@@ -332,3 +332,18 @@ Backup + v11 local migration: data/promotion_settings_migration_check.json; 217 
 No live market mutation/charge was tested. priority_position is explicitly scoped to
 priority placement; global search rank is not proven. Periodic scheduling, full target
 listing and asynchronous budget guard notices remain pending along with the full goal.
+
+
+## PHASE 5 — promotion worker checkpoint (2026-10-30)
+
+351 passed in 34.34s; data/phase5_promotion_worker_results.xml; Ruff/pip and actual
+secret checks clean. Tests cover disabled no-network behavior, persisted schedule,
+no replay before due, selected targets and exclusion, multi-page cursor continuation,
+lease fencing/expiry, per-item backoff, policy revision change, discovery Retry-After,
+shutdown and durable budget alerts outside historical baseline. No paid executor used.
+
+v12 backup/migration probe data/promotion_worker_migration_check.json: 217 orders,
+1 owner preserved, DISABLED, processed=0, external_requests=0/mutations=0. The worker
+was invoked once locally against disabled policy, not left running. It does not charge
+or record dry-run as a real promotion. Further full target queue UI and broader goal
+acceptance remain pending.

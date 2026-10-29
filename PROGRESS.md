@@ -671,3 +671,42 @@ mock quote inputs/raw_price, budget/неопределённые расходы,
 FSM restart и настоящий aiogram редактор→save→stop. Остальные фазы цели не сокращены.
 
 Проверка продвижения: **341 passed in 33.29s**, JUnit data/phase5_promotion_settings_results.xml; Ruff/pip/format/secret scan чистые.
+
+
+## PHASE 5 — периодическая dry-run проверка продвижения (2026-10-30)
+
+PromotionWorker подключён к lifecycle бота только при авторизованном Playerok. При
+выключенной/отсутствующей policy не делает запросов. Платных mutations в нём нет.
+Режим selected берёт явные include; all читает по одной странице каталога за цикл,
+сохраняет cursor/visited и обновляет законченный каталог не чаще 300 секунд. Сбой
+discovery сохраняет cursor и backoff/Retry-After; уже известные цели могут проверяться
+независимо. Повтор страницы безопасен благодаря unique item_id.
+
+promotion_schedule (v12) хранит due_at, lease/token, failures/error_code и policy revision.
+По умолчанию до 4 целей за цикл, период worker 30 секунд. Lease 180 секунд защищает
+параллельные claims; истёкший lease разрешает повтор read-only проверки, не платную
+операцию. Успешный time dry-run переносит следующее наблюдение на заданный дневной/
+ночной интервал, не записывает вымышленное поднятие в expense ledger. Position-проверки
+разнесены не меньше check_seconds. Изменение revision делает старое расписание снова
+к проверке, новые наблюдения не смешиваются с прошлой конфигурацией.
+
+Проверяется только цена текущего класса размещения лота. Если quote неоднозначен или
+неполон, платный upgrade не подбирается. Ошибки лотов имеют backoff и не мешают другим
+целям. Health планировщика виден в диагностике; paid_operations=0. Он не ставит outbox,
+не резервирует деньги, не делает update/publish и не меняет объявления.
+
+Budget guard теперь создаёт durable уведомление в той же транзакции, что локальное
+выключение policy; оно не прячется в initial baseline, отправляется владельцу один раз
+и явно говорит, что dry-run ничего не списал. Стандартная неизвестность Telegram-send
+остаётся UNCERTAIN без слепого повтора. Источник денег — только существующий ledger,
+наблюдения/evaluations отдельно. В рабочей БД расходов по-прежнему не создавалось.
+
+v12 применена после backup before-promotion-schedule-v12: 217 заказов, 1 владелец
+сохранены. Проверка выключенной политики на рабочей БД: processed=0, DISABLED,
+external_requests=0/mutations=0; data/promotion_worker_migration_check.json.
+Тесты покрывают restart/cursor, no premature repeat, lease recovery, targets/exclusions,
+ошибку отдельного лота, revision wakeup, discovery backoff и durable budget notification.
+Полный список всех target overrides/ручное управление очередью и дальнейшие пункты
+автоматизации/аналитики/финальной приёмки остаются; вся цель не объявляется завершённой.
+
+Контрольная точка планировщика: **351 passed in 34.34s**, JUnit data/phase5_promotion_worker_results.xml; Ruff/pip/format/secret scan чистые.

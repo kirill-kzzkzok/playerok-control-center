@@ -458,6 +458,8 @@ def create_router(store, api, products, synchronizer):
                     + escaped(store.setting("realtime:health", {"status": "NOT_STARTED"}), 400)
                     + "\nАдресная сверка: "
                     + escaped(store.setting("realtime:reconciliation", {}), 200)
+                    + "\nПланировщик продвижения: "
+                    + escaped(store.setting("promotions:health", {"status": "NOT_STARTED"}), 300)
                     + "\n\n"
                     + "\n".join(
                         escape(f"{a['kind']}: {a['status']} · {a['error_code'] or ''}") for a in actions

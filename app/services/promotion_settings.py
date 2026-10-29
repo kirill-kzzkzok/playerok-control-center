@@ -134,6 +134,21 @@ class PromotionSettings:
                         "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'PROMOTION_BUDGET_GUARD',?,'LOCAL_POLICY_DISABLED',?)",
                         (actor, ident, checked),
                     )
+                    db.execute(
+                        "INSERT OR IGNORE INTO inbox(key,kind,payload,received_at,processed_at) VALUES(?,'promotion_guard',?,?,?)",
+                        (
+                            f"promotion_guard:{revision}",
+                            encode(
+                                {
+                                    "item_id": ident,
+                                    "revision": revision,
+                                    "reasons": [reason for reason in reasons if reason in budget_reasons],
+                                }
+                            ),
+                            checked,
+                            checked,
+                        ),
+                    )
             db.execute(
                 "INSERT INTO promotion_evaluations(item_id,policy_revision,result,checked_at) VALUES(?,?,?,?)",
                 (ident, revision, encode(result), checked),

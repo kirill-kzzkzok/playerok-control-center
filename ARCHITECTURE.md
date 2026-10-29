@@ -344,3 +344,24 @@ policy атомарным CAS с audit; evaluation хранится отдель
 Фактического платного исполнителя нет. Постоянный сбор rank/периодический планировщик
 и уведомления budget guard требуют дальнейшей реализации. История расходов читает
 только существующий ledger и не подменяет его dry-run журналом.
+
+
+## Read-only PromotionWorker (v12)
+
+Worker выполняет discover→leased claim→fresh API evaluation→persist next_due. Один
+проход ограничен четырьмя лотами, discovery all — одной страницей, полный каталог
+перечитывается после 300-секундного окна. selected не требует обхода API-каталога.
+Курсор сохраняется только после внесения уникальных targets. Ошибка discovery сохраняет
+исходный cursor и due/backoff, target failures независимы.
+
+promotion_schedule хранит policy_revision, поэтому редактирование политики не ждёт
+старого interval. Active lease не обходится даже новой revision; старый результат не
+перезаписывает чужой token. Read-only replay после expiry допустим и не равен paid retry.
+Проверяется current priority class; неоднозначная цена не заменяется выбранным premium.
+Time/night интервалы планируют наблюдения, не фиктивные расходы/поднятия. Платного
+исполнителя/резерва/queue mutations нет. Diagnostics показывает safe health.
+
+Budget guard фиксирует inbox promotion_guard вместе с CAS-disable и audit. Notifications
+обходит historical baseline для этой локальной тревоги и сообщает отсутствие списания.
+Уведомление дедуплицируется устойчивым policy revision key. Shutdown worker ждёт stop
+и оставляет leases/cursors в БД для восстановления следующего процесса.
