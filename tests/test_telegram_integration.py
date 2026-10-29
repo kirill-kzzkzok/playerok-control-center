@@ -93,7 +93,7 @@ class Interaction:
     def __init__(self, bot, dp):
         self.bot, self.dp, self.counter = bot, dp, 0
 
-    async def message(self, text=None, owner=7, document=None, group=False):
+    async def message(self, text=None, owner=7, document=None, group=False, caption=None):
         self.counter += 1
         entities = [{"type": "bot_command", "offset": 0, "length": 6}] if text == "/start" else None
         message = Message(
@@ -104,6 +104,7 @@ class Interaction:
             text=text,
             entities=entities,
             document=document,
+            caption=caption,
         )
         return await self.dp.feed_update(self.bot, Update(update_id=self.counter, message=message))
 
@@ -276,6 +277,50 @@ async def test_notification_reply_keeps_original_and_updates_after_durable_compl
         assert edit.message_id == 1
         assert "Original question" in edit.text and "remote-answer" in edit.text
         assert "подтверждено API" in edit.text
+    finally:
+        await bot.session.close()
+        store.close()
+
+
+async def test_photo_reply_preview_requires_confirmation_and_survives_restart(tmp_path, monkeypatch):
+    class ChatAPI(CatalogAPI):
+        account = SimpleNamespace(id="seller", writes_enabled=True)
+
+        async def call(self, method, **kwargs):
+            assert method == "get_chat"
+            return {"id": kwargs["chat_id"]}
+
+    store = Store(tmp_path / "photo-ui.sqlite")
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    api = ChatAPI()
+    uploads = Attachments(tmp_path / "uploads")
+    monkeypatch.setattr("app.telegram.replies_panel.Attachments", lambda: uploads)
+    ui = Interaction(bot, dispatcher(store, api))
+    state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
+    try:
+        await ui.message("/start")
+        await ui.click("reply:chat")
+        await ui.message(
+            document=Document(
+                file_id="photo", file_unique_id="photo-u", file_name="image.png", mime_type="image/png"
+            ),
+            caption="<photo caption>",
+        )
+        pending = (await state.get_data())["pending"]
+        assert pending["target"] == "chat"
+        assert pending["payload"]["text"] == "<photo caption>"
+        assert len(pending["payload"]["photos"]) == 1
+        assert (await uploads.read(pending["payload"]["photos"][0])).startswith(b"\xff\xd8\xff")
+        assert "&lt;photo caption&gt;" in session.calls[-1].text
+        assert session.calls[-2].__api_method__ == "sendPhoto"
+        assert not store.rows("SELECT * FROM outbox")
+        token = (await state.get_data())["confirm_token"]
+        ui.dp = dispatcher(store, api)
+        await ui.click("commit:" + token)
+        await ui.click("commit:" + token)
+        assert len(store.rows("SELECT * FROM outbox")) == 1
+        assert not store.rows("SELECT * FROM chat_uploads")  # worker/network not run
     finally:
         await bot.session.close()
         store.close()

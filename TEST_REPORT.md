@@ -163,3 +163,23 @@ Local migration evidence data/replies_migration_check.json: schema 1/2/3/4, 217 
 1 owner retained, 0 external requests/mutations; backup before-replies-v4 taken first.
 Live photo transport, WebSocket, manual UNCERTAIN resolution and remaining specification
 are not accepted by this checkpoint. No claim of full project readiness.
+
+
+## PHASE 4 — chat images checkpoint (2026-10-30)
+
+**223 passed in 13.28s**, data/phase4_images_results.xml; Ruff/pip check clean.
+test_chat_images.py verifies exact multipart upload path and client ID, guarded
+createChatMessage JSON imagesIds, disabled writes, upload journal before send, success
+confirmation, uncertain upload/send/incorrect chat/expired upload/missing returned images,
+no automatic replay, local file protection and cleanup, all paths checked before upload,
+remote image size/host/redirect/content validation, deleted/stale media rejection.
+Real Dispatcher integration verifies a photo/document reply with caption: normalized
+preview, no outbox before confirmation, durable state across dispatcher restart and
+one outbox after duplicate confirmation. All Telegram/Playerok sends were mocked.
+
+Current unauthenticated official bundle GET: HTTP 200; upload/input/imagesIds/client ID
+contract confirmed, raw source saved .vendor/public_web/chat-current.js; metadata and
+SHA in data/chat_image_contract_check.json. No live temporary upload, message or paid
+operation was performed. v5 local migration backed up first; schema 1–5, 217 orders,
+1 owner preserved (data/chat_images_migration_check.json). Photo UI handles one image per
+confirmed reply; automatic Telegram album aggregation remains outside this checkpoint.

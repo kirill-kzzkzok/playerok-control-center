@@ -293,3 +293,49 @@ Telegram retry_after), но это никогда не повторяет отп
 JUnit: data/phase4_replies_results.xml. Фаза 4 не завершена: фото, WebSocket,
 ручное разрешение UNCERTAIN и полные действия/карточки заказов остаются. Фазы 5–9
 и общая live-приёмка также остаются. Работа продолжается с исходным объёмом цели.
+
+
+## PHASE 4 — фотографии в диалогах (2026-10-30)
+
+Реализованы просмотр входящих фото и подтверждённый исходящий photo reply. При
+просмотре бот повторно запрашивает текущую страницу сообщений и проверяет ID/удаление
+сообщения; stale/отрицательные media callbacks отклоняются. Загрузка допускается
+только с HTTPS Playerok media host, без cookie аккаунта, без redirects и до 10 МБ
+фактических байтов. Изображение проверяется Pillow, ограничивается разрешение,
+перекодируется JPEG; временный файл просмотра удаляется после чтения. Фотографии
+открываются по явной кнопке, а не пересылаются автоматически для всей истории.
+
+В сценарии «Ответить» можно прислать фото или документ JPEG/PNG/WEBP с подписью.
+Появляются preview и отдельное подтверждение; FSM хранит путь и подпись после restart.
+UI готовит одно фото на сообщение; Telegram album не объединяется в один ответ.
+Низкоуровневый outbox допускает до 10 фото, но не объявляется готовым UI альбомов.
+
+Официальный текущий веб-клиент подтверждает uploadChatImageIntoTemporaryStore и
+createChatMessage.input.imagesIds. SafeAccount разрешает первый запрос только через
+scoped write permit и точный доверенный mutation; запрос multipart использует variables.file.
+До загрузок читаются/проверяются все локальные файлы. Перед внешней загрузкой журнал
+chat_uploads фиксирует clientAttachmentId (детерминированный UUID для action/position),
+затем attachment ID/expiresAt. Проверяются chatId/clientAttachmentId/срок вложения.
+После загрузок выполняется отдельный createChatMessage с IDs; успех требует message ID
+и подтверждённого числа вложений. Неопределённый ответ/таймаут остаётся UNCERTAIN,
+без автоматического повтора, с сохранением файла и upload journal. Стабильный client ID
+не считается доказательством серверной идемпотентности. Cleanup использует прежние photos
+references и не удаляет файлы незавершённых/UNCERTAIN ответов.
+
+Миграция v5 применена к локальной БД после backup before-chat-images-v5: версии 1–5,
+217 заказов и 1 владелец сохранены; journal пуст. Внешних запросов/мутаций при миграции
+не было. Свидетельство data/chat_images_migration_check.json.
+Публичный source GET без авторизации: HTTP 200, контракт проверен заново;
+data/chat_image_contract_check.json и .vendor/public_web/chat-current.js. Raw SHA отличается
+от старого снимка; вывод о смене API из одного hash не делается, нужные поля сверены.
+
+**223 passed in 13.28s**, Ruff/pip check чистые; JUnit data/phase4_images_results.xml.
+Тесты покрывают multipart/IDs, write guard, expiry, timeout каждого внешнего шага,
+неполный ответ, отсутствие автоповтора, защиту файлов, bounded remote download,
+отказ от redirects/постороннего URL/неизображения, stale/deleted media и настоящий
+aiogram UI preview→restart→double-confirm на mock Telegram.
+Реальным покупателям не отправлялись сообщения/фото, temporary uploads live не выполнялись.
+Фаза 4 остаётся открытой: WebSocket/reconnect, безопасное разрешение UNCERTAIN,
+полные карточки и действия заказов. Последующие фазы и live-приёмка не сокращены.
+
+Финальная проверка фото: secret scan и format check чистые; .env/PROJECT_SPEC.md/data исключены из Git.

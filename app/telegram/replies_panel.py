@@ -1,14 +1,18 @@
 import secrets
 from html import escape
 
+from aiogram.types import BufferedInputFile
+
+from app.services.attachments import Attachments
 from app.services.products import ValidationError
-from app.services.replies import Replies, reply_text
+from app.services.replies import Replies, reply_payload
 from app.telegram.keyboards import keyboard
 
 
 class RepliesPanel:
     def __init__(self, store):
         self.replies = Replies(store)
+        self.attachments = Attachments()
 
     async def menu(self, owner, state, *, chat_id=None, origin=None):
         nonce = secrets.token_hex(6)
@@ -28,7 +32,7 @@ class RepliesPanel:
         return (
             "⚡ <b>Быстрые ответы</b>\n"
             + (
-                "Введите свой ответ или выберите шаблон. Перед отправкой будет подтверждение."
+                "Введите ответ, пришлите фото с подписью или выберите шаблон. Перед отправкой будет подтверждение."
                 if chat_id
                 else "Здесь можно сохранить и изменить шаблоны ответов."
             ),
@@ -110,9 +114,26 @@ class RepliesPanel:
             message.from_user.id, state, chat_id=view.get("chat_id"), origin=view.get("origin_event")
         )
 
+    async def photo(self, message, state):
+        data = await state.get_data()
+        file = message.photo[-1] if message.photo else message.document
+        source = await self.attachments.download(message.bot, file)
+        try:
+            result = await self.confirm(
+                state, data["chat_id"], message.caption or "", data.get("origin_event"), photos=[source]
+            )
+        except BaseException:
+            self.attachments.discard(source)
+            raise
+        await message.answer_photo(
+            BufferedInputFile(await self.attachments.read(source), filename="reply-preview.jpg"),
+            caption="Предпросмотр фотографии. Подтвердите отправку следующим сообщением.",
+        )
+        return result
+
     @staticmethod
-    async def confirm(state, chat_id, text, origin=None):
-        text = reply_text(text)
+    async def confirm(state, chat_id, text, origin=None, *, photos=None):
+        payload = reply_payload({"text": text, "photos": photos or []})
         nonce = secrets.token_hex(8)
         await state.set_state(None)
         await state.set_data(
@@ -120,12 +141,12 @@ class RepliesPanel:
                 "pending": {
                     "kind": "reply",
                     "target": chat_id,
-                    "payload": {"text": text},
+                    "payload": payload,
                     "origin_event": origin,
                 },
                 "confirm_token": nonce,
             }
         )
-        return "Подтвердите ответ покупателю:\n\n" + escape(text), keyboard(
-            [[("✅ Отправить", "commit:" + nonce)]]
-        )
+        return "Подтвердите ответ покупателю:\n\n" + escape(payload["text"]) + (
+            f"\n📷 Фотографий: {len(photos)}" if photos else ""
+        ), keyboard([[("✅ Отправить", "commit:" + nonce)]])

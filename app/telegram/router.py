@@ -349,6 +349,12 @@ def create_router(store, api, products, synchronizer):
                 )
             elif action.startswith(("chat:", "chatpage:")):
                 text, markup = await chats.show(action, state)
+            elif action.startswith("chatmedia:"):
+                data, caption, markup = await chats.media(action, state)
+                await message.answer_photo(
+                    BufferedInputFile(data, filename="chat-image.jpg"), caption=caption, reply_markup=markup
+                )
+                return
             elif action.startswith("readchat:"):
                 ident = action.split(":", 1)[1]
                 await api.call("get_chat", chat_id=ident)
@@ -508,6 +514,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await finance.message(message, state)
             elif current and current.startswith("quick:"):
                 text, markup = await replies.message(message, state)
+            elif current == "reply" and (message.photo or message.document):
+                text, markup = await replies.photo(message, state)
             elif current == "discount":
                 data = await state.get_data()
                 item = await products.owned_item(data["item_id"])

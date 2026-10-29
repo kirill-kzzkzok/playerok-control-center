@@ -154,3 +154,25 @@ Router сохраняет исходные notifications: при callback из �
 видимым и не создаёт повторной отправки. Повтор editMessageText идемпотентен по тому
 же Telegram ID/тексту; rendered_status записывается после edit, а retry_after/failures
 сохраняются при сбое. Новая смена outbox status не теряется при параллельном завершении.
+
+
+## Фото в сообщениях и журнал загрузок (v5)
+
+Attachments.remote — ограниченная HTTP-загрузка публичного media URL без cookies и
+redirects, с общей валидацией/нормализацией JPEG. ChatPanel.media перепроверяет сообщение
+на той же API-странице; URL не приходит из callback. Индексы/nonce и исходные message IDs
+живут в SQLite FSM. При изменении страницы пользователь обновляет диалог.
+
+RepliesPanel.photo сохраняет нормализованный файл и pending snapshot, показывает фото
+и полный текст подписи отдельно от подтверждения. Queue payload содержит photos/text;
+origin notification связывается прежней транзакцией Replies.enqueue. Один Telegram
+photo/document обрабатывается как один ответ; агрегатор Telegram albums не реализован.
+
+Executor последовательно: свежий get_chat → валидация всех локальных файлов → journal
+PROCESSING → guarded uploadChatImageIntoTemporaryStore → journal UPLOADED с ID/expiry →
+проверка срока всех вложений → guarded createChatMessage(imagesIds) → проверка message ID
+и числа image records → SUCCEEDED. Все потенциально принятые, но не подтверждённые
+mutations переводятся в UNCERTAIN. Journal не даёт права повторять неизвестный запрос;
+детерминированный clientAttachmentId служит корреляцией, не гарантией идемпотентности.
+Cleanup защищает photos paths активного FSM/outbox и UNCERTAIN; успешные uploads можно
+удалить локально после завершения. Реальный settlement/платежи в этом потоке отсутствуют.

@@ -1,4 +1,6 @@
 import asyncio
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +17,7 @@ from app.services.products import (
     validate_draft,
     validate_field,
 )
+from app.services.replies import reply_payload
 
 
 class Executor:
@@ -208,6 +211,70 @@ class Executor:
             return {"chat_id": target, "unread_messages_counter": 0}
         if kind == "reply":
             await self.api.call("get_chat", chat_id=target)
+            try:
+                payload = reply_payload(payload)
+            except ValueError as error:
+                raise ValidationError(str(error)) from None
+            sources = payload.get("photos", [])
+            # Validate/read every local file before the first external upload.
+            images = [await Attachments().read(source) for source in sources]
+            image_ids = []
+            for index, image in enumerate(images):
+                client_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"playerok:{action['id']}:{index}"))
+                self.store.execute(
+                    "INSERT INTO chat_uploads(operation_id,position,client_attachment_id,status) VALUES(?,?,?,'PROCESSING')",
+                    (action["id"], index, client_id),
+                )
+                uploaded = await self.mutate(
+                    "uploadChatImageIntoTemporaryStore",
+                    "upload_chat_image",
+                    image=image,
+                    chat_id=target,
+                    client_attachment_id=client_id,
+                )
+                if (
+                    not isinstance(uploaded, dict)
+                    or not uploaded.get("id")
+                    or uploaded.get("chatId") != target
+                    or uploaded.get("clientAttachmentId") != client_id
+                ):
+                    raise APIError("CHAT_UPLOAD_NOT_CONFIRMED", uncertain=True)
+                try:
+                    expiry = datetime.fromisoformat(uploaded["expiresAt"])
+                    if expiry.tzinfo is None or expiry <= datetime.now(UTC):
+                        raise ValueError
+                except (KeyError, ValueError, TypeError, AttributeError):
+                    raise APIError("CHAT_UPLOAD_EXPIRY_UNKNOWN", uncertain=True) from None
+                self.store.execute(
+                    "UPDATE chat_uploads SET status='UPLOADED',attachment_id=?,expires_at=? WHERE operation_id=? AND position=?",
+                    (uploaded["id"], uploaded["expiresAt"], action["id"], index),
+                )
+                image_ids.append(uploaded["id"])
+            if image_ids:
+                uploads = self.store.rows(
+                    "SELECT expires_at FROM chat_uploads WHERE operation_id=?", (action["id"],)
+                )
+                if any(
+                    datetime.fromisoformat(upload["expires_at"]) <= datetime.now(UTC) for upload in uploads
+                ):
+                    raise ValidationError("Срок временного вложения истёк до отправки")
+                result = await self.mutate(
+                    "createChatMessage",
+                    "send_message_with_images",
+                    chat_id=target,
+                    text=payload["text"],
+                    image_ids=image_ids,
+                )
+                returned = result.get("images") if isinstance(result, dict) else None
+                if (
+                    not isinstance(returned, list)
+                    or len(returned) != len(image_ids)
+                    or any(not isinstance(image, dict) or not image.get("id") for image in returned)
+                ):
+                    raise APIError("MESSAGE_IMAGES_NOT_CONFIRMED", uncertain=True)
+                if not result.get("id"):
+                    raise APIError("MESSAGE_ID_MISSING", uncertain=True)
+                return {"message_id": result["id"], "image_count": len(image_ids)}
             result = await self.mutate(
                 "createChatMessage", "send_message", chat_id=target, text=payload["text"]
             )

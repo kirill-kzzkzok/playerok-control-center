@@ -165,3 +165,16 @@ Public item UI запрашивает itemPriorityStatuses с price=item.rawPric
 Все проверки записи публикации пока изолированные; live-публикация не запускалась.
 Источники: ранее зафиксированные официальные bundles 4.js, 23.js,
 587921dc4784.js и abc07b5139a5.js с URL/SHA256 выше.
+
+
+## Chat photo contract recheck — 2026-10-30 MSK
+
+Current [official application bundle](https://playerok.com/_next/static/chunks/pages/_app-81aa885e88a4fc68.js) fetched without credentials, HTTP 200.
+Observed uploadChatImageIntoTemporaryStore(file: Upload!, input: UploadTemporaryAttachmentInput!)
+returns expiresAt/id/url/chatId/clientAttachmentId. The chat bridge passes chatId/text/imagesIds
+to createChatMessage. No remote code was executed. Source/metadata: .vendor/public_web/chat-current.js
+and data/chat_image_contract_check.json. Current raw SHA256:
+6c3fb66e2c445e36b6021767b7baeba5963f041ce03f7bc43cc5398b5c2452bb.
+Raw bytes differ from the older snapshot; the fields used here were inspected again.
+This confirms published client usage, not live successful sending or idempotency.
+No authenticated temporary uploads, buyer messages, withdrawals or paid operations performed.

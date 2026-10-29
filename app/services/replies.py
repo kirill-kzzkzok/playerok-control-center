@@ -9,6 +9,20 @@ def reply_text(value):
     return value.strip()
 
 
+def reply_payload(payload):
+    photos = payload.get("photos", [])
+    if (
+        not isinstance(photos, list)
+        or len(photos) > 10
+        or any(not isinstance(p, str) or not p for p in photos)
+    ):
+        raise ValueError("В ответе допустимы до 10 изображений")
+    text = payload.get("text", "")
+    if photos and isinstance(text, str) and not text.strip():
+        return {"text": "", "photos": photos}
+    return {"text": reply_text(text), **({"photos": photos} if photos else {})}
+
+
 class Replies:
     def __init__(self, store):
         self.store = store
@@ -72,7 +86,7 @@ class Replies:
         kind, target = pending["kind"], pending["target"]
         payload = pending["payload"]
         if kind == "reply":
-            payload = {**payload, "text": reply_text(payload.get("text"))}
+            payload = reply_payload(payload)
         origin = pending.get("origin_event")
         with self.store.transaction() as db:
             if origin and (

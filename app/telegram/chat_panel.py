@@ -2,6 +2,7 @@ import secrets
 
 from app.database.store import encode
 from app.playerok.adapter import validate_page
+from app.services.attachments import Attachments
 from app.services.products import ValidationError
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
@@ -12,6 +13,7 @@ class ChatPanel:
 
     def __init__(self, store, api):
         self.store, self.api = store, api
+        self.attachments = Attachments()
 
     async def show(self, action, state):
         if action.startswith("chat:"):
@@ -40,7 +42,14 @@ class ChatPanel:
                 "INSERT INTO chat_messages VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
                 (message["id"], ident, message.get("created_at"), encode(message)),
             )
-        view.update(next=following, nonce=secrets.token_hex(6))
+        media = []
+        for message in reversed(messages):
+            if not message.get("deleted_at"):
+                media.extend(
+                    {"message_id": message["id"], "image_index": index}
+                    for index, _ in enumerate(message.get("images") or [])
+                )
+        view.update(next=following, nonce=secrets.token_hex(6), media=media)
         await state.update_data(chat_view=view)
         blocks = []
         for message in reversed(messages):
@@ -59,9 +68,48 @@ class ChatPanel:
             navigation.append(("Старее →", f"chatpage:{view['nonce']}:older"))
         if navigation:
             rows.append(navigation)
+        if media:
+            rows.append([("📷 Открыть фотографии", f"chatmedia:{view['nonce']}:0")])
         rows.append([("🔄 Последние", "chat:" + ident)])
         return (
             f"💬 <b>Диалог · страница {view['index'] + 1}</b>\n\n"
             + ("\n\n".join(blocks) if blocks else "Сообщений нет."),
             keyboard(rows),
+        )
+
+    async def media(self, action, state):
+        parts = action.split(":")
+        view = (await state.get_data()).get("chat_view", {})
+        if len(parts) != 3 or parts[1] != view.get("nonce"):
+            raise ValidationError("Просмотр фото устарел. Откройте диалог заново")
+        try:
+            index = int(parts[2])
+            if index < 0:
+                raise ValueError
+            selected = view["media"][index]
+        except (ValueError, KeyError, IndexError):
+            raise ValidationError("Фотография недоступна") from None
+        page = await self.api.call(
+            "get_chat_messages", chat_id=view["id"], count=8, after_cursor=view["cursors"][view["index"]]
+        )
+        messages, _ = validate_page(page, "messages")
+        message = next((message for message in messages if message["id"] == selected["message_id"]), None)
+        if not message or message.get("deleted_at"):
+            raise ValidationError("Сообщение удалено или изменилось. Обновите диалог")
+        images = message.get("images") or []
+        if selected["image_index"] >= len(images):
+            raise ValidationError("Вложение изменилось. Обновите диалог")
+        image = images[selected["image_index"]]
+        if not isinstance(image, dict):
+            raise ValidationError("API вернул неполное вложение")
+        data = await self.attachments.remote(image.get("url"))
+        rows = []
+        if index:
+            rows.append(("← Фото", f"chatmedia:{view['nonce']}:{index - 1}"))
+        if index + 1 < len(view["media"]):
+            rows.append(("Фото →", f"chatmedia:{view['nonce']}:{index + 1}"))
+        return (
+            data,
+            f"📷 Фотография {index + 1} из {len(view['media'])}",
+            keyboard(([rows] if rows else []) + [[("💬 Диалог", "chat:" + view["id"])]]),
         )

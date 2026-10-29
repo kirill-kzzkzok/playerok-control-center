@@ -100,6 +100,7 @@ class SafeAccount(Account):
                 "removeItem",
                 "publishItem",
                 "createChatMessage",
+                "uploadChatImageIntoTemporaryStore",
                 "markChatAsRead",
                 "updateDeal",
                 "acceptGameCategoryAgreement",
@@ -204,6 +205,38 @@ class SafeAccount(Account):
         except (ValueError, InvalidOperation):
             raise APIError("EXCHANGE_RATE_UNAVAILABLE") from None
         return {"pair": "USDT_RUB", "rate": str(rate)}
+
+    def upload_chat_image(self, image, chat_id, client_attachment_id):
+        operations = {
+            "operationName": "uploadChatImageIntoTemporaryStore",
+            "query": QUERIES["uploadChatImageIntoTemporaryStore"],
+            "variables": {
+                "file": None,
+                "input": {"chatId": chat_id, "clientAttachmentId": client_attachment_id},
+            },
+        }
+        filename, file_obj, content_type = self._resolve_image_file(image)
+        response = self.request(
+            "post",
+            self.base_url + "/graphql",
+            {},
+            {"operations": json.dumps(operations), "map": json.dumps({"1": ["variables.file"]})},
+            {"1": (filename, file_obj, content_type)},
+        )
+        return response.json()["data"].get("uploadChatImageIntoTemporaryStore")
+
+    def send_message_with_images(self, chat_id, text, image_ids):
+        response = self.request(
+            "post",
+            self.base_url + "/graphql",
+            {},
+            {
+                "operationName": "createChatMessage",
+                "query": QUERIES["createChatMessage"],
+                "variables": {"input": {"chatId": chat_id, "text": text, "imagesIds": image_ids}},
+            },
+        )
+        return response.json()["data"].get("createChatMessage")
 
     def close(self):
         self.client.close()
