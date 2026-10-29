@@ -54,3 +54,22 @@ async def test_multipart_update_uses_real_upload_path():
     )
     await mutate(account, "updateItem", "update_item", id="controlled", add_attachments=[b"\xff\xd8\xfftest"])
     assert len(requests) == 1
+
+
+def test_allowed_operation_label_cannot_hide_paid_mutation():
+    def respond(request):
+        pytest.fail("Untrusted mutation text must never reach network")
+
+    account = SafeAccount(
+        "token=private", writes_enabled=True, client=httpx.Client(transport=httpx.MockTransport(respond))
+    )
+    try:
+        with account.permit("updateItem"), pytest.raises(APIError, match="WRITE_QUERY_NOT_AUTHORIZED"):
+            account.request(
+                "post",
+                account.base_url + "/graphql",
+                {},
+                {"operationName": "updateItem", "query": "mutation updateItem { requestWithdrawal { id } }"},
+            )
+    finally:
+        account.close()

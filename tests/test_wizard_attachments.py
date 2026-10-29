@@ -26,7 +26,7 @@ class NoObtainingAPI:
 
     async def call(self, method, **kwargs):
         if method == "get_game_category":
-            return {"options": []}
+            return {"id": kwargs["id"], "options": []}
         if method == "get_game":
             return {"categories": [{"id": "c", "name": "Category"}]}
         if method == "get_games":

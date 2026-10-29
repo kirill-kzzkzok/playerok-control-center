@@ -3,8 +3,17 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.playerok.adapter import APIError, plain
+from app.services.agreements import Agreements, require_conditions
 from app.services.attachments import Attachments
-from app.services.products import ValidationError, listing_price, listing_text, validate_draft
+from app.services.discounts import discount_plan
+from app.services.products import (
+    ValidationError,
+    field_baseline,
+    listing_price,
+    listing_text,
+    validate_draft,
+    validate_field,
+)
 
 
 class Executor:
@@ -37,7 +46,9 @@ class Executor:
         if kind == "create":
             draft = self.store.get_draft(target, payload["owner"])
             value = draft["payload"]
-            form = await self.products.schema(value["category_id"], value["obtaining_type_id"])
+            snapshot = await self.products.schema_details(value["category_id"], value["obtaining_type_id"])
+            require_conditions(value, snapshot["conditions"])
+            form = snapshot["form"]
             validate_draft(value, form, getattr(self.api.account, "role", None))
             attachments = []
             for source in value.get("photos", []):
@@ -75,6 +86,69 @@ class Executor:
                 db.execute("INSERT INTO bindings(draft_id,remote_id) VALUES(?,?)", (target, result["id"]))
                 db.execute("UPDATE drafts SET state='REMOTE_DRAFT' WHERE id=?", (target,))
             return {"remote_id": result["id"]}
+        if kind == "discount":
+            item = await self.products.owned_item(target)
+            fresh = discount_plan(item, payload["price"], getattr(self.api.account, "role", None))
+            if fresh != payload:
+                raise ValidationError("Условия скидки изменились. Требуется новое подтверждение.")
+            result = await self.mutate("updateItem", "update_item", id=target, price=fresh["price"])
+            if (
+                result.get("id") != target
+                or result.get("price") != fresh["price"]
+                or result.get("raw_price") != fresh["expected_raw_price"]
+            ):
+                raise APIError("DISCOUNT_RESULT_UNKNOWN", uncertain=True)
+            return {"remote_id": target, "price": result["price"], "raw_price": result["raw_price"]}
+        if kind == "edit_fields":
+            draft = self.store.get_draft(payload["draft_id"], payload["owner"])
+            value = draft["payload"]
+            if value.get("edit_target") != target or draft["state"] != "QUEUED":
+                raise ValidationError("Черновик редактирования не соответствует операции")
+            item = await self.products.owned_item(target)
+            if field_baseline(item) != value.get("edit_baseline"):
+                raise ValidationError("Поля товара изменились после подтверждения")
+            details = await self.products.schema_details(value["category_id"], value["obtaining_type_id"])
+            require_conditions(value, details["conditions"])
+            attributes = dict(item.get("attributes") or {})
+            fields, comment = [], None
+            for field in details["form"]:
+                selected = validate_field(field, value["fields"].get(field["key"], ""))
+                if field.get("comment"):
+                    comment = selected
+                elif field.get("data_field"):
+                    fields.append(SimpleNamespace(id=field["key"], value=selected))
+                else:
+                    attributes[field["key"]] = selected
+            result = await self.mutate(
+                "updateItem",
+                "update_item",
+                id=target,
+                options=[SimpleNamespace(field=key, value=selected) for key, selected in attributes.items()],
+                data_fields=fields,
+                comment=comment,
+            )
+            if result.get("id") != target:
+                raise APIError("EDIT_NOT_CONFIRMED", uncertain=True)
+            self.store.execute("UPDATE drafts SET state='UPDATED' WHERE id=?", (draft["id"],))
+            return {"remote_id": target}
+        if kind == "agreements":
+            if payload.get("account_id") != self.api.account.id:
+                raise ValidationError("Аккаунт изменился после подтверждения условий")
+            current = await Agreements(self.api).pending(target, payload.get("obtaining_type_id"))
+            expected = {entry["id"]: entry for entry in payload["agreements"]}
+            if any(entry["id"] not in expected or entry != expected[entry["id"]] for entry in current):
+                raise ValidationError("Условия изменились. Прочитайте их и подтвердите заново.")
+            accepted = []
+            for entry in current:
+                result = await self.mutate(
+                    "acceptGameCategoryAgreement", "accept_game_category_agreement", agreement_id=entry["id"]
+                )
+                if not isinstance(result, dict) or result.get("id") != entry["id"]:
+                    raise APIError("AGREEMENT_RESULT_UNKNOWN", uncertain=True)
+                accepted.append(entry["id"])
+            if await Agreements(self.api).pending(target, payload.get("obtaining_type_id")):
+                raise APIError("AGREEMENT_ACCEPTANCE_NOT_CONFIRMED", uncertain=True)
+            return {"accepted_ids": accepted, "confirmed": True}
         if kind == "publish":
             item = await self.owned_item(target)
             if item.get("status") != "DRAFT":

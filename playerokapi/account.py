@@ -1323,7 +1323,8 @@ class Account:
         options: list[GameCategoryOption] | None = None, 
         data_fields: list[GameCategoryDataField] | None = None, 
         remove_attachments: list[str] | None = None, 
-        add_attachments: list[str | bytes] | None = None  # ← было: list[str] | None
+        add_attachments: list[str | bytes] | None = None,  # ← было: list[str] | None
+        comment: str | None = None
     ) -> types.Item:
         """
         Обновляет предмет аккаунта.
@@ -1374,8 +1375,9 @@ class Account:
         if name: operations["variables"]["input"]["name"] = name
         if price: operations["variables"]["input"]["price"] = int(price)
         if description: operations["variables"]["input"]["description"] = description
-        if options: operations["variables"]["input"]["attributes"] = payload_attributes
-        if data_fields: operations["variables"]["input"]["dataFields"] = payload_data_fields
+        if comment is not None: operations["variables"]["input"]["comment"] = comment
+        if options is not None: operations["variables"]["input"]["attributes"] = payload_attributes
+        if data_fields is not None: operations["variables"]["input"]["dataFields"] = payload_data_fields
         if remove_attachments: operations["variables"]["input"]["removedAttachments"] = remove_attachments
 
         map = {}

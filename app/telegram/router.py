@@ -15,6 +15,7 @@ from app.playerok.adapter import APIError, safe_media_url
 from app.rendering.cards import profile_card
 from app.rendering.charts import revenue_chart
 from app.services.catalog import ORDER_FILTERS, order_page
+from app.services.discounts import discount_plan
 from app.services.products import ValidationError, listing_price, listing_text
 from app.services.statistics import statistics
 from app.telegram.formatting import escaped
@@ -135,6 +136,8 @@ def create_router(store, api, products, synchronizer):
                     text, markup = await wizard.screen(owner, state)
                 else:
                     binding = store.rows("SELECT remote_id FROM bindings WHERE draft_id=?", (ident,))
+                    if not binding and draft["payload"].get("edit_target"):
+                        binding = [{"remote_id": draft["payload"]["edit_target"]}]
                     rows = [[("Открыть серверный лот", "item:" + binding[0]["remote_id"])]] if binding else []
                     text, markup = "Состояние: " + escape(draft["state"]), keyboard(rows)
             elif action in {"items", "chats"}:
@@ -177,14 +180,17 @@ def create_router(store, api, products, synchronizer):
                     f'<a href="https://playerok.com/products/{escape(item.get("slug") or ident, quote=True)}">Открыть на Playerok</a>'
                 )
                 rows = [
-                    [("💰 Изменить цену", "editprice:" + ident), ("📋 Описание", "editdesc:" + ident)],
+                    [("💰 Цена / Скидка", "discount:" + ident), ("📋 Описание", "editdesc:" + ident)],
                     [("📝 Название", "editname:" + ident), ("🖼 Заменить фото", "editphoto:" + ident)],
+                    [("🧩 Атрибуты и данные", "editfields:" + ident)],
                     [("⭐ Стоимость размещения", "quote:" + ident)],
                     [("🗑 Удалить", "delete:" + ident)],
                 ]
                 if item.get("status") == "DRAFT":
                     rows.append([("Бесплатная публикация · превью", "publish:" + ident)])
                 markup = keyboard(rows)
+            elif action.startswith("editfields:"):
+                text, markup = await wizard.start_edit(owner, state, action.split(":", 1)[1])
             elif action.startswith("quote:"):
                 ident = action.split(":", 1)[1]
                 item = await api.call("get_item", id=ident)
@@ -195,7 +201,18 @@ def create_router(store, api, products, synchronizer):
                 )
                 text += "\n\nПросмотр ничего не покупает. Платные действия запрещены."
                 markup = keyboard([[("⬅️ Лот", "item:" + ident)]])
-            elif action.startswith(("editprice:", "editdesc:", "editname:", "editphoto:")):
+            elif action.startswith(("discount:", "editprice:")):
+                ident = action.split(":", 1)[1]
+                item = await products.owned_item(ident)
+                if item.get("raw_price") is None:
+                    raise ValidationError("API не вернул базовую цену. Изменение скидки недоступно.")
+                await state.set_state("discount")
+                await state.set_data({"item_id": ident})
+                text, markup = (
+                    f"💰 <b>Цена и скидка</b>\nБазовая цена: {item['raw_price']} ₽\nТекущая цена: {item['price']} ₽\n\nВведите цену со скидкой (минимум 5%). Для снятия скидки укажите базовую цену. Базовая цена не изменяется.",
+                    keyboard([]),
+                )
+            elif action.startswith(("editdesc:", "editname:", "editphoto:")):
                 kind, ident = action.split(":", 1)
                 item = await api.call("get_item", id=ident)
                 if not api.account.id or (item.get("user") or {}).get("id") != api.account.id:
@@ -454,6 +471,25 @@ def create_router(store, api, products, synchronizer):
             current = await state.get_state()
             if current == "wizard":
                 text, markup = await wizard.message(message, state)
+            elif current == "discount":
+                data = await state.get_data()
+                item = await products.owned_item(data["item_id"])
+                plan = discount_plan(item, message.text or "", getattr(api.account, "role", None))
+                nonce = secrets.token_hex(8)
+                await state.set_state(None)
+                await state.set_data(
+                    {
+                        "pending": {"kind": "discount", "target": data["item_id"], "payload": plan},
+                        "confirm_token": nonce,
+                    }
+                )
+                text = (
+                    f"💰 <b>{'Снять скидку' if plan['restore'] else 'Установить скидку'}</b>\n"
+                    f"Базовая цена: {plan['expected_raw_price']} ₽\nБыло: {plan['expected_price']} ₽\n"
+                    f"Новая цена: {plan['price']} ₽\nСкидка: {plan['discount_percent']}%\n\n"
+                    "Перед изменением условия будут проверены повторно."
+                )
+                markup = keyboard([[("✅ Подтвердить цену", "commit:" + nonce)]])
             elif current == "editphoto":
                 data = await state.get_data()
                 file = message.photo[-1] if message.photo else message.document

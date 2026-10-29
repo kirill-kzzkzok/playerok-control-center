@@ -50,7 +50,7 @@ class FakeAPI:
 
     async def call(self, method, **kwargs):
         if method == "get_game_category":
-            return {"options": []}
+            return {"id": kwargs["id"], "options": []}
         if method == "get_item":
             return {"id": kwargs["id"], "user": {"id": self.item_owner}, "status": "DRAFT", "price": 100}
         if method == "get_item_priority_statuses":
@@ -64,7 +64,7 @@ class FakeAPI:
         if method == "get_game_category_obtaining_types":
             yield [{"id": "o"}]
         else:
-            assert method == "get_game_category_data_fields"
+            assert method in {"get_game_category_data_fields", "get_game_category_agreements"}
             yield []
 
 

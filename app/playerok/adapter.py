@@ -12,7 +12,9 @@ from urllib.parse import urlsplit
 import httpx
 
 from playerokapi.account import Account
-from playerokapi.misc import PERSISTED_QUERIES
+from playerokapi.misc import PERSISTED_QUERIES, QUERIES
+
+ACCEPT_AGREEMENT_QUERY = "mutation acceptGameCategoryAgreement($input: AcceptGameCategoryAgreementInput!) { acceptGameCategoryAgreement(input: $input) { id } }"
 
 
 class APIError(RuntimeError):
@@ -99,6 +101,7 @@ class SafeAccount(Account):
                 "createChatMessage",
                 "markChatAsRead",
                 "updateDeal",
+                "acceptGameCategoryAgreement",
             }:
                 raise APIError("OPERATION_FORBIDDEN")
             if (
@@ -107,6 +110,13 @@ class SafeAccount(Account):
                 or self._permit_thread != threading.get_ident()
             ):
                 raise APIError("WRITE_NOT_AUTHORIZED")
+            trusted = (
+                ACCEPT_AGREEMENT_QUERY
+                if operation == "acceptGameCategoryAgreement"
+                else QUERIES.get(operation)
+            )
+            if not trusted or query != trusted:
+                raise APIError("WRITE_QUERY_NOT_AUTHORIZED")
         request_headers = {
             "accept": "application/json",
             "origin": self.base_url,
@@ -153,6 +163,20 @@ class SafeAccount(Account):
         if operation == "viewer" and not body["data"].get("viewer"):
             raise APIError("SESSION_EXPIRED")
         return response
+
+    def accept_game_category_agreement(self, agreement_id):
+        if not self.id or not self._is_initiated:
+            raise APIError("SESSION_NOT_INITIALIZED")
+        operation = "acceptGameCategoryAgreement"
+        payload = {
+            "operationName": operation,
+            "query": ACCEPT_AGREEMENT_QUERY,
+            "variables": {"input": {"agreementId": agreement_id, "userId": self.id}},
+        }
+        result = self.request("post", self.base_url + "/graphql", {}, payload).json()["data"].get(operation)
+        if not isinstance(result, dict) or result.get("id") != agreement_id:
+            raise APIError("AGREEMENT_RESULT_UNKNOWN", uncertain=True)
+        return result
 
     def close(self):
         self.client.close()

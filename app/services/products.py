@@ -7,11 +7,9 @@ from pathlib import Path
 from PIL import Image, UnidentifiedImageError
 
 from app.database.store import Conflict, now
+from app.services.agreements import Agreements, fingerprint, require_conditions
 from app.services.finance import selected_fee_multiplier
-
-
-class ValidationError(ValueError):
-    pass
+from app.services.products_errors import ValidationError
 
 
 def text_units(value):
@@ -168,7 +166,9 @@ def validate_draft(payload, form, role=None):
     for field in form:
         validate_field(field, values.get(field["key"], ""))
     if payload.get("discount") is not None:
-        raise ValidationError("Механизм установки скидки не подтверждён")
+        raise ValidationError(
+            "Скидка применяется отдельным подтверждённым действием после создания серверного черновика"
+        )
 
 
 def save_image(data, directory, max_size=10_000_000):
@@ -192,6 +192,12 @@ def save_image(data, directory, max_size=10_000_000):
             return str(path.resolve())
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
         raise ValidationError("Повреждённое или неподдерживаемое изображение") from None
+
+
+def field_baseline(item):
+    return fingerprint(
+        {key: item.get(key) for key in ("attributes", "data_fields", "comment", "category", "obtaining_type")}
+    )
 
 
 class Products:
@@ -221,7 +227,9 @@ class Products:
         ):
             fields.extend(page)
         selected = next((entry for entry in obtaining if entry["id"] == obtaining_type_id), {})
+        conditions = await Agreements(self.api).snapshot(category, selected)
         return {
+            "conditions": conditions,
             "form": category_form(category, fields),
             "category_fee_multiplier": category.get("fee_multiplier"),
             "obtaining_fee_multiplier": selected.get("fee_multiplier"),
@@ -233,8 +241,13 @@ class Products:
 
     async def queue_create(self, ident, owner, revision):
         draft = self.store.get_draft(ident, owner)
-        form = await self.schema(draft["payload"]["category_id"], draft["payload"]["obtaining_type_id"])
-        validate_draft(draft["payload"], form, getattr(self.api.account, "role", None))
+        if draft["payload"].get("edit_target"):
+            raise ValidationError("Черновик редактирования нельзя использовать для создания нового товара")
+        details = await self.schema_details(
+            draft["payload"]["category_id"], draft["payload"]["obtaining_type_id"]
+        )
+        require_conditions(draft["payload"], details["conditions"])
+        validate_draft(draft["payload"], details["form"], getattr(self.api.account, "role", None))
         with self.store.transaction() as db:
             r = db.execute(
                 "UPDATE drafts SET state='QUEUED',revision=revision+1 WHERE id=? AND owner_id=? AND revision=? AND state='DRAFT'",
@@ -243,6 +256,10 @@ class Products:
             if r.rowcount != 1:
                 raise Conflict("Черновик уже отправлен или изменён")
             operation = self.store.enqueue(f"create:{ident}", "create", ident, {"owner": owner}, db)
+            db.execute(
+                "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,?,?,?,?)",
+                (owner, "CREATE_QUEUED", ident, "PENDING", now()),
+            )
         return operation
 
     async def priority_preview(self, item_id, price):
@@ -252,6 +269,82 @@ class Products:
         if not isinstance(statuses, list):
             raise ValidationError("Цена размещения не получена")
         return statuses
+
+    async def owned_item(self, item_id):
+        item = await self.api.call("get_item", id=item_id)
+        if (
+            not getattr(self.api.account, "id", None)
+            or (item.get("user") or {}).get("id") != self.api.account.id
+        ):
+            raise ValidationError("Владение товаром не подтверждено")
+        if item.get("is_editable") is False:
+            raise ValidationError("Playerok запрещает редактирование этого товара")
+        return item
+
+    async def edit_fields_draft(self, owner, item_id):
+        item = await self.owned_item(item_id)
+        category_id = (item.get("category") or {}).get("id")
+        if not category_id:
+            raise ValidationError("API не вернул категорию товара")
+        obtaining_id = (item.get("obtaining_type") or {}).get("id")
+        details = await self.schema_details(category_id, obtaining_id)
+        attributes = item.get("attributes") or {}
+        data = {field["id"]: field.get("value") for field in item.get("data_fields") or []}
+        values = {}
+        for field in details["form"]:
+            values[field["key"]] = (
+                (item.get("comment") or "")
+                if field.get("comment")
+                else data.get(field["key"], "")
+                if field.get("data_field")
+                else attributes.get(field["key"], "")
+            )
+        payload = {
+            "edit_target": item_id,
+            "edit_baseline": field_baseline(item),
+            "category_id": category_id,
+            "obtaining_type_id": obtaining_id,
+            "obtaining_not_required": obtaining_id is None,
+            "game_id": (item.get("game") or {}).get("id"),
+            "fields": values,
+            "photos": [],
+            "name": item.get("name") or item_id,
+            "description": item.get("description") or "",
+            "price": item.get("price"),
+            "step": "fields",
+            "delivery": "manual",
+            "auto_confirm": False,
+        }
+        return self.store.draft(owner, payload)
+
+    async def queue_fields_edit(self, ident, owner, revision):
+        draft = self.store.get_draft(ident, owner)
+        value = draft["payload"]
+        target = value.get("edit_target")
+        if not target:
+            raise ValidationError("Черновик не привязан к редактируемому товару")
+        item = await self.owned_item(target)
+        if field_baseline(item) != value["edit_baseline"]:
+            raise Conflict("Поля товара изменились на Playerok. Откройте редактирование заново.")
+        details = await self.schema_details(value["category_id"], value["obtaining_type_id"])
+        require_conditions(value, details["conditions"])
+        for field in details["form"]:
+            validate_field(field, value["fields"].get(field["key"], ""))
+        with self.store.transaction() as db:
+            updated = db.execute(
+                "UPDATE drafts SET state='QUEUED',revision=revision+1 WHERE id=? AND owner_id=? AND revision=? AND state='DRAFT'",
+                (ident, owner, revision),
+            )
+            if updated.rowcount != 1:
+                raise Conflict("Редактирование уже отправлено или изменено")
+            operation = self.store.enqueue(
+                "fields:" + ident, "edit_fields", target, {"draft_id": ident, "owner": owner}, db
+            )
+            db.execute(
+                "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,?,?,?,?)",
+                (owner, "FIELDS_EDIT_QUEUED", target, "PENDING", now()),
+            )
+            return operation
 
     async def free_priority(self, item_id, price):
         statuses = await self.priority_preview(item_id, price)

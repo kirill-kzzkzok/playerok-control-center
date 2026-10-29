@@ -119,12 +119,14 @@ class FakeAPI:
         if method == "get_game":
             return {"categories": [{"id": "c1", "name": "Category"}]}
         if method == "get_game_category":
-            return {"options": []}
+            return {"id": kwargs["id"], "options": []}
         raise AssertionError(method)
 
     async def pages(self, method, collection, **kwargs):
         if method == "get_game_category_obtaining_types":
             yield [{"id": "o1", "name": "Manual"}]
+        elif method == "get_game_category_agreements":
+            yield []
         elif method == "get_game_category_data_fields":
             yield [
                 {

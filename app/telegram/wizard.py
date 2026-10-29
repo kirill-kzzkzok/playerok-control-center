@@ -6,10 +6,11 @@ from html import escape
 from aiogram.types import BufferedInputFile
 
 from app.database.store import now
+from app.services.agreements import fingerprint
 from app.services.attachments import Attachments
 from app.services.finance import calculate, format_calculation, sale_rule_from_api
 from app.services.products import ValidationError, listing_price, listing_text, validate_field
-from app.telegram.formatting import escaped
+from app.telegram.formatting import escaped, html_pages
 from app.telegram.keyboards import keyboard
 
 
@@ -26,6 +27,15 @@ class Wizard:
         await state.set_data({"draft_id": ident, "revision": 0})
         return await self.screen(owner, state)
 
+    async def start_edit(self, owner, state, item_id):
+        ident = await self.products.edit_fields_draft(owner, item_id)
+        draft = self.store.get_draft(ident, owner)
+        await self.load_form(draft["payload"], draft["payload"]["obtaining_type_id"])
+        self.store.update_draft(ident, owner, 0, draft["payload"])
+        await state.set_state("wizard")
+        await state.set_data({"draft_id": ident, "revision": 1})
+        return await self.screen(owner, state)
+
     async def save(self, owner, state, payload):
         data = await state.get_data()
         self.store.update_draft(data["draft_id"], owner, data["revision"], payload)
@@ -40,6 +50,17 @@ class Wizard:
         payload["fee_checked_at"] = snapshot["checked_at"]
         payload["fee_source"] = "https://playerok.com/sell; live GamePageCategory/gameCategoryObtainingTypes"
         payload["field_index"] = 0
+        payload["conditions"] = snapshot["conditions"]
+        payload["conditions_page"] = 0
+        payload["step"] = "conditions" if snapshot["conditions"]["documents"] else "fields"
+
+    def condition_pages(self, payload):
+        documents = payload.get("conditions", {}).get("documents", [])
+        return [
+            page
+            for document in documents
+            for page in html_pages(document["title"] + "\n\n" + document["text"])
+        ] or ["Условия не предоставлены Playerok."]
 
     async def screen(self, owner, state):
         data = await state.get_data()
@@ -74,21 +95,48 @@ class Wizard:
                 payload["obtaining_type_id"] = None
                 payload["obtaining_not_required"] = True
                 await self.load_form(payload, None)
-                payload["step"] = "fields"
                 await self.save(owner, state, payload)
                 return await self.screen(owner, state)
             text = "📬 <b>Способ получения</b>\nВыберите вариант Playerok."
+        elif step == "conditions":
+            pages = self.condition_pages(payload)
+            current = min(max(payload.get("conditions_page", 0), 0), len(pages) - 1)
+            text = f"📄 <b>Условия выбранной категории · {current + 1}/{len(pages)}</b>\n\n{pages[current]}"
+            navigation = []
+            if current:
+                navigation.append(("← Условия", f"w:{nonce}:conditions_prev"))
+            if current + 1 < len(pages):
+                navigation.append(("Условия →", f"w:{nonce}:conditions_next"))
+            else:
+                label = (
+                    "Принимаю условия на Playerok"
+                    if payload["conditions"]["pending"]
+                    else "Инструкцию прочитал · далее"
+                )
+                rows.append([(label, f"w:{nonce}:conditions_done")])
+            if navigation:
+                rows.append(navigation)
+            rows.append([("🔄 Проверить принятие на Playerok", f"w:{nonce}:conditions_refresh")])
+            if payload["conditions"]["pending"]:
+                text += "\n\nPlayerok требует принять условия. Только явное подтверждение отправит отдельную операцию; создание товара здесь не выполняется."
         elif step == "fields":
             form = payload["form"]
             index = payload.get("field_index", 0)
             if index >= len(form):
-                payload["step"] = "name"
+                payload["step"] = "preview" if payload.get("edit_target") else "name"
                 await self.save(owner, state, payload)
                 return await self.screen(owner, state)
             field = form[index]
             text = f"🧩 <b>{escape(field['label'])}</b>\n" + (
                 "Обязательное поле" if field["required"] else "Необязательное: введите − для пропуска"
             )
+            if payload.get("edit_target"):
+                try:
+                    validate_field(field, payload["fields"].get(field["key"], ""))
+                except ValidationError:
+                    pass
+                else:
+                    rows.append([("Оставить текущее значение", f"w:{nonce}:field_keep")])
             if field["kind"] in {"choice", "multi"}:
                 selected = payload.get("fields", {}).get(field["key"], []) if field["kind"] == "multi" else []
                 choices = [
@@ -127,7 +175,7 @@ class Wizard:
                     ]
                 )
         elif step == "price":
-            text = "💰 <b>Цена продажи</b>\nВведите целую сумму в рублях. Установка настоящей скидки пока недоступна: протокол не подтверждён."
+            text = "💰 <b>Базовая цена</b>\nВведите целую сумму в рублях. Настоящая скидка устанавливается отдельным подтверждённым действием после создания серверного черновика."
         elif step == "delivery":
             text = "⚡ <b>Выдача</b>\nВыберите локальный режим. Автовыдача остаётся выключенной до отдельного включения после проверки."
             choices = [
@@ -141,22 +189,38 @@ class Wizard:
             text = "✅ <b>Подтверждение сделки</b>\nАвтоматическое SENT выключено. SENT продавца и подтверждение покупателя — разные действия."
             rows = [[("Продолжить", f"w:{nonce}:confirm_done")]]
         elif step == "preview":
-            rule = sale_rule_from_api(payload.get("fee_multiplier"), payload.get("fee_checked_at") or now())
-            calculation = format_calculation(calculate(payload["price"], platform=rule))
-            text = (
-                f"📦 <b>{escape(payload.get('name', ''))}</b>\n\n{escaped(payload.get('description', ''), 2200)}\n\n"
-                f"💰 Цена: {payload.get('price')} ₽\n🖼 Фото: {len(payload['photos'])}\n"
-                f"⚡ Выдача: {escape(payload['delivery'])} (автоматика выключена)\n\n"
-                f"{escape(calculation)}\n"
-                "Стоимость PREMIUM доступна только после создания серверного черновика. Покупка запрещена.\n"
-                "Первое действие создаёт черновик на Playerok. Публикация отдельная, только при подтверждённой нулевой стоимости."
-            )
-            rows = [
-                [("Создать серверный черновик", f"w:{nonce}:submit")],
-                [("📝 Название", f"w:{nonce}:edit:name"), ("📋 Описание", f"w:{nonce}:edit:description")],
-                [("🖼 Фото", f"w:{nonce}:edit:photos"), ("💰 Цена", f"w:{nonce}:edit:price")],
-                [("⚡ Выдача", f"w:{nonce}:edit:delivery")],
-            ]
+            if payload.get("edit_target"):
+                text = (
+                    f"🧩 <b>Редактирование: {escaped(payload['name'], 400)}</b>\n"
+                    f"Полей по схеме: {len(payload['form'])}\n"
+                    "Будут изменены только атрибуты и данные товара. Приватные значения в превью не выводятся.\n"
+                    "Перед отправкой проверяются владение, текущие поля и условия Playerok."
+                )
+                rows = [
+                    [("✅ Сохранить изменения на Playerok", f"w:{nonce}:submit")],
+                    [("✏️ Изменить поля", f"w:{nonce}:edit:fields")],
+                    [("📄 Условия", f"w:{nonce}:conditions_refresh")],
+                ]
+            else:
+                rule = sale_rule_from_api(
+                    payload.get("fee_multiplier"), payload.get("fee_checked_at") or now()
+                )
+                calculation = format_calculation(calculate(payload["price"], platform=rule))
+                text = (
+                    f"📦 <b>{escape(payload.get('name', ''))}</b>\n\n{escaped(payload.get('description', ''), 2200)}\n\n"
+                    f"💰 Цена: {payload.get('price')} ₽\n🖼 Фото: {len(payload['photos'])}\n"
+                    f"⚡ Выдача: {escape(payload['delivery'])} (автоматика выключена)\n\n"
+                    f"{escape(calculation)}\n"
+                    "Стоимость PREMIUM доступна только после создания серверного черновика. Покупка запрещена.\n"
+                    "Первое действие создаёт черновик на Playerok. Публикация отдельная, только при подтверждённой нулевой стоимости."
+                )
+                rows = [
+                    [("Создать серверный черновик", f"w:{nonce}:submit")],
+                    [("📝 Название", f"w:{nonce}:edit:name"), ("📋 Описание", f"w:{nonce}:edit:description")],
+                    [("🖼 Фото", f"w:{nonce}:edit:photos"), ("💰 Цена", f"w:{nonce}:edit:price")],
+                    [("⚡ Выдача", f"w:{nonce}:edit:delivery")],
+                    [("📄 Условия категории", f"w:{nonce}:conditions_refresh")],
+                ]
         choice_view = f"{step}:{payload.get('category_id', '')}:{payload.get('field_index', 0)}"
         if choices:
             page_info = payload.get("choice_page") or {}
@@ -197,7 +261,53 @@ class Wizard:
         payload, action = draft["payload"], parts[2]
         step = payload["step"]
         removed_photo = None
-        if action == "choice_page":
+        if action in {"conditions_next", "conditions_prev", "conditions_done"} and step == "conditions":
+            pages = self.condition_pages(payload)
+            current = payload.get("conditions_page", 0)
+            if action == "conditions_next":
+                if current + 1 >= len(pages):
+                    raise ValidationError("Последняя страница условий уже открыта")
+                payload["conditions_page"] = current + 1
+            elif action == "conditions_prev":
+                if current <= 0:
+                    raise ValidationError("Первая страница условий уже открыта")
+                payload["conditions_page"] = current - 1
+            else:
+                if current != len(pages) - 1:
+                    raise ValidationError("Сначала откройте все страницы условий")
+                conditions = payload["conditions"]
+                if conditions["pending"]:
+                    if not self.api.account.writes_enabled:
+                        raise ValidationError("Записи Playerok отключены. Условия на сервере не приняты.")
+                    account_id = getattr(self.api.account, "id", None)
+                    if not account_id:
+                        raise ValidationError("Авторизация Playerok не подтверждена")
+                    acceptance = {
+                        "agreements": conditions["pending"],
+                        "account_id": account_id,
+                        "obtaining_type_id": payload.get("obtaining_type_id"),
+                    }
+                    ident = self.store.enqueue(
+                        "agreements:" + fingerprint({"category": payload["category_id"], **acceptance}),
+                        "agreements",
+                        payload["category_id"],
+                        acceptance,
+                    )
+                    self.store.audit(owner, "ACCEPT_AGREEMENTS_QUEUED", payload["category_id"], "PENDING")
+                    return (
+                        f"Принятие условий поставлено в очередь: <code>{ident}</code>. Затем нажмите «Проверить принятие на Playerok».",
+                        keyboard([[("Проверить принятие на Playerok", f"w:{parts[1]}:conditions_refresh")]]),
+                    )
+                payload["conditions_ack"] = conditions["hash"]
+                self.store.audit(owner, "CONDITIONS_REVIEWED", payload["category_id"], conditions["hash"])
+                payload["step"] = payload.pop("conditions_return", "fields")
+        elif action == "conditions_refresh" and step in {"conditions", "preview"}:
+            if step == "preview":
+                payload["conditions_return"] = "preview"
+            await self.load_form(payload, payload.get("obtaining_type_id"))
+            if not payload["conditions"]["documents"]:
+                payload["step"] = payload.pop("conditions_return", "fields")
+        elif action == "choice_page":
             try:
                 number = int(parts[3])
                 if not 0 <= number < data.get("choice_pages", 0):
@@ -213,6 +323,7 @@ class Wizard:
                     "category": "game",
                     "obtaining": "category",
                     "fields": "obtaining",
+                    "conditions": "category" if payload.get("obtaining_not_required") else "obtaining",
                     "name": "fields",
                     "description": "name",
                     "photos": "description",
@@ -225,9 +336,18 @@ class Wizard:
                     raise ValidationError("Предыдущий шаг недоступен")
                 payload["step"] = previous[step]
                 if step in {"name", "fields"} and (not payload.get("form") or step == "fields"):
-                    payload["step"] = "category" if payload.get("obtaining_not_required") else "obtaining"
+                    payload["step"] = (
+                        "conditions"
+                        if payload.get("conditions", {}).get("documents")
+                        else "category"
+                        if payload.get("obtaining_not_required")
+                        else "obtaining"
+                    )
+                    payload["conditions_page"] = 0
                 if payload["step"] == "fields":
                     payload["field_index"] = max(0, len(payload.get("form", [])) - 1)
+                if payload.get("edit_target") and step in {"fields", "conditions"}:
+                    payload["step"] = "preview"
         elif action == "next" and step == "game":
             payload["cursor"] = data.get("next_cursor")
         elif action == "choose":
@@ -278,6 +398,10 @@ class Wizard:
                 payload["step"] = "confirm" if choice["value"] == "manual" else "delivery_data"
             else:
                 raise ValidationError("Выбор не соответствует шагу")
+        elif action == "field_keep" and step == "fields" and payload.get("edit_target"):
+            field = payload["form"][payload["field_index"]]
+            validate_field(field, payload["fields"].get(field["key"], ""))
+            payload["field_index"] += 1
         elif action == "field_done" and step == "fields":
             field = payload["form"][payload["field_index"]]
             if field["kind"] != "multi":
@@ -313,13 +437,23 @@ class Wizard:
             payload["step"] = "preview"
         elif action == "edit" and step == "preview":
             target = parts[3] if len(parts) > 3 else "name"
-            if target not in {"name", "description", "photos", "price", "delivery"}:
+            allowed = (
+                {"fields"}
+                if payload.get("edit_target")
+                else {"name", "description", "photos", "price", "delivery"}
+            )
+            if target not in allowed:
                 raise ValidationError("Неизвестное поле редактирования")
             payload["step"] = target
+            if target == "fields":
+                payload["field_index"] = 0
         elif action == "submit" and step == "preview":
             if not self.api.account.writes_enabled:
                 raise ValidationError("Записи Playerok отключены в .env. Локальный черновик сохранён.")
-            ident = await self.products.queue_create(draft["id"], owner, draft["revision"])
+            method = (
+                self.products.queue_fields_edit if payload.get("edit_target") else self.products.queue_create
+            )
+            ident = await method(draft["id"], owner, draft["revision"])
             await state.clear()
             return f"Операция сохранена: <code>{ident}</code>. Результат смотрите в диагностике.", keyboard(
                 []

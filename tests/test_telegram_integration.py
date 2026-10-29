@@ -72,7 +72,7 @@ class CatalogAPI:
         if method == "get_game":
             return {"categories": [{"id": "category", "name": "Category"}]}
         if method == "get_game_category":
-            return {"options": []}
+            return {"id": kwargs["id"], "options": []}
         raise AssertionError(method)
 
     async def pages(self, method, collection, **kwargs):

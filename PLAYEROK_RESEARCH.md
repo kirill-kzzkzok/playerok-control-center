@@ -103,3 +103,43 @@ BAD_REQUEST: введённые данные товара должны соот�
 - https://playerok.com/_next/static/chunks/9092-ff2d2cafe217731b.js — SHA256 c911260ade34aad6b1b0abeb2978daf63ad92370285f862e2709b86d7a29b9bd
 
 - https://playerok.com/_next/static/chunks/pages/sell-c39653030b4e944c.js — SHA256 be7a8c7ceda6b4ece13ea456e2341dd46b3a8eabf03cf6e9056d23e4605bea01
+
+
+## Редактор товара и вывод: новые официальные источники, 2026-10-29
+
+Из публичного build manifest получены дополнительные bundles редактора товара и
+страницы вывода. Загружены обычным GET без cookies, 10/10 HTTP 200.
+
+Подтверждено в официальном редакторе (4354c395451c.js в локальном исследовании):
+- UpdateItemInput включает comment; при непустом comment форма передаёт dataFields=[].
+- Для обычного продавца исходная rawPrice сохраняется. Поле price — фактическая цена
+  продажи, в том числе со скидкой. При пустой цене со скидкой форма отправляет rawPrice.
+- Верхняя граница скидочной цены — floor(rawPrice*.95), нижняя — минимум для роли;
+  при недостаточном диапазоне UI скрывает ввод скидки. Изменение rawPrice доступно
+  лишь специальным ролям; наш адаптер его не добавляет.
+- Сценарий скидки в боте реализован с отдельным подтверждением и проверкой свежих
+  price/rawPrice. Проверен на mock; live-изменение рабочей цены не выполнялось.
+
+Подтверждено в коде вывода (587921dc4784.js / abc07b5139a5.js):
+- fee задаётся в процентах; базовый расчёт fee_amount=amount*fee/100.
+- Дополнительный сбор USDT — 1 USDT, в RUB используется текущий exchangeRate.
+- Применяется minFeeAmount: max(base_fee+extra_fee,minFeeAmount).
+- Историческая ветка для транзакций до 2025-04-01 отдельная: современные ставки
+  нельзя переносить на старые операции. Округление фактического расчёта пока не сверено.
+
+Обычная read-only introspection input types вернула HTTP 500. Не обходили ограничения
+и не повторяли запрос; контракт update/comment/discount подтверждается public frontend,
+а не неуспешной интроспекцией. Безопасное чтение условий аккаунта прошло, mutations=0.
+
+Дополнительно в ранее полученном официальном общем bundle подтверждены
+acceptGameCategoryAgreement($input: AcceptGameCategoryAgreementInput!) и входные
+agreementId/userId. Read gameCategoryAgreements с userId возвращает непринятые условия;
+соглашения получения используют тот же механизм принятия. Реальное принятие не запускалось.
+
+Новые источники с хешами:
+
+- https://playerok.com/_next/static/chunks/6476-589a32cc120d2139.js — SHA256 af96a5e8192b40f48e11c9dcd2cc89709fd28a2bd2559ea4c79cf23e74ad6977
+
+- https://playerok.com/_next/static/chunks/pages/wallet/withdraw-afd5dceb017e6632.js — SHA256 f52f1c1a0bba0b6ebe96a0c04e7bc596f43afbf57956702bfccbd8cf87c4f371
+
+- https://playerok.com/_next/static/chunks/pages/products/[slug]/edit-4767bcce2b41850b.js — SHA256 cd33d827c17c764e35bca13fcd910fbb0bf53ee768c27acb58f0482aa3f53c05

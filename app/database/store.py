@@ -110,9 +110,9 @@ class Store:
             existing = connection.execute("SELECT id FROM outbox WHERE operation_key=?", (key,)).fetchone()
             if existing:
                 return existing[0]
-            if kind in {"create", "publish", "edit", "delete"}:
+            if kind in {"create", "publish", "edit", "edit_fields", "discount", "delete", "agreements"}:
                 blocked = connection.execute(
-                    "SELECT id FROM outbox WHERE target=? AND kind IN ('create','publish','edit','delete') "
+                    "SELECT id FROM outbox WHERE target=? AND kind IN ('create','publish','edit','edit_fields','discount','delete','agreements') "
                     "AND status IN ('PENDING','PROCESSING','RETRYABLE_FAILED','UNCERTAIN') LIMIT 1",
                     (target,),
                 ).fetchone()

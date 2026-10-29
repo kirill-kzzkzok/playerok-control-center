@@ -69,3 +69,26 @@ Steam schema фактически вернула RANGE и TEXTAREA; upstream и�
 
 Read-only: data/live_phase2_schema.json фиксирует успешную авторизацию/категорию без
 obtaining/dataFields и **mutations=0**. Реальные рабочие товары не изменялись.
+
+
+## Условия, редактирование полей и скидки
+
+Полный suite: **151 passed in 13.87s**; ruff чист, pip check без нарушений.
+
+- test_agreements.py: 8 сценариев — полные страницы условий, read-only запрет,
+  явная очередь, повторные callbacks, сверка, изменение текста, частичный timeout,
+  чужая категория и GraphQL input через mock HTTP. Live-принятие не запускалось.
+- test_item_fields.py: 5 сценариев — edit draft и запрет create, сохранение неизвестных
+  атрибутов, приватность, FSM restart, изменения до enqueue/execute, владение/editable,
+  сериализация comment.
+- test_discounts.py: 10 сценариев — диапазон/5%/floor/снятие, неизвестная rawPrice,
+  отсутствие выдуманной старой цены, свежая проверка и подтверждение цены в ответе.
+  Только изолированные API; рабочие лоты не изменялись.
+- test_transport_guards.py: operationName не позволяет скрыть платную mutation.
+
+Live read-only: data/live_conditions_readonly.json — авторизация/соглашения прочитаны,
+mutations=0. Introspection типов input → HTTP 500, не повторялась и не считается успехом.
+Public bundles редактора/вывода: 10 успешных GET без авторизационных cookies.
+Условия реального аккаунта, объявления, сделки и деньги на этом этапе не изменялись.
+
+Финальная проверка контрольной точки: **151 passed in 11.94s**; JUnit: `data/phase2_conditions_results.xml` (вне Git). Ruff/pip check/secret scan прошли.
