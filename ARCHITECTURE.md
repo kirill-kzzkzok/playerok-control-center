@@ -327,3 +327,20 @@ Timeout не повторяется. Failed/unknown шаг блокирует ch
 PLAYEROK_AUTOMATION_ENABLED=false и PLAYEROK_WRITES_ENABLED=false по умолчанию.
 Для запуска нужны оба флага, сохранённая enabled policy, dry-run и явное подтверждение
 конкретного заказа. Это не подписка на автоматическую выдачу всем будущим заказам.
+
+
+## PromotionSettings / PromotionsPanel (v11)
+
+Глобальная desired promotion policy имеет revision/actor и режим выбора all/selected;
+per-item target overrides include/exclude. Сервис не вызывает mutation. Panel редактирует
+снимок в SQLite FSM, сохраняет через CAS и проверяет владельца. Ночные часы задаются в
+МСК; position mode требует две разнесённые, свежие observations той же policy revision.
+priority_position scope явно ограничен: общий поисковый rank им не доказывается.
+
+Evaluate перечитывает item/priority price по raw_price, проверяет status/selection,
+outbox lock, интервалы и бюджет. Ledger RESERVED/SUCCEEDED/UNCERTAIN учитывается как
+потенциально потраченные деньги; неизвестное не обнуляется. Превышение budget отключает
+policy атомарным CAS с audit; evaluation хранится отдельной строкой без создания расхода.
+Фактического платного исполнителя нет. Постоянный сбор rank/периодический планировщик
+и уведомления budget guard требуют дальнейшей реализации. История расходов читает
+только существующий ledger и не подменяет его dry-run журналом.

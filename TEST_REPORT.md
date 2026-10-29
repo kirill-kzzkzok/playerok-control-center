@@ -316,3 +316,19 @@ chain was created. Registration is explicit per order; new-order automatic enrol
 promotion controls and broader acceptance remain pending. Unknown chain states are
 not retried; manual resolution of one step does not silently resume the sequence.
 Secret scan clean.
+
+
+## PHASE 5 — promotion settings checkpoint (2026-10-30)
+
+341 passed in 33.29s; data/phase5_promotion_settings_results.xml; Ruff/pip check and
+actual-secret scan clean. Tests cover policy CAS/owner guards, include/exclude/all,
+night timing and two spaced observations, invalid intervals/bools/money, native mock
+quotes via raw_price, ledger budget limits and automatic local disable, inactive/busy
+items, separate evaluation ledger, restart/stale buttons and real Dispatcher settings.
+No paid executor exists here; no paid outbox/expense created by dry-run.
+
+Backup + v11 local migration: data/promotion_settings_migration_check.json; 217 orders,
+1 owner preserved, 0 configured policies and expenses, external_requests=0/mutations=0.
+No live market mutation/charge was tested. priority_position is explicitly scoped to
+priority placement; global search rank is not proven. Periodic scheduling, full target
+listing and asynchronous budget guard notices remain pending along with the full goal.

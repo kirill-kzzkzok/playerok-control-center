@@ -631,3 +631,43 @@ restart, повтор advance/create, timeout приветствия, возвр
 выключенные flags. Дальнейшая автоматика, promotion controls, аналитика и приёмка остаются.
 
 Контрольная точка: **326 passed in 32.10s**, после финальной правки 19 passed in 7.39s; Ruff/pip/format/secret scan чистые. JUnit data/phase5_chains_results.xml.
+
+
+## PHASE 5 — настройки продвижения и dry-run (2026-10-30)
+
+Миграция v11: promotion_policy с optimistic revision, promotion_targets include/exclude,
+реальные API observations и отдельный журнал evaluations. Telegram предоставляет все
+базовые параметры: режим time/position, интервал, check interval, threshold/cooldown,
+night toggle/interval/threshold/start/end (МСК), расходы на операцию/день/месяц и число
+операций на лот. Defaults сохранены по спецификации: enabled=false, 3600/120/10/600,
+ночь false, 14400/25/23–8, все бюджеты 0. Bool/целочисленные значения и интервалы
+валидируются, включая ночные значения. Выбор всех подходящих и отдельные include/exclude
+сохраняются; переключение и редактор имеют owner/revision/nonce guards и durable FSM.
+Все действия настроек локальные, рабочие объявления не изменяются.
+
+У лота есть отдельная dry-run карточка. Она читает реальную стоимость priority statuses
+по raw_price и перечитывает выбранный quote перед оценкой. Position сохраняется с
+источником и временем: priority_position относится к приоритетному размещению, не
+объявляется доказательством общего места в поиске. В режиме position нужны две свежие
+проверки с требуемым интервалом; повторный клик не подделывает вторую разнесённую проверку.
+Изменение policy revision начинает новую серию observations. Неактивные/исключённые
+лоты и незавершённые outbox блокируют оценку. Time/cooldown учитывают известные
+RESERVED/SUCCEEDED/UNCERTAIN расходы. Дневные/месячные границы считаются в МСК.
+
+Превышение budget/max-count выключает локальную policy под CAS и сохраняет audit,
+не перетирая более свежие настройки. Evaluation хранится отдельно от расходов: dry-run
+не создаёт promotion_expenses, financial_operations или платный outbox. История
+сохранённых расходов доступна в Telegram, пустая история не заполняется оценками.
+Это не работающий paid promoter: платного исполнения нет, фактические списания не
+создавались. Periodic scheduling/полный список всех настроенных лотов и автоматические
+уведомления budget guard ещё предстоят; экран запроса честно показывает результат.
+
+v11 применена после backup before-promotions-v11: 217 заказов, 1 владелец сохранены,
+0 настроенных promotion policy/расходов; data/promotion_settings_migration_check.json.
+Внешних запросов и mutations при миграции нет. Новых live-проверок рыночных действий
+не выполнялось. Тесты используют mock API/read quotes, бюджетные записи только в tmp DB.
+Проверены CAS/owner/selection, defaults/invalid values, night/position timing, реальные
+mock quote inputs/raw_price, budget/неопределённые расходы, отсутствие платных действий,
+FSM restart и настоящий aiogram редактор→save→stop. Остальные фазы цели не сокращены.
+
+Проверка продвижения: **341 passed in 33.29s**, JUnit data/phase5_promotion_settings_results.xml; Ruff/pip/format/secret scan чистые.

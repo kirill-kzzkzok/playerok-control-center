@@ -25,6 +25,7 @@ from app.telegram.fulfillment_panel import FulfillmentPanel
 from app.telegram.keyboards import keyboard, main_menu
 from app.telegram.operations_panel import OperationsPanel
 from app.telegram.orders_panel import OrdersPanel
+from app.telegram.promotions_panel import PromotionsPanel
 from app.telegram.replies_panel import RepliesPanel
 from app.telegram.wizard import Wizard
 from playerokapi.enums import ItemStatuses
@@ -55,6 +56,7 @@ def create_router(store, api, products, synchronizer):
     orders_panel = OrdersPanel(store, api)
     fulfillment_panel = FulfillmentPanel(store, api)
     automation_panel = AutomationPanel(store, api)
+    promotions_panel = PromotionsPanel(store, api)
 
     @router.message(CommandStart())
     async def start(message, state):
@@ -133,6 +135,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await replies.callback(action, owner, state)
             elif action.startswith("ops:"):
                 text, markup = await operations.callback(action, owner, state)
+            elif action == "promotions" or action.startswith(("promo:", "pp:", "pi:")):
+                text, markup = await promotions_panel.callback(action, owner, state)
             elif action == "automation" or action.startswith(("auto:", "ap:")):
                 text, markup = await automation_panel.callback(action, owner, state)
             elif action.startswith("ff:"):
@@ -222,6 +226,7 @@ def create_router(store, api, products, synchronizer):
                     [("⭐ Стоимость размещения", "quote:" + ident)],
                     [("💰 Финансовый расчёт", "finance:" + ident)],
                     [("⚡ Политика выдачи · dry-run", "auto:item:" + ident)],
+                    [("🚀 Продвижение · dry-run", "promo:item:" + ident)],
                     [("🗑 Удалить", "delete:" + ident)],
                 ]
                 if item.get("status") == "DRAFT":
@@ -487,6 +492,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await orders_panel.message(message, state)
             elif current and current.startswith("automation:"):
                 text, markup = await automation_panel.message(message, state)
+            elif current and current.startswith("promotion:"):
+                text, markup = await promotions_panel.message(message, state)
             elif current and current.startswith("fulfill:"):
                 text, markup = await fulfillment_panel.message(message, state)
             elif current and current.startswith("resolve:"):

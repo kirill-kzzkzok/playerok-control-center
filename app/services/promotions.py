@@ -21,25 +21,58 @@ class PromotionPolicy:
     daily: str = "0"
     monthly: str = "0"
     max_operations_per_item: int = 0
+    night_start_hour: int = 23
+    night_end_hour: int = 8
 
     def __post_init__(self):
+        integers = (
+            self.interval_seconds,
+            self.check_seconds,
+            self.cooldown_seconds,
+            self.night_interval_seconds,
+            self.threshold,
+            self.night_threshold,
+            self.max_operations_per_item,
+            self.night_start_hour,
+            self.night_end_hour,
+        )
+        if (
+            any(type(value) is not int for value in integers)
+            or type(self.enabled) is not bool
+            or type(self.night_enabled) is not bool
+        ):
+            raise ValueError("Ожидаются целые интервалы и явные переключатели")
         if (
             self.mode not in {"time", "position"}
             or self.interval_seconds < 600
             or self.check_seconds < 120
             or self.cooldown_seconds < 600
+            or self.night_interval_seconds < 600
+            or max(self.interval_seconds, self.night_interval_seconds, self.cooldown_seconds) > 31 * 86400
+            or self.check_seconds > 86400
         ):
             raise ValueError("Недопустимые интервалы продвижения")
         if self.threshold < 1 or self.night_threshold < 1 or self.max_operations_per_item < 0:
             raise ValueError("Недопустимые ограничения")
         for value in (self.per_operation, self.daily, self.monthly):
             money(value)
+        if (
+            not 0 <= self.night_start_hour <= 23
+            or not 0 <= self.night_end_hour <= 23
+            or self.night_start_hour == self.night_end_hour
+        ):
+            raise ValueError("Ночные часы: 0–23, начало и конец должны отличаться")
 
     def due(self, at, last_bump, positions=()):
         if not self.enabled or at.tzinfo is None:
             return False
         local = at.astimezone(ZoneInfo("Europe/Moscow"))
-        night = self.night_enabled and (local.hour >= 23 or local.hour < 8)
+        start, end = self.night_start_hour, self.night_end_hour
+        night = self.night_enabled and (
+            (local.hour >= start or local.hour < end) if start > end else start <= local.hour < end
+        )
+        if last_bump and last_bump.tzinfo is None:
+            return False
         elapsed = (at - last_bump).total_seconds() if last_bump else float("inf")
         if elapsed < self.cooldown_seconds:
             return False
@@ -49,8 +82,16 @@ class PromotionPolicy:
             return False
         first, second = positions[-2:]
         threshold = self.night_threshold if night else self.threshold
+        if any(
+            not isinstance(p, (list, tuple))
+            or len(p) != 2
+            or not isinstance(p[1], datetime)
+            or p[1].tzinfo is None
+            for p in (first, second)
+        ):
+            return False
         return (
-            all(isinstance(p[0], int) and p[0] > threshold for p in (first, second))
+            all(type(p[0]) is int and p[0] > threshold for p in (first, second))
             and 0 <= (at - second[1]).total_seconds() <= self.check_seconds
             and self.check_seconds <= (second[1] - first[1]).total_seconds() <= self.check_seconds * 2
         )

@@ -540,3 +540,33 @@ async def test_automation_router_edits_local_policy_without_enabling_runtime(tmp
     finally:
         await bot.session.close()
         store.close()
+
+
+async def test_promotions_settings_router_has_no_paid_execution(tmp_path):
+    store = Store(tmp_path / "promotion-ui.sqlite")
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    api = CatalogAPI()
+    ui = Interaction(bot, dispatcher(store, api))
+    state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
+    try:
+        await ui.message("/start")
+        await ui.click("automation")
+        await ui.click("promotions")
+        nonce = (await state.get_data())["promotion"]["nonce"]
+        await ui.click(f"pp:{nonce}:edit:interval_seconds")
+        await ui.message("7200")
+        nonce = (await state.get_data())["promotion"]["nonce"]
+        ui.dp = dispatcher(store, api)
+        await ui.click(f"pp:{nonce}:save")
+        assert store.rows("SELECT revision FROM promotion_policy") == [{"revision": 1}]
+        assert "Платное исполнение отсутствует" in session.calls[-1].text
+        await ui.click("promo:stop")
+        assert store.rows("SELECT revision FROM promotion_policy") == [{"revision": 2}]
+        assert not store.rows("SELECT * FROM promotion_expenses")
+        assert not store.rows("SELECT * FROM outbox")
+        await ui.click("promotions", owner=8)
+        assert not api.calls
+    finally:
+        await bot.session.close()
+        store.close()
