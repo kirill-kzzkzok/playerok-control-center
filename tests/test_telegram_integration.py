@@ -529,7 +529,7 @@ async def test_automation_router_edits_local_policy_without_enabling_runtime(tmp
         nonce = (await state.get_data())["automation"]["nonce"]
         ui.dp = dispatcher(store, api)
         await ui.click(f"ap:{nonce}:save")
-        assert "Исполнение выключено" in session.calls[-1].text
+        assert "Сохранение политики не запускает отправки" in session.calls[-1].text
         assert store.rows("SELECT revision FROM delivery_policies") == [{"revision": 1}]
         assert not store.rows("SELECT * FROM outbox")
         await ui.click("auto:stop")

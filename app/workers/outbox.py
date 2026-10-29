@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from app.playerok.adapter import APIError, plain
 from app.services.agreements import Agreements, require_conditions
 from app.services.attachments import Attachments
+from app.services.delivery_chains import DeliveryChains
 from app.services.discounts import discount_plan
 from app.services.fulfillment import Fulfillment
 from app.services.order_management import deliverable
@@ -50,6 +51,21 @@ class Executor:
 
     async def __call__(self, action):
         kind, target, payload = action["kind"], action["target"], action["payload"]
+        chain_chat = None
+        if payload.get("chain_id"):
+            chain_chat = await DeliveryChains(self.store, self.api).verify_step(action)
+        if kind in {"chain_message", "delivery_text"}:
+            if not payload.get("chain_id"):
+                raise ValidationError("Автоматическое сообщение требует зарегистрированной цепочки")
+            text = payload.get("text", "")
+            if not text.strip() or len(text.encode("utf-16-le")) // 2 > 3500:
+                raise ValidationError("Пустое или слишком длинное сообщение")
+            result = await self.mutate(
+                "createChatMessage", "send_message", chat_id=chain_chat, text=text
+            )
+            if not result.get("id"):
+                raise APIError("CHAIN_MESSAGE_UNKNOWN", uncertain=True)
+            return {"message_id": result["id"]}
         if kind == "fulfill":
             service = Fulfillment(self.store, self.api)
             prepared = await service.load(target)

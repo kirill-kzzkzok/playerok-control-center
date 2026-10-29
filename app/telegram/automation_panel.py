@@ -3,6 +3,7 @@ from dataclasses import asdict
 
 from app.database.store import Conflict
 from app.services.automation import Automation, DeliveryPolicy, message_text
+from app.services.delivery_chains import DeliveryChains
 from app.services.products import ValidationError
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
@@ -26,7 +27,7 @@ class AutomationPanel:
         ]
         buttons.extend([[("📦 Выбрать товар", "items")], [("⛔ Выключить все политики выдачи", "auto:stop")]])
         return (
-            "⚡ <b>Автоматизация</b>\nИсполнение автоматических отправок сейчас выключено. Здесь сохраняются желаемые политики и выполняются dry-run проверки.\nАвтоподнятие: только расчёт, платные операции запрещены. Автовывод запрещён.\nВыберите товар в списке или откройте его карточку.",
+            "⚡ <b>Автоматизация</b>\nЗдесь сохраняются политики и выполняются dry-run проверки. Запуск цепочки отдельного заказа требует отдельного подтверждения и разрешения в локальной конфигурации.\nАвтоподнятие: только расчёт, платные операции запрещены. Автовывод запрещён.\nВыберите товар в списке или откройте его карточку.",
             keyboard(buttons),
         )
 
@@ -37,7 +38,7 @@ class AutomationPanel:
         await state.set_data({"automation": data})
         values = data["values"]
         modes = {"manual": "Ручной", "text": "Постоянный текст", "stock": "Уникальный запас"}
-        text = f"⚡ <b>Политика выдачи · v{data['revision']}</b>\nТовар: {escaped(data['id'], 100)}\nРежим: {modes[values['mode']]}\nЖелаемое включение: {'да' if values['enabled'] else 'нет'}\nОтметка SENT после выдачи: {'запрошена' if values['mark_sent'] else 'нет'}\n\nИсполнение выключено: сохранение политики не запускает отправки. Изменения применяются только после «Сохранить»."
+        text = f"⚡ <b>Политика выдачи · v{data['revision']}</b>\nТовар: {escaped(data['id'], 100)}\nРежим: {modes[values['mode']]}\nЖелаемое включение: {'да' if values['enabled'] else 'нет'}\nОтметка SENT после выдачи: {'запрошена' if values['mark_sent'] else 'нет'}\n\nСохранение политики не запускает отправки. Запуск выбранного заказа подтверждается отдельно. Изменения применяются только после «Сохранить»."
         for field, label in FIELDS.items():
             text += f"\n{label}: {'задано' if values[field] else 'пусто'}"
         rows = [
@@ -134,8 +135,39 @@ class AutomationPanel:
             )
             text += "\nПричины: " + escaped("; ".join(result["reasons"]) or "нет", 1000)
             text += "\nШаги: " + escaped(", ".join(result["steps"]) or "нет", 300)
-            text += "\nРеальных отправок: 0. Резервов: 0. Исполнение автоматики выключено."
-            return text, keyboard([[("К политике", "auto:item:" + data["id"])]])
+            text += "\nВ этой проверке отправок: 0. Резервов: 0. Автоматического запуска заказов нет."
+            data["selected_order"] = data["orders"][index]
+            data["evaluated_revision"] = result["policy_revision"]
+            await state.update_data(automation=data)
+            return text, keyboard(
+                (
+                    [[("Подготовить запуск цепочки", f"ap:{data['nonce']}:plan")]]
+                    if result["would_deliver"]
+                    else []
+                )
+                + [[("К политике", "auto:item:" + data["id"])]]
+            )
+        elif command == "plan" and data.get("selected_order"):
+            if not self.service.api.account.writes_enabled or not getattr(
+                self.service.api.account, "automation_enabled", False
+            ):
+                raise ValidationError(
+                    "Цепочки выключены: нужны PLAYEROK_WRITES_ENABLED и PLAYEROK_AUTOMATION_ENABLED в локальном .env"
+                )
+            data["nonce"] = secrets.token_hex(6)
+            await state.update_data(automation=data)
+            return (
+                "Запустить сохранённую цепочку для выбранного оплаченного заказа? Приветствие, выдача и сообщение после выдачи отправятся по очереди с повторной проверкой сделки. Неизвестный результат остановит продолжение. Отметка SENT потребует отдельного fulfillment-сценария.",
+                keyboard([[("✅ Запустить цепочку", f"ap:{data['nonce']}:start_chain")]]),
+            )
+        elif command == "start_chain" and data.get("selected_order"):
+            ident = await DeliveryChains(self.store, self.service.api).create(
+                owner, data["selected_order"], data["evaluated_revision"]
+            )
+            await state.clear()
+            return ("Цепочка сохранена." if ident else "Доступный запас пуст. Цепочка не создана."), keyboard(
+                [[("Заказ", "order:" + data["selected_order"])]]
+            )
         else:
             raise ValidationError("Действие настройки недоступно")
         return await self.show(data, state)

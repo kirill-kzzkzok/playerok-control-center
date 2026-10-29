@@ -299,3 +299,20 @@ v9 backup and migration evidence data/delivery_policies_migration_check.json: sc
 1–9, 217 orders, 1 owner, 0 configured policies; external_requests=0/mutations=0.
 No live shop settings changed. Existing delivery/fulfillment/read-only tests remain green.
 Further automation implementation and full specification acceptance remain pending.
+
+
+## PHASE 5 — delivery chains checkpoint (2026-10-30)
+
+326 passed in 32.10s; JUnit data/phase5_chains_results.xml. Ruff/pip check clean.
+After final reuse of verified chat ID, targeted chains/Dispatcher suite: 19 passed
+in 7.39s. Tests cover ordered stock/text sends, restart/no replay, unknown greeting
+blocking all subsequent steps, quarantine, returned sale after greeting, global stop,
+policy change during API await, disabled runtime/stale revision, manual reserve
+rollback and separate fulfillment requirement. All external sends were mocked.
+
+Migration v10 backup evidence data/delivery_chains_migration_check.json: 217 orders,
+1 owner, 0 chains, writes/runtime false, external_requests=0/mutations=0. No live
+chain was created. Registration is explicit per order; new-order automatic enrollment,
+promotion controls and broader acceptance remain pending. Unknown chain states are
+not retried; manual resolution of one step does not silently resume the sequence.
+Secret scan clean.

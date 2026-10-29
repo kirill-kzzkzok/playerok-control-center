@@ -77,7 +77,14 @@ class OperationsPanel:
             rows = []
             if row["status"] == "UNCERTAIN":
                 text += "\n\nПовтор запрещён, пока результат не установлен. Отсутствие записи на проверенных страницах не доказывает, что отправки не было."
-                if row["kind"] in {"reply", "delivery", "mark_read", "fulfill"}:
+                if row["kind"] in {
+                    "reply",
+                    "delivery",
+                    "delivery_text",
+                    "chain_message",
+                    "mark_read",
+                    "fulfill",
+                }:
                     rows.append([("🔎 Сверить успешный результат", "ops:confirm:" + ident)])
                 rows.append([("⛔ Остановить без повтора", "ops:stop:" + ident)])
             rows.append([("История операций", "ops:list:ALL:0")])
@@ -89,7 +96,7 @@ class OperationsPanel:
             if row["kind"] in {"mark_read", "fulfill"}:
                 data["evidence"] = await self.service.evidence(owner, ident)
                 data["decision"] = "CONFIRM_READ_STATE"
-            elif row["kind"] in {"reply", "delivery"}:
+            elif row["kind"] in {"reply", "delivery", "delivery_text", "chain_message"}:
                 await state.set_state("resolve:message")
                 await state.set_data({"resolution": data})
                 return (

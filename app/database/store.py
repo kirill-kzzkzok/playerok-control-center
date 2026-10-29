@@ -128,6 +128,21 @@ class Store:
             existing = connection.execute("SELECT id FROM outbox WHERE operation_key=?", (key,)).fetchone()
             if existing:
                 return existing[0]
+            if kind in {"delivery", "delivery_text", "fulfill"}:
+                chain = connection.execute(
+                    "SELECT order_id FROM delivery_chains WHERE order_id=?", (target,)
+                ).fetchone()
+                if chain and payload.get("chain_id") != target and kind != "fulfill":
+                    raise Conflict("Для заказа уже зарегистрирована цепочка выдачи")
+                if (
+                    chain
+                    and kind == "fulfill"
+                    and connection.execute(
+                        "SELECT 1 FROM delivery_chains WHERE order_id=? AND status!='NEEDS_FULFILLMENT' AND status!='SUCCEEDED'",
+                        (target,),
+                    ).fetchone()
+                ):
+                    raise Conflict("Цепочка выдачи ещё не подтверждена")
             if kind in {"delivery", "fulfill"}:
                 if (
                     kind == "fulfill"

@@ -22,6 +22,7 @@ from app.services.products import Products
 from app.telegram.router import create_router
 from app.telegram.storage import SQLiteStorage
 from app.workers.cleanup import UploadCleanup
+from app.workers.delivery_chains import ChainWorker
 from app.workers.notifications import Notifications
 from app.workers.outbox import Executor, OutboxWorker
 from app.workers.realtime import Realtime
@@ -43,6 +44,7 @@ async def outbox_loop(worker, stop):
 async def run(config):
     store = Store(config.database_path)
     account = SafeAccount(config.playerok_header, writes_enabled=config.writes_enabled)
+    account.automation_enabled = config.automation_enabled
     api = Playerok(account)
     session = AiohttpSession(timeout=35)
     if config.use_proxy:
@@ -88,6 +90,8 @@ async def run(config):
                     asyncio.create_task(Realtime(store, account, sync).run(stop), name="playerok-realtime")
                 )
         if config.writes_enabled:
+            if config.automation_enabled:
+                tasks.append(asyncio.create_task(ChainWorker(store, api).run(stop), name="delivery-chains"))
             worker = OutboxWorker(store, Executor(store, api, products))
             tasks.append(asyncio.create_task(outbox_loop(worker, stop), name="outbox"))
         logger.info(

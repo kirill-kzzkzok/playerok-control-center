@@ -307,3 +307,23 @@ automation_runs содержит причины/названия шагов и c
 Симуляция не резервирует и не исполняет шаги. Запрошенный mark_sent указывает на
 необходимость отдельного Fulfillment workflow, а не на автоматическое CONFIRMED.
 Greeting/after и fixed text сохраняются, но runtime цепочка ещё не подключена.
+
+
+## Последовательности отправок (v10)
+
+DeliveryChains создаёт order-scoped snapshot + step rows до первой отправки. Для stock
+резерв атомарен с chain registration, без преждевременного delivery outbox. advance
+под транзакцией привязывает к следующему шагу ровно один outbox ID и ждёт SUCCEEDED.
+Unique order/step/operation constraints защищают restart/concurrent scheduling.
+ChainWorker не enroll-ит заказы: запускаются только явно выбранные chains.
+
+Executor.verify_step проверяет step ownership и все предыдущие операции, свежую сделку,
+чат и локальную проблему, policy revision до и после awaited reads. Greeting/after
+используют chain_message, fixed payload delivery_text; core stock — существующий delivery.
+Timeout не повторяется. Failed/unknown шаг блокирует chain, резерв остаётся в карантине.
+Изменение политики cancels chain. Сверка отдельного шага не возобновляет цепочку скрыто.
+Запрошенный SENT требует отдельного Fulfillment workflow, NEEDS_FULFILLMENT лишь сигнал.
+
+PLAYEROK_AUTOMATION_ENABLED=false и PLAYEROK_WRITES_ENABLED=false по умолчанию.
+Для запуска нужны оба флага, сохранённая enabled policy, dry-run и явное подтверждение
+конкретного заказа. Это не подписка на автоматическую выдачу всем будущим заказам.

@@ -53,7 +53,7 @@ class Reconciliation:
                 "unread_messages_counter": 0,
                 "checked_at": now(),
             }
-        if kind not in {"reply", "delivery"}:
+        if kind not in {"reply", "delivery", "delivery_text", "chain_message"}:
             raise Conflict(
                 "Для этой операции доступна остановка без повтора; успешность автоматически не устанавливается"
             )
@@ -64,6 +64,11 @@ class Reconciliation:
             raise Conflict("Нужна авторизованная сессия Playerok для проверки отправителя")
         text, count = payload.get("text", ""), len(payload.get("photos", []))
         chat_id = target
+        if kind in {"delivery_text", "chain_message"}:
+            order = await self.api.call("get_deal", deal_id=target)
+            chat_id = (order.get("chat") or {}).get("id")
+            if order.get("id") != target or order.get("direction") != "OUT" or not chat_id:
+                raise Conflict("Чат продажи не подтверждён")
         if kind == "delivery":
             order = await self.api.call("get_deal", deal_id=target)
             stock = self.store.rows(
