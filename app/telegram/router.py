@@ -15,7 +15,7 @@ from app.playerok.adapter import APIError, safe_media_url
 from app.rendering.cards import profile_card
 from app.rendering.charts import revenue_chart
 from app.services.catalog import ORDER_FILTERS, order_page
-from app.services.products import ValidationError, integer_price
+from app.services.products import ValidationError, listing_price, listing_text
 from app.services.statistics import statistics
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard, main_menu
@@ -101,7 +101,7 @@ def create_router(store, api, products, synchronizer):
             if action == "create":
                 text, markup = await wizard.start(owner, state)
             elif action.startswith("w:"):
-                text, markup = await wizard.callback(owner, state, action)
+                text, markup = await wizard.callback(owner, state, action, message=message)
             elif action == "cancel_wizard":
                 data = await state.get_data()
                 if data.get("draft_id"):
@@ -178,6 +178,7 @@ def create_router(store, api, products, synchronizer):
                 )
                 rows = [
                     [("💰 Изменить цену", "editprice:" + ident), ("📋 Описание", "editdesc:" + ident)],
+                    [("📝 Название", "editname:" + ident), ("🖼 Заменить фото", "editphoto:" + ident)],
                     [("⭐ Стоимость размещения", "quote:" + ident)],
                     [("🗑 Удалить", "delete:" + ident)],
                 ]
@@ -194,14 +195,28 @@ def create_router(store, api, products, synchronizer):
                 )
                 text += "\n\nПросмотр ничего не покупает. Платные действия запрещены."
                 markup = keyboard([[("⬅️ Лот", "item:" + ident)]])
-            elif action.startswith(("editprice:", "editdesc:")):
+            elif action.startswith(("editprice:", "editdesc:", "editname:", "editphoto:")):
                 kind, ident = action.split(":", 1)
-                await state.set_state("edit")
+                item = await api.call("get_item", id=ident)
+                if not api.account.id or (item.get("user") or {}).get("id") != api.account.id:
+                    raise ValidationError("Владение товаром не подтверждено")
+                await state.set_state("editphoto" if kind == "editphoto" else "edit")
                 await state.set_data(
-                    {"item_id": ident, "field": "price" if kind == "editprice" else "description"}
+                    {
+                        "item_id": ident,
+                        "field": {
+                            "editprice": "price",
+                            "editdesc": "description",
+                            "editname": "name",
+                            "editphoto": "photos",
+                        }[kind],
+                        "attachment_ids": [a.get("id") for a in item.get("attachments") or []],
+                    }
                 )
                 text, markup = (
-                    "Введите новую цену в целых рублях или текст описания. Затем будет подтверждение.",
+                    "Пришлите одно новое изображение. После подтверждения оно заменит все текущие фотографии."
+                    if kind == "editphoto"
+                    else "Введите новое значение. Затем будет подтверждение.",
                     keyboard([]),
                 )
             elif action.startswith(("delete:", "publish:")):
@@ -439,6 +454,30 @@ def create_router(store, api, products, synchronizer):
             current = await state.get_state()
             if current == "wizard":
                 text, markup = await wizard.message(message, state)
+            elif current == "editphoto":
+                data = await state.get_data()
+                file = message.photo[-1] if message.photo else message.document
+                if not file:
+                    raise ValidationError("Пришлите фотографию или файл JPEG/PNG/WEBP")
+                source = await wizard.attachments.download(message.bot, file)
+                nonce = secrets.token_hex(8)
+                pending = {
+                    "kind": "edit",
+                    "target": data["item_id"],
+                    "payload": {"add_photos": [source], "replace_attachment_ids": data["attachment_ids"]},
+                }
+                try:
+                    await state.set_data({"pending": pending, "confirm_token": nonce})
+                    await state.set_state(None)
+                except BaseException:
+                    wizard.attachments.discard(source)
+                    raise
+                await message.answer_photo(
+                    BufferedInputFile(await wizard.attachments.read(source), filename="replacement.jpg"),
+                    caption="Новое фото заменит все текущие фотографии после подтверждения.",
+                    reply_markup=keyboard([[("✅ Заменить фотографии", "commit:" + nonce)]]),
+                )
+                return
             elif current in {"reply", "edit"}:
                 data = await state.get_data()
                 value = message.text or ""
@@ -448,7 +487,9 @@ def create_router(store, api, products, synchronizer):
                     pending = {"kind": "reply", "target": data["chat_id"], "payload": {"text": value}}
                 else:
                     if data["field"] == "price":
-                        value = integer_price(value)
+                        value = listing_price(value, getattr(api.account, "role", None))
+                    else:
+                        value = listing_text(value, data["field"])
                     pending = {"kind": "edit", "target": data["item_id"], "payload": {data["field"]: value}}
                 nonce = secrets.token_hex(8)
                 await state.set_state(None)

@@ -43,3 +43,29 @@ Steam schema фактически вернула RANGE и TEXTAREA; upstream и�
 Полная приёмка PROJECT_SPEC.md ещё не пройдена.
 
 Фильтры и пагинация заказов, безопасный поиск SQL, HTML и multi-value roundtrip: полный suite **72 passed** (19.79 s).
+
+## PHASE 2 — расширенные проверки
+
+Команда: `.venv/Scripts/python -m pytest -q` → **127 passed in 21.34s**.
+`ruff check app tests` прошёл; последующее форматирование завершилось без ошибок.
+
+- tests/test_wizard_attachments.py: реальная Pillow-обработка PNG/JPEG, ограниченный buffer,
+  preview/replace/delete, сохранение файлов при конфликте ревизий, восстановление FSM,
+  пустые схемы, пагинация, отрицательный индекс, запрет чужого файлового пути, multi-select.
+- tests/test_telegram_integration.py: реальный aiogram Dispatcher/Router/Middleware/SQLiteStorage
+  с mock Telegram session; полный локальный мастер с download фото, рестарт диспетчера,
+  запрет повторных submit при read-only, отказ чужим callbacks и регистрации из группы.
+  Это **не** live-проверка Telegram download/upload.
+- tests/test_target_lock.py: гонка нескольких SQLite-соединений и блокировка товара при UNCERTAIN.
+- tests/test_upload_cleanup.py: защита активных/неопределённых операций, безопасная очистка
+  успешных загрузок, отказ от удаления при повреждённых ссылках; БД/история не удаляются.
+- tests/test_operations.py: замена фотографий только с актуальными attachment ID, реальными
+  байтами файла; проверки цены/названия/описания на границе mutation.
+- tests/test_category_contracts.py: сериализация private comment в input.comment,
+  обязательность данных, ограничения официальной формы/UTF-16, приоритет ставок,
+  floor-округление оценки дохода.
+- tests/test_incomplete_api.py: None/неполные объекты, неполный pageInfo, повторяющиеся курсоры;
+  непроверенная страница не передаётся синхронизатору.
+
+Read-only: data/live_phase2_schema.json фиксирует успешную авторизацию/категорию без
+obtaining/dataFields и **mutations=0**. Реальные рабочие товары не изменялись.

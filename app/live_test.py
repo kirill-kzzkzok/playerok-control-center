@@ -109,11 +109,14 @@ async def main():
             name=journal["name"],
             price=100,
             description="Изолированный технический тест PCC. Не предназначен для покупки. Будет удалён после проверки.",
-            options={f["key"]: values[f["key"]] for f in form if not f.get("data_field")},
+            options={
+                f["key"]: values[f["key"]] for f in form if not f.get("data_field") and not f.get("comment")
+            },
             data_fields=[
                 SimpleNamespace(id=f["key"], value=values[f["key"]]) for f in form if f.get("data_field")
             ],
             attachments=[buffer.getvalue()],
+            comment=next((values[f["key"]] for f in form if f.get("comment")), None),
         )
         ident = getattr(created, "id", None)
         if not ident:

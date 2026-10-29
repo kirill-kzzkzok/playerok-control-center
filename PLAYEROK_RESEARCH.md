@@ -77,3 +77,29 @@ BAD_REQUEST: введённые данные товара должны соот�
 проверены все доступные собственные лоты; объект по уникальному имени не найден.
 Технические объявления повторно автоматически не создаются; обход правил не применяется.
 Публикация и редактирование реального тестового лота остаются неподтверждёнными.
+
+
+## Дополнение к контракту создания и комиссий (2026-10-29)
+
+Официальные загруженные сегодня public bundles 25.js/26.js:
+- Когда нет структурированных данных ITEM_DATA, форма требует textData и отправляет
+  его в createItem.input.comment. Это приватные данные покупателю, не description и
+  не attributes. Добавлен optional comment в vendored Account.create_item и обязательное
+  приватное поле в динамический мастер. Проверено test_category_contracts.py и реальным
+  aiogram pipeline на mock transport. На сервер повторное создание не отправлялось.
+- Модули 66572/85570: textData обязателен, 2–2048 UTF-16 units; name 10–72,
+  description 10–2048. Обычная цена 90–100000 RUB; роль OFFICIAL_SELLER имеет минимум 10.
+  Эти frontend ограничения не подменяют финальную серверную проверку категории/контента.
+- Модель eR выбранного obtaining использует obtaining.feeMultiplier ?? category.feeMultiplier.
+  Начальный обзор категорий может показывать минимальную ставку, но после выбора способа
+  применяется его ставка. Исправлена потеря category fallback; глобальные 20% не подставляются.
+- Библиотечный updateItem multipart mapping подтверждён отдельным тестом HTTP payload.
+  Замена фотографий рабочего товара live не выполнялась.
+
+Источники с хешами локально прочитанного контента:
+
+- https://playerok.com/_next/static/chunks/pages/_app-81aa885e88a4fc68.js — SHA256 f0f6277b94003778e49aa08f6d5fccaa0fde9b2eece35991ceb6e90d58e701ea
+
+- https://playerok.com/_next/static/chunks/9092-ff2d2cafe217731b.js — SHA256 c911260ade34aad6b1b0abeb2978daf63ad92370285f862e2709b86d7a29b9bd
+
+- https://playerok.com/_next/static/chunks/pages/sell-c39653030b4e944c.js — SHA256 be7a8c7ceda6b4ece13ea456e2341dd46b3a8eabf03cf6e9056d23e4605bea01

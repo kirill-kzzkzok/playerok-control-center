@@ -191,7 +191,7 @@ class Playerok:
                 result = await asyncio.to_thread(getattr(self.account, method), **kwargs)
                 # get() returns Account itself; don't expose cookies/client in plain().
                 if method == "get":
-                    return {
+                    viewer = {
                         k: plain(getattr(result, k, None))
                         for k in (
                             "id",
@@ -202,7 +202,29 @@ class Playerok:
                             "is_blocked",
                         )
                     }
-                return plain(result)
+                    if not viewer["id"]:
+                        raise APIError("SESSION_EXPIRED")
+                    return viewer
+                normalized = plain(result)
+                expected = (
+                    list if method in {"get_item_priority_statuses", "get_transaction_providers"} else dict
+                )
+                if not isinstance(normalized, expected):
+                    raise APIError("UPSTREAM_INCOMPLETE_RESPONSE")
+                if expected is list and any(
+                    not isinstance(entry, dict) or not entry.get("id") for entry in normalized
+                ):
+                    raise APIError("UPSTREAM_INCOMPLETE_RESPONSE")
+                if method in {
+                    "get_user",
+                    "get_game",
+                    "get_game_category",
+                    "get_item",
+                    "get_deal",
+                    "get_chat",
+                } and not normalized.get("id"):
+                    raise APIError("UPSTREAM_INCOMPLETE_RESPONSE")
+                return normalized
             except APIError:
                 raise
             except (KeyError, TypeError, AttributeError, ValueError):
@@ -214,13 +236,20 @@ class Playerok:
             page = await self.call(method, after_cursor=cursor, **kwargs)
             if not isinstance(page, dict) or collection not in page or not isinstance(page[collection], list):
                 raise APIError("INCOMPLETE_PAGE")
-            yield page[collection]
-            info = page.get("page_info") or {}
-            if not info.get("has_next_page"):
-                break
-            cursor = info.get("end_cursor")
-            if not cursor or cursor in seen:
+            if any(not isinstance(entry, dict) or not entry.get("id") for entry in page[collection]):
+                raise APIError("INCOMPLETE_PAGE_ENTRY")
+            info = page.get("page_info")
+            if not isinstance(info, dict) or not isinstance(info.get("has_next_page"), bool):
+                raise APIError("INCOMPLETE_PAGE_INFO")
+            next_cursor = info.get("end_cursor")
+            if info["has_next_page"] and (
+                not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen
+            ):
                 raise APIError("INVALID_PAGINATION_CURSOR")
+            yield page[collection]
+            if not info["has_next_page"]:
+                break
+            cursor = next_cursor
             seen.add(cursor)
 
 

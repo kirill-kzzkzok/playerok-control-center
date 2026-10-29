@@ -101,9 +101,25 @@ class Store:
             raise Conflict("Черновик изменён в другом сценарии; откройте его заново")
 
     def enqueue(self, key, kind, target, payload, db=None):
-        connection = db or self.db
+        if db is None:
+            with self.transaction() as connection:
+                return self.enqueue(key, kind, target, payload, db=connection)
+        connection = db
         ident = uuid.uuid4().hex
         with self.lock:
+            existing = connection.execute("SELECT id FROM outbox WHERE operation_key=?", (key,)).fetchone()
+            if existing:
+                return existing[0]
+            if kind in {"create", "publish", "edit", "delete"}:
+                blocked = connection.execute(
+                    "SELECT id FROM outbox WHERE target=? AND kind IN ('create','publish','edit','delete') "
+                    "AND status IN ('PENDING','PROCESSING','RETRYABLE_FAILED','UNCERTAIN') LIMIT 1",
+                    (target,),
+                ).fetchone()
+                if blocked:
+                    raise Conflict(
+                        "Для этого товара уже есть незавершённая операция. Сначала проверьте её результат."
+                    )
             connection.execute(
                 "INSERT OR IGNORE INTO outbox(id,operation_key,kind,target,payload,created_at) VALUES(?,?,?,?,?,?)",
                 (ident, key, kind, target, encode(payload), now()),

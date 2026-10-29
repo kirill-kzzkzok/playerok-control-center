@@ -157,7 +157,7 @@ async def test_wizard_full_local_flow_restart_and_stale_callback(store):
         return await wizard.message(SimpleNamespace(from_user=SimpleNamespace(id=2), text=value), state)
 
     await text("seller data")
-    await text("<Product>")
+    await text("<Product 1>")
     await text("Description")
     nonce = (await state.get_data())["view_token"]
     await wizard.callback(2, state, f"w:{nonce}:photos_done")
@@ -166,7 +166,7 @@ async def test_wizard_full_local_flow_restart_and_stale_callback(store):
     await wizard.callback(2, state, f"w:{nonce}:choose:0")
     nonce = (await state.get_data())["view_token"]
     text_result, _ = await wizard.callback(2, state, f"w:{nonce}:confirm_done")
-    assert "&lt;Product&gt;" in text_result
+    assert "&lt;Product 1&gt;" in text_result
     assert "seller data" not in text_result
     assert len(store.rows("SELECT * FROM drafts")) == 1
     assert not store.rows("SELECT * FROM outbox")

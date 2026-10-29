@@ -1,0 +1,195 @@
+"""Exercise aiogram's real dispatcher, FSM, routers and middleware without network."""
+
+from datetime import UTC, datetime
+from io import BytesIO
+from types import SimpleNamespace
+
+from aiogram import Bot, Dispatcher
+from aiogram.client.session.base import BaseSession
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.base import StorageKey
+from aiogram.fsm.storage.memory import SimpleEventIsolation
+from aiogram.types import CallbackQuery, Chat, Document, File, Message, Update, User
+from PIL import Image
+
+from app.database.store import Store
+from app.security.access import OwnerMiddleware
+from app.services.attachments import Attachments
+from app.services.products import Products
+from app.telegram.router import create_router
+from app.telegram.storage import SQLiteStorage
+
+
+class TelegramSession(BaseSession):
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+        stream = BytesIO()
+        Image.new("RGB", (40, 40), "purple").save(stream, "PNG")
+        self.image = stream.getvalue()
+
+    async def close(self):
+        pass
+
+    async def make_request(self, bot, method, timeout=None):
+        self.calls.append(method)
+        name = method.__api_method__
+        if name == "getMe":
+            return User(id=123, is_bot=True, first_name="Test", username="pcc_test_bot")
+        if name == "getFile":
+            return File(
+                file_id="photo",
+                file_unique_id="unique",
+                file_path="images/photo.png",
+                file_size=len(self.image),
+            )
+        if name in {"sendMessage", "editMessageText", "sendPhoto"}:
+            return Message(
+                message_id=len(self.calls),
+                date=datetime.now(UTC),
+                chat=Chat(id=method.chat_id, type="private"),
+                text=getattr(method, "text", None),
+                caption=getattr(method, "caption", None),
+            )
+        if name == "answerCallbackQuery":
+            return True
+        raise AssertionError(name)
+
+    async def stream_content(self, url, headers=None, timeout=30, chunk_size=65536, raise_for_status=True):
+        yield self.image
+
+
+class CatalogAPI:
+    account = SimpleNamespace(id="seller", writes_enabled=False)
+
+    def __init__(self):
+        self.calls = []
+
+    async def call(self, method, **kwargs):
+        self.calls.append((method, kwargs))
+        if method == "get_games":
+            return {"games": [{"id": "game", "name": "Game"}], "page_info": {}}
+        if method == "get_game":
+            return {"categories": [{"id": "category", "name": "Category"}]}
+        if method == "get_game_category":
+            return {"options": []}
+        raise AssertionError(method)
+
+    async def pages(self, method, collection, **kwargs):
+        self.calls.append((method, kwargs))
+        yield []
+
+
+def dispatcher(store, api):
+    dp = Dispatcher(storage=SQLiteStorage(store), events_isolation=SimpleEventIsolation())
+    access = OwnerMiddleware([], store, first_start_claim=True)
+    dp.message.outer_middleware(access)
+    dp.callback_query.outer_middleware(access)
+    dp.include_router(create_router(store, api, Products(store, api), SimpleNamespace(once=None)))
+    return dp
+
+
+class Interaction:
+    def __init__(self, bot, dp):
+        self.bot, self.dp, self.counter = bot, dp, 0
+
+    async def message(self, text=None, owner=7, document=None, group=False):
+        self.counter += 1
+        entities = [{"type": "bot_command", "offset": 0, "length": 6}] if text == "/start" else None
+        message = Message(
+            message_id=self.counter,
+            date=datetime.now(UTC),
+            chat=Chat(id=owner, type="group" if group else "private"),
+            from_user=User(id=owner, first_name="Owner", is_bot=False),
+            text=text,
+            entities=entities,
+            document=document,
+        )
+        return await self.dp.feed_update(self.bot, Update(update_id=self.counter, message=message))
+
+    async def click(self, action, owner=7):
+        self.counter += 1
+        message = Message(
+            message_id=1, date=datetime.now(UTC), chat=Chat(id=owner, type="private"), text="Menu"
+        )
+        query = CallbackQuery(
+            id=str(self.counter),
+            from_user=User(id=owner, first_name="Owner", is_bot=False),
+            chat_instance="test",
+            message=message,
+            data=action,
+        )
+        return await self.dp.feed_update(self.bot, Update(update_id=self.counter, callback_query=query))
+
+
+async def test_dispatcher_full_draft_with_upload_restart_and_double_submit(tmp_path, monkeypatch):
+    store = Store(tmp_path / "telegram.sqlite")
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    api = CatalogAPI()
+    uploads = Attachments(tmp_path / "uploads")
+    monkeypatch.setattr("app.telegram.wizard.Attachments", lambda: uploads)
+    ui = Interaction(bot, dispatcher(store, api))
+    state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
+    try:
+        await ui.message("/start")
+        await ui.click("create")
+        for _ in range(2):
+            nonce = (await state.get_data())["view_token"]
+            await ui.click(f"w:{nonce}:choose:0")
+        assert await state.get_state() == "wizard"
+        await ui.message("Private buyer delivery data")
+        await ui.message("Test product")
+        await ui.message("<description>")
+        await ui.message(
+            document=Document(
+                file_id="photo",
+                file_unique_id="unique",
+                file_name="image.png",
+                mime_type="image/png",
+                file_size=len(session.image),
+            )
+        )
+        ident = (await state.get_data())["draft_id"]
+        assert len(store.get_draft(ident, 7)["payload"]["photos"]) == 1
+        # Fresh dispatcher restores the same SQLite FSM and owner.
+        ui.dp = dispatcher(store, api)
+        nonce = (await state.get_data())["view_token"]
+        await ui.click(f"w:{nonce}:photos_done")
+        await ui.message("100")
+        nonce = (await state.get_data())["view_token"]
+        await ui.click(f"w:{nonce}:choose:0")
+        nonce = (await state.get_data())["view_token"]
+        await ui.click(f"w:{nonce}:confirm_done")
+        assert "&lt;description&gt;" in session.calls[-1].text
+        nonce = (await state.get_data())["view_token"]
+        await ui.click(f"w:{nonce}:submit")
+        await ui.click(f"w:{nonce}:submit")
+        assert not store.rows("SELECT * FROM outbox")  # read-only config truly blocks network writes
+        assert store.get_draft(ident, 7)["state"] == "DRAFT"
+        assert "отключены" in session.calls[-1].text
+    finally:
+        await bot.session.close()
+        store.close()
+
+
+async def test_dispatcher_denies_foreign_callbacks_and_group_registration(tmp_path):
+    store = Store(tmp_path / "access.sqlite")
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    api = CatalogAPI()
+    ui = Interaction(bot, dispatcher(store, api))
+    try:
+        await ui.message("/start", owner=8, group=True)
+        assert not store.rows("SELECT * FROM administrators")
+        await ui.message("/start", owner=7)
+        api.calls.clear()
+        await ui.click("create", owner=8)
+        await ui.click("commit:forged", owner=8)
+        assert not api.calls
+        assert not store.rows("SELECT * FROM drafts")
+        assert not store.rows("SELECT * FROM outbox")
+        assert session.calls[-1].text == "Доступ закрыт"
+    finally:
+        await bot.session.close()
+        store.close()

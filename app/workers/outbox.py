@@ -3,7 +3,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.playerok.adapter import APIError, plain
-from app.services.products import ValidationError, validate_draft
+from app.services.attachments import Attachments
+from app.services.products import ValidationError, listing_price, listing_text, validate_draft
 
 
 class Executor:
@@ -37,7 +38,7 @@ class Executor:
             draft = self.store.get_draft(target, payload["owner"])
             value = draft["payload"]
             form = await self.products.schema(value["category_id"], value["obtaining_type_id"])
-            validate_draft(value, form)
+            validate_draft(value, form, getattr(self.api.account, "role", None))
             attachments = []
             for source in value.get("photos", []):
                 path = Path(source).resolve()
@@ -49,7 +50,12 @@ class Executor:
                 for f in form
                 if f.get("data_field")
             ]
-            options = {f["key"]: value["fields"][f["key"]] for f in form if not f.get("data_field")}
+            options = {
+                f["key"]: value["fields"][f["key"]]
+                for f in form
+                if not f.get("data_field") and not f.get("comment")
+            }
+            comment = next((value["fields"][f["key"]] for f in form if f.get("comment")), None)
             result = await self.mutate(
                 "createItem",
                 "create_item",
@@ -61,6 +67,7 @@ class Executor:
                 options=options,
                 data_fields=data,
                 attachments=attachments,
+                comment=comment,
             )
             if not result.get("id"):
                 raise APIError("CREATE_ID_MISSING", uncertain=True)
@@ -82,11 +89,31 @@ class Executor:
                 raise APIError("PUBLICATION_NOT_CONFIRMED", uncertain=True)
             return {"remote_id": target, "status": result.get("status")}
         if kind in {"edit", "delete"}:
-            await self.owned_item(target)
+            current = await self.owned_item(target)
             if kind == "delete":
                 result = await self.mutate("removeItem", "remove_item", id=target)
                 return {"removed": bool(result)}
             changes = {k: v for k, v in payload.items() if k in {"name", "description", "price"}}
+            if set(payload) - {"name", "description", "price", "add_photos", "replace_attachment_ids"}:
+                raise ValidationError("Изменение содержит неподдерживаемые поля")
+            if "price" in changes:
+                changes["price"] = listing_price(changes["price"], getattr(self.api.account, "role", None))
+            for field in ("name", "description"):
+                if field in changes:
+                    changes[field] = listing_text(changes[field], field)
+            if "add_photos" in payload:
+                sources = payload["add_photos"]
+                if not isinstance(sources, list) or not 1 <= len(sources) <= 10:
+                    raise ValidationError("Требуется от 1 до 10 изображений")
+                current_attachments = current.get("attachments") or []
+                current_ids = [attachment.get("id") for attachment in current_attachments]
+                if any(not ident for ident in current_ids):
+                    raise ValidationError("API не вернул идентификаторы фотографий")
+                expected = payload.get("replace_attachment_ids")
+                if not isinstance(expected, list) or sorted(expected) != sorted(current_ids):
+                    raise ValidationError("Фотографии товара изменились. Повторно откройте превью.")
+                changes["add_attachments"] = [await Attachments().read(source) for source in sources]
+                changes["remove_attachments"] = current_ids
             if not changes:
                 raise ValidationError("Нет разрешённых изменений")
             result = await self.mutate("updateItem", "update_item", id=target, **changes)

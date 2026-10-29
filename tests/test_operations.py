@@ -1,12 +1,15 @@
 import asyncio
 from contextlib import contextmanager
+from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 
 from app.database.store import Conflict, Store
 from app.playerok.adapter import APIError
-from app.services.products import Products
+from app.services.attachments import Attachments
+from app.services.products import Products, save_image
 from app.workers.outbox import Executor, OutboxWorker
 
 
@@ -81,10 +84,10 @@ async def test_create_double_click_and_publish(setup):
         {
             "category_id": "c",
             "obtaining_type_id": "o",
-            "name": "Test",
-            "description": "test",
+            "name": "Test product",
+            "description": "Test description",
             "price": 100,
-            "fields": {},
+            "fields": {"__comment": "Test buyer delivery data"},
             "photos": [],
         },
     )
@@ -140,10 +143,10 @@ async def test_response_lost_after_remote_create_not_repeated(setup):
         {
             "category_id": "c",
             "obtaining_type_id": "o",
-            "name": "Test",
-            "description": "test",
+            "name": "Test product",
+            "description": "Test description",
             "price": 100,
-            "fields": {},
+            "fields": {"__comment": "Test buyer delivery data"},
             "photos": [],
         },
     )
@@ -152,3 +155,54 @@ async def test_response_lost_after_remote_create_not_repeated(setup):
     assert not await worker.once()
     assert api.account.calls == ["createItem"]
     assert store.rows("SELECT status FROM outbox")[0]["status"] == "UNCERTAIN"
+
+
+async def test_replace_images_checks_fresh_attachment_ids_and_passes_bytes(setup, tmp_path, monkeypatch):
+    store, api, _, worker = setup
+    images = Attachments(tmp_path / "uploads")
+    monkeypatch.setattr("app.workers.outbox.Attachments", lambda: images)
+    buffer = BytesIO()
+    Image.new("RGB", (20, 20), "purple").save(buffer, "PNG")
+    source = save_image(buffer.getvalue(), images.directory)
+    call = api.call
+
+    async def with_attachments(method, **kwargs):
+        result = await call(method, **kwargs)
+        if method == "get_item":
+            result["attachments"] = [{"id": "old-photo"}]
+        return result
+
+    api.call = with_attachments
+    changes = []
+
+    def update(**kwargs):
+        changes.append(kwargs)
+        return SimpleNamespace(id=kwargs["id"])
+
+    api.account.update_item = update
+    store.enqueue(
+        "images", "edit", "remote1", {"add_photos": [source], "replace_attachment_ids": ["old-photo"]}
+    )
+    await worker.once()
+    assert changes[0]["remove_attachments"] == ["old-photo"]
+    assert changes[0]["add_attachments"][0].startswith(b"\xff\xd8\xff")
+    assert store.rows("SELECT status FROM outbox")[0]["status"] == "SUCCEEDED"
+    # A second confirmation based on stale IDs cannot remove a newly added server image.
+    store.enqueue("stale-images", "edit", "remote1", {"add_photos": [source], "replace_attachment_ids": []})
+    await worker.once()
+    assert len(changes) == 1
+    assert (
+        store.rows("SELECT status FROM outbox WHERE operation_key='stale-images'")[0]["status"]
+        == "PERMANENT_FAILED"
+    )
+
+
+@pytest.mark.parametrize(
+    "changes", [{"price": "NaN"}, {"price": 0}, {"name": ""}, {"description": " "}, {"unknown": True}]
+)
+async def test_executor_validates_changes_at_server_boundary(setup, changes):
+    store, api, _, worker = setup
+    store.enqueue("bad-edit", "edit", "remote1", changes)
+    await worker.once()
+    assert not api.account.calls
+    assert store.rows("SELECT status FROM outbox")[0]["status"] == "PERMANENT_FAILED"

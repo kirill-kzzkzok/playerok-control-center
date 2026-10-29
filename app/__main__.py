@@ -21,6 +21,7 @@ from app.services.orders import Orders
 from app.services.products import Products
 from app.telegram.router import create_router
 from app.telegram.storage import SQLiteStorage
+from app.workers.cleanup import UploadCleanup
 from app.workers.notifications import Notifications
 from app.workers.outbox import Executor, OutboxWorker
 from app.workers.sync import Synchronizer
@@ -77,6 +78,7 @@ async def run(config):
         dispatcher.message.outer_middleware(middleware)
         dispatcher.callback_query.outer_middleware(middleware)
         dispatcher.include_router(create_router(store, api, products, sync))
+        tasks.append(asyncio.create_task(UploadCleanup(store).run(stop), name="upload-cleanup"))
         if account.id:
             tasks.append(asyncio.create_task(sync.run(stop), name="playerok-sync"))
             tasks.append(asyncio.create_task(Notifications(store, bot).run(stop), name="notifications"))

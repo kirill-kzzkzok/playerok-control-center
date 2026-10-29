@@ -1235,7 +1235,8 @@ class Account:
         description: str, 
         options: list[GameCategoryOption] | dict,
         data_fields: list[GameCategoryDataField],
-        attachments: list[str | bytes]  # ← было: list[str]
+        attachments: list[str | bytes],  # ← было: list[str]
+        comment: str | None = None
     ) -> types.Item:
         """
         Создаёт предмет (после создания помещается в черновик, а не сразу выставляется на продажу).
@@ -1267,6 +1268,10 @@ class Account:
         :param attachments: Массив файлов-приложений предмета. Пути к файлам или байты.
         :type attachments: `list[str | bytes]`
 
+        :param comment: Неструктурированные данные для покупателя (официальная форма sell отправляет input.comment,
+            когда у категории нет структурированных ITEM_DATA полей). Не является публичным описанием.
+        :type comment: `str` or `None`
+
         :return: Объект созданного предмета.
         :rtype: `playerokapi.types.Item`
         """
@@ -1290,6 +1295,8 @@ class Account:
                 "attachments": [None] * len(attachments)
             }
         }
+        if comment is not None:
+            operations["variables"]["input"]["comment"] = comment
         
         map = {}
         files = {}

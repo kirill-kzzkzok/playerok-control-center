@@ -64,6 +64,20 @@ def sale_rule_from_api(multiplier, checked_at, source="https://playerok.com/sell
     )
 
 
+def selected_fee_multiplier(category_multiplier, obtaining_multiplier):
+    """Public sell model eR: selected obtaining type overrides category rate.
+
+    The site's global fallback is deliberately not used when API values are absent.
+    """
+    value = obtaining_multiplier if obtaining_multiplier is not None else category_multiplier
+    if value is None:
+        return None
+    ratio = Decimal(str(value))
+    if not ratio.is_finite() or not 0 <= ratio <= 1:
+        raise ValueError("Множитель комиссии вне диапазона 0–1")
+    return str(ratio)
+
+
 @dataclass(frozen=True)
 class Calculation:
     sale: Decimal
