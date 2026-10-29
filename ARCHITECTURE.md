@@ -133,3 +133,24 @@ mark_read после явного подтверждения; разрешённ
 Notifications выбирает только события без записи для хотя бы одного владельца,
 пакетами 200. Собственные сообщения получают SKIPPED. Начальная установка BASELINE
 и initialized атомарна. PROCESSING/UNCERTAIN не отправляются повторно автоматически.
+
+
+## Шаблоны и связь ответов с Telegram (v4)
+
+Replies хранит quick_replies с owner_id и optimistic revision. Текст валидируется по
+UTF-16 лимиту Telegram. RepliesPanel использует SQLite FSM для create/edit и nonce
+для выбора шаблона. Шаблон копируется в подтверждённый pending snapshot; изменения
+шаблона после preview не меняют отправляемый текст. Preview включает весь snapshot.
+
+Replies.origin разрешает источник только по сохранённым notifications + chat_messages
+и владельцу. Replies.enqueue повторно сверяет origin/target/owner и записывает outbox
+и notification_actions в одной транзакции. Связь не передаётся в Playerok mutation.
+Операция без источника (из списка диалогов) также допустима, но уведомление не выдумывается.
+
+Router сохраняет исходные notifications: при callback из такого сообщения display
+создаёт отдельный экран. Notifications.refresh_actions читает durable outbox и редактирует
+существующее уведомление с текущим состоянием последнего связанного действия. Успех
+отправки показывается только после SUCCEEDED с API message ID. UNCERTAIN остаётся
+видимым и не создаёт повторной отправки. Повтор editMessageText идемпотентен по тому
+же Telegram ID/тексту; rendered_status записывается после edit, а retry_after/failures
+сохраняются при сбое. Новая смена outbox status не теряется при параллельном завершении.

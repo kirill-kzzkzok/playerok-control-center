@@ -144,3 +144,22 @@ notifications or buyer sends were run in this probe. mark_read and paging Telegr
 are covered offline; live mark_read was not performed. WebSocket, quick replies,
 photo transport, notification update after reply and manual UNCERTAIN resolution
 remain pending alongside the rest of the original specification.
+
+
+## PHASE 4 — replies checkpoint (2026-10-30)
+
+**208 passed in 11.64s**, JUnit data/phase4_replies_results.xml; Ruff clean, pip check clean.
+Tests cover owner isolation, optimistic revisions, 20-template limit, UTF-16 validation,
+atomic/verified notification mapping and rollback, duplicate confirmation, complete
+escaped preview, durable template FSM, unknown reply outcome, edit retry/backoff without
+buyer resend and navigation back to a previously viewed chat page.
+
+Real aiogram Dispatcher/Router/SQLiteStorage test: opening reply preserves the original
+notification; manual input/confirmation survive a fresh dispatcher; double submit creates
+one durable action/link; a mock successful executor updates the original Telegram ID with
+the original question and remote answer ID. No real Telegram or Playerok sends performed.
+
+Local migration evidence data/replies_migration_check.json: schema 1/2/3/4, 217 orders,
+1 owner retained, 0 external requests/mutations; backup before-replies-v4 taken first.
+Live photo transport, WebSocket, manual UNCERTAIN resolution and remaining specification
+are not accepted by this checkpoint. No claim of full project readiness.

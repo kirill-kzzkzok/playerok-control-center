@@ -22,6 +22,7 @@ from app.telegram.chat_panel import ChatPanel
 from app.telegram.finance_panel import FinancePanel
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard, main_menu
+from app.telegram.replies_panel import RepliesPanel
 from app.telegram.wizard import Wizard
 from playerokapi.enums import ItemStatuses
 
@@ -46,6 +47,7 @@ def create_router(store, api, products, synchronizer):
     wizard = Wizard(store, api, products)
     finance = FinancePanel(store, api, products)
     chats = ChatPanel(store, api)
+    replies = RepliesPanel(store)
 
     @router.message(CommandStart())
     async def start(message, state):
@@ -99,16 +101,29 @@ def create_router(store, api, products, synchronizer):
         action = query.data or ""
         owner = query.from_user.id
         message = query.message
+        preserve = bool(
+            store.rows(
+                "SELECT 1 FROM notifications WHERE owner_id=? AND telegram_message_id=? LIMIT 1",
+                (owner, message.message_id),
+            )
+        )
         try:
             if action == "home":
                 await state.clear()
                 return await display(
-                    message, "🟣 <b>PLAYEROK CONTROL CENTER</b>\nУправление магазином", main_menu(), True
+                    message,
+                    "🟣 <b>PLAYEROK CONTROL CENTER</b>\nУправление магазином",
+                    main_menu(),
+                    not preserve,
                 )
             if action == "create":
                 text, markup = await wizard.start(owner, state)
             elif finance.handles(action):
                 text, markup = await finance.callback(action, owner, state)
+            elif action == "quickreplies":
+                text, markup = await replies.menu(owner, state)
+            elif action.startswith("quick:"):
+                text, markup = await replies.callback(action, owner, state)
             elif action.startswith("w:"):
                 text, markup = await wizard.callback(owner, state, action, message=message)
             elif action == "cancel_wizard":
@@ -274,9 +289,7 @@ def create_router(store, api, products, synchronizer):
                 if not api.account.writes_enabled:
                     raise ValidationError("Записи Playerok отключены в локальном .env")
                 pending = data["pending"]
-                ident = store.enqueue(
-                    "ui:" + data["confirm_token"], pending["kind"], pending["target"], pending["payload"]
-                )
+                ident = replies.replies.enqueue(owner, "ui:" + data["confirm_token"], pending)
                 store.audit(owner, "QUEUE_" + pending["kind"], pending["target"], "PENDING")
                 await state.clear()
                 text, markup = (
@@ -343,7 +356,12 @@ def create_router(store, api, products, synchronizer):
                 await state.set_state(None)
                 await state.set_data(
                     {
-                        "pending": {"kind": "mark_read", "target": ident, "payload": {}},
+                        "pending": {
+                            "kind": "mark_read",
+                            "target": ident,
+                            "payload": {},
+                            "origin_event": replies.replies.origin(owner, message.message_id, ident),
+                        },
                         "confirm_token": nonce,
                     }
                 )
@@ -353,9 +371,9 @@ def create_router(store, api, products, synchronizer):
                 )
             elif action.startswith("reply:"):
                 ident = action.split(":", 1)[1]
-                await state.set_state("reply")
-                await state.set_data({"chat_id": ident})
-                text, markup = "Введите ответ покупателю. Перед отправкой будет подтверждение.", keyboard([])
+                await api.call("get_chat", chat_id=ident)
+                origin = replies.replies.origin(owner, message.message_id, ident)
+                text, markup = await replies.menu(owner, state, chat_id=ident, origin=origin)
             elif action == "sync":
                 await synchronizer.once()
                 text, markup = (
@@ -436,6 +454,7 @@ def create_router(store, api, products, synchronizer):
                     [
                         [("🔐 Подключения", "diagnostics")],
                         [("💰 Условия вывода · просмотр", "providers")],
+                        [("⚡ Быстрые ответы", "quickreplies")],
                         [("💾 Резервная копия БД", "backup")],
                         [("⚡ Автоматизация", "automation")],
                     ]
@@ -474,7 +493,7 @@ def create_router(store, api, products, synchronizer):
                 markup = keyboard([[("🔄 Сверить API", "sync")]])
             else:
                 raise ValidationError("Кнопка устарела. Откройте главное меню.")
-            await display(message, text, markup, True)
+            await display(message, text, markup, not preserve)
         except (APIError, ValidationError, Conflict, ValueError) as error:
             code = error.code if isinstance(error, APIError) else str(error)
             await message.answer("❗ " + escaped(code, 800), reply_markup=keyboard([]))
@@ -487,6 +506,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await wizard.message(message, state)
             elif current and current.startswith("finance:"):
                 text, markup = await finance.message(message, state)
+            elif current and current.startswith("quick:"):
+                text, markup = await replies.message(message, state)
             elif current == "discount":
                 data = await state.get_data()
                 item = await products.owned_item(data["item_id"])
@@ -536,7 +557,10 @@ def create_router(store, api, products, synchronizer):
                 if not value.strip() or len(value) > 3500:
                     raise ValidationError("Введите текст длиной 1–3500 символов")
                 if current == "reply":
-                    pending = {"kind": "reply", "target": data["chat_id"], "payload": {"text": value}}
+                    text, markup = await replies.confirm(
+                        state, data["chat_id"], value, data.get("origin_event")
+                    )
+                    return await display(message, text, markup)
                 else:
                     if data["field"] == "price":
                         value = listing_price(value, getattr(api.account, "role", None))

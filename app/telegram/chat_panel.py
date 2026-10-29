@@ -33,7 +33,7 @@ class ChatPanel:
             ident = view["id"]
         cursor = view["cursors"][view["index"]]
         page = await self.api.call("get_chat_messages", chat_id=ident, count=8, after_cursor=cursor)
-        messages, following = validate_page(page, "messages", view["cursors"])
+        messages, following = validate_page(page, "messages", view["cursors"][: view["index"] + 1])
         for message in messages:
             # Browsing old history is not an incoming event and must not notify owners.
             self.store.execute(

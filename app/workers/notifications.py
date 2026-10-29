@@ -1,10 +1,14 @@
 import asyncio
 import json
+import time
 from html import escape
+
+from aiogram.exceptions import TelegramBadRequest
 
 from app.database.store import encode
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
+from app.telegram.message_notice import message_notice
 
 
 class Notifications:
@@ -16,6 +20,7 @@ class Notifications:
     async def once(self):
         if not self.store.rows("SELECT user_id FROM administrators LIMIT 1"):
             return
+        await self.refresh_actions()
         # First completed sync establishes baseline: do not flood with historical orders.
         if not self.store.setting("notifications:initialized", False):
             if self.store.setting("sync:health", {}).get("status") != "OK":
@@ -50,19 +55,7 @@ class Notifications:
                     continue
                 rows = self.store.rows("SELECT chat_id FROM chat_messages WHERE id=?", (payload["id"],))
                 chat_id = rows[0]["chat_id"] if rows else None
-                text = "💬 <b>Новое сообщение</b>\n" + escaped(
-                    payload.get("text") or "[вложение/событие]", 2800
-                )
-                markup = (
-                    keyboard(
-                        [
-                            [("✉️ Ответить", "reply:" + chat_id), ("📖 Диалог", "chat:" + chat_id)],
-                            [("✅ Прочитано", "readchat:" + chat_id)],
-                        ]
-                    )
-                    if chat_id
-                    else keyboard([])
-                )
+                text, markup = message_notice(payload, chat_id)
             elif event["kind"] == "order":
                 item = payload.get("item") or {}
                 text = f"🛒 <b>Заказ</b>\n{escape(item.get('name') or payload['id'])}\nСтатус: {escape(payload['status'])}\nСумма: {item.get('price', '?')} ₽"
@@ -102,6 +95,83 @@ class Notifications:
                         "UPDATE notifications SET status='SUCCEEDED',telegram_message_id=? WHERE event_key=? AND owner_id=?",
                         (message.message_id, event["key"], user),
                     )
+
+    async def refresh_actions(self):
+        pending = self.store.rows(
+            "SELECT DISTINCT a.event_key,a.owner_id,n.telegram_message_id,i.payload,m.chat_id "
+            "FROM notification_actions a JOIN outbox o ON o.id=a.operation_id "
+            "JOIN notifications n ON n.event_key=a.event_key AND n.owner_id=a.owner_id "
+            "JOIN inbox i ON i.key=a.event_key JOIN chat_messages m ON i.key='message:'||m.id "
+            "WHERE n.telegram_message_id IS NOT NULL "
+            "AND a.retry_after<=? AND (a.rendered_status IS NULL OR a.rendered_status!=o.status) LIMIT 100",
+            (time.time(),),
+        )
+        labels = {
+            "PENDING": "сохранено в очереди",
+            "PROCESSING": "выполняется",
+            "RETRYABLE_FAILED": "ожидает повторной проверки",
+            "UNCERTAIN": "результат неизвестен; проверьте Playerok. Автоповтора нет",
+            "PERMANENT_FAILED": "не выполнено; см. диагностику",
+            "SUCCEEDED": "подтверждено API",
+        }
+        for notification in pending:
+            actions = self.store.rows(
+                "SELECT a.operation_id,a.failures,o.kind,o.status,o.result FROM notification_actions a "
+                "JOIN outbox o ON o.id=a.operation_id WHERE a.owner_id=? AND a.event_key=? "
+                "ORDER BY o.created_at DESC,o.id DESC",
+                (notification["owner_id"], notification["event_key"]),
+            )
+            latest = actions[0]
+            name = "Ответ" if latest["kind"] == "reply" else "Отметка прочитанности"
+            note = (
+                f"<b>{name}:</b> {labels[latest['status']]}\nОперация: <code>{latest['operation_id']}</code>"
+            )
+            result = json.loads(latest["result"]) if latest["result"] else {}
+            if latest["status"] == "SUCCEEDED" and result.get("message_id"):
+                note += "\nID ответа: " + escaped(result["message_id"], 100)
+            text, markup = message_notice(json.loads(notification["payload"]), notification["chat_id"], note)
+            try:
+                await self.bot.edit_message_text(
+                    text,
+                    chat_id=notification["owner_id"],
+                    message_id=notification["telegram_message_id"],
+                    reply_markup=markup,
+                )
+            except asyncio.CancelledError:
+                raise
+            except TelegramBadRequest as error:
+                if "message is not modified" not in error.message.lower():
+                    self.store.audit(
+                        notification["owner_id"],
+                        "NOTIFICATION_UPDATE",
+                        notification["event_key"],
+                        "TELEGRAM_REJECTED",
+                    )
+                    self.defer_update(notification, actions, error)
+                    continue
+            except Exception as error:  # noqa: BLE001 -- editing same message is safe to retry, never resend buyer reply
+                self.store.audit(
+                    notification["owner_id"],
+                    "NOTIFICATION_UPDATE",
+                    notification["event_key"],
+                    type(error).__name__,
+                )
+                self.defer_update(notification, actions, error)
+                continue
+            with self.store.transaction() as db:
+                for action in actions:
+                    db.execute(
+                        "UPDATE notification_actions SET rendered_status=?,retry_after=0,failures=0 WHERE operation_id=?",
+                        (action["status"], action["operation_id"]),
+                    )
+
+    def defer_update(self, notification, actions, error):
+        failures = max(action["failures"] for action in actions) + 1
+        delay = max(min(3600, 5 * 2 ** min(failures, 10)), getattr(error, "retry_after", 0))
+        self.store.execute(
+            "UPDATE notification_actions SET retry_after=?,failures=? WHERE event_key=? AND owner_id=?",
+            (time.time() + delay, failures, notification["event_key"], notification["owner_id"]),
+        )
 
     async def run(self, stop):
         self.store.execute("UPDATE notifications SET status='UNCERTAIN' WHERE status='PROCESSING'")

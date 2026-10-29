@@ -224,3 +224,58 @@ async def test_financial_panel_through_real_dispatcher_is_read_only(tmp_path):
     finally:
         await bot.session.close()
         store.close()
+
+
+async def test_notification_reply_keeps_original_and_updates_after_durable_completion(tmp_path):
+    from app.services.orders import Orders
+    from app.workers.notifications import Notifications
+    from app.workers.outbox import OutboxWorker
+
+    class ChatAPI(CatalogAPI):
+        account = SimpleNamespace(id="seller", writes_enabled=True)
+
+        async def call(self, method, **kwargs):
+            assert method == "get_chat"
+            return {"id": kwargs["chat_id"]}
+
+    store = Store(tmp_path / "notification-reply.sqlite")
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    ui = Interaction(bot, dispatcher(store, ChatAPI()))
+    state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
+    try:
+        await ui.message("/start")
+        Orders(store).ingest_message("chat", {"id": "incoming", "text": "Original question"})
+        store.execute("INSERT INTO notifications VALUES('message:incoming',7,1,'SUCCEEDED')")
+        store.set_setting("notifications:initialized", True)
+        await ui.click("reply:chat")
+        assert session.calls[-1].__api_method__ == "sendMessage"
+        assert await state.get_state() == "reply"
+        await ui.message("Answer <buyer>")
+        token = (await state.get_data())["confirm_token"]
+        assert not store.rows("SELECT * FROM outbox")
+        # Restore dispatcher, keeping confirmation and origin mapping in SQLite.
+        ui.dp = dispatcher(store, ChatAPI())
+        await ui.click("commit:" + token)
+        await ui.click("commit:" + token)
+        assert len(store.rows("SELECT * FROM outbox")) == 1
+        assert len(store.rows("SELECT * FROM notification_actions")) == 1
+        executed = []
+
+        async def successful(action):
+            executed.append(action)
+            return {"message_id": "remote-answer"}
+
+        worker = OutboxWorker(store, successful)
+        await worker.once()
+        await worker.once()
+        assert len(executed) == 1
+        await Notifications(store, bot).once()
+        edit = session.calls[-1]
+        assert edit.__api_method__ == "editMessageText"
+        assert edit.message_id == 1
+        assert "Original question" in edit.text and "remote-answer" in edit.text
+        assert "подтверждено API" in edit.text
+    finally:
+        await bot.session.close()
+        store.close()

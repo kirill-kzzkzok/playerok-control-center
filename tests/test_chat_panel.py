@@ -52,3 +52,21 @@ async def test_deleted_message_hides_body_and_incomplete_page_is_not_cached(tmp_
         assert "Изображений: 1" in text
     finally:
         store.close()
+
+
+async def test_navigation_back_to_newer_page_accepts_known_forward_cursor(tmp_path):
+    store = Store(tmp_path / "chat.sqlite")
+    try:
+        state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=1, chat_id=2, user_id=2))
+        api = SimpleNamespace(
+            call=AsyncMock(side_effect=[page("new", "opaque"), page("old"), page("new", "opaque")])
+        )
+        panel = ChatPanel(store, api)
+        _, markup = await panel.show("chat:chat-id", state)
+        _, markup = await panel.show(markup.inline_keyboard[1][0].callback_data, state)
+        text, markup = await panel.show(markup.inline_keyboard[1][0].callback_data, state)
+        assert "страница 1" in text
+        assert markup.inline_keyboard[1][0].text == "Старее →"
+        assert api.call.call_args.kwargs["after_cursor"] is None
+    finally:
+        store.close()
