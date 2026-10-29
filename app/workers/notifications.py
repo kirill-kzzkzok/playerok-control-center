@@ -2,6 +2,7 @@ import asyncio
 import json
 from html import escape
 
+from app.database.store import encode
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 
@@ -23,10 +24,16 @@ class Notifications:
                 db.execute(
                     "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT i.key,a.user_id,'BASELINE' FROM inbox i CROSS JOIN administrators a"
                 )
-            self.store.set_setting("notifications:initialized", True)
+                db.execute(
+                    "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    ("notifications:initialized", encode(True)),
+                )
             return
         events = self.store.rows(
-            "SELECT i.* FROM inbox i WHERE i.processed_at IS NOT NULL ORDER BY received_at"
+            "SELECT i.* FROM inbox i WHERE i.processed_at IS NOT NULL "
+            "AND EXISTS (SELECT 1 FROM administrators a WHERE NOT EXISTS "
+            "(SELECT 1 FROM notifications n WHERE n.event_key=i.key AND n.owner_id=a.user_id)) "
+            "ORDER BY i.received_at,i.key LIMIT 200"
         )
         owners = self.store.rows("SELECT user_id FROM administrators")
         for event in events:
@@ -35,6 +42,11 @@ class Notifications:
                 author = payload.get("user") or {}
                 account_id = self.store.setting("playerok:account_id")
                 if account_id and author.get("id") == account_id:
+                    self.store.execute(
+                        "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) "
+                        "SELECT ?,user_id,'SKIPPED' FROM administrators",
+                        (event["key"],),
+                    )
                     continue
                 rows = self.store.rows("SELECT chat_id FROM chat_messages WHERE id=?", (payload["id"],))
                 chat_id = rows[0]["chat_id"] if rows else None
@@ -42,7 +54,12 @@ class Notifications:
                     payload.get("text") or "[вложение/событие]", 2800
                 )
                 markup = (
-                    keyboard([[("✉️ Ответить", "reply:" + chat_id), ("📖 Диалог", "chat:" + chat_id)]])
+                    keyboard(
+                        [
+                            [("✉️ Ответить", "reply:" + chat_id), ("📖 Диалог", "chat:" + chat_id)],
+                            [("✅ Прочитано", "readchat:" + chat_id)],
+                        ]
+                    )
                     if chat_id
                     else keyboard([])
                 )
@@ -51,6 +68,11 @@ class Notifications:
                 text = f"🛒 <b>Заказ</b>\n{escape(item.get('name') or payload['id'])}\nСтатус: {escape(payload['status'])}\nСумма: {item.get('price', '?')} ₽"
                 markup = keyboard([[("Открыть заказ", "order:" + payload["id"])]])
             else:
+                self.store.execute(
+                    "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) "
+                    "SELECT ?,user_id,'SKIPPED' FROM administrators",
+                    (event["key"],),
+                )
                 continue
             for owner in owners:
                 user = owner["user_id"]

@@ -40,6 +40,9 @@ class FakeAccount:
     def send_message(self, **kwargs):
         return SimpleNamespace(id="message1")
 
+    def mark_chat_as_read(self, **kwargs):
+        return SimpleNamespace(id=kwargs["chat_id"], unread_messages_counter=0)
+
 
 class FakeAPI:
     def __init__(self):
@@ -216,3 +219,30 @@ async def test_executor_validates_changes_at_server_boundary(setup, changes):
     await worker.once()
     assert not api.account.calls
     assert store.rows("SELECT status FROM outbox")[0]["status"] == "PERMANENT_FAILED"
+
+
+async def test_mark_read_is_durable_and_duplicate_confirmation_does_not_repeat(setup):
+    store, api, _, worker = setup
+    first = store.enqueue("read-once", "mark_read", "chat1", {})
+    await worker.once()
+    assert store.enqueue("read-once", "mark_read", "chat1", {}) == first
+    assert not await worker.once()
+    assert api.account.calls == ["markChatAsRead"]
+    assert store.rows("SELECT status FROM outbox")[0]["status"] == "SUCCEEDED"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"id": "wrong", "unread_messages_counter": 0},
+        {"id": "chat1"},
+        {"id": "chat1", "unread_messages_counter": 2},
+    ],
+)
+async def test_mark_read_incomplete_response_is_uncertain_without_retry(setup, response):
+    store, api, _, worker = setup
+    api.account.mark_chat_as_read = lambda **kwargs: response
+    store.enqueue("read-once", "mark_read", "chat1", {})
+    await worker.once()
+    assert store.rows("SELECT status FROM outbox")[0]["status"] == "UNCERTAIN"
+    assert not await worker.once()

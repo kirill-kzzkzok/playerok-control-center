@@ -18,6 +18,7 @@ from app.services.catalog import ORDER_FILTERS, order_page
 from app.services.discounts import discount_plan
 from app.services.products import ValidationError, listing_price, listing_text, priority_price_basis
 from app.services.statistics import statistics
+from app.telegram.chat_panel import ChatPanel
 from app.telegram.finance_panel import FinancePanel
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard, main_menu
@@ -44,6 +45,7 @@ def create_router(store, api, products, synchronizer):
     router = Router()
     wizard = Wizard(store, api, products)
     finance = FinancePanel(store, api, products)
+    chats = ChatPanel(store, api)
 
     @router.message(CommandStart())
     async def start(message, state):
@@ -80,6 +82,8 @@ def create_router(store, api, products, synchronizer):
             label = value.get("name") or user.get("username") or value.get("id")
             if kind == "items":
                 label = f"{value.get('price', '?')} ₽ · {label}"
+            elif value.get("unread_messages_counter"):
+                label = f"🔵 {value['unread_messages_counter']} · {label}"
             rows.append([(str(label)[:60], f"{prefix}:{value['id']}")])
         info = page.get("page_info") or {}
         if info.get("has_next_page"):
@@ -330,15 +334,23 @@ def create_router(store, api, products, synchronizer):
                 markup = keyboard(
                     ([[("💬 Диалог", "chat:" + chat)]] if chat else []) + [[("🔄 Проверить", action)]]
                 )
-            elif action.startswith("chat:"):
+            elif action.startswith(("chat:", "chatpage:")):
+                text, markup = await chats.show(action, state)
+            elif action.startswith("readchat:"):
                 ident = action.split(":", 1)[1]
-                page = await api.call("get_chat_messages", chat_id=ident, count=12)
-                messages = page.get("messages") or []
-                text = "💬 <b>Последние сообщения</b>\n\n" + "\n\n".join(
-                    escaped(m.get("text") or "[вложение/событие]", 300) for m in reversed(messages)
+                await api.call("get_chat", chat_id=ident)
+                nonce = secrets.token_hex(8)
+                await state.set_state(None)
+                await state.set_data(
+                    {
+                        "pending": {"kind": "mark_read", "target": ident, "payload": {}},
+                        "confirm_token": nonce,
+                    }
                 )
-                text = text[:3900]
-                markup = keyboard([[("✉️ Ответить", "reply:" + ident)]])
+                text, markup = (
+                    "Отметить все сообщения этого диалога прочитанными в Playerok?",
+                    keyboard([[("✅ Подтвердить", "commit:" + nonce)]]),
+                )
             elif action.startswith("reply:"):
                 ident = action.split(":", 1)[1]
                 await state.set_state("reply")
@@ -347,7 +359,9 @@ def create_router(store, api, products, synchronizer):
             elif action == "sync":
                 await synchronizer.once()
                 text, markup = (
-                    "Сверка завершена. История сохранена локально.",
+                    "Цикл сверки завершён. Статус: "
+                    + escaped(synchronizer.health.get("status", "UNKNOWN"))
+                    + ". Сохранённая история доступна локально; полная загрузка может занять несколько циклов.",
                     keyboard([[("🛒 Заказы", "orders")]]),
                 )
             elif action == "profile":

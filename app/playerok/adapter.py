@@ -286,23 +286,27 @@ class Playerok:
         cursor, seen = None, set()
         while True:
             page = await self.call(method, after_cursor=cursor, **kwargs)
-            if not isinstance(page, dict) or collection not in page or not isinstance(page[collection], list):
-                raise APIError("INCOMPLETE_PAGE")
-            if any(not isinstance(entry, dict) or not entry.get("id") for entry in page[collection]):
-                raise APIError("INCOMPLETE_PAGE_ENTRY")
-            info = page.get("page_info")
-            if not isinstance(info, dict) or not isinstance(info.get("has_next_page"), bool):
-                raise APIError("INCOMPLETE_PAGE_INFO")
-            next_cursor = info.get("end_cursor")
-            if info["has_next_page"] and (
-                not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen
-            ):
-                raise APIError("INVALID_PAGINATION_CURSOR")
-            yield page[collection]
-            if not info["has_next_page"]:
+            entries, next_cursor = validate_page(page, collection, seen)
+            yield entries
+            if next_cursor is None:
                 break
             cursor = next_cursor
             seen.add(cursor)
+
+
+def validate_page(page, collection, seen=()):
+    """Validate the entire envelope before committing any entries or cursor."""
+    if not isinstance(page, dict) or not isinstance(page.get(collection), list):
+        raise APIError("INCOMPLETE_PAGE")
+    if any(not isinstance(entry, dict) or not entry.get("id") for entry in page[collection]):
+        raise APIError("INCOMPLETE_PAGE_ENTRY")
+    info = page.get("page_info")
+    if not isinstance(info, dict) or not isinstance(info.get("has_next_page"), bool):
+        raise APIError("INCOMPLETE_PAGE_INFO")
+    cursor = info.get("end_cursor") if info["has_next_page"] else None
+    if info["has_next_page"] and (not isinstance(cursor, str) or not cursor or cursor in seen):
+        raise APIError("INVALID_PAGINATION_CURSOR")
+    return page[collection], cursor
 
 
 def safe_media_url(url):

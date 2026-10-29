@@ -52,3 +52,19 @@ async def test_no_owner_does_not_mark_notification_baseline(store):
     await Notifications(store, bot).once()
     assert not store.setting("notifications:initialized", False)
     bot.send_message.assert_not_called()
+
+
+async def test_self_messages_do_not_starve_notifications_behind_batch_limit(store):
+    store.set_setting("notifications:initialized", True)
+    store.set_setting("playerok:account_id", "seller")
+    orders = Orders(store)
+    for index in range(201):
+        orders.ingest_message("chat", {"id": f"self-{index}", "user": {"id": "seller"}})
+    orders.ingest_message("chat", {"id": "buyer", "text": "hello", "user": {"id": "buyer"}})
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=7)))
+    worker = Notifications(store, bot)
+    await worker.once()
+    await worker.once()
+    await worker.once()
+    assert bot.send_message.await_count == 1
+    assert len(store.rows("SELECT * FROM notifications WHERE status='SKIPPED'")) == 201

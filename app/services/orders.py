@@ -89,7 +89,7 @@ class Orders:
                 (key, "message", encode(message), now()),
             ).rowcount
             db.execute(
-                "INSERT OR IGNORE INTO chat_messages VALUES(?,?,?,?)",
+                "INSERT INTO chat_messages VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
                 (message["id"], chat_id, message.get("created_at"), encode(message)),
             )
             db.execute("UPDATE inbox SET processed_at=? WHERE key=?", (now(), key))

@@ -200,6 +200,12 @@ class Executor:
             if result.get("id") != target:
                 raise APIError("EDIT_NOT_CONFIRMED", uncertain=True)
             return {"remote_id": target}
+        if kind == "mark_read":
+            await self.api.call("get_chat", chat_id=target)
+            result = await self.mutate("markChatAsRead", "mark_chat_as_read", chat_id=target)
+            if result.get("id") != target or result.get("unread_messages_counter") != 0:
+                raise APIError("READ_STATUS_NOT_CONFIRMED", uncertain=True)
+            return {"chat_id": target, "unread_messages_counter": 0}
         if kind == "reply":
             await self.api.call("get_chat", chat_id=target)
             result = await self.mutate(

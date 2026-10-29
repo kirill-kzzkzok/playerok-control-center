@@ -120,3 +120,27 @@ Live read-only `data/live_withdrawal_quotes.json`: сессия авторизо
 Рабочая локальная БД успешно мигрирована с backup: 217 заказов и 1 владелец сохранены.
 
 Финальный запуск финансовой контрольной точки: **181 passed in 12.79s**; ruff/pip check чистые, JUnit: data/phase3_finance_results.xml.
+
+
+## PHASE 4 checkpoint (2026-10-30)
+
+196 passed in 11.01s; JUnit: data/phase4_sync_results.xml. Ruff clean; pip check: no
+broken requirements. Secret scan of tracked and nonignored files clean; actual
+Telegram token, full Playerok header and long cookie values checked without output.
+
+test_sync_recovery.py: bounded history, refreshed head, durable cursor after database
+close/reopen, partial-page interruption/replay, network failure retaining checkpoint,
+looping cursor rejection before ingest, independent failed chats, round-robin fairness,
+message updates without duplicate events. test_chat_panel.py: durable navigation,
+stale callbacks, escaping/size limits, deleted message redaction and image counts;
+viewing history creates no inbox events. test_notifications.py: self messages beyond
+200-entry batch cannot starve a buyer notification. test_operations.py: mark_read
+duplicate confirmation, verified chat/counter and UNCERTAIN on incomplete responses.
+
+Live read-only: data/live_sync_readonly.json; 24 chats, 4 checkpoints, 217 preserved
+orders, 1 preserved owner; BACKFILL, errors={}, mutations=0. Backup taken before v3.
+This was one bounded cycle, not proof of complete historical coverage. No Telegram
+notifications or buyer sends were run in this probe. mark_read and paging Telegram UI
+are covered offline; live mark_read was not performed. WebSocket, quick replies,
+photo transport, notification update after reply and manual UNCERTAIN resolution
+remain pending alongside the rest of the original specification.
