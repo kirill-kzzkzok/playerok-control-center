@@ -17,6 +17,7 @@ from app.rendering.charts import revenue_chart
 from app.services.discounts import discount_plan
 from app.services.products import ValidationError, listing_price, listing_text, priority_price_basis
 from app.services.statistics import statistics
+from app.telegram.automation_panel import AutomationPanel
 from app.telegram.chat_panel import ChatPanel
 from app.telegram.finance_panel import FinancePanel
 from app.telegram.formatting import escaped
@@ -53,6 +54,7 @@ def create_router(store, api, products, synchronizer):
     operations = OperationsPanel(store, api)
     orders_panel = OrdersPanel(store, api)
     fulfillment_panel = FulfillmentPanel(store, api)
+    automation_panel = AutomationPanel(store, api)
 
     @router.message(CommandStart())
     async def start(message, state):
@@ -131,6 +133,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await replies.callback(action, owner, state)
             elif action.startswith("ops:"):
                 text, markup = await operations.callback(action, owner, state)
+            elif action == "automation" or action.startswith(("auto:", "ap:")):
+                text, markup = await automation_panel.callback(action, owner, state)
             elif action.startswith("ff:"):
                 text, markup = await fulfillment_panel.callback(action, owner, state)
             elif action.startswith("w:"):
@@ -217,6 +221,7 @@ def create_router(store, api, products, synchronizer):
                     [("🧩 Атрибуты и данные", "editfields:" + ident)],
                     [("⭐ Стоимость размещения", "quote:" + ident)],
                     [("💰 Финансовый расчёт", "finance:" + ident)],
+                    [("⚡ Политика выдачи · dry-run", "auto:item:" + ident)],
                     [("🗑 Удалить", "delete:" + ident)],
                 ]
                 if item.get("status") == "DRAFT":
@@ -436,12 +441,6 @@ def create_router(store, api, products, synchronizer):
                     "Резервная копия сохранена локально в data/backups. В Telegram база с данными выдачи не отправляется.",
                     keyboard([]),
                 )
-            elif action == "automation":
-                text = (
-                    "⚡ <b>Автоматизация</b>\nАвтовыдача: выключена\nАвтоподтверждение: выключено\nАвтоподнятие: только dry-run\nАвтовывод: запрещён\n\n"
-                    "Транзакционный запас и обработка сбоев реализованы и проверяются изолированно. Включение реальных действий не предоставлено до завершения сквозных проверок."
-                )
-                markup = keyboard([])
             elif action == "diagnostics":
                 health = store.setting("sync:health", {"status": "NOT_STARTED"})
                 actions = store.rows(
@@ -486,6 +485,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await replies.message(message, state)
             elif current and current.startswith("order:"):
                 text, markup = await orders_panel.message(message, state)
+            elif current and current.startswith("automation:"):
+                text, markup = await automation_panel.message(message, state)
             elif current and current.startswith("fulfill:"):
                 text, markup = await fulfillment_panel.message(message, state)
             elif current and current.startswith("resolve:"):

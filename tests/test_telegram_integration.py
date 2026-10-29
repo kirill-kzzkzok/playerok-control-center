@@ -503,3 +503,40 @@ async def test_fulfillment_checklist_router_requires_attestation_and_restores_co
     finally:
         await bot.session.close()
         store.close()
+
+
+async def test_automation_router_edits_local_policy_without_enabling_runtime(tmp_path):
+    class PolicyAPI(CatalogAPI):
+        async def call(self, method, **kwargs):
+            self.calls.append((method, kwargs))
+            assert method == "get_item"
+            return {"id": kwargs["id"], "user": {"id": "seller"}}
+
+    store = Store(tmp_path / "policy-ui.sqlite")
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    api = PolicyAPI()
+    ui = Interaction(bot, dispatcher(store, api))
+    state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
+    try:
+        await ui.message("/start")
+        await ui.click("automation")
+        await ui.click("auto:item:item")
+        nonce = (await state.get_data())["automation"]["nonce"]
+        await ui.click(f"ap:{nonce}:mode:stock")
+        nonce = (await state.get_data())["automation"]["nonce"]
+        await ui.click(f"ap:{nonce}:toggle:enabled")
+        nonce = (await state.get_data())["automation"]["nonce"]
+        ui.dp = dispatcher(store, api)
+        await ui.click(f"ap:{nonce}:save")
+        assert "Исполнение выключено" in session.calls[-1].text
+        assert store.rows("SELECT revision FROM delivery_policies") == [{"revision": 1}]
+        assert not store.rows("SELECT * FROM outbox")
+        await ui.click("auto:stop")
+        assert store.rows("SELECT revision FROM delivery_policies") == [{"revision": 2}]
+        count = len(api.calls)
+        await ui.click("auto:item:item", owner=8)
+        assert len(api.calls) == count
+    finally:
+        await bot.session.close()
+        store.close()

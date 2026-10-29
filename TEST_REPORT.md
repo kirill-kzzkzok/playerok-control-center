@@ -282,3 +282,20 @@ summary (state/Telegram/time), not an echo of all supplier fields. Full live acc
 and remaining original requirements are still pending.
 
 After final UI wording adjustments, the fulfillment/Dispatcher subset passed again: **33 passed in 15.82s**. Format and actual-secret scans clean.
+
+
+## PHASE 5 — desired delivery policies checkpoint (2026-10-30)
+
+**316 passed in 37.80s**, JUnit data/phase5_delivery_policies_results.xml;
+Ruff and dependency checks clean. test_automation.py verifies policy validation,
+owner/seller isolation, CAS conflict, persisted edit FSM, stale nonce, stop-all,
+readonly API simulations of PAID stock delivery, no reservations/outbox, safe audit/run
+payloads and stock/local-problem/prior-operation refusal. Real aiogram Dispatcher test
+covers configuration, restart, save, global stop and foreign callback. No runtime
+chain is claimed by these tests; greeting/fixed text/after/SENT desired settings are
+not automatically executed yet.
+
+v9 backup and migration evidence data/delivery_policies_migration_check.json: schema
+1–9, 217 orders, 1 owner, 0 configured policies; external_requests=0/mutations=0.
+No live shop settings changed. Existing delivery/fulfillment/read-only tests remain green.
+Further automation implementation and full specification acceptance remain pending.

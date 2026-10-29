@@ -286,3 +286,24 @@ FulfillmentPanel сохраняет checkbox/поля/выбор поставщ�
 введённые данные. Поля отчёта не копируются в audit/order_history; стоимость отчёта
 не создаёт financial_operation и не переводит деньги. Native SDK parser сохраняет
 новые raw role/sellerType, чтобы OFFICIAL_SELLER не терялся до выбора workflow.
+
+
+## DeliveryPolicy и dry-run оценки (v9)
+
+Automation хранит desired DeliveryPolicy по item_id с revision/actor и транзакционным
+CAS. Policy не является разрешением worker execution: runtime_enabled=False на уровне
+оценки, никакого вызова Executor/Orders.reserve из этого сервиса нет. Изменение политики
+не редактирует объявление. Режимы manual/text/stock, message fields и mark_sent имеют
+строгую валидацию. Secret-bearing поля сохраняются в локальных policy/FSM, не audit.
+
+AutomationPanel содержит per-item редактор и local global-stop. Кнопки имеют nonce;
+сохранение сверяет свежего продавца и версию. Несохранённые изменения не используются
+для dry-run. Общий список показывает последние 20, остальные доступны через карточки
+товаров (полная пагинация настроенных политик ещё предстоит). Выключение меняет только
+policy desired state; ручной durable outbox не отменяется по скрытому побочному эффекту.
+
+simulate читает свежую продажу/чат и локальные резервы/операции/проблемы. Результат
+automation_runs содержит причины/названия шагов и counts, без message/stock values.
+Симуляция не резервирует и не исполняет шаги. Запрошенный mark_sent указывает на
+необходимость отдельного Fulfillment workflow, а не на автоматическое CONFIRMED.
+Greeting/after и fixed text сохраняются, но runtime цепочка ещё не подключена.
