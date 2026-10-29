@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal, InvalidOperation
+from zoneinfo import ZoneInfo
 
 
 def money(value):
@@ -12,7 +13,10 @@ def money(value):
         raise ValueError("Некорректная денежная сумма") from None
     if not result.is_finite() or result < 0:
         raise ValueError("Сумма должна быть конечной и неотрицательной")
-    return result.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    try:
+        return result.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except InvalidOperation:
+        raise ValueError("Денежная сумма превышает допустимую точность") from None
 
 
 @dataclass(frozen=True)
@@ -25,6 +29,8 @@ class FeeRule:
     estimated: bool = True
     rounding: str = ROUND_HALF_UP
     net_floor_rubles: bool = False
+    extra_fee_amount: Decimal = Decimal(0)
+    net_floor_cents: bool = False
 
     def __post_init__(self):
         percent = Decimal(str(self.percent))
@@ -32,13 +38,20 @@ class FeeRule:
             raise ValueError("Недопустимая ставка")
         if not self.source or not self.checked_at or not self.basis:
             raise ValueError("Для ставки требуется источник, дата и основание")
+        money(self.extra_fee_amount)
 
     def charge(self, amount):
         if self.net_floor_rubles:
             amount = money(amount)
             net = (amount * (1 - Decimal(str(self.percent)) / 100)).quantize(Decimal(1), rounding=ROUND_FLOOR)
             return amount - net
-        charge = max(money(amount) * Decimal(str(self.percent)) / 100, money(self.minimum))
+        charge = max(
+            money(amount) * Decimal(str(self.percent)) / 100 + money(self.extra_fee_amount),
+            money(self.minimum),
+        )
+        if self.net_floor_cents:
+            net = (money(amount) - charge).quantize(Decimal("0.01"), rounding=ROUND_FLOOR)
+            return money(amount) - net
         return charge.quantize(Decimal("0.01"), rounding=self.rounding)
 
 
@@ -152,6 +165,16 @@ def quote_fresh(checked_at, max_age=60):
         return False
 
 
+def checked_time(checked_at):
+    try:
+        value = datetime.fromisoformat(checked_at)
+        if value.tzinfo is None:
+            return "время не подтверждено"
+        return value.astimezone(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y %H:%M МСК")
+    except (ValueError, TypeError):
+        return "время не подтверждено"
+
+
 def format_calculation(result):
     title = (
         "Точный расчёт недоступен"
@@ -177,4 +200,7 @@ def format_calculation(result):
             lines.append(f"{label}: {value} ₽")
     if result.unknown:
         lines.append("Неизвестно: " + ", ".join(result.unknown))
+    times = list(dict.fromkeys(checked_time(rule.checked_at) for rule in result.sources))
+    if times:
+        lines.append("Данные комиссий: " + "; ".join(times))
     return "\n".join(lines)

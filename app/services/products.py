@@ -200,6 +200,12 @@ def field_baseline(item):
     )
 
 
+def priority_price_basis(item):
+    if item.get("raw_price") is None:
+        raise ValidationError("API не вернул базовую цену для расчёта размещения")
+    return integer_price(item["raw_price"])
+
+
 class Products:
     def __init__(self, store, api):
         self.store, self.api = store, api

@@ -92,3 +92,31 @@ Public bundles редактора/вывода: 10 успешных GET без �
 Условия реального аккаунта, объявления, сделки и деньги на этом этапе не изменялись.
 
 Финальная проверка контрольной точки: **151 passed in 11.94s**; JUnit: `data/phase2_conditions_results.xml` (вне Git). Ruff/pip check/secret scan прошли.
+
+
+## PHASE 3 — вывод, себестоимость, PREMIUM preview
+
+Полный suite: **181 passed**. Отдельный JUnit сохранён в `data/phase3_finance_results.xml`.
+Ruff и pip check прошли в ходе контрольной точки; финальные проверки повторяются перед commit.
+
+- test_withdrawals.py: проценты/минимум/лимиты, +1 USDT с актуальным FX, отсутствие
+  выдуманного курса, неизвестные/устаревшие условия, слишком большая сумма Decimal,
+  расчёт себестоимости/размещения отдельно, точный GET-контракт exchange rate,
+  missing raw financial fields не трактуются как явный null.
+- test_finance_panel.py: сохранение способа и cost после restart, разграничение владельцев,
+  локальная cost для SOLD без рыночного редактирования, multi-step мастер, безопасный
+  финансовый журнал, миграция v1→v2, PREMIUM quote без платежа и повторного списания.
+- test_placement_basis.py: quote по rawPrice при скидке, отказ при её отсутствии,
+  бесплатная публикация требует свежих обеих цен.
+- test_telegram_integration.py: настоящий Dispatcher/Router/Middleware/FSM проходит
+  финансовый UI на mock Telegram; чужой callback не читает API, outbox и реальные
+  financial_operations остаются пустыми.
+- test_finance.py: время источника показано Europe/Moscow с переходом даты.
+
+Live read-only `data/live_withdrawal_quotes.json`: сессия авторизована, 5 способов вывода,
+реальный курс USDT_RUB получен, расчёт для явно условной суммы 2000 RUB; **mutations=0**.
+Не было реального вывода или сверки фактического settlement. Поэтому округление/поступления
+не объявлены подтверждёнными, все такие суммы обозначены как оценки.
+Рабочая локальная БД успешно мигрирована с backup: 217 заказов и 1 владелец сохранены.
+
+Финальный запуск финансовой контрольной точки: **181 passed in 12.79s**; ruff/pip check чистые, JUnit: data/phase3_finance_results.xml.

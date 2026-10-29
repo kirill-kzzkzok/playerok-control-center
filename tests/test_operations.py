@@ -52,7 +52,13 @@ class FakeAPI:
         if method == "get_game_category":
             return {"id": kwargs["id"], "options": []}
         if method == "get_item":
-            return {"id": kwargs["id"], "user": {"id": self.item_owner}, "status": "DRAFT", "price": 100}
+            return {
+                "id": kwargs["id"],
+                "user": {"id": self.item_owner},
+                "status": "DRAFT",
+                "price": 100,
+                "raw_price": 100,
+            }
         if method == "get_item_priority_statuses":
             return [self.quote]
         if method == "get_chat":
@@ -99,7 +105,9 @@ async def test_create_double_click_and_publish(setup):
     assert api.account.calls == ["createItem"]
     assert not await worker.once()
     assert store.rows("SELECT remote_id FROM bindings")[0]["remote_id"] == "remote1"
-    store.enqueue("publish:remote1", "publish", "remote1", {"priority_id": "free", "price": 100})
+    store.enqueue(
+        "publish:remote1", "publish", "remote1", {"priority_id": "free", "price": 100, "raw_price": 100}
+    )
     await worker.once()
     assert api.account.calls == ["createItem", "publishItem"]
 
@@ -107,7 +115,9 @@ async def test_create_double_click_and_publish(setup):
 async def test_stale_paid_quote_blocks_before_mutation(setup):
     store, api, _, worker = setup
     api.quote["price"] = 1
-    store.enqueue("publish:remote1", "publish", "remote1", {"priority_id": "free", "price": 100})
+    store.enqueue(
+        "publish:remote1", "publish", "remote1", {"priority_id": "free", "price": 100, "raw_price": 100}
+    )
     await worker.once()
     assert not api.account.calls
     assert store.rows("SELECT status FROM outbox")[0]["status"] == "PERMANENT_FAILED"

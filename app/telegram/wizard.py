@@ -5,11 +5,12 @@ from html import escape
 
 from aiogram.types import BufferedInputFile
 
-from app.database.store import now
 from app.services.agreements import fingerprint
 from app.services.attachments import Attachments
-from app.services.finance import calculate, format_calculation, sale_rule_from_api
+from app.services.finance import format_calculation, money
+from app.services.financial_quotes import save_quote
 from app.services.products import ValidationError, listing_price, listing_text, validate_field
+from app.services.withdrawals import draft_calculation, withdrawal_methods, withdrawal_snapshot
 from app.telegram.formatting import escaped, html_pages
 from app.telegram.keyboards import keyboard
 
@@ -21,7 +22,15 @@ class Wizard:
 
     async def start(self, owner, state):
         ident = self.store.draft(
-            owner, {"step": "game", "fields": {}, "photos": [], "delivery": "manual", "auto_confirm": False}
+            owner,
+            {
+                "step": "game",
+                "fields": {},
+                "photos": [],
+                "delivery": "manual",
+                "auto_confirm": False,
+                "withdrawal": self.store.setting(f"finance:{owner}:withdrawal"),
+            },
         )
         await state.set_state("wizard")
         await state.set_data({"draft_id": ident, "revision": 0})
@@ -188,6 +197,29 @@ class Wizard:
         elif step == "confirm":
             text = "✅ <b>Подтверждение сделки</b>\nАвтоматическое SENT выключено. SENT продавца и подтверждение покупателя — разные действия."
             rows = [[("Продолжить", f"w:{nonce}:confirm_done")]]
+        elif step == "finance":
+            snapshot = payload.get("withdrawal") or {}
+            method = (snapshot.get("provider") or {}).get("name") or "не выбран"
+            text = (
+                f"💰 <b>Финансовые параметры</b>\nСпособ вывода: {escape(method)}\n"
+                f"Себестоимость: {escape(str(payload.get('cost', 'не задана')))} ₽\n\n"
+                "Расчёт вывода относится к отдельному выводу суммы этой продажи. Для небольших сумм может потребоваться накопить баланс до минимума. Для USDT показан рублёвый эквивалент."
+            )
+            rows = [
+                [("💳 Выбрать способ вывода", f"w:{nonce}:finance_method")],
+                [
+                    ("✏️ Себестоимость", f"w:{nonce}:finance_cost"),
+                    ("Очистить", f"w:{nonce}:finance_clear_cost"),
+                ],
+                [("🔄 Обновить комиссии", f"w:{nonce}:finance_refresh")],
+                [("Без выбранного способа", f"w:{nonce}:finance_clear_method")],
+                [("Вернуться к превью", f"w:{nonce}:finance_done")],
+            ]
+        elif step == "finance_method":
+            choices = await withdrawal_methods(self.api)
+            text = "💳 <b>Способ предполагаемого вывода</b>\nВыберите доступный вариант Playerok. Это только расчёт, деньги не выводятся."
+        elif step == "finance_cost":
+            text = "💰 <b>Себестоимость одной единицы</b>\nВведите неотрицательную сумму в рублях, можно с копейками. Она сохраняется только в этом локальном черновике."
         elif step == "preview":
             if payload.get("edit_target"):
                 text = (
@@ -202,10 +234,9 @@ class Wizard:
                     [("📄 Условия", f"w:{nonce}:conditions_refresh")],
                 ]
             else:
-                rule = sale_rule_from_api(
-                    payload.get("fee_multiplier"), payload.get("fee_checked_at") or now()
-                )
-                calculation = format_calculation(calculate(payload["price"], platform=rule))
+                result = draft_calculation(payload)
+                save_quote(self.store, owner, "draft:" + draft["id"], payload, result)
+                calculation = format_calculation(result)
                 text = (
                     f"📦 <b>{escape(payload.get('name', ''))}</b>\n\n{escaped(payload.get('description', ''), 2200)}\n\n"
                     f"💰 Цена: {payload.get('price')} ₽\n🖼 Фото: {len(payload['photos'])}\n"
@@ -220,6 +251,7 @@ class Wizard:
                     [("🖼 Фото", f"w:{nonce}:edit:photos"), ("💰 Цена", f"w:{nonce}:edit:price")],
                     [("⚡ Выдача", f"w:{nonce}:edit:delivery")],
                     [("📄 Условия категории", f"w:{nonce}:conditions_refresh")],
+                    [("💰 Вывод и себестоимость", f"w:{nonce}:finance_open")],
                 ]
         choice_view = f"{step}:{payload.get('category_id', '')}:{payload.get('field_index', 0)}"
         if choices:
@@ -261,7 +293,43 @@ class Wizard:
         payload, action = draft["payload"], parts[2]
         step = payload["step"]
         removed_photo = None
-        if action in {"conditions_next", "conditions_prev", "conditions_done"} and step == "conditions":
+        if action == "finance_open" and step == "preview" and not payload.get("edit_target"):
+            payload["step"] = "finance"
+        elif (
+            action
+            in {
+                "finance_method",
+                "finance_cost",
+                "finance_done",
+                "finance_clear_cost",
+                "finance_clear_method",
+                "finance_refresh",
+            }
+            and step == "finance"
+        ):
+            if action == "finance_method":
+                payload["step"] = "finance_method"
+            elif action == "finance_cost":
+                payload["step"] = "finance_cost"
+            elif action == "finance_done":
+                payload["step"] = "preview"
+            elif action == "finance_clear_cost":
+                payload.pop("cost", None)
+            elif action == "finance_clear_method":
+                payload.pop("withdrawal", None)
+            else:
+                snapshot = await self.products.schema_details(
+                    payload["category_id"], payload.get("obtaining_type_id")
+                )
+                payload["fee_multiplier"] = snapshot["fee_multiplier"]
+                payload["fee_checked_at"] = snapshot["checked_at"]
+                payload["category_fee_multiplier"] = snapshot["category_fee_multiplier"]
+                payload["obtaining_fee_multiplier"] = snapshot["obtaining_fee_multiplier"]
+                if payload.get("withdrawal"):
+                    payload["withdrawal"] = await withdrawal_snapshot(
+                        self.api, payload["withdrawal"]["provider"]["id"]
+                    )
+        elif action in {"conditions_next", "conditions_prev", "conditions_done"} and step == "conditions":
             pages = self.condition_pages(payload)
             current = payload.get("conditions_page", 0)
             if action == "conditions_next":
@@ -331,6 +399,9 @@ class Wizard:
                     "delivery": "price",
                     "delivery_data": "delivery",
                     "confirm": "delivery",
+                    "finance": "preview",
+                    "finance_method": "finance",
+                    "finance_cost": "finance",
                 }
                 if step not in previous:
                     raise ValidationError("Предыдущий шаг недоступен")
@@ -396,6 +467,9 @@ class Wizard:
             elif step == "delivery":
                 payload["delivery"] = choice["value"]
                 payload["step"] = "confirm" if choice["value"] == "manual" else "delivery_data"
+            elif step == "finance_method":
+                payload["withdrawal"] = await withdrawal_snapshot(self.api, choice["id"])
+                payload["step"] = "finance"
             else:
                 raise ValidationError("Выбор не соответствует шагу")
         elif action == "field_keep" and step == "fields" and payload.get("edit_target"):
@@ -504,6 +578,9 @@ class Wizard:
         elif step == "price":
             payload["price"] = listing_price(text, getattr(self.api.account, "role", None))
             payload["step"] = "delivery"
+        elif step == "finance_cost":
+            payload["cost"] = str(money(text.replace(",", ".")))
+            payload["step"] = "finance"
         elif step == "delivery_data":
             if not text.strip() or len(text) > 10000:
                 raise ValidationError("Введите непустые данные до 10000 символов")

@@ -16,12 +16,13 @@ from app.rendering.cards import profile_card
 from app.rendering.charts import revenue_chart
 from app.services.catalog import ORDER_FILTERS, order_page
 from app.services.discounts import discount_plan
-from app.services.products import ValidationError, listing_price, listing_text
+from app.services.products import ValidationError, listing_price, listing_text, priority_price_basis
 from app.services.statistics import statistics
+from app.telegram.finance_panel import FinancePanel
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard, main_menu
 from app.telegram.wizard import Wizard
-from playerokapi.enums import ItemStatuses, TransactionProviderDirections
+from playerokapi.enums import ItemStatuses
 
 
 async def display(message, text, markup, edit=False):
@@ -42,6 +43,7 @@ async def display(message, text, markup, edit=False):
 def create_router(store, api, products, synchronizer):
     router = Router()
     wizard = Wizard(store, api, products)
+    finance = FinancePanel(store, api, products)
 
     @router.message(CommandStart())
     async def start(message, state):
@@ -101,6 +103,8 @@ def create_router(store, api, products, synchronizer):
                 )
             if action == "create":
                 text, markup = await wizard.start(owner, state)
+            elif finance.handles(action):
+                text, markup = await finance.callback(action, owner, state)
             elif action.startswith("w:"):
                 text, markup = await wizard.callback(owner, state, action, message=message)
             elif action == "cancel_wizard":
@@ -184,6 +188,7 @@ def create_router(store, api, products, synchronizer):
                     [("📝 Название", "editname:" + ident), ("🖼 Заменить фото", "editphoto:" + ident)],
                     [("🧩 Атрибуты и данные", "editfields:" + ident)],
                     [("⭐ Стоимость размещения", "quote:" + ident)],
+                    [("💰 Финансовый расчёт", "finance:" + ident)],
                     [("🗑 Удалить", "delete:" + ident)],
                 ]
                 if item.get("status") == "DRAFT":
@@ -194,7 +199,7 @@ def create_router(store, api, products, synchronizer):
             elif action.startswith("quote:"):
                 ident = action.split(":", 1)[1]
                 item = await api.call("get_item", id=ident)
-                statuses = await products.priority_preview(ident, item["price"])
+                statuses = await products.priority_preview(ident, priority_price_basis(item))
                 text = "⭐ <b>Стоимость из Playerok API</b>\n" + "\n".join(
                     f"{escape(s.get('name') or s.get('type') or '?')}: {s.get('price', 'неизвестно')} ₽ · {s.get('period', '?')} дн."
                     for s in statuses
@@ -241,8 +246,13 @@ def create_router(store, api, products, synchronizer):
                 pending = {"kind": kind, "target": ident, "payload": {}}
                 if kind == "publish":
                     item = await api.call("get_item", id=ident)
-                    quote = await products.free_priority(ident, item["price"])
-                    pending["payload"] = {"price": item["price"], "priority_id": quote["id"]}
+                    base_price = priority_price_basis(item)
+                    quote = await products.free_priority(ident, base_price)
+                    pending["payload"] = {
+                        "price": item["price"],
+                        "raw_price": base_price,
+                        "priority_id": quote["id"],
+                    }
                 nonce = secrets.token_hex(8)
                 await state.set_data({"pending": pending, "confirm_token": nonce})
                 text, markup = (
@@ -416,16 +426,6 @@ def create_router(store, api, products, synchronizer):
                         [("⚡ Автоматизация", "automation")],
                     ]
                 )
-            elif action == "providers":
-                providers = await api.call(
-                    "get_transaction_providers", direction=TransactionProviderDirections.OUT
-                )
-                text = "💰 <b>Провайдеры вывода · без операции вывода</b>\n" + "\n".join(
-                    f"{escape(p.get('name') or str(p.get('id')))} · fee={p.get('fee')} · minFeeAmount={p.get('min_fee_amount')}"
-                    for p in providers
-                )
-                text += "\n\nЕдиницы fee и правила округления ещё не подтверждены; это не точный расчёт."
-                markup = keyboard([])
             elif action == "backup":
                 from datetime import datetime
 
@@ -471,6 +471,8 @@ def create_router(store, api, products, synchronizer):
             current = await state.get_state()
             if current == "wizard":
                 text, markup = await wizard.message(message, state)
+            elif current and current.startswith("finance:"):
+                text, markup = await finance.message(message, state)
             elif current == "discount":
                 data = await state.get_data()
                 item = await products.owned_item(data["item_id"])

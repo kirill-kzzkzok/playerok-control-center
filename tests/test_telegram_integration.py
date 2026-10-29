@@ -193,3 +193,34 @@ async def test_dispatcher_denies_foreign_callbacks_and_group_registration(tmp_pa
     finally:
         await bot.session.close()
         store.close()
+
+
+async def test_financial_panel_through_real_dispatcher_is_read_only(tmp_path):
+    from tests.test_finance_panel import FinancialAPI
+
+    store = Store(tmp_path / "finance-dispatcher.sqlite")
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    api = FinancialAPI()
+    ui = Interaction(bot, dispatcher(store, api))
+    try:
+        await ui.message("/start")
+        await ui.click("settings")
+        await ui.click("providers")
+        await ui.click("fin:select:SBP")
+        await ui.message("1000")
+        assert "940.00" in session.calls[-1].text and "Оценка" in session.calls[-1].text
+        await ui.click("finance:item")
+        await ui.click("fin:cost:item")
+        await ui.message("500")
+        assert store.setting("finance:7:cost:item") == "500.00"
+        count = len(api.calls)
+        await ui.click("finance:item", owner=8)
+        assert len(api.calls) == count
+        assert session.calls[-1].text == "Доступ закрыт"
+        assert not store.rows("SELECT * FROM outbox")
+        assert not store.rows("SELECT * FROM financial_operations")
+        assert store.rows("SELECT count(*) AS n FROM financial_quotes")[0]["n"] >= 3
+    finally:
+        await bot.session.close()
+        store.close()

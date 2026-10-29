@@ -143,3 +143,25 @@ agreementId/userId. Read gameCategoryAgreements с userId возвращает �
 - https://playerok.com/_next/static/chunks/pages/wallet/withdraw-afd5dceb017e6632.js — SHA256 f52f1c1a0bba0b6ebe96a0c04e7bc596f43afbf57956702bfccbd8cf87c4f371
 
 - https://playerok.com/_next/static/chunks/pages/products/[slug]/edit-4767bcce2b41850b.js — SHA256 cd33d827c17c764e35bca13fcd910fbb0bf53ee768c27acb58f0482aa3f53c05
+
+
+## Подтверждение exchange rate и расчётов вывода (2026-10-29)
+
+В официальном общем JS найден read-only запрос:
+`query getExchangeRates($pair: ExchangePair!) { getExchangeRates(pair: $pair) }`,
+enum USDT_RUB. Wallet UI обновляет курс примерно раз в 60 секунд. Этот точный контракт
+добавлен в безопасный адаптер и успешно проверен GET-запросом на реальном API.
+
+Read-only исследование получило 5 OUT providers и курс USDT/RUB; построены оценки для
+явно условных 2000 RUB без вывода/покупки/изменений. Свидетельство —
+`data/live_withdrawal_quotes.json`, mutations=0. Настоящий settlement не выполнялся,
+поэтому правила округления не объявлены точными. Неизвестные ставки/лимиты/курс
+не заменяются фиксированными значениями. Минимальная комиссия применяется после доплаты.
+Для USDT отображается рублёвый эквивалент, а не выдуманное количество выплаченных токенов.
+
+Public item UI запрашивает itemPriorityStatuses с price=item.rawPrice. Исправлено
+использование скидочной цены при quote размещения; обе цены проверяются перед
+бесплатной публикацией, отсутствие rawPrice блокирует предположение стоимости.
+Все проверки записи публикации пока изолированные; live-публикация не запускалась.
+Источники: ранее зафиксированные официальные bundles 4.js, 23.js,
+587921dc4784.js и abc07b5139a5.js с URL/SHA256 выше.

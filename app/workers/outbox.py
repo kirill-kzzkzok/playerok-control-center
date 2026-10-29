@@ -11,6 +11,7 @@ from app.services.products import (
     field_baseline,
     listing_price,
     listing_text,
+    priority_price_basis,
     validate_draft,
     validate_field,
 )
@@ -153,8 +154,13 @@ class Executor:
             item = await self.owned_item(target)
             if item.get("status") != "DRAFT":
                 raise ValidationError("Публикация разрешена только серверному черновику")
-            quote = await self.products.free_priority(target, item["price"])
-            if quote["id"] != payload["priority_id"] or item["price"] != payload["price"]:
+            base_price = priority_price_basis(item)
+            quote = await self.products.free_priority(target, base_price)
+            if (
+                quote["id"] != payload["priority_id"]
+                or item["price"] != payload["price"]
+                or base_price != payload.get("raw_price")
+            ):
                 raise ValidationError("Условия размещения изменились; требуется новое превью")
             result = await self.mutate(
                 "publishItem", "publish_item", item_id=target, priority_status_id=quote["id"]

@@ -6,6 +6,7 @@ import re
 import threading
 import time
 from contextlib import contextmanager
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from urllib.parse import urlsplit
 
@@ -86,7 +87,7 @@ class SafeAccount(Account):
             json.loads(payload["operations"]) if payload and "operations" in payload else payload
         )
         operation = (operation_payload or {}).get("operationName", "")
-        read = operation in {*PERSISTED_QUERIES, "viewer"}
+        read = operation in {*PERSISTED_QUERIES, "viewer", "getExchangeRates"}
         query = (operation_payload or {}).get("query")
         if read and query and not re.match(r"^\s*(?:query\b|\{)", query):
             raise APIError("MUTATION_DISGUISED_AS_QUERY")
@@ -160,6 +161,13 @@ class SafeAccount(Account):
             raise APIError("NON_JSON_RESPONSE", uncertain=not read) from None
         if not isinstance(body, dict) or body.get("errors") or not isinstance(body.get("data"), dict):
             raise APIError("GRAPHQL_ERROR_OR_INCOMPLETE", uncertain=not read)
+        if operation == "transactionProviders":
+            providers = body["data"].get("transactionProviders")
+            required = {"id", "fee", "minFeeAmount", "limits"}
+            if not isinstance(providers, list) or any(
+                not isinstance(provider, dict) or not required <= provider.keys() for provider in providers
+            ):
+                raise APIError("UPSTREAM_FINANCIAL_DATA_INCOMPLETE")
         if operation == "viewer" and not body["data"].get("viewer"):
             raise APIError("SESSION_EXPIRED")
         return response
@@ -177,6 +185,25 @@ class SafeAccount(Account):
         if not isinstance(result, dict) or result.get("id") != agreement_id:
             raise APIError("AGREEMENT_RESULT_UNKNOWN", uncertain=True)
         return result
+
+    def get_exchange_rate(self):
+        payload = {
+            "operationName": "getExchangeRates",
+            "query": "query getExchangeRates($pair: ExchangePair!) { getExchangeRates(pair: $pair) }",
+            "variables": json.dumps({"pair": "USDT_RUB"}),
+        }
+        result = (
+            self.request("get", self.base_url + "/graphql", {}, payload)
+            .json()["data"]
+            .get("getExchangeRates")
+        )
+        try:
+            rate = Decimal(str(result))
+            if not rate.is_finite() or rate <= 0:
+                raise ValueError
+        except (ValueError, InvalidOperation):
+            raise APIError("EXCHANGE_RATE_UNAVAILABLE") from None
+        return {"pair": "USDT_RUB", "rate": str(rate)}
 
     def close(self):
         self.client.close()
@@ -208,6 +235,7 @@ class Playerok:
             "get_chat_messages",
             "get_transaction_providers",
             "get_transactions",
+            "get_exchange_rate",
         }:
             raise APIError("READ_METHOD_FORBIDDEN")
         async with self.lock:

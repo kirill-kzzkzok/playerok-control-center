@@ -2,7 +2,15 @@ from decimal import Decimal
 
 import pytest
 
-from app.services.finance import FeeRule, calculate, discount_percent, format_calculation, money, quote_fresh
+from app.services.finance import (
+    FeeRule,
+    calculate,
+    checked_time,
+    discount_percent,
+    format_calculation,
+    money,
+    quote_fresh,
+)
 
 
 def rule(percent, minimum=0, estimated=False):
@@ -69,3 +77,8 @@ def test_stale_and_naive_quotes_rejected():
     assert not quote_fresh("2020-01-01T00:00:00+00:00")
     assert not quote_fresh("2026-10-29T00:00:00")
     assert not quote_fresh("invalid")
+
+
+def test_source_time_is_displayed_in_moscow_with_day_boundary():
+    assert checked_time("2026-10-29T22:30:00+00:00") == "30.10.2026 01:30 МСК"
+    assert checked_time("2026-10-29T22:30:00") == "время не подтверждено"

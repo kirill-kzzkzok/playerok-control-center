@@ -32,6 +32,24 @@ class Store:
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.executescript(Path(__file__).with_name("schema.sql").read_text(encoding="utf-8"))
         self.db.execute("INSERT OR IGNORE INTO schema_migrations VALUES(1,?)", (now(),))
+        self.apply_migrations()
+
+    def apply_migrations(self):
+        directory = Path(__file__).with_name("migrations")
+        for source in sorted(directory.glob("[0-9]*.sql")):
+            version = int(source.name.split("_", 1)[0])
+            with self.transaction() as db:
+                if db.execute("SELECT 1 FROM schema_migrations WHERE version=?", (version,)).fetchone():
+                    continue
+                statement = ""
+                for line in source.read_text(encoding="utf-8").splitlines(keepends=True):
+                    statement += line
+                    if sqlite3.complete_statement(statement):
+                        db.execute(statement)
+                        statement = ""
+                if statement.strip():
+                    raise RuntimeError("Незавершённая SQL-миграция")
+                db.execute("INSERT INTO schema_migrations VALUES(?,?)", (version, now()))
 
     @contextmanager
     def transaction(self):
