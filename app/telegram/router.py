@@ -1,0 +1,468 @@
+import asyncio
+import json
+import secrets
+from datetime import UTC
+from html import escape
+from pathlib import Path
+
+from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.filters import CommandStart
+from aiogram.types import BufferedInputFile
+
+from app.database.store import Conflict
+from app.playerok.adapter import APIError, safe_media_url
+from app.rendering.cards import profile_card
+from app.rendering.charts import revenue_chart
+from app.services.catalog import ORDER_FILTERS, order_page
+from app.services.products import ValidationError, integer_price
+from app.services.statistics import statistics
+from app.telegram.formatting import escaped
+from app.telegram.keyboards import keyboard, main_menu
+from app.telegram.wizard import Wizard
+from playerokapi.enums import ItemStatuses, TransactionProviderDirections
+
+
+async def display(message, text, markup, edit=False):
+    if edit and message.text:
+        try:
+            return await message.edit_text(text, reply_markup=markup)
+        except TelegramBadRequest as error:
+            if "message is not modified" in error.message.lower():
+                return
+            if not any(
+                fragment in error.message.lower()
+                for fragment in ("message to edit not found", "message can't be edited")
+            ):
+                raise
+    return await message.answer(text, reply_markup=markup)
+
+
+def create_router(store, api, products, synchronizer):
+    router = Router()
+    wizard = Wizard(store, api, products)
+
+    @router.message(CommandStart())
+    async def start(message, state):
+        await state.clear()
+        await message.answer(
+            "🟣 <b>PLAYEROK CONTROL CENTER</b>\n\nПанель магазина. Платные операции запрещены.\n"
+            "Черновики и история сохраняются локально.",
+            reply_markup=main_menu(),
+        )
+
+    async def listing(kind, state, cursor=None):
+        if kind == "items":
+            filters = (await state.get_data()).get("item_filters", {})
+            status = filters.get("status")
+            if status and status not in ItemStatuses.__members__:
+                raise ValidationError("Неизвестный статус товара")
+            page = await api.call(
+                "get_my_items",
+                count=10,
+                after_cursor=cursor,
+                statuses=[ItemStatuses[status]] if status else None,
+            )
+            values, prefix = page.get("items") or [], "item"
+            title = "📦 Мои товары"
+        elif kind == "chats":
+            page = await api.call("get_chats", count=10, after_cursor=cursor)
+            values, prefix = page.get("chats") or [], "chat"
+            title = "💬 Диалоги"
+        else:
+            raise ValidationError("Неизвестный список")
+        rows = []
+        for value in values:
+            user = value.get("user") or {}
+            label = value.get("name") or user.get("username") or value.get("id")
+            if kind == "items":
+                label = f"{value.get('price', '?')} ₽ · {label}"
+            rows.append([(str(label)[:60], f"{prefix}:{value['id']}")])
+        info = page.get("page_info") or {}
+        if info.get("has_next_page"):
+            await state.update_data(list_kind=kind, list_next=info["end_cursor"])
+            rows.append([("Далее →", f"listnext:{kind}")])
+        if kind == "items":
+            rows.append([("🔎 Статусы", "itemfilters")])
+        return f"<b>{title}</b>\n" + ("Выберите запись." if values else "Записей нет."), keyboard(rows)
+
+    @router.callback_query()
+    async def callback(query, state):
+        await query.answer()
+        action = query.data or ""
+        owner = query.from_user.id
+        message = query.message
+        try:
+            if action == "home":
+                await state.clear()
+                return await display(
+                    message, "🟣 <b>PLAYEROK CONTROL CENTER</b>\nУправление магазином", main_menu(), True
+                )
+            if action == "create":
+                text, markup = await wizard.start(owner, state)
+            elif action.startswith("w:"):
+                text, markup = await wizard.callback(owner, state, action)
+            elif action == "cancel_wizard":
+                data = await state.get_data()
+                if data.get("draft_id"):
+                    store.execute(
+                        "UPDATE drafts SET state='CANCELLED' WHERE id=? AND owner_id=? AND state='DRAFT'",
+                        (data["draft_id"], owner),
+                    )
+                await state.clear()
+                text, markup = "Сценарий отменён. Запись оставлена в локальной истории.", main_menu()
+            elif action == "drafts":
+                drafts = store.rows(
+                    "SELECT id,payload,state FROM drafts WHERE owner_id=? ORDER BY created_at DESC LIMIT 30",
+                    (owner,),
+                )
+                rows = [
+                    [
+                        (
+                            (json.loads(d["payload"]).get("name") or "Новый товар")[:42] + " · " + d["state"],
+                            "draft:" + d["id"],
+                        )
+                    ]
+                    for d in drafts
+                ]
+                text, markup = "💾 <b>Черновики</b>\nПоследние 30 записей.", keyboard(rows)
+            elif action.startswith("draft:"):
+                ident = action.split(":", 1)[1]
+                draft = store.get_draft(ident, owner)
+                if draft["state"] == "DRAFT":
+                    await state.set_state("wizard")
+                    await state.set_data({"draft_id": ident, "revision": draft["revision"]})
+                    text, markup = await wizard.screen(owner, state)
+                else:
+                    binding = store.rows("SELECT remote_id FROM bindings WHERE draft_id=?", (ident,))
+                    rows = [[("Открыть серверный лот", "item:" + binding[0]["remote_id"])]] if binding else []
+                    text, markup = "Состояние: " + escape(draft["state"]), keyboard(rows)
+            elif action in {"items", "chats"}:
+                await state.clear()
+                text, markup = await listing(action, state)
+            elif action == "itemfilters":
+                names = {
+                    "APPROVED": "Активные",
+                    "DRAFT": "Черновики",
+                    "SOLD": "Проданные",
+                    "EXPIRED": "Истёкшие",
+                    "PENDING_APPROVAL": "На проверке",
+                }
+                rows = [
+                    [(label, "itemfilter:" + value)]
+                    for value, label in names.items()
+                    if value in ItemStatuses.__members__
+                ]
+                rows.append([("Все статусы", "itemfilter:ALL")])
+                text, markup = "📦 Фильтр товаров по реальным статусам API", keyboard(rows)
+            elif action.startswith("itemfilter:"):
+                value = action.split(":", 1)[1]
+                await state.set_data({"item_filters": {"status": None if value == "ALL" else value}})
+                text, markup = await listing("items", state)
+            elif action.startswith("listnext:"):
+                kind = action.split(":", 1)[1]
+                data = await state.get_data()
+                if data.get("list_kind") != kind or not data.get("list_next"):
+                    raise ValidationError("Список устарел")
+                text, markup = await listing(kind, state, data["list_next"])
+            elif action.startswith("item:"):
+                ident = action.split(":", 1)[1]
+                item = await api.call("get_item", id=ident)
+                if (item.get("user") or {}).get("id") != api.account.id:
+                    raise ValidationError("Лот не принадлежит вашему аккаунту")
+                text = (
+                    f"📦 <b>{escape(item.get('name') or ident)}</b>\nЦена: {item.get('price')} ₽\n"
+                    f"Статус: {escape(item.get('status') or '?')}\nПриоритет: {escape(item.get('priority') or '?')}\n"
+                    f"Позиция: {item.get('priority_position') or 'нет данных'}\n\n{escaped(item.get('description') or '', 1700)}\n\n"
+                    f'<a href="https://playerok.com/products/{escape(item.get("slug") or ident, quote=True)}">Открыть на Playerok</a>'
+                )
+                rows = [
+                    [("💰 Изменить цену", "editprice:" + ident), ("📋 Описание", "editdesc:" + ident)],
+                    [("⭐ Стоимость размещения", "quote:" + ident)],
+                    [("🗑 Удалить", "delete:" + ident)],
+                ]
+                if item.get("status") == "DRAFT":
+                    rows.append([("Бесплатная публикация · превью", "publish:" + ident)])
+                markup = keyboard(rows)
+            elif action.startswith("quote:"):
+                ident = action.split(":", 1)[1]
+                item = await api.call("get_item", id=ident)
+                statuses = await products.priority_preview(ident, item["price"])
+                text = "⭐ <b>Стоимость из Playerok API</b>\n" + "\n".join(
+                    f"{escape(s.get('name') or s.get('type') or '?')}: {s.get('price', 'неизвестно')} ₽ · {s.get('period', '?')} дн."
+                    for s in statuses
+                )
+                text += "\n\nПросмотр ничего не покупает. Платные действия запрещены."
+                markup = keyboard([[("⬅️ Лот", "item:" + ident)]])
+            elif action.startswith(("editprice:", "editdesc:")):
+                kind, ident = action.split(":", 1)
+                await state.set_state("edit")
+                await state.set_data(
+                    {"item_id": ident, "field": "price" if kind == "editprice" else "description"}
+                )
+                text, markup = (
+                    "Введите новую цену в целых рублях или текст описания. Затем будет подтверждение.",
+                    keyboard([]),
+                )
+            elif action.startswith(("delete:", "publish:")):
+                kind, ident = action.split(":", 1)
+                pending = {"kind": kind, "target": ident, "payload": {}}
+                if kind == "publish":
+                    item = await api.call("get_item", id=ident)
+                    quote = await products.free_priority(ident, item["price"])
+                    pending["payload"] = {"price": item["price"], "priority_id": quote["id"]}
+                nonce = secrets.token_hex(8)
+                await state.set_data({"pending": pending, "confirm_token": nonce})
+                text, markup = (
+                    (
+                        "Подтвердите удаление лота."
+                        if kind == "delete"
+                        else "API подтвердил бесплатный DEFAULT (0 ₽). Перед публикацией условия будут проверены повторно."
+                    ),
+                    keyboard([[("Подтвердить", "commit:" + nonce)]]),
+                )
+            elif action.startswith("commit:"):
+                data = await state.get_data()
+                if action.split(":", 1)[1] != data.get("confirm_token") or not data.get("pending"):
+                    raise ValidationError("Подтверждение устарело или уже принято")
+                if not api.account.writes_enabled:
+                    raise ValidationError("Записи Playerok отключены в локальном .env")
+                pending = data["pending"]
+                ident = store.enqueue(
+                    "ui:" + data["confirm_token"], pending["kind"], pending["target"], pending["payload"]
+                )
+                store.audit(owner, "QUEUE_" + pending["kind"], pending["target"], "PENDING")
+                await state.clear()
+                text, markup = (
+                    f"Операция сохранена: <code>{ident}</code>. Статус доступен в диагностике.",
+                    keyboard([]),
+                )
+            elif action == "orders" or action.startswith("orderpage:"):
+                data = await state.get_data()
+                if action == "orders":
+                    page_number, filter_name = 0, "ALL"
+                    await state.clear()
+                else:
+                    _, raw_page, filter_name = action.split(":")
+                    page_number = int(raw_page)
+                result = order_page(
+                    store,
+                    page_number,
+                    filter_name,
+                    data.get("order_search", "") if action != "orders" else "",
+                )
+                values = result["rows"]
+                text = (
+                    f"🛒 <b>Заказы · {ORDER_FILTERS[filter_name][0]}</b>\nСтраница {page_number + 1} · Всего {result['total']}\nСинхронизация: "
+                    + escape(str(store.setting("orders:last_complete_sync", "ещё не завершена")))
+                )
+                rows = [[((v["amount"] or "?") + " ₽ · " + v["status"], "order:" + v["id"])] for v in values]
+                navigation = []
+                if result["has_previous"]:
+                    navigation.append(("← Назад", f"orderpage:{page_number - 1}:{filter_name}"))
+                if result["has_next"]:
+                    navigation.append(("Далее →", f"orderpage:{page_number + 1}:{filter_name}"))
+                if navigation:
+                    rows.append(navigation)
+                rows.extend([[("🔎 Фильтры", "orderfilters")], [("🔄 Сверить с API", "sync")]])
+                markup = keyboard(rows)
+            elif action == "orderfilters":
+                text, markup = (
+                    "🛒 Фильтр заказов",
+                    keyboard(
+                        [[(label, "orderpage:0:" + name)] for name, (label, _, _) in ORDER_FILTERS.items()]
+                    ),
+                )
+            elif action.startswith("order:"):
+                ident = action.split(":", 1)[1]
+                order = await api.call("get_deal", id=ident)
+                item = order.get("item") or {}
+                user = order.get("user") or {}
+                text = (
+                    f"🛒 <b>Сделка {escape(ident)}</b>\nПокупатель: {escape(user.get('username') or '?')}\n"
+                    f"Товар: {escape(item.get('name') or '?')}\nСумма: {item.get('price', '?')} ₽\n"
+                    f"Статус: {escape(order.get('status') or '?')}\nДата: {escape(order.get('created_at') or '?')}\n"
+                    "Автоподтверждение и выдача реальным покупателям в этой сборке выключены."
+                )
+                chat = (order.get("chat") or {}).get("id")
+                markup = keyboard(
+                    ([[("💬 Диалог", "chat:" + chat)]] if chat else []) + [[("🔄 Проверить", action)]]
+                )
+            elif action.startswith("chat:"):
+                ident = action.split(":", 1)[1]
+                page = await api.call("get_chat_messages", chat_id=ident, count=12)
+                messages = page.get("messages") or []
+                text = "💬 <b>Последние сообщения</b>\n\n" + "\n\n".join(
+                    escaped(m.get("text") or "[вложение/событие]", 300) for m in reversed(messages)
+                )
+                text = text[:3900]
+                markup = keyboard([[("✉️ Ответить", "reply:" + ident)]])
+            elif action.startswith("reply:"):
+                ident = action.split(":", 1)[1]
+                await state.set_state("reply")
+                await state.set_data({"chat_id": ident})
+                text, markup = "Введите ответ покупателю. Перед отправкой будет подтверждение.", keyboard([])
+            elif action == "sync":
+                await synchronizer.once()
+                text, markup = (
+                    "Сверка завершена. История сохранена локально.",
+                    keyboard([[("🛒 Заказы", "orders")]]),
+                )
+            elif action == "profile":
+                viewer = await api.call("get")
+                profile = viewer.get("profile") or {}
+                avatar = None
+                url = profile.get("avatar_url")
+                if url and safe_media_url(url):
+                    import httpx
+
+                    try:
+                        async with (
+                            httpx.AsyncClient(timeout=10, follow_redirects=False) as client,
+                            client.stream("GET", url) as response,
+                        ):
+                            if response.status_code == 200:
+                                chunks = bytearray()
+                                async for chunk in response.aiter_bytes():
+                                    chunks.extend(chunk)
+                                    if len(chunks) > 5_000_000:
+                                        break
+                                if len(chunks) <= 5_000_000:
+                                    avatar = bytes(chunks)
+                    except httpx.HTTPError:
+                        pass
+                image = await asyncio.to_thread(profile_card, profile, avatar)
+                balance = profile.get("balance") or {}
+                caption = (
+                    f"👤 <b>{escape(viewer.get('username') or '?')}</b>\n"
+                    f"Рейтинг: {profile.get('rating', 'нет данных')} · Отзывов: {profile.get('reviews_count', 'нет данных')}\n"
+                    f"Баланс: {balance.get('value', 'нет данных')} ₽\nДоступно к выводу: {balance.get('withdrawable', 'нет данных')} ₽\n"
+                    f"Регистрация: {escape(viewer.get('created_at') or '?')}"
+                )
+                return await message.answer_photo(
+                    BufferedInputFile(image, filename="profile.png"),
+                    caption=caption,
+                    reply_markup=keyboard([]),
+                )
+            elif action.startswith("stats:"):
+                days = int(action.split(":")[1])
+                stats = await asyncio.to_thread(statistics, store, days)
+                image = await asyncio.to_thread(revenue_chart, stats)
+                caption = (
+                    f"📊 <b>Статистика · {'всё время' if days == 0 else str(days) + ' дн.'}</b>\n"
+                    f"Заказов: {stats['orders']} · Оплаченных: {stats['paid']}\n"
+                    f"Выручка до комиссий: {stats['revenue']} ₽\nПодтверждённые продажи: {stats['confirmed_revenue']} ₽\n"
+                    f"Возвраты: {stats['refunds']} ₽\nСредний чек: {stats['average'] if stats['average'] is not None else 'нет данных'}\n"
+                    f"Начало локального покрытия: {escape(str(stats['coverage_start'] or 'нет данных'))}\n"
+                    "История ограничена доступными API данными. Комиссии, поступления и прибыль не подтверждены."
+                )
+                markup = keyboard(
+                    [
+                        [
+                            ("24 ч", "stats:1"),
+                            ("48 ч", "stats:2"),
+                            ("7 дн", "stats:7"),
+                            ("30 дн", "stats:30"),
+                            ("Всё", "stats:0"),
+                        ]
+                    ]
+                )
+                return await message.answer_photo(
+                    BufferedInputFile(image, filename="statistics.png"), caption=caption, reply_markup=markup
+                )
+            elif action == "settings":
+                text = (
+                    "⚙️ <b>Настройки</b>\nЗаписи API: "
+                    + ("включены" if api.account.writes_enabled else "выключены")
+                    + "\nПлатежи и автовывод запрещены.\nВладелец закреплён локально."
+                )
+                markup = keyboard(
+                    [
+                        [("🔐 Подключения", "diagnostics")],
+                        [("💰 Условия вывода · просмотр", "providers")],
+                        [("💾 Резервная копия БД", "backup")],
+                        [("⚡ Автоматизация", "automation")],
+                    ]
+                )
+            elif action == "providers":
+                providers = await api.call(
+                    "get_transaction_providers", direction=TransactionProviderDirections.OUT
+                )
+                text = "💰 <b>Провайдеры вывода · без операции вывода</b>\n" + "\n".join(
+                    f"{escape(p.get('name') or str(p.get('id')))} · fee={p.get('fee')} · minFeeAmount={p.get('min_fee_amount')}"
+                    for p in providers
+                )
+                text += "\n\nЕдиницы fee и правила округления ещё не подтверждены; это не точный расчёт."
+                markup = keyboard([])
+            elif action == "backup":
+                from datetime import datetime
+
+                destination = Path("data/backups") / (
+                    datetime.now(UTC).strftime("%Y%m%dT%H%M%S") + ".sqlite3"
+                )
+                await asyncio.to_thread(store.backup, destination)
+                text, markup = (
+                    "Резервная копия сохранена локально в data/backups. В Telegram база с данными выдачи не отправляется.",
+                    keyboard([]),
+                )
+            elif action == "automation":
+                text = (
+                    "⚡ <b>Автоматизация</b>\nАвтовыдача: выключена\nАвтоподтверждение: выключено\nАвтоподнятие: только dry-run\nАвтовывод: запрещён\n\n"
+                    "Транзакционный запас и обработка сбоев реализованы и проверяются изолированно. Включение реальных действий не предоставлено до завершения сквозных проверок."
+                )
+                markup = keyboard([])
+            elif action == "diagnostics":
+                health = store.setting("sync:health", {"status": "NOT_STARTED"})
+                actions = store.rows(
+                    "SELECT kind,status,error_code,created_at FROM outbox ORDER BY created_at DESC LIMIT 10"
+                )
+                text = (
+                    "🩺 <b>Диагностика</b>\nСверка: "
+                    + escape(str(health))
+                    + "\n\n"
+                    + "\n".join(
+                        escape(f"{a['kind']}: {a['status']} · {a['error_code'] or ''}") for a in actions
+                    )
+                )
+                text += "\n\nUNCERTAIN не повторяется автоматически. Для разрешения сверяйте результат на Playerok."
+                markup = keyboard([[("🔄 Сверить API", "sync")]])
+            else:
+                raise ValidationError("Кнопка устарела. Откройте главное меню.")
+            await display(message, text, markup, True)
+        except (APIError, ValidationError, Conflict, ValueError) as error:
+            code = error.code if isinstance(error, APIError) else str(error)
+            await message.answer("❗ " + escaped(code, 800), reply_markup=keyboard([]))
+
+    @router.message(F.text | F.photo | F.document)
+    async def input_message(message, state):
+        try:
+            current = await state.get_state()
+            if current == "wizard":
+                text, markup = await wizard.message(message, state)
+            elif current in {"reply", "edit"}:
+                data = await state.get_data()
+                value = message.text or ""
+                if not value.strip() or len(value) > 3500:
+                    raise ValidationError("Введите текст длиной 1–3500 символов")
+                if current == "reply":
+                    pending = {"kind": "reply", "target": data["chat_id"], "payload": {"text": value}}
+                else:
+                    if data["field"] == "price":
+                        value = integer_price(value)
+                    pending = {"kind": "edit", "target": data["item_id"], "payload": {data["field"]: value}}
+                nonce = secrets.token_hex(8)
+                await state.set_state(None)
+                await state.set_data({"pending": pending, "confirm_token": nonce})
+                text, markup = (
+                    "Подтвердите действие:\n\n" + escape(str(value)),
+                    keyboard([[("✅ Подтвердить", "commit:" + nonce)]]),
+                )
+            else:
+                text, markup = "Выберите действие в меню.", main_menu()
+            await display(message, text, markup)
+        except (APIError, ValidationError, Conflict, ValueError) as error:
+            await message.answer(
+                "❗ " + escaped(error.code if isinstance(error, APIError) else str(error), 800)
+            )
+
+    return router
