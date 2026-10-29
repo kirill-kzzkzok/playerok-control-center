@@ -7,7 +7,12 @@ ORDER_FILTERS = {
     "SENT": ("Выданные", "status='SENT'", ()),
     "CONFIRMED": ("Завершённые", "status IN ('CONFIRMED','CONFIRMED_AUTOMATICALLY')", ()),
     "ROLLED_BACK": ("Возвраты", "status='ROLLED_BACK'", ()),
-    "PROBLEM": ("Проблемные", "json_extract(payload,'$.has_problem')=1", ()),
+    "FAILED": ("Не состоялись", "status='FAILED'", ()),
+    "PROBLEM": (
+        "Проблемные",
+        "(json_extract(payload,'$.has_problem')=1 OR EXISTS (SELECT 1 FROM order_annotations a WHERE a.order_id=orders.id AND a.problem=1))",
+        (),
+    ),
 }
 
 
@@ -18,11 +23,11 @@ def order_page(store, page=0, filter_name="ALL", search="", page_size=12):
     if search:
         # Wildcard characters are escaped; user input never becomes SQL.
         value = search[:200].replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        where += " AND (id LIKE ? ESCAPE '\\' OR json_extract(payload,'$.item.name') LIKE ? ESCAPE '\\')"
-        args += ("%" + value + "%", "%" + value + "%")
+        where += " AND (id LIKE ? ESCAPE '\\' OR json_extract(payload,'$.item.name') LIKE ? ESCAPE '\\' OR json_extract(payload,'$.user.username') LIKE ? ESCAPE '\\')"
+        args += ("%" + value + "%",) * 3
     total = store.rows("SELECT count(*) AS n FROM orders WHERE " + where, args)[0]["n"]
     rows = store.rows(
-        "SELECT id,status,amount FROM orders WHERE "
+        "SELECT id,status,amount,json_extract(payload,'$.item.name') AS name FROM orders WHERE "
         + where
         + " ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?",
         (*args, page_size, page * page_size),

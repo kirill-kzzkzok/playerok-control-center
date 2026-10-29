@@ -231,3 +231,30 @@ request не означает, что закончена вся история. 
 отмену всех child tasks. Health/queue сохранены в SQLite и доступны в диагностике.
 PLAYEROK_REALTIME_ENABLED=false отключает сокет, сохраняя API polling. Зависимость
 прямо объявлена aiohttp>=3.14,<4, установленная версия уже включена в requirements.lock.
+
+
+## OrderManagement, OrdersPanel и история (v8)
+
+OrderManagement — слой свежих sales read/guards поверх Orders. Sale проверяет OUT,
+ID/предмет и продавца; deliverable требует PAID, явные false has_problem/is_automated,
+владельца товара и чат. Queue дополнительно читает актуальную доступность чата и
+сверяет snapshot. Executor повторяет guards перед mutation. Получение сообщения
+не равнозначно SENT/CONFIRMED: ручная выдача вызывает только createChatMessage.
+
+Orders.reserve атомарно закрепляет уникальный inventory и stable delivery key. Коллизия
+другой операции не оставляет новый сиротский резерв. Empty stock выключает per-item
+автоматику и сохраняет safe inbox notice по item/batch. API problem transition при
+том же статусе имеет отдельное событие по committed history ID. Notifications не ждёт
+baseline для таких тревог и не отправляет устаревший статус или уже пополненный stock alert.
+
+order_history (v8) хранит наблюдения/действия без секретов inventory; order_annotations
+имеет owner actor и optimistic revision. finish/recover/manual resolution пишут delivery
+history внутри своей транзакции. Старые заказы импортируются как состояние на момент
+миграции, а не полная реконструкция. API logs остаются отдельным источником снимка.
+
+OrdersPanel инкапсулирует карточки/поиск/фильтры/history/notes/stock confirmations.
+Кеш при APIError явно помечен; выдача из него недоступна. Stock values в confirmation
+не отображаются. Сервис/native SDK contract использует get_deal(deal_id=...), а не id.
+Статический аудит kwargs и реальный mock HTTP тест защищают границу SDK.
+Fulfillment requirement/checklist и platform problem reporting пока не реализованы;
+legacy updateDeal не используется как обход нового обязательного процесса.

@@ -58,7 +58,7 @@ class Reconciliation:
         text, count = payload.get("text", ""), len(payload.get("photos", []))
         chat_id = target
         if kind == "delivery":
-            order = await self.api.call("get_deal", id=target)
+            order = await self.api.call("get_deal", deal_id=target)
             stock = self.store.rows(
                 "SELECT i.id,i.secret,i.item_id FROM inventory i JOIN reservations r ON r.inventory_id=i.id WHERE r.order_id=?",
                 (target,),
@@ -167,6 +167,11 @@ class Reconciliation:
                 db.execute(
                     "UPDATE inventory SET status='DELIVERED' WHERE id=(SELECT inventory_id FROM reservations WHERE order_id=?) AND status='QUARANTINED'",
                     (action["target"],),
+                )
+            if action["kind"] == "delivery":
+                db.execute(
+                    "INSERT INTO order_history(order_id,source,new_status,actor,note,created_at) SELECT id,'MANUAL_DELIVERY_RESOLUTION',status,?,?,? FROM orders WHERE id=?",
+                    (actor, decision, now(), action["target"]),
                 )
             db.execute(
                 "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'RESOLVE_OPERATION',?,?,?)",

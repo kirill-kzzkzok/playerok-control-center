@@ -130,6 +130,9 @@ async def test_delivery_confirmation_updates_quarantine_atomically_but_does_not_
     assert store.rows("SELECT status FROM inventory")[0]["status"] == "DELIVERED"
     assert store.rows("SELECT status FROM orders")[0]["status"] == "PAID"
     assert all(call.args[0].startswith("get_") for call in api.call.call_args_list)
+    assert [call.kwargs for call in api.call.call_args_list if call.args[0] == "get_deal"] == [
+        {"deal_id": "order"}
+    ]
 
 
 async def test_resolution_transaction_rolls_back_with_quarantine_on_storage_failure(setup):

@@ -231,3 +231,28 @@ Local v7 migration followed backup; 217 orders/1 owner preserved. A real durable
 request ran bounded API reads with errors={}, pending=0, BACKFILL/backlog=46; evidence
  data/live_realtime_catchup_readonly.json. This proves processing of the request, not
 complete historical coverage. No bot was left polling after the probes.
+
+
+## PHASE 4 — order management checkpoint (2026-10-30)
+
+**279 passed in 38.11s**, data/phase4_orders_results.xml; Ruff/pip check clean.
+test_order_management.py covers proper native SDK keyword/persisted GET contract,
+FAILED parsing, one unique delivery after duplicate confirmation, no updateDeal,
+10 forbidden/unverified sale states, owner/preview/closed chat, readonly guard,
+rollback/timeout after reserve, quarantine, empty-stock alert dedupe, local note
+revision/isolation/search escaping, cache without secrets, nonregressing states,
+problem reopening and suppression of obsolete paid notifications.
+
+Real Dispatcher integration covers card/local problem, persisted confirmation across
+restart, duplicate click, local SQL buyer search, stock preview without secret echo,
+readonly delivery refusal and one reservation/outbox after enabling only the mock account.
+Existing reservation/recovery/reconciliation tests remain green with transactional history.
+
+Live first probe failed due to our incorrect id keyword (not an upstream schema change).
+All four callers now use deal_id. The corrected native read succeeded for a real sale:
+OUT/CONFIRMED, owner matched, both flags bool, 3 logs; no mutations/Telegram sends.
+Evidence data/live_order_card_fixed_readonly.json; original failure preserved separately.
+41 static read-call keyword contracts checked against SafeAccount signatures, 0 invalid.
+Backup before v8; 217 orders/1 owner preserved. No real codes were added or delivered.
+New fulfillment-report requirements were found in public official source; no unchecked
+SENT/CONFIRMED/reportDealProblem mutation is claimed implemented or accepted here.

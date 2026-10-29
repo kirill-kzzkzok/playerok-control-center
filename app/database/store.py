@@ -177,6 +177,12 @@ class Store:
                     "UPDATE inventory SET status=? WHERE id=(SELECT inventory_id FROM reservations WHERE order_id=?)",
                     (state, order),
                 )
+                current_order = db.execute("SELECT status FROM orders WHERE id=?", (order,)).fetchone()
+                if current_order:
+                    db.execute(
+                        "INSERT INTO order_history(order_id,source,new_status,note,created_at) VALUES(?,'DELIVERY_RESULT',?,?,?)",
+                        (order, current_order[0], status, now()),
+                    )
             if status == "UNCERTAIN":
                 self.uncertain_event(db, ident)
 
@@ -204,6 +210,11 @@ class Store:
                     db.execute(
                         "UPDATE inventory SET status='QUARANTINED' WHERE id=(SELECT inventory_id FROM reservations WHERE order_id=?)",
                         (row["operation_key"].removeprefix("delivery:"),),
+                    )
+                    order = row["operation_key"].removeprefix("delivery:")
+                    db.execute(
+                        "INSERT INTO order_history(order_id,source,new_status,note,created_at) SELECT id,'DELIVERY_RESULT',status,'UNCERTAIN: LEASE_EXPIRED',? FROM orders WHERE id=?",
+                        (now(), order),
                     )
                 self.uncertain_event(db, row["id"])
             return len(affected)

@@ -14,7 +14,6 @@ from app.database.store import Conflict
 from app.playerok.adapter import APIError, safe_media_url
 from app.rendering.cards import profile_card
 from app.rendering.charts import revenue_chart
-from app.services.catalog import ORDER_FILTERS, order_page
 from app.services.discounts import discount_plan
 from app.services.products import ValidationError, listing_price, listing_text, priority_price_basis
 from app.services.statistics import statistics
@@ -23,6 +22,7 @@ from app.telegram.finance_panel import FinancePanel
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard, main_menu
 from app.telegram.operations_panel import OperationsPanel
+from app.telegram.orders_panel import OrdersPanel
 from app.telegram.replies_panel import RepliesPanel
 from app.telegram.wizard import Wizard
 from playerokapi.enums import ItemStatuses
@@ -50,6 +50,7 @@ def create_router(store, api, products, synchronizer):
     chats = ChatPanel(store, api)
     replies = RepliesPanel(store)
     operations = OperationsPanel(store, api)
+    orders_panel = OrdersPanel(store, api)
 
     @router.message(CommandStart())
     async def start(message, state):
@@ -300,57 +301,8 @@ def create_router(store, api, products, synchronizer):
                     f"Операция сохранена: <code>{ident}</code>. Статус доступен в диагностике.",
                     keyboard([]),
                 )
-            elif action == "orders" or action.startswith("orderpage:"):
-                data = await state.get_data()
-                if action == "orders":
-                    page_number, filter_name = 0, "ALL"
-                    await state.clear()
-                else:
-                    _, raw_page, filter_name = action.split(":")
-                    page_number = int(raw_page)
-                result = order_page(
-                    store,
-                    page_number,
-                    filter_name,
-                    data.get("order_search", "") if action != "orders" else "",
-                )
-                values = result["rows"]
-                text = (
-                    f"🛒 <b>Заказы · {ORDER_FILTERS[filter_name][0]}</b>\nСтраница {page_number + 1} · Всего {result['total']}\nСинхронизация: "
-                    + escape(str(store.setting("orders:last_complete_sync", "ещё не завершена")))
-                )
-                rows = [[((v["amount"] or "?") + " ₽ · " + v["status"], "order:" + v["id"])] for v in values]
-                navigation = []
-                if result["has_previous"]:
-                    navigation.append(("← Назад", f"orderpage:{page_number - 1}:{filter_name}"))
-                if result["has_next"]:
-                    navigation.append(("Далее →", f"orderpage:{page_number + 1}:{filter_name}"))
-                if navigation:
-                    rows.append(navigation)
-                rows.extend([[("🔎 Фильтры", "orderfilters")], [("🔄 Сверить с API", "sync")]])
-                markup = keyboard(rows)
-            elif action == "orderfilters":
-                text, markup = (
-                    "🛒 Фильтр заказов",
-                    keyboard(
-                        [[(label, "orderpage:0:" + name)] for name, (label, _, _) in ORDER_FILTERS.items()]
-                    ),
-                )
-            elif action.startswith("order:"):
-                ident = action.split(":", 1)[1]
-                order = await api.call("get_deal", id=ident)
-                item = order.get("item") or {}
-                user = order.get("user") or {}
-                text = (
-                    f"🛒 <b>Сделка {escape(ident)}</b>\nПокупатель: {escape(user.get('username') or '?')}\n"
-                    f"Товар: {escape(item.get('name') or '?')}\nСумма: {item.get('price', '?')} ₽\n"
-                    f"Статус: {escape(order.get('status') or '?')}\nДата: {escape(order.get('created_at') or '?')}\n"
-                    "Автоподтверждение и выдача реальным покупателям в этой сборке выключены."
-                )
-                chat = (order.get("chat") or {}).get("id")
-                markup = keyboard(
-                    ([[("💬 Диалог", "chat:" + chat)]] if chat else []) + [[("🔄 Проверить", action)]]
-                )
+            elif action in {"orders", "orderfilters"} or action.startswith(("orderpage:", "order:", "od:")):
+                text, markup = await orders_panel.callback(action, owner, state)
             elif action.startswith(("chat:", "chatpage:")):
                 text, markup = await chats.show(action, state)
             elif action.startswith("chatmedia:"):
@@ -528,6 +480,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await finance.message(message, state)
             elif current and current.startswith("quick:"):
                 text, markup = await replies.message(message, state)
+            elif current and current.startswith("order:"):
+                text, markup = await orders_panel.message(message, state)
             elif current and current.startswith("resolve:"):
                 text, markup = await operations.message(message, state)
             elif current == "reply" and (message.photo or message.document):

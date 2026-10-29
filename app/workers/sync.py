@@ -49,7 +49,7 @@ class Synchronizer:
                         if self.health["status"] == "ERROR":
                             raise APIError("RECONCILE_PARTIAL")
                     elif kind == "deal":
-                        deal = await self.api.call("get_deal", id=target)
+                        deal = await self.api.call("get_deal", deal_id=target)
                         if deal.get("id") != target or deal.get("direction") not in {"IN", "OUT"}:
                             raise APIError("DEAL_ID_OR_DIRECTION_MISMATCH")
                         if deal.get("direction") == "OUT":

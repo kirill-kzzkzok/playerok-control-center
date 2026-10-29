@@ -163,6 +163,8 @@ class ItemDealStatuses(Enum):
     """Сделка подтверждена автоматически."""
     ROLLED_BACK = 5
     """Сделка возвращена."""
+    FAILED = 6
+    """Сделка не состоялась (актуальное состояние интерфейса Playerok)."""
 
 
 class ItemDealDirections(Enum):

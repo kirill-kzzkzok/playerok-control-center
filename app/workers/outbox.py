@@ -8,6 +8,7 @@ from app.playerok.adapter import APIError, plain
 from app.services.agreements import Agreements, require_conditions
 from app.services.attachments import Attachments
 from app.services.discounts import discount_plan
+from app.services.order_management import deliverable
 from app.services.products import (
     ValidationError,
     field_baseline,
@@ -282,10 +283,12 @@ class Executor:
                 raise APIError("MESSAGE_ID_MISSING", uncertain=True)
             return {"message_id": result["id"]}
         if kind == "delivery":
-            order = await self.api.call("get_deal", id=target)
-            if order.get("status") != "PAID" or order.get("direction") != "OUT":
-                raise ValidationError("Актуальная сделка не является оплаченной продажей")
+            order = await self.api.call("get_deal", deal_id=target)
+            deliverable(order, target, self.api.account.id)
             chat = (order.get("chat") or {}).get("id")
+            current_chat = await self.api.call("get_chat", chat_id=chat)
+            if current_chat.get("id") != chat or current_chat.get("is_texting_allowed") is not True:
+                raise ValidationError("Чат недоступен для выдачи")
             stock = self.store.rows(
                 "SELECT i.secret,i.status,i.item_id FROM inventory i JOIN reservations r ON r.inventory_id=i.id WHERE r.order_id=?",
                 (target,),

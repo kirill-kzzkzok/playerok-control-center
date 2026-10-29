@@ -190,3 +190,19 @@ Server validation independently confirmed that (data/ws_schema_probe.json). Mini
 inline-fragment subscriptions then stayed connected for 45 seconds and received JSON
 pong (data/ws_heartbeat_fixed_probe.json). No buyer event delivery was verified,
 no messages or mutations were sent. Source inspected lexically, never executed.
+
+
+## Seller fulfillment — 2026-10-30 MSK
+
+Public route metadata: data/public_chat_routes.json and data/public_deal_routes.json
+(18+11 unauthenticated GETs; URLs/SHA recorded there). The /deal/[id] code in
+.vendor/deal_routes/6aea091dcf56.js has separate buyer/seller controls: seller PAID
+uses SENT, buyer SENT uses CONFIRMED subject to confirmationRestriction. The seller
+flow calls GET /deals/{dealId}/fulfillment-report/requirement then may submit checklist
+or fields to /deals/{dealId}/fulfillment-report. Its legacy fallback is not treated
+as permission for this project to bypass an unknown requirement. No such writes run.
+Relevant source URL is the /deal/[id] chunk listed in public_deal_routes.json.
+Native PlayerokAPI get_deal parameter is deal_id; passing id was a local call-site bug.
+It is corrected and verified against real read-only API and mock native transport.
+
+[Official deal page bundle](https://playerok.com/_next/static/chunks/pages/deal/[id]-44549e1716e305e1.js); SHA256 1c7f7d36dde139dc6866a4828aac6ba6e604fcfdea8a3e5b25af8b9351d86206.

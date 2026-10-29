@@ -373,3 +373,77 @@ async def test_uncertain_resolution_ui_survives_restart_without_enabling_writes(
     finally:
         await bot.session.close()
         store.close()
+
+
+async def test_order_notes_search_stock_and_guarded_delivery_ui(tmp_path):
+    from copy import deepcopy
+
+    from app.database.store import now
+
+    order = {
+        "id": "order",
+        "status": "PAID",
+        "direction": "OUT",
+        "has_problem": False,
+        "is_automated": False,
+        "created_at": now(),
+        "item": {"id": "item", "name": "Product", "price": 100, "user": {"id": "seller"}},
+        "user": {"username": "buyer_%"},
+        "chat": {"id": "chat"},
+        "logs": [],
+    }
+
+    class OrderAPI(CatalogAPI):
+        account = SimpleNamespace(id="seller", writes_enabled=False)
+
+        async def call(self, method, **kwargs):
+            self.calls.append((method, kwargs))
+            if method == "get_deal":
+                return deepcopy(order)
+            assert method == "get_chat"
+            return {"id": "chat", "is_texting_allowed": True}
+
+    store = Store(tmp_path / "orders-ui.sqlite")
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    api = OrderAPI()
+    ui = Interaction(bot, dispatcher(store, api))
+    state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
+    try:
+        await ui.message("/start")
+        await ui.click("order:order")
+        await ui.click("od:problem:order")
+        await ui.message("Local <note> for owner")
+        token = (await state.get_data())["order_token"]
+        ui.dp = dispatcher(store, api)
+        await ui.click("od:apply:" + token)
+        await ui.click("od:apply:" + token)
+        assert store.rows("SELECT revision FROM order_annotations") == [{"revision": 1}]
+        await ui.click("orderpage:0:PROBLEM")
+        count = len(api.calls)
+        await ui.click("od:search")
+        await ui.message("buyer_%")
+        assert "Всего 1" in session.calls[-1].text
+        assert len(api.calls) == count
+        await ui.click("od:stock:order")
+        await ui.message("private code")
+        token = (await state.get_data())["order_token"]
+        assert "private code" not in session.calls[-1].text
+        assert not store.rows("SELECT * FROM inventory")
+        await ui.click("od:apply:" + token)
+        assert len(store.rows("SELECT * FROM inventory")) == 1
+        assert not store.rows("SELECT * FROM outbox")
+        await ui.click("od:prepare:order")
+        token = (await state.get_data())["order_token"]
+        await ui.click("od:apply:" + token)
+        assert "отключены" in session.calls[-1].text and not store.rows("SELECT * FROM outbox")
+        api.account.writes_enabled = True  # mock account only, never the real configuration
+        await ui.click("od:apply:" + token)
+        await ui.click("od:apply:" + token)
+        assert len(store.rows("SELECT * FROM outbox")) == 1
+        assert store.rows("SELECT status FROM inventory") == [{"status": "RESERVED"}]
+        assert all(method.startswith("get_") for method, _ in api.calls)
+        assert "private code" not in str(store.rows("SELECT * FROM order_history"))
+    finally:
+        await bot.session.close()
+        store.close()
