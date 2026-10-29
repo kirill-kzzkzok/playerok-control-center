@@ -128,6 +128,20 @@ class Store:
             existing = connection.execute("SELECT id FROM outbox WHERE operation_key=?", (key,)).fetchone()
             if existing:
                 return existing[0]
+            if kind in {"delivery", "fulfill"}:
+                if (
+                    kind == "fulfill"
+                    and connection.execute(
+                        "SELECT 1 FROM outbox WHERE target=? AND kind='fulfill' AND error_code='MANUALLY_STOPPED_UNCERTAIN' LIMIT 1",
+                        (target,),
+                    ).fetchone()
+                ):
+                    raise Conflict("Исход предыдущей отметки неизвестен; новая запись запрещена")
+                if connection.execute(
+                    "SELECT 1 FROM outbox WHERE target=? AND kind IN ('delivery','fulfill') AND status IN ('PENDING','PROCESSING','RETRYABLE_FAILED','UNCERTAIN') LIMIT 1",
+                    (target,),
+                ).fetchone():
+                    raise Conflict("Для заказа есть незавершённая выдача или отметка выполнения")
             if kind in {"create", "publish", "edit", "edit_fields", "discount", "delete", "agreements"}:
                 blocked = connection.execute(
                     "SELECT id FROM outbox WHERE target=? AND kind IN ('create','publish','edit','edit_fields','discount','delete','agreements') "
@@ -169,7 +183,7 @@ class Store:
             if r.rowcount != 1:
                 raise Conflict("Lease операции потерян")
             # Delivery state and external outcome must commit together.
-            row = db.execute("SELECT operation_key FROM outbox WHERE id=?", (ident,)).fetchone()
+            row = db.execute("SELECT operation_key,kind,target FROM outbox WHERE id=?", (ident,)).fetchone()
             if row[0].startswith("delivery:"):
                 order = row[0].removeprefix("delivery:")
                 state = "DELIVERED" if status == "SUCCEEDED" else "QUARANTINED"
@@ -185,6 +199,11 @@ class Store:
                     )
             if status == "UNCERTAIN":
                 self.uncertain_event(db, ident)
+            if row["kind"] == "fulfill":
+                db.execute(
+                    "INSERT INTO order_history(order_id,source,new_status,note,created_at) SELECT id,'FULFILLMENT_RESULT',status,?,? FROM orders WHERE id=?",
+                    (status, now(), row["target"]),
+                )
 
     @staticmethod
     def uncertain_event(db, ident):
@@ -198,7 +217,7 @@ class Store:
     def recover(self):
         with self.transaction() as db:
             affected = db.execute(
-                "SELECT id,operation_key FROM outbox WHERE status='PROCESSING' AND lease_until<?",
+                "SELECT id,operation_key,kind,target FROM outbox WHERE status='PROCESSING' AND lease_until<?",
                 (time.time(),),
             ).fetchall()
             db.execute(
@@ -217,6 +236,11 @@ class Store:
                         (now(), order),
                     )
                 self.uncertain_event(db, row["id"])
+                if row["kind"] == "fulfill":
+                    db.execute(
+                        "INSERT INTO order_history(order_id,source,new_status,note,created_at) SELECT id,'FULFILLMENT_RESULT',status,'UNCERTAIN: LEASE_EXPIRED',? FROM orders WHERE id=?",
+                        (now(), row["target"]),
+                    )
             return len(affected)
 
     def audit(self, actor, action, target, outcome):

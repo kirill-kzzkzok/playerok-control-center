@@ -447,3 +447,59 @@ async def test_order_notes_search_stock_and_guarded_delivery_ui(tmp_path):
     finally:
         await bot.session.close()
         store.close()
+
+
+async def test_fulfillment_checklist_router_requires_attestation_and_restores_confirmation(tmp_path):
+    from copy import deepcopy
+
+    from app.database.store import now
+
+    class FulfillmentAPI(CatalogAPI):
+        account = SimpleNamespace(id="seller", writes_enabled=False)
+
+        async def call(self, method, **kwargs):
+            self.calls.append((method, kwargs))
+            assert method == "get_deal" and kwargs == {"deal_id": "deal"}
+            return deepcopy(
+                {
+                    "id": "deal",
+                    "status": "PAID",
+                    "direction": "OUT",
+                    "has_problem": False,
+                    "is_automated": False,
+                    "created_at": now(),
+                    "item": {"id": "item", "seller_type": "USER", "user": {"id": "seller", "role": "USER"}},
+                    "chat": {"id": "chat"},
+                }
+            )
+
+    store = Store(tmp_path / "fulfillment-ui.sqlite")
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    api = FulfillmentAPI()
+    ui = Interaction(bot, dispatcher(store, api))
+    state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
+    try:
+        await ui.message("/start")
+        await ui.click("ff:start:deal")
+        nonce = (await state.get_data())["fulfillment"]["nonce"]
+        await ui.click("ff:" + nonce + ":continue")
+        assert "Нужно лично" in session.calls[-1].text
+        await ui.click("ff:" + nonce + ":check")
+        nonce = (await state.get_data())["fulfillment"]["nonce"]
+        await ui.click("ff:" + nonce + ":continue")
+        nonce = (await state.get_data())["fulfillment"]["nonce"]
+        ui.dp = dispatcher(store, api)
+        await ui.click("ff:" + nonce + ":submit")
+        assert "отключены" in session.calls[-1].text and not store.rows("SELECT * FROM outbox")
+        api.account.writes_enabled = True
+        await ui.click("ff:" + nonce + ":submit")
+        await ui.click("ff:" + nonce + ":submit")
+        assert len(store.rows("SELECT * FROM outbox")) == 1
+        assert store.rows("SELECT kind FROM outbox")[0]["kind"] == "fulfill"
+        count = len(api.calls)
+        await ui.click("ff:start:deal", owner=8)
+        assert len(api.calls) == count
+    finally:
+        await bot.session.close()
+        store.close()

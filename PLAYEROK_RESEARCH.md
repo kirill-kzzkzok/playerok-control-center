@@ -206,3 +206,18 @@ Native PlayerokAPI get_deal parameter is deal_id; passing id was a local call-si
 It is corrected and verified against real read-only API and mock native transport.
 
 [Official deal page bundle](https://playerok.com/_next/static/chunks/pages/deal/[id]-44549e1716e305e1.js); SHA256 1c7f7d36dde139dc6866a4828aac6ba6e604fcfdea8a3e5b25af8b9351d86206.
+
+
+## Fulfillment contract refinement — 2026-10-30 MSK
+
+The same verified official deal bundle gates the requirement read on
+item.user.role === OFFICIAL_SELLER. Other known roles use the seller checklist and
+updateDeal(SENT). The category confirmation-checklist endpoint is for buyer receipt,
+not the seller checklist. Seller text: goods transferred and order fulfilled.
+REST base comes from module 94216 / API_PUBLIC_URI:
+https://playerok.com/rest-api/public. Report bodies are state=draft or state=filled
+with workerName/telegram/providerId/supplierOrderNumber/price/currency. Price is a
+two-decimal string; the form offers USD/EUR/KZT (even though a shared enum also has BYN).
+GET journal-entry returns state/telegram/submittedAt; it does not echo all fields.
+Read-only live: none/absent, providers403. Evidence data/live_fulfillment_readonly.json.
+No status changes, reports, payments or requests to bypass provider permissions made.

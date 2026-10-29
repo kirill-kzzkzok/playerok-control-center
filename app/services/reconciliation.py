@@ -36,6 +36,13 @@ class Reconciliation:
         action = self.action(actor, ident, uncertain=True)
         kind, target = action["kind"], action["target"]
         payload = json.loads(action["payload"])
+        if kind == "fulfill":
+            from app.services.fulfillment import Fulfillment
+
+            confirmed = await Fulfillment(self.store, self.api).result(action)
+            if not confirmed:
+                raise Conflict("Выполнение и требуемый отчёт не подтверждены; повтор запрещён")
+            return {"decision": "CONFIRM_READ_STATE", **confirmed, "checked_at": now()}
         if kind == "mark_read":
             chat = await self.api.call("get_chat", chat_id=target)
             if chat.get("id") != target or chat.get("unread_messages_counter") != 0:
@@ -171,6 +178,11 @@ class Reconciliation:
             if action["kind"] == "delivery":
                 db.execute(
                     "INSERT INTO order_history(order_id,source,new_status,actor,note,created_at) SELECT id,'MANUAL_DELIVERY_RESOLUTION',status,?,?,? FROM orders WHERE id=?",
+                    (actor, decision, now(), action["target"]),
+                )
+            if action["kind"] == "fulfill":
+                db.execute(
+                    "INSERT INTO order_history(order_id,source,new_status,actor,note,created_at) SELECT id,'MANUAL_FULFILLMENT_RESOLUTION',status,?,?,? FROM orders WHERE id=?",
                     (actor, decision, now(), action["target"]),
                 )
             db.execute(

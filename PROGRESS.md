@@ -489,3 +489,59 @@ forms и реальная жалоба Playerok ещё предстоят; ло�
 Реальные buyer sends, updateDeal/reportDealProblem и платные операции не выполнялись.
 
 Финальная проверка заказов: format check/secret scan чистые; приватные файлы и live-свидетельства в data не входят в Git.
+
+
+## PHASE 4 — отметка SENT и fulfillment-report (2026-10-30)
+
+Исследован seller flow /deal/[id] целиком в относящейся части: обычная роль проходит
+локальный checkbox «Я передал(а) товар покупателю и выполнил(а) заказ» и updateDeal(SENT).
+Именно OFFICIAL_SELLER запрашивает GET /deals/{id}/fulfillment-report/requirement.
+none означает legacy, draft — POST {state:draft}, fields — POST с данными исполнителя,
+Telegram, поставщика, номера заказа, стоимости (0.01–100000, две цифры) и USD/EUR/KZT.
+Category confirmation checklist относится к покупателю, не подменяет seller checkbox.
+Ранее отмеченная неопределённость роли/процесса снята исходниками и безопасным чтением.
+
+Добавлен ограниченный REST transport только к https://playerok.com/rest-api/public:
+три GET и один POST fulfillment-report. Произвольные пути/методы/поля отвергаются,
+redirects выключены, TLS штатный, cookie остаётся на фиксированном host, нет retry
+неопределённой записи. Scoped permit/тот же поток обязательны. Контрактный тест выявил
+взаимную блокировку wrong-thread write из-за проверки после RLock: перенесена проверка
+перед lock с повтором внутри. Два зависших тестовых запуска остановлены; regression
+теперь имеет timeout и не зависает. Последний полный suite успешно завершён.
+
+Fulfillment проверяет OUT/PAID, владельца, проблему/автоматизацию, роль, snapshot
+требования и личное подтверждение передачи. Неизвестная роль/requirement/ошибка REST
+не превращаются в legacy. Исправлен vendor parser: неизвестные role/sellerType
+сохраняются raw, вместо потери OFFICIAL_SELLER/SYSTEM в None; неизвестная роль всё
+равно запрещает отметку. Перед queue и execute читаются свежие условия/поставщики.
+Delivery и fulfill взаимно блокируют незавершённые действия по одной сделке.
+
+Telegram: отдельный checkbox, сохраняемый FSM формы, актуальный список поставщиков
+с пагинацией, нормализация Telegram/Decimal-стоимости и полный финальный preview.
+Введённые поля сохраняются при недоступном provider list; никакие заглушки не выбираются.
+Read-only конфигурация блокирует submit. Все записи идут через durable outbox.
+После одной mutation выполняются только повторные GET для подтверждения результата.
+Legacy успех требует текущий SENT/CONFIRMED у собственной продажи; report также требует
+журнальную запись нужного state/Telegram и времени не раньше операции. Читается summary
+отчёта, а не полный повтор всех supplier fields; принятие POST само по себе не успех.
+Неизвестный результат — UNCERTAIN без автоповтора. Его можно сверить read-only через
+существующий ручной CONFIRM_READ_STATE. Остановка неизвестного fulfill не даёт права
+на новый POST. История результата/восстановления/ручного решения сохранена без полей отчёта.
+
+Live только GET: requirement=none, journal entry=absent; official-providers вернул
+FULFILLMENT_HTTP_403 для текущей сессии. Обхода прав или fallback по ошибке нет.
+data/live_fulfillment_readonly.json: mutations=0, telegram_sends=0, 217 заказов и
+1 владелец сохранены. Реальные updateDeal/POST отчёта не выполнялись. Ни успешность
+live SENT, ни официальная fields-ветка для аккаунта с нужными правами не объявлены принятой.
+Миграция БД не нужна; версии до v8 сохранены, поля отчёта живут в приватном outbox/FSM.
+
+**305 passed in 35.36s**, Ruff/pip check чистые; JUnit data/phase4_fulfillment_results.xml.
+Покрыты три workflow, аттестация/владелец/read-only, невалидные поля, race требований/
+поставщика, target locks с rollback резерва, timeout write/read-after-write, отсутствие
+повтора, native REST allowlist/redirect/thread guard, сохранение OFFICIAL_SELLER,
+UI fields restart и настоящий aiogram checklist → restart → guarded/double submit.
+Остаются незавершённые требования общего проекта и live-приёмка: нельзя объявлять
+готовыми все PHASE 4–9 по одному этому checkpoint. Рабочие лоты и платные операции
+по-прежнему не затрагивались, бот постоянно не запускался.
+
+Финальные пользовательские подписи проверены профильным запуском: **33 passed in 15.82s**. Format/secret scan чистые; .env/PROJECT_SPEC.md и data исключены из Git.

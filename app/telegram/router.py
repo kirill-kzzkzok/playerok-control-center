@@ -20,6 +20,7 @@ from app.services.statistics import statistics
 from app.telegram.chat_panel import ChatPanel
 from app.telegram.finance_panel import FinancePanel
 from app.telegram.formatting import escaped
+from app.telegram.fulfillment_panel import FulfillmentPanel
 from app.telegram.keyboards import keyboard, main_menu
 from app.telegram.operations_panel import OperationsPanel
 from app.telegram.orders_panel import OrdersPanel
@@ -51,6 +52,7 @@ def create_router(store, api, products, synchronizer):
     replies = RepliesPanel(store)
     operations = OperationsPanel(store, api)
     orders_panel = OrdersPanel(store, api)
+    fulfillment_panel = FulfillmentPanel(store, api)
 
     @router.message(CommandStart())
     async def start(message, state):
@@ -129,6 +131,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await replies.callback(action, owner, state)
             elif action.startswith("ops:"):
                 text, markup = await operations.callback(action, owner, state)
+            elif action.startswith("ff:"):
+                text, markup = await fulfillment_panel.callback(action, owner, state)
             elif action.startswith("w:"):
                 text, markup = await wizard.callback(owner, state, action, message=message)
             elif action == "cancel_wizard":
@@ -482,6 +486,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await replies.message(message, state)
             elif current and current.startswith("order:"):
                 text, markup = await orders_panel.message(message, state)
+            elif current and current.startswith("fulfill:"):
+                text, markup = await fulfillment_panel.message(message, state)
             elif current and current.startswith("resolve:"):
                 text, markup = await operations.message(message, state)
             elif current == "reply" and (message.photo or message.document):

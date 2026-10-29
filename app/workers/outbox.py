@@ -8,6 +8,7 @@ from app.playerok.adapter import APIError, plain
 from app.services.agreements import Agreements, require_conditions
 from app.services.attachments import Attachments
 from app.services.discounts import discount_plan
+from app.services.fulfillment import Fulfillment
 from app.services.order_management import deliverable
 from app.services.products import (
     ValidationError,
@@ -19,6 +20,7 @@ from app.services.products import (
     validate_field,
 )
 from app.services.replies import reply_payload
+from playerokapi.enums import ItemDealStatuses
 
 
 class Executor:
@@ -48,6 +50,33 @@ class Executor:
 
     async def __call__(self, action):
         kind, target, payload = action["kind"], action["target"], action["payload"]
+        if kind == "fulfill":
+            service = Fulfillment(self.store, self.api)
+            prepared = await service.load(target)
+            if prepared["snapshot"] != payload.get("snapshot") or prepared["mode"] != payload.get("mode"):
+                raise ValidationError("Сделка или требование исполнения изменились")
+            values = {key: value for key, value in payload.get("report", {}).items() if key != "state"}
+            report = await service.validate(prepared, values, payload.get("attested"))
+            if report != payload.get("report"):
+                raise ValidationError("Снимок отчёта не соответствует подтверждению")
+            if prepared["mode"] == "legacy":
+                await self.mutate(
+                    "updateDeal", "update_deal", deal_id=target, new_status=ItemDealStatuses.SENT
+                )
+            else:
+                await self.mutate(
+                    "submitFulfillmentReport", "submit_fulfillment", deal_id=target, report=report
+                )
+            try:
+                for attempt in range(10):
+                    confirmed = await service.result(action)
+                    if confirmed:
+                        return confirmed
+                    if attempt < 9:
+                        await asyncio.sleep(1)
+            except (APIError, ValueError, TypeError):
+                raise APIError("FULFILLMENT_OUTCOME_UNKNOWN", uncertain=True) from None
+            raise APIError("FULFILLMENT_NOT_CONFIRMED", uncertain=True)
         if kind == "create":
             draft = self.store.get_draft(target, payload["owner"])
             value = draft["payload"]

@@ -241,6 +241,26 @@ class SafeAccount(Account):
     def close(self):
         self.client.close()
 
+    def get_fulfillment_requirement(self, deal_id):
+        from app.playerok.fulfillment_transport import fulfillment_request
+
+        return fulfillment_request(self, "get", f"/deals/{deal_id}/fulfillment-report/requirement")
+
+    def get_fulfillment_providers(self):
+        from app.playerok.fulfillment_transport import fulfillment_request
+
+        return fulfillment_request(self, "get", "/official-providers")
+
+    def get_fulfillment_entry(self, deal_id):
+        from app.playerok.fulfillment_transport import fulfillment_request
+
+        return fulfillment_request(self, "get", f"/deals/{deal_id}/fulfillment-report/journal-entry")
+
+    def submit_fulfillment(self, deal_id, report):
+        from app.playerok.fulfillment_transport import fulfillment_request
+
+        return fulfillment_request(self, "post", f"/deals/{deal_id}/fulfillment-report", report)
+
 
 class Playerok:
     def __init__(self, account):
@@ -269,6 +289,9 @@ class Playerok:
             "get_transaction_providers",
             "get_transactions",
             "get_exchange_rate",
+            "get_fulfillment_requirement",
+            "get_fulfillment_providers",
+            "get_fulfillment_entry",
         }:
             raise APIError("READ_METHOD_FORBIDDEN")
         async with self.lock:

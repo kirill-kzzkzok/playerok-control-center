@@ -91,12 +91,13 @@ class OrdersPanel:
             text += "\nЗаметка: " + escaped(annotation["note"], 500)
         if operation:
             text += "\nВыдача: " + escaped(operation[0]["status"], 50)
-        text += "\n\nSENT означает отметку продавца о выполнении. Окончательное подтверждение — действие покупателя. Fulfillment checklist выполняйте в Playerok; бот его пока не заменяет."
+        text += "\n\nSENT означает отметку продавца о выполнении. Окончательное подтверждение — действие покупателя."
         rows = []
         chat = (order.get("chat") or {}).get("id")
         if chat:
             rows.append([("💬 Диалог", "chat:" + chat), ("✉️ Написать", "reply:" + chat)])
         if not cached and order["status"] == "PAID":
+            rows.append([("✅ Я выполнил заказ", "ff:start:" + ident)])
             if not operation:
                 rows.append([("📦 Выдать из запаса", "od:prepare:" + ident)])
             rows.append([("➕ Добавить уникальные коды", "od:stock:" + ident)])

@@ -256,3 +256,29 @@ Evidence data/live_order_card_fixed_readonly.json; original failure preserved se
 Backup before v8; 217 orders/1 owner preserved. No real codes were added or delivered.
 New fulfillment-report requirements were found in public official source; no unchecked
 SENT/CONFIRMED/reportDealProblem mutation is claimed implemented or accepted here.
+
+
+## PHASE 4 — seller fulfillment checkpoint (2026-10-30)
+
+**305 passed in 35.36s**, JUnit data/phase4_fulfillment_results.xml; Ruff/pip check clean.
+test_fulfillment.py covers legacy/draft/fields queue+worker+read verification, strict
+SENT instead of CONFIRMED, unknown role/state, attestation, owner/read-only and stale
+requirement guards, disappeared provider, no write replay after timeout/read-after-write,
+atomic reservation rollback under target lock, manual read reconciliation, form validation,
+native REST body/path/permit/redirect guards, parser role preservation and form restart.
+Real aiogram Dispatcher test covers checkbox, readonly refusal, persisted confirmation,
+one outbox on double submit and foreign callback denial. All writes were mocked.
+
+Cross-thread REST regression initially deadlocked because permission was checked inside
+an RLock held by the other thread. Those two test processes were interrupted; the guard
+is now checked before locking as well as inside, and the regression is bounded by a
+one-second timeout. The final full suite above includes the fix and passes.
+
+Live evidence data/live_fulfillment_readonly.json: GET requirement=none, GET entry=absent,
+GET providers HTTP403. No rights bypass/fallback, no actual SENT or POST. Existing 217
+orders/1 owner preserved. This proves the read endpoints for this ordinary account,
+not live write acceptance or official-provider access. The journal verifier checks a
+summary (state/Telegram/time), not an echo of all supplier fields. Full live acceptance
+and remaining original requirements are still pending.
+
+After final UI wording adjustments, the fulfillment/Dispatcher subset passed again: **33 passed in 15.82s**. Format and actual-secret scans clean.

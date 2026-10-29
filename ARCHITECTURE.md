@@ -256,5 +256,33 @@ OrdersPanel инкапсулирует карточки/поиск/фильтр�
 Кеш при APIError явно помечен; выдача из него недоступна. Stock values в confirmation
 не отображаются. Сервис/native SDK contract использует get_deal(deal_id=...), а не id.
 Статический аудит kwargs и реальный mock HTTP тест защищают границу SDK.
-Fulfillment requirement/checklist и platform problem reporting пока не реализованы;
+Fulfillment requirement/checklist описан ниже; platform problem reporting пока не реализован;
 legacy updateDeal не используется как обход нового обязательного процесса.
+
+
+## Seller fulfillment
+
+Fulfillment отделён от выдачи сообщения/кода и от buyer CONFIRMED. Роль и статус
+берутся из свежей собственной OUT-сделки. Обычный seller использует только SENT;
+OFFICIAL_SELLER использует REST requirement (none/draft/fields). Отсутствующие роли
+и ошибки не являются разрешением для legacy. Snapshot включает режим/роль/checkbox
+и существенные поля сделки. Fields нормализуются по текущему официальному form contract.
+
+fulfillment_transport принимает только фиксированные same-host public REST paths,
+проверяет допустимый JSON shape и write permit/thread перед захватом RLock и внутри
+него. Нет произвольного URL/redirect, нет повторной mutation. SafeAccount предоставляет
+явные методы; чтения проходят whitelist Playerok.call, запись — Executor.mutate.
+
+fulfill outbox конкурирует с delivery по target. PREVIEW не создаёт запись. Worker
+повторяет preconditions, отправляет ровно одну mutation, затем ограниченно читает
+состояние/summary отчёта. Неопределённый write или read-after-write переводится в
+UNCERTAIN. HTTP 2xx POST без подтверждённого результата недостаточно. Повторные GET
+не повторяют POST/updateDeal. Ручная сверка использует тот же result verifier;
+CONFIRM_READ_STATE и actor/исходные ошибки остаются в журнале. Stopped-unknown fulfill
+также блокирует новый POST, поскольку отсутствие записи не доказывает отсутствие приёма.
+
+FulfillmentPanel сохраняет checkbox/поля/выбор поставщика в SQLite FSM, меняет nonce
+на каждом экране и требует отдельный submit. Provider retrieval failure сохраняет
+введённые данные. Поля отчёта не копируются в audit/order_history; стоимость отчёта
+не создаёт financial_operation и не переводит деньги. Native SDK parser сохраняет
+новые raw role/sellerType, чтобы OFFICIAL_SELLER не терялся до выбора workflow.

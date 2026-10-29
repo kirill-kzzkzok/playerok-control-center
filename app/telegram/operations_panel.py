@@ -77,7 +77,7 @@ class OperationsPanel:
             rows = []
             if row["status"] == "UNCERTAIN":
                 text += "\n\nПовтор запрещён, пока результат не установлен. Отсутствие записи на проверенных страницах не доказывает, что отправки не было."
-                if row["kind"] in {"reply", "delivery", "mark_read"}:
+                if row["kind"] in {"reply", "delivery", "mark_read", "fulfill"}:
                     rows.append([("🔎 Сверить успешный результат", "ops:confirm:" + ident)])
                 rows.append([("⛔ Остановить без повтора", "ops:stop:" + ident)])
             rows.append([("История операций", "ops:list:ALL:0")])
@@ -86,7 +86,7 @@ class OperationsPanel:
             raise Conflict("Операция уже разрешена или действие недоступно")
         data = {"id": ident, "signature": signature(row), "decision": "STOP_UNCERTAIN"}
         if command == "confirm":
-            if row["kind"] == "mark_read":
+            if row["kind"] in {"mark_read", "fulfill"}:
                 data["evidence"] = await self.service.evidence(owner, ident)
                 data["decision"] = "CONFIRM_READ_STATE"
             elif row["kind"] in {"reply", "delivery"}:
