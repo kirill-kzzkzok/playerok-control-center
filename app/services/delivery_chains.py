@@ -184,6 +184,12 @@ class DeliveryChains:
         if self.store.rows("SELECT 1 FROM order_annotations WHERE order_id=? AND problem=1", (ident,)):
             raise ValidationError("Локальная проблема блокирует автоматическую отправку")
         latest_revision, latest_policy = self.policies.get(step["item_id"])
-        if latest_revision != step["policy_revision"] or not latest_policy.enabled or not self.store.rows("SELECT 1 FROM delivery_chains WHERE order_id=? AND status='ACTIVE'", (ident,)):
+        if (
+            latest_revision != step["policy_revision"]
+            or not latest_policy.enabled
+            or not self.store.rows(
+                "SELECT 1 FROM delivery_chains WHERE order_id=? AND status='ACTIVE'", (ident,)
+            )
+        ):
             raise ValidationError("Цепочка остановлена во время проверки")
         return order["chat"]["id"]

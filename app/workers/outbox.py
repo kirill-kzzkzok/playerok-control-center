@@ -60,9 +60,7 @@ class Executor:
             text = payload.get("text", "")
             if not text.strip() or len(text.encode("utf-16-le")) // 2 > 3500:
                 raise ValidationError("Пустое или слишком длинное сообщение")
-            result = await self.mutate(
-                "createChatMessage", "send_message", chat_id=chain_chat, text=text
-            )
+            result = await self.mutate("createChatMessage", "send_message", chat_id=chain_chat, text=text)
             if not result.get("id"):
                 raise APIError("CHAIN_MESSAGE_UNKNOWN", uncertain=True)
             return {"message_id": result["id"]}
