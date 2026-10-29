@@ -177,22 +177,35 @@ class Store:
                     "UPDATE inventory SET status=? WHERE id=(SELECT inventory_id FROM reservations WHERE order_id=?)",
                     (state, order),
                 )
+            if status == "UNCERTAIN":
+                self.uncertain_event(db, ident)
+
+    @staticmethod
+    def uncertain_event(db, ident):
+        row = db.execute("SELECT kind,target,error_code FROM outbox WHERE id=?", (ident,)).fetchone()
+        payload = {"operation_id": ident, **dict(row)}
+        db.execute(
+            "INSERT OR IGNORE INTO inbox(key,kind,payload,received_at,processed_at) VALUES(?,'operation_uncertain',?,?,?)",
+            (f"operation:{ident}:UNCERTAIN", encode(payload), now(), now()),
+        )
 
     def recover(self):
         with self.transaction() as db:
             affected = db.execute(
-                "SELECT operation_key FROM outbox WHERE status='PROCESSING' AND lease_until<?", (time.time(),)
+                "SELECT id,operation_key FROM outbox WHERE status='PROCESSING' AND lease_until<?",
+                (time.time(),),
             ).fetchall()
             db.execute(
                 "UPDATE outbox SET status='UNCERTAIN',error_code='LEASE_EXPIRED' WHERE status='PROCESSING' AND lease_until<?",
                 (time.time(),),
             )
             for row in affected:
-                if row[0].startswith("delivery:"):
+                if row["operation_key"].startswith("delivery:"):
                     db.execute(
                         "UPDATE inventory SET status='QUARANTINED' WHERE id=(SELECT inventory_id FROM reservations WHERE order_id=?)",
-                        (row[0].removeprefix("delivery:"),),
+                        (row["operation_key"].removeprefix("delivery:"),),
                     )
+                self.uncertain_event(db, row["id"])
             return len(affected)
 
     def audit(self, actor, action, target, outcome):

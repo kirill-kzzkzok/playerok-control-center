@@ -176,3 +176,29 @@ mutations переводятся в UNCERTAIN. Journal не даёт права 
 детерминированный clientAttachmentId служит корреляцией, не гарантией идемпотентности.
 Cleanup защищает photos paths активного FSM/outbox и UNCERTAIN; успешные uploads можно
 удалить локально после завершения. Реальный settlement/платежи в этом потоке отсутствуют.
+
+
+## Локальная сверка неопределённых операций (v6)
+
+Reconciliation разрешает UNCERTAIN только владельцу из administrators, проверяет
+snapshot signature и повторяет read evidence непосредственно перед транзакцией.
+Положительное сопоставление сообщения использует указанный владельцем ID, актуальный
+chat scope, seller author, точный текст (без вывода), created_at и число фото. Для
+delivery проверяются свежая продажа/предмет и тот же quarantined reservation. Это
+ручное решение: совпадение количества фото не доказывает их содержимое. Выборка
+ограничена 480 сообщениями; negative search result никогда не даёт права на resend.
+
+CONFIRM_MESSAGE/CONFIRM_READ_STATE сохраняются как SUCCEEDED с resolution_source
+OWNER_DECISION; STOP_UNCERTAIN — как PERMANENT_FAILED с отдельным кодом
+MANUALLY_STOPPED_UNCERTAIN и external_outcome UNKNOWN. Последний означает локальную
+остановку, а не доказанную внешнюю неудачу. Нет перехода в PENDING/RETRYABLE_FAILED.
+Оригинальные result/error и причина решения остаются в operation_resolutions; журнал,
+outbox, inventory и audit меняются атомарно с повторной проверкой CAS. Данные выдачи
+не копируются в evidence, причины вводятся владельцем с предупреждением не писать секреты.
+
+Store.finish/recover создают operation_uncertain inbox в той же транзакции; v6 backfill
+охватывает ранее сохранённые неопределённые операции. Notifications выводит такие
+события до окончания первой синхронизации, независимо от подключения Playerok. Уже
+закрытые события получают SKIPPED. Cleanup сохраняет файлы MANUALLY_STOPPED_UNCERTAIN
+для последующей сверки; резерв не возвращается в AVAILABLE. OperationsPanel использует
+SQLite FSM/nonce и отдельное подтверждение. Все разрешения локальные, mutations отсутствуют.

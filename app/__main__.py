@@ -79,9 +79,9 @@ async def run(config):
         dispatcher.callback_query.outer_middleware(middleware)
         dispatcher.include_router(create_router(store, api, products, sync))
         tasks.append(asyncio.create_task(UploadCleanup(store).run(stop), name="upload-cleanup"))
+        tasks.append(asyncio.create_task(Notifications(store, bot).run(stop), name="notifications"))
         if account.id:
             tasks.append(asyncio.create_task(sync.run(stop), name="playerok-sync"))
-            tasks.append(asyncio.create_task(Notifications(store, bot).run(stop), name="notifications"))
         if config.writes_enabled:
             worker = OutboxWorker(store, Executor(store, api, products))
             tasks.append(asyncio.create_task(outbox_loop(worker, stop), name="outbox"))

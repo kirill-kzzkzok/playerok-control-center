@@ -1,0 +1,230 @@
+import asyncio
+import json
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from app.database.store import Conflict, Store, now
+from app.services.attachments import Attachments
+from app.services.orders import Orders
+from app.services.reconciliation import Reconciliation, signature
+from app.workers.cleanup import UploadCleanup
+
+
+@pytest.fixture
+def setup(tmp_path):
+    store = Store(tmp_path / "resolve.sqlite")
+    store.claim_first_owner(1)
+    api = SimpleNamespace(account=SimpleNamespace(id="seller"))
+    api.call = AsyncMock(
+        return_value={
+            "messages": [
+                {"id": "sent", "user": {"id": "seller"}, "text": "private code", "created_at": now()}
+            ],
+            "page_info": {"has_next_page": False},
+        }
+    )
+    yield store, api, Reconciliation(store, api)
+    store.close()
+
+
+def uncertain(store, kind="reply", target="chat", payload=None):
+    ident = store.enqueue("action", kind, target, payload or {"text": "private code"})
+    action = store.claim()
+    store.finish(ident, action["lease_token"], "UNCERTAIN", error="NETWORK_ERROR")
+    return ident, signature(store.rows("SELECT * FROM outbox WHERE id=?", (ident,))[0])
+
+
+async def test_verified_message_resolves_locally_without_sending_and_records_reason(setup):
+    store, api, service = setup
+    ident, expected = uncertain(store)
+    await service.resolve(1, ident, expected, "CONFIRM_MESSAGE", "Проверил сообщение на Playerok", "sent")
+    row = store.rows("SELECT status,result,error_code FROM outbox")[0]
+    assert row["status"] == "SUCCEEDED" and row["error_code"] is None
+    assert json.loads(row["result"])["resolution_source"] == "OWNER_DECISION"
+    assert (
+        store.rows("SELECT previous_error_code FROM operation_resolutions")[0]["previous_error_code"]
+        == "NETWORK_ERROR"
+    )
+    assert api.call.call_args.args[0] == "get_chat_messages"
+    assert store.claim() is None
+    assert "private code" not in str(store.rows("SELECT * FROM operation_resolutions"))
+    assert "private code" not in str(store.rows("SELECT * FROM audit_log"))
+    with pytest.raises(Conflict):
+        await service.resolve(1, ident, expected, "CONFIRM_MESSAGE", "Повторное подтверждение", "sent")
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"user": {"id": "buyer"}},
+        {"text": "different"},
+        {"deleted_at": "today"},
+        {"created_at": "2020-01-01T00:00:00Z"},
+        {"created_at": None},
+        {"images": [{"id": "extra"}]},
+    ],
+)
+async def test_mismatched_message_cannot_be_confirmed(setup, change):
+    store, api, service = setup
+    ident, expected = uncertain(store)
+    api.call.return_value["messages"][0].update(change)
+    with pytest.raises(Conflict):
+        await service.resolve(1, ident, expected, "CONFIRM_MESSAGE", "Проверил сообщение вручную", "sent")
+    assert store.rows("SELECT status FROM outbox")[0]["status"] == "UNCERTAIN"
+    assert not store.rows("SELECT * FROM operation_resolutions")
+
+
+async def test_search_is_bounded_and_absence_never_requeues(setup):
+    store, api, service = setup
+    ident, expected = uncertain(store)
+
+    async def page(*args, **kwargs):
+        cursor = int(kwargs.get("after_cursor") or 0)
+        return {"messages": [], "page_info": {"has_next_page": True, "end_cursor": str(cursor + 1)}}
+
+    api.call.side_effect = page
+    with pytest.raises(Conflict, match="не доказывает"):
+        await service.resolve(1, ident, expected, "CONFIRM_MESSAGE", "Не вижу сообщение в чате", "absent")
+    assert api.call.await_count == 20
+    assert store.claim() is None
+
+
+async def test_owner_and_snapshot_checked_before_api(setup):
+    store, api, service = setup
+    ident, expected = uncertain(store)
+    with pytest.raises(Conflict, match="Доступ"):
+        await service.resolve(2, ident, expected, "CONFIRM_MESSAGE", "Foreign owner attempted", "sent")
+    with pytest.raises(Conflict, match="изменилась"):
+        await service.resolve(1, ident, "wrong", "CONFIRM_MESSAGE", "Stale snapshot attempted", "sent")
+    api.call.assert_not_called()
+
+
+def delivery(store):
+    orders = Orders(store)
+    order = {
+        "id": "order",
+        "status": "PAID",
+        "direction": "OUT",
+        "item": {"id": "item", "price": 100},
+        "chat": {"id": "chat"},
+    }
+    orders.ingest(order)
+    orders.add_stock("item", ["private code"])
+    orders.reserve("order")
+    action = store.claim()
+    store.finish(action["id"], action["lease_token"], "UNCERTAIN", error="NETWORK_ERROR")
+    return order, action["id"], signature(store.rows("SELECT * FROM outbox")[0])
+
+
+async def test_delivery_confirmation_updates_quarantine_atomically_but_does_not_complete_deal(setup):
+    store, api, service = setup
+    order, ident, expected = delivery(store)
+    messages = api.call.return_value
+    api.call.side_effect = lambda method, **kwargs: order if method == "get_deal" else messages
+    await service.resolve(1, ident, expected, "CONFIRM_MESSAGE", "Код в моём сообщении совпадает", "sent")
+    assert store.rows("SELECT status FROM inventory")[0]["status"] == "DELIVERED"
+    assert store.rows("SELECT status FROM orders")[0]["status"] == "PAID"
+    assert all(call.args[0].startswith("get_") for call in api.call.call_args_list)
+
+
+async def test_resolution_transaction_rolls_back_with_quarantine_on_storage_failure(setup):
+    store, api, service = setup
+    order, ident, expected = delivery(store)
+    messages = api.call.return_value
+    api.call.side_effect = lambda method, **kwargs: order if method == "get_deal" else messages
+    store.execute(
+        "CREATE TRIGGER resolution_fail BEFORE UPDATE ON outbox BEGIN SELECT RAISE(ABORT,'test failure'); END"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        await service.resolve(1, ident, expected, "CONFIRM_MESSAGE", "Код в моём сообщении совпадает", "sent")
+    assert store.rows("SELECT status FROM inventory")[0]["status"] == "QUARANTINED"
+    assert store.rows("SELECT status FROM outbox")[0]["status"] == "UNCERTAIN"
+    assert not store.rows("SELECT * FROM operation_resolutions")
+
+
+async def test_stop_keeps_quarantine_and_cannot_reserve_same_code_again(setup):
+    store, api, service = setup
+    _, ident, expected = delivery(store)
+    await service.resolve(1, ident, expected, "STOP_UNCERTAIN", "Останавливаю без повторной отправки")
+    api.call.assert_not_called()
+    assert store.rows("SELECT status FROM inventory")[0]["status"] == "QUARANTINED"
+    assert store.rows("SELECT error_code FROM outbox")[0]["error_code"] == "MANUALLY_STOPPED_UNCERTAIN"
+    assert store.claim() is None
+    Orders(store).reserve("order")
+    assert len(store.rows("SELECT * FROM outbox")) == 1
+
+
+async def test_read_state_requires_fresh_zero_counter(setup):
+    store, api, service = setup
+    ident, expected = uncertain(store, "mark_read", payload={})
+    api.call.return_value = {"id": "chat", "unread_messages_counter": 1}
+    with pytest.raises(Conflict):
+        await service.resolve(1, ident, expected, "CONFIRM_READ_STATE", "Чат проверен вручную владельцем")
+    api.call.return_value["unread_messages_counter"] = 0
+    await service.resolve(1, ident, expected, "CONFIRM_READ_STATE", "Чат проверен вручную владельцем")
+    assert store.rows("SELECT status FROM outbox")[0]["status"] == "SUCCEEDED"
+
+
+def test_two_connections_cannot_resolve_the_same_operation_twice(setup):
+    store, _, _ = setup
+    ident, expected = uncertain(store)
+    barrier = Barrier(2)
+
+    def resolve(_):
+        other = Store(store.path)
+        try:
+            barrier.wait(timeout=10)
+            asyncio.run(
+                Reconciliation(other, None).resolve(
+                    1, ident, expected, "STOP_UNCERTAIN", "Проверено, остановлено без повтора"
+                )
+            )
+            return "ok"
+        except Conflict:
+            return "conflict"
+        finally:
+            other.close()
+
+    with ThreadPoolExecutor(2) as executor:
+        assert sorted(executor.map(resolve, range(2))) == ["conflict", "ok"]
+    assert len(store.rows("SELECT * FROM operation_resolutions")) == 1
+
+
+async def test_stopped_unknown_photo_keeps_evidence_file(setup, tmp_path):
+    store, _, service = setup
+    attachments = Attachments(tmp_path / "uploads")
+    attachments.directory.mkdir()
+    source = attachments.directory / "proof.jpg"
+    source.write_bytes(b"test")
+    ident, expected = uncertain(store, payload={"text": "", "photos": [str(source)]})
+    await service.resolve(1, ident, expected, "STOP_UNCERTAIN", "Файл сохранён для дальнейшей проверки")
+    assert UploadCleanup(store, attachments, grace_seconds=-1).once()["removed"] == 0
+    assert source.exists()
+
+
+def test_upgrade_backfills_existing_unknown_operation_once_without_exposing_payload(tmp_path):
+    path = tmp_path / "upgrade.sqlite"
+    store = Store(path)
+    ident, _ = uncertain(store)
+    # Emulate a pre-v6 database: the action exists, but alert generation did not.
+    store.execute("DELETE FROM schema_migrations WHERE version=6")
+    store.execute("DELETE FROM inbox WHERE kind='operation_uncertain'")
+    store.close()
+    store = Store(path)
+    try:
+        events = store.rows("SELECT payload FROM inbox WHERE kind='operation_uncertain'")
+        assert len(events) == 1 and ident in events[0]["payload"]
+        assert "private code" not in events[0]["payload"]
+        assert store.rows("SELECT status FROM outbox")[0]["status"] == "UNCERTAIN"
+    finally:
+        store.close()
+    store = Store(path)
+    try:
+        assert len(store.rows("SELECT * FROM inbox WHERE kind='operation_uncertain'")) == 1
+    finally:
+        store.close()

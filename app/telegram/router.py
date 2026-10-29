@@ -22,6 +22,7 @@ from app.telegram.chat_panel import ChatPanel
 from app.telegram.finance_panel import FinancePanel
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard, main_menu
+from app.telegram.operations_panel import OperationsPanel
 from app.telegram.replies_panel import RepliesPanel
 from app.telegram.wizard import Wizard
 from playerokapi.enums import ItemStatuses
@@ -48,6 +49,7 @@ def create_router(store, api, products, synchronizer):
     finance = FinancePanel(store, api, products)
     chats = ChatPanel(store, api)
     replies = RepliesPanel(store)
+    operations = OperationsPanel(store, api)
 
     @router.message(CommandStart())
     async def start(message, state):
@@ -124,6 +126,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await replies.menu(owner, state)
             elif action.startswith("quick:"):
                 text, markup = await replies.callback(action, owner, state)
+            elif action.startswith("ops:"):
+                text, markup = await operations.callback(action, owner, state)
             elif action.startswith("w:"):
                 text, markup = await wizard.callback(owner, state, action, message=message)
             elif action == "cancel_wizard":
@@ -496,7 +500,13 @@ def create_router(store, api, products, synchronizer):
                     )
                 )
                 text += "\n\nUNCERTAIN не повторяется автоматически. Для разрешения сверяйте результат на Playerok."
-                markup = keyboard([[("🔄 Сверить API", "sync")]])
+                markup = keyboard(
+                    [
+                        [("🔄 Сверить API", "sync")],
+                        [("⚠️ Неопределённые операции", "ops:list:UNCERTAIN:0")],
+                        [("🧾 История операций", "ops:list:ALL:0")],
+                    ]
+                )
             else:
                 raise ValidationError("Кнопка устарела. Откройте главное меню.")
             await display(message, text, markup, not preserve)
@@ -514,6 +524,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await finance.message(message, state)
             elif current and current.startswith("quick:"):
                 text, markup = await replies.message(message, state)
+            elif current and current.startswith("resolve:"):
+                text, markup = await operations.message(message, state)
             elif current == "reply" and (message.photo or message.document):
                 text, markup = await replies.photo(message, state)
             elif current == "discount":

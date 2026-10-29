@@ -39,7 +39,7 @@ class UploadCleanup:
                 active.update(referenced_photos(json.loads(row[0])))
             for row in db.execute("SELECT data FROM fsm"):
                 active.update(referenced_photos(json.loads(row[0])))
-            for row in db.execute("SELECT kind,target,payload,status FROM outbox"):
+            for row in db.execute("SELECT kind,target,payload,status,error_code FROM outbox"):
                 paths = referenced_photos(json.loads(row["payload"]))
                 if row["kind"] == "create":
                     draft = db.execute("SELECT payload FROM drafts WHERE id=?", (row["target"],)).fetchone()
@@ -47,7 +47,7 @@ class UploadCleanup:
                         paths.extend(referenced_photos(json.loads(draft[0])))
                 if row["status"] == "SUCCEEDED":
                     successful.update(paths)
-                elif row["status"] != "PERMANENT_FAILED":
+                elif row["status"] != "PERMANENT_FAILED" or row["error_code"] == "MANUALLY_STOPPED_UNCERTAIN":
                     active.update(paths)
         active = {self.attachments.path(source) for source in active}
         successful = {self.attachments.path(source) for source in successful}

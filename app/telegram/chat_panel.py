@@ -59,7 +59,9 @@ class ChatPanel:
             text = "[сообщение удалено]" if message.get("deleted_at") else message.get("text") or "[событие]"
             images = message.get("images") or []
             attachment = f"\n📷 Изображений: {len(images)}" if images else ""
-            blocks.append(f"<b>{author}</b> · {date}\n{escaped(text, 290)}{attachment}")
+            blocks.append(
+                f"<b>{author}</b> · {date}\nID: <code>{escaped(message['id'], 72)}</code>\n{escaped(text, 290)}{attachment}"
+            )
         rows = [[("✉️ Ответить", "reply:" + ident), ("✅ Прочитано", "readchat:" + ident)]]
         navigation = []
         if view["index"]:

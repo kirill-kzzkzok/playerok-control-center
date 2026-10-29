@@ -106,7 +106,9 @@ async def test_notification_edit_after_reply_survives_restart_without_buyer_rese
 async def test_uncertain_reply_is_visible_and_never_labelled_sent(store):
     Replies(store).enqueue(42, "reply", pending(origin(store)))
     finish(store, "UNCERTAIN")
-    bot = SimpleNamespace(edit_message_text=AsyncMock(), send_message=AsyncMock())
+    bot = SimpleNamespace(
+        edit_message_text=AsyncMock(), send_message=AsyncMock(return_value=SimpleNamespace(message_id=70))
+    )
     await Notifications(store, bot).once()
     text = bot.edit_message_text.call_args.args[0]
     assert "результат неизвестен" in text
@@ -142,3 +144,35 @@ async def test_quick_reply_new_template_survives_restart(store):
         SimpleNamespace(text="My text", from_user=SimpleNamespace(id=42)), state
     )
     assert Replies(store).list(42)[0]["text"] == "My text"
+
+
+async def test_manual_confirmation_is_labelled_owner_decision_and_obsolete_alert_is_skipped(store):
+    from app.database.store import now
+    from app.services.reconciliation import Reconciliation, signature
+
+    ident = Replies(store).enqueue(42, "reply", pending(origin(store)))
+    finish(store, "UNCERTAIN")
+    api = SimpleNamespace(
+        account=SimpleNamespace(id="seller"),
+        call=AsyncMock(
+            return_value={
+                "messages": [
+                    {"id": "sent", "user": {"id": "seller"}, "text": "Private response", "created_at": now()}
+                ],
+                "page_info": {"has_next_page": False},
+            }
+        ),
+    )
+    await Reconciliation(store, api).resolve(
+        42,
+        ident,
+        signature(store.rows("SELECT * FROM outbox")[0]),
+        "CONFIRM_MESSAGE",
+        "Лично сверил исходящее сообщение",
+        "sent",
+    )
+    bot = SimpleNamespace(edit_message_text=AsyncMock(), send_message=AsyncMock())
+    await Notifications(store, bot).once()
+    assert "подтверждено владельцем" in bot.edit_message_text.call_args.args[0]
+    assert "подтверждено API" not in bot.edit_message_text.call_args.args[0]
+    bot.send_message.assert_not_called()

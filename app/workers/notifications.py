@@ -22,23 +22,23 @@ class Notifications:
             return
         await self.refresh_actions()
         # First completed sync establishes baseline: do not flood with historical orders.
-        if not self.store.setting("notifications:initialized", False):
-            if self.store.setting("sync:health", {}).get("status") != "OK":
-                return
+        initialized = self.store.setting("notifications:initialized", False)
+        if not initialized and self.store.setting("sync:health", {}).get("status") == "OK":
             with self.store.transaction() as db:
                 db.execute(
-                    "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT i.key,a.user_id,'BASELINE' FROM inbox i CROSS JOIN administrators a"
+                    "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT i.key,a.user_id,'BASELINE' FROM inbox i CROSS JOIN administrators a WHERE i.kind!='operation_uncertain'"
                 )
                 db.execute(
                     "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                     ("notifications:initialized", encode(True)),
                 )
-            return
+            initialized = True
         events = self.store.rows(
             "SELECT i.* FROM inbox i WHERE i.processed_at IS NOT NULL "
             "AND EXISTS (SELECT 1 FROM administrators a WHERE NOT EXISTS "
             "(SELECT 1 FROM notifications n WHERE n.event_key=i.key AND n.owner_id=a.user_id)) "
-            "ORDER BY i.received_at,i.key LIMIT 200"
+            + ("AND i.kind='operation_uncertain' " if not initialized else "")
+            + "ORDER BY i.received_at,i.key LIMIT 200"
         )
         owners = self.store.rows("SELECT user_id FROM administrators")
         for event in events:
@@ -60,6 +60,24 @@ class Notifications:
                 item = payload.get("item") or {}
                 text = f"🛒 <b>Заказ</b>\n{escape(item.get('name') or payload['id'])}\nСтатус: {escape(payload['status'])}\nСумма: {item.get('price', '?')} ₽"
                 markup = keyboard([[("Открыть заказ", "order:" + payload["id"])]])
+            elif event["kind"] == "operation_uncertain":
+                ident = payload["operation_id"]
+                current = self.store.rows("SELECT status FROM outbox WHERE id=?", (ident,))
+                if not current or current[0]["status"] != "UNCERTAIN":
+                    self.store.execute(
+                        "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT ?,user_id,'SKIPPED' FROM administrators",
+                        (event["key"],),
+                    )
+                    continue
+                text = (
+                    "⚠️ <b>Неопределённый результат операции</b>\n"
+                    + escaped(payload["kind"], 80)
+                    + "\nID: <code>"
+                    + escaped(ident, 100)
+                    + "</code>\n"
+                    + "Автоматического повтора нет. Откройте операцию и проверьте результат на Playerok."
+                )
+                markup = keyboard([[("🔎 Проверить операцию", "ops:show:" + ident)]])
             else:
                 self.store.execute(
                     "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) "
@@ -127,6 +145,13 @@ class Notifications:
                 f"<b>{name}:</b> {labels[latest['status']]}\nОперация: <code>{latest['operation_id']}</code>"
             )
             result = json.loads(latest["result"]) if latest["result"] else {}
+            if result and result.get("resolution_source") == "OWNER_DECISION":
+                state_label = (
+                    "повтор остановлен; внешний результат неизвестен"
+                    if result.get("decision") == "STOP_UNCERTAIN"
+                    else "подтверждено владельцем после сверки"
+                )
+                note = f"<b>{name}:</b> {state_label}\nОперация: <code>{latest['operation_id']}</code>"
             if latest["status"] == "SUCCEEDED" and result.get("message_id"):
                 note += "\nID ответа: " + escaped(result["message_id"], 100)
             text, markup = message_notice(json.loads(notification["payload"]), notification["chat_id"], note)

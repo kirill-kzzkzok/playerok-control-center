@@ -68,3 +68,34 @@ async def test_self_messages_do_not_starve_notifications_behind_batch_limit(stor
     await worker.once()
     assert bot.send_message.await_count == 1
     assert len(store.rows("SELECT * FROM notifications WHERE status='SKIPPED'")) == 201
+
+
+async def test_uncertain_operation_alert_does_not_wait_for_initial_sync_or_repeat(store):
+    store.set_setting("sync:health", {"status": "ERROR"})
+    Orders(store).ingest_message("chat", {"id": "history", "text": "old"})
+    ident = store.enqueue("reply", "reply", "chat", {"text": "private response"})
+    action = store.claim()
+    store.finish(ident, action["lease_token"], "UNCERTAIN", error="NETWORK_ERROR")
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=99)))
+    worker = Notifications(store, bot)
+    await worker.once()
+    await worker.once()
+    assert bot.send_message.await_count == 1
+    text = bot.send_message.call_args.args[1]
+    assert "Неопределённый" in text and ident in text
+    assert "private response" not in text and "old" not in text
+    assert not store.setting("notifications:initialized", False)
+    store.set_setting("sync:health", {"status": "OK"})
+    await worker.once()
+    assert bot.send_message.await_count == 1
+
+
+async def test_recovered_expired_action_emits_one_persistent_alert(store):
+    ident = store.enqueue("lost", "reply", "chat", {"text": "private response"})
+    store.claim(lease_seconds=-1)
+    assert store.recover() == 1
+    assert store.recover() == 0
+    events = store.rows("SELECT payload FROM inbox WHERE kind='operation_uncertain'")
+    assert len(events) == 1
+    assert ident in events[0]["payload"]
+    assert "private response" not in events[0]["payload"]

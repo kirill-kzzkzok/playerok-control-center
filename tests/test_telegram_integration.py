@@ -324,3 +324,52 @@ async def test_photo_reply_preview_requires_confirmation_and_survives_restart(tm
     finally:
         await bot.session.close()
         store.close()
+
+
+async def test_uncertain_resolution_ui_survives_restart_without_enabling_writes(tmp_path):
+    from app.database.store import now
+
+    class EvidenceAPI(CatalogAPI):
+        async def call(self, method, **kwargs):
+            assert method == "get_chat_messages"
+            self.calls.append((method, kwargs))
+            return {
+                "messages": [
+                    {"id": "verified", "text": "answer", "user": {"id": "seller"}, "created_at": now()}
+                ],
+                "page_info": {"has_next_page": False},
+            }
+
+    store = Store(tmp_path / "resolution-ui.sqlite")
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    api = EvidenceAPI()
+    ui = Interaction(bot, dispatcher(store, api))
+    state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
+    try:
+        await ui.message("/start")
+        ident = store.enqueue("uncertain", "reply", "chat", {"text": "answer"})
+        action = store.claim()
+        store.finish(ident, action["lease_token"], "UNCERTAIN", error="NETWORK_ERROR")
+        await ui.click("ops:list:UNCERTAIN:0")
+        await ui.click("ops:show:" + ident)
+        await ui.click("ops:confirm:" + ident)
+        assert await state.get_state() == "resolve:message"
+        await ui.message("verified")
+        await ui.message("Лично проверил ответ в нужном диалоге")
+        assert store.rows("SELECT status FROM outbox")[0]["status"] == "UNCERTAIN"
+        token = (await state.get_data())["resolution"]["nonce"]
+        ui.dp = dispatcher(store, api)
+        await ui.click("ops:apply:" + token)
+        await ui.click("ops:apply:" + token)
+        assert store.rows("SELECT status FROM outbox")[0]["status"] == "SUCCEEDED"
+        assert len(store.rows("SELECT * FROM operation_resolutions")) == 1
+        assert len(api.calls) == 2  # preview and fresh read before local decision
+        assert not api.account.writes_enabled
+        assert store.claim() is None
+        count = len(api.calls)
+        await ui.click("ops:show:" + ident, owner=8)
+        assert len(api.calls) == count and session.calls[-1].text == "Доступ закрыт"
+    finally:
+        await bot.session.close()
+        store.close()

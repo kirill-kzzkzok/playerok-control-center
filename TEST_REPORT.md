@@ -183,3 +183,26 @@ SHA in data/chat_image_contract_check.json. No live temporary upload, message or
 operation was performed. v5 local migration backed up first; schema 1–5, 217 orders,
 1 owner preserved (data/chat_images_migration_check.json). Photo UI handles one image per
 confirmed reply; automatic Telegram album aggregation remains outside this checkpoint.
+
+
+## PHASE 4 — UNCERTAIN resolution checkpoint (2026-10-30)
+
+**243 passed in 31.20s**, JUnit data/phase4_resolution_results.xml; Ruff/pip check clean.
+test_reconciliation.py covers positive read evidence, wrong sender/text/date/deletion/
+image count, bounded negative search without resend, owner/snapshot guards, transactional
+delivery confirmation, rollback on storage failure, quarantine after STOP_UNCERTAIN,
+read-state refresh, racing independent SQLite connections, preserved photo evidence and
+upgrade backfill exactly once. Evidence omits private message/stock text.
+
+Real Dispatcher/FSM test covers preview, owner comment, restart, separate confirmation,
+duplicate click and foreign callback with writes disabled. Notifications tests prove
+alerts are independent of initial sync, durable recovery deduplication, manual outcome
+labelled as owner decision, and suppression of a resolved alert before send. No real
+Telegram/Playerok messages or resolutions were performed.
+
+Local migration v6: backed up first; schema 1–6, 217 orders and 1 owner preserved,
+0 UNCERTAIN/0 decisions (data/resolution_migration_check.json). No external requests.
+Positive photo evidence verifies count only; file contents require owner inspection.
+Other mutations cannot be declared successful here. STOP_UNCERTAIN preserves unknown
+external outcome and blocks automatic replay; inventory/photos remain quarantined/protected.
+WebSocket, complete order cards/actions and later specification phases remain pending.
