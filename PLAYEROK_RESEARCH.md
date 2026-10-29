@@ -178,3 +178,15 @@ and data/chat_image_contract_check.json. Current raw SHA256:
 Raw bytes differ from the older snapshot; the fields used here were inspected again.
 This confirms published client usage, not live successful sending or idempotency.
 No authenticated temporary uploads, buyer messages, withdrawals or paid operations performed.
+
+
+## WebSocket — 2026-10-30 MSK
+
+The current [official application bundle](https://playerok.com/_next/static/chunks/pages/_app-81aa885e88a4fc68.js) contains
+wss://ws.playerok.com/graphql, graphql-transport-ws, connectionParams x-gql-op/path/timezone
+and chatUpdated/chatMarkedAsRead/userUpdated subscriptions. PartialUserProfile on
+UserProfile spreads User and UserFragment fragments: direct id on the union is invalid.
+Server validation independently confirmed that (data/ws_schema_probe.json). Minimal
+inline-fragment subscriptions then stayed connected for 45 seconds and received JSON
+pong (data/ws_heartbeat_fixed_probe.json). No buyer event delivery was verified,
+no messages or mutations were sent. Source inspected lexically, never executed.

@@ -387,3 +387,51 @@ mutations=0. Upgrade также backfill-ит безопасные событи�
 Live-отправки покупателям, изменение рабочих лотов и платные операции не выполнялись.
 
 Контрольная точка: **243 passed in 31.20s**; Ruff/pip check/secret scan чистые; JUnit data/phase4_resolution_results.xml.
+
+
+## PHASE 4 — WebSocket и сохраняемые сигналы сверки (2026-10-30)
+
+Добавлен aiohttp graphql-transport-ws с TLS verification, фиксированным endpoint
+wss://ws.playerok.com/graphql и защитой redirect через middleware: cookie не уходит
+на другой URL. Размер frame ограничен 1 МБ. Сырые frames/headers/error bodies не
+пишутся в логи. Используются read-only подписки chatUpdated/chatMarkedAsRead/userUpdated,
+уникальные UUID IDs, handshake deadline, JSON ping/pong и cancellable reconnect с
+backoff/jitter. При 401/403/429 выдерживается минимум 300 секунд; при protocol rejection
+минимум 60. Другие ошибки тоже имеют ограниченную частоту повторов.
+
+WebSocket сообщает только hint. До API await он сохраняется в sync_requests (v7):
+kind/target/revision/completed_revision, без текста покупателя. Повторные hints
+объединяются; новый revision во время API-запроса не теряется. ACK/reconnect/обрыв
+создают catchup request. Адресная сверка читает текущий чат/сообщения или сделку,
+канонические записи идут через прежний durable inbox. Ошибки имеют сохраняемый backoff;
+неполная сделка не мешает другому чату. Обычный периодический обход истории продолжает
+работать независимо от WebSocket. catchup означает ограниченный цикл, а не доказательство
+полноты истории: BACKFILL остаётся видимым до окончания первой загрузки.
+
+Live read-only выявил несовместимость: первоначальная полная vendor-подписка закрылась
+кодом 4500. Изоляция минимальных запросов обнаружила, что userUpdated возвращает union
+UserProfile: id выбирается через ... on User / ... on UserFragment. Это подтверждено
+официальным bundle и серверной диагностикой, исправлено. У aiohttp обнаружен ещё один
+важный случай: нативные ping могут продлевать внутренний receive timeout. Внешний
+asyncio deadline обеспечивает реальную проверку JSON pong; добавлен regression test.
+
+После исправлений реальное соединение выдержало 45 секунд, connection_ack и pong
+получены, ошибок подписок за окно не было: data/ws_heartbeat_fixed_probe.json.
+Новые события покупателей не создавались и не получены: events_verified=false.
+Отправок/выдач/платных mutations нет. Предыдущие неудачные пробы сохранены отдельно,
+не заменяются утверждением о полной live-приёмке потока событий.
+
+v7 применена после backup before-realtime-v7, 217 заказов и 1 владелец сохранены.
+Реальный сохранённый catchup обработан отдельным bounded read-only циклом: errors={},
+queue pending=0, health BACKFILL/chat_backlog=46; data/live_realtime_catchup_readonly.json.
+Это не полная историческая сверка. Бот постоянно не запускался, проверки закончены.
+Параметр PLAYEROK_REALTIME_ENABLED (default true) позволяет отключить ускоритель,
+не выключая API polling. Диагностика показывает состояние сокета и очередь сверки.
+
+Полный suite: **256 passed in 35.26s**; Ruff/pip check чистые, JUnit
+ data/phase4_realtime_results.xml. Проверены настоящий локальный aiohttp handshake,
+redirect guard, ping deadlines, stop/cancellation, повтор подключения, durable restart,
+coalescing, revision race, backoff и неполные ответы. Далее в PHASE 4 остаются полные
+карточки/действия заказов; PHASE 5–9 и общая приёмка сохраняют исходный объём.
+
+Финальная проверка realtime: format check и secret scan чистые; приватные .env/PROJECT_SPEC.md и data исключены из Git.

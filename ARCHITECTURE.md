@@ -202,3 +202,32 @@ Store.finish/recover создают operation_uncertain inbox в той же т�
 закрытые события получают SKIPPED. Cleanup сохраняет файлы MANUALLY_STOPPED_UNCERTAIN
 для последующей сверки; резерв не возвращается в AVAILABLE. OperationsPanel использует
 SQLite FSM/nonce и отдельное подтверждение. Все разрешения локальные, mutations отсутствуют.
+
+
+## WebSocket accelerator и sync_requests (v7)
+
+Realtime имеет фиксированный WSS endpoint и три минимальные subscriptions из текущего
+контракта официального клиента. UserProfile является union, поэтому userUpdated.id
+получается через inline fragments User/UserFragment. В теле подписок нет mutations,
+текстов ответов и данных выдачи. Origin middleware проверяет каждый handshake request,
+включая redirects. TLS verification включена, max frame=1 МБ, cookie jar выключен.
+
+Сообщения сокета не становятся заказами и не запускают выдачу. Сначала сохраняется
+coalesced sync_requests revision по chat/deal/catchup, затем выставляется asyncio wake.
+Synchronizer обрабатывает до 8 адресных requests за проход под общим lock; API ответы
+проходят прежние проверки/envelope и durable inbox. completed_revision записывается
+после сохранения канонических данных, поэтому сигнал, пришедший во время await,
+остаётся pending. Ошибки/Retry-After сохраняют not_before и не блокируют другие цели.
+
+Периодические full-pass chunks имеют отдельный monotonic deadline и не заменяются
+WS hints. После ACK и обрыва запрашивается ограниченный catchup cycle; завершение этого
+request не означает, что закончена вся история. API polling, cursors и BACKFILL сохраняют
+свою семантику. Глобальные подписки ускоряют обнаружение, но мгновенная доставка каждого
+события и наличие server replay не предполагаются. Перечитывание страниц и дедупликация
+в inbox обязательны. Сырой WS payload не хранится; сохраняется только запрос сверки.
+
+Сокет имеет handshake timeout, application ping/pong deadline поверх aiohttp.receive
+(его внутренний таймер может продлеваться native ping), backoff/jitter и корректную
+отмену всех child tasks. Health/queue сохранены в SQLite и доступны в диагностике.
+PLAYEROK_REALTIME_ENABLED=false отключает сокет, сохраняя API polling. Зависимость
+прямо объявлена aiohttp>=3.14,<4, установленная версия уже включена в requirements.lock.

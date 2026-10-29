@@ -19,6 +19,7 @@ class Config:
     writes_enabled: bool = False
     database_path: Path = Path("data/control_center.sqlite3")
     first_start_claim: bool = False
+    realtime_enabled: bool = True
 
     @classmethod
     def load(cls, path: str = ".env"):
@@ -56,6 +57,7 @@ class Config:
             values.get("PLAYEROK_WRITES_ENABLED", "false").lower() == "true",
             Path(values.get("DATABASE_PATH") or "data/control_center.sqlite3"),
             values.get("FIRST_START_CLAIM", "false").lower() == "true",
+            values.get("PLAYEROK_REALTIME_ENABLED", "true").lower() == "true",
         )
 
     def require_owner(self):

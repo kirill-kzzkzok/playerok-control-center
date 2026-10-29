@@ -494,6 +494,10 @@ def create_router(store, api, products, synchronizer):
                 text = (
                     "🩺 <b>Диагностика</b>\nСверка: "
                     + escape(str(health))
+                    + "\nWebSocket: "
+                    + escaped(store.setting("realtime:health", {"status": "NOT_STARTED"}), 400)
+                    + "\nАдресная сверка: "
+                    + escaped(store.setting("realtime:reconciliation", {}), 200)
                     + "\n\n"
                     + "\n".join(
                         escape(f"{a['kind']}: {a['status']} · {a['error_code'] or ''}") for a in actions

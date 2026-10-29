@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import random
+import time
 
 from app.database.store import encode, now
 from app.playerok.adapter import APIError, validate_page
@@ -16,6 +17,86 @@ class Synchronizer:
         self.pages_per_stream, self.chats_per_cycle = pages_per_stream, chats_per_cycle
         self.health = {"status": "NOT_STARTED"}
         self.lock = asyncio.Lock()
+        self.wake = asyncio.Event()
+
+    def request(self, kind, target):
+        if (
+            kind not in {"chat", "deal", "catchup"}
+            or not isinstance(target, str)
+            or not target
+            or len(target) > 100
+        ):
+            raise ValueError("Некорректный сигнал сверки")
+        self.store.execute(
+            "INSERT INTO sync_requests(key,kind,target,updated_at) VALUES(?,?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET revision=revision+1,updated_at=excluded.updated_at",
+            (kind + ":" + target, kind, target, now()),
+        )
+        self.wake.set()
+
+    async def process_requests(self, limit=8):
+        async with self.lock:
+            requests = self.store.rows(
+                "SELECT * FROM sync_requests WHERE revision>completed_revision AND not_before<=? "
+                "ORDER BY updated_at,key LIMIT ?",
+                (time.time(), limit),
+            )
+            for request in requests:
+                try:
+                    kind, target = request["kind"], request["target"]
+                    if kind == "catchup":
+                        await self._once()
+                        if self.health["status"] == "ERROR":
+                            raise APIError("RECONCILE_PARTIAL")
+                    elif kind == "deal":
+                        deal = await self.api.call("get_deal", id=target)
+                        if deal.get("id") != target or deal.get("direction") not in {"IN", "OUT"}:
+                            raise APIError("DEAL_ID_OR_DIRECTION_MISMATCH")
+                        if deal.get("direction") == "OUT":
+                            self.orders.ingest(deal)
+                    else:
+                        chat = await self.api.call("get_chat", chat_id=target)
+                        if chat.get("id") != target:
+                            raise APIError("CHAT_ID_MISMATCH")
+                        self.ingest_chat(chat)
+                        _, complete = await self.scan(
+                            "messages:" + target,
+                            "get_chat_messages",
+                            "messages",
+                            lambda message, chat_id=target: self.orders.ingest_message(chat_id, message),
+                            chat_id=target,
+                        )
+                        self.store.execute(
+                            "UPDATE sync_chats SET initial_complete=MAX(initial_complete,?),last_synced_at=?,error_code=NULL WHERE id=?",
+                            (int(complete), now(), target),
+                        )
+                except (APIError, ValueError, KeyError, TypeError) as error:
+                    failures = request["failures"] + 1
+                    code = error.code if isinstance(error, APIError) else "SYNC_REQUEST_SCHEMA_ERROR"
+                    delay = min(900, 5 * 2 ** min(failures, 8))
+                    retry_after = getattr(error, "retry_after", None)
+                    if isinstance(retry_after, (str, int)) and str(retry_after).isdigit():
+                        delay = max(delay, int(retry_after))
+                    self.store.execute(
+                        "UPDATE sync_requests SET failures=?,not_before=?,error_code=? WHERE key=?",
+                        (
+                            failures,
+                            time.time() + delay,
+                            code,
+                            request["key"],
+                        ),
+                    )
+                else:
+                    # Signals arriving during API awaits retain a higher revision.
+                    self.store.execute(
+                        "UPDATE sync_requests SET completed_revision=MAX(completed_revision,?),failures=0,not_before=0,error_code=NULL WHERE key=?",
+                        (request["revision"], request["key"]),
+                    )
+            pending = self.store.rows(
+                "SELECT COUNT(*) AS n FROM sync_requests WHERE revision>completed_revision"
+            )[0]["n"]
+            self.store.set_setting("realtime:reconciliation", {"pending": pending, "at": now()})
+            return len(requests)
 
     async def scan(self, key, method, collection, ingest, **kwargs):
         """Poll the head, then resume a bounded history pass. Never infer cursor ordering.
@@ -135,15 +216,23 @@ class Synchronizer:
 
     async def run(self, stop):
         failures = 0
+        next_full = 0
         while not stop.is_set():
+            self.wake.clear()
             try:
-                await self.once()
-                failures = failures + 1 if self.health["status"] == "ERROR" else 0
+                if time.monotonic() >= next_full:
+                    await self.once()
+                    failures = failures + 1 if self.health["status"] == "ERROR" else 0
+                    next_full = time.monotonic() + min(900, 60 * 2 ** min(failures, 4)) + random.uniform(0, 5)
+                processed = await self.process_requests()
+                if processed == 8:
+                    self.wake.set()
             except APIError as error:
                 failures += 1
                 self.health = {"status": "ERROR", "code": error.code, "at": now()}
                 self.store.set_setting("sync:health", self.health)
                 logging.getLogger(__name__).warning("Synchronization failed: %s", error.code)
+                next_full = time.monotonic() + min(900, 60 * 2 ** min(failures, 4))
             except Exception as error:  # noqa: BLE001 -- isolate worker failure, persist health and back off
                 failures += 1
                 self.health = {"status": "ERROR", "code": "SYNC_SCHEMA_OR_STORAGE_ERROR", "at": now()}
@@ -151,8 +240,27 @@ class Synchronizer:
                 logging.getLogger(__name__).error(
                     "Synchronization stopped for this cycle: %s", type(error).__name__
                 )
-            delay = min(900, 60 * 2 ** min(failures, 4)) + random.uniform(0, 5)
+                next_full = time.monotonic() + min(900, 60 * 2 ** min(failures, 4))
+            pending = self.store.rows(
+                "SELECT MIN(not_before) AS due FROM sync_requests WHERE revision>completed_revision"
+            )[0]["due"]
+            delay = max(
+                1,
+                min(
+                    60,
+                    next_full - time.monotonic(),
+                    (max(1, pending - time.time()) if pending is not None else 60),
+                ),
+            )
+            tasks = [asyncio.create_task(stop.wait()), asyncio.create_task(self.wake.wait())]
             try:
-                await asyncio.wait_for(stop.wait(), timeout=delay)
-            except TimeoutError:
-                continue
+                await asyncio.wait(tasks, timeout=delay, return_when=asyncio.FIRST_COMPLETED)
+                if not stop.is_set() and self.wake.is_set():
+                    try:
+                        await asyncio.wait_for(stop.wait(), timeout=1)
+                    except TimeoutError:
+                        pass
+            finally:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)

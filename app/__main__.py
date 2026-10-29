@@ -24,6 +24,7 @@ from app.telegram.storage import SQLiteStorage
 from app.workers.cleanup import UploadCleanup
 from app.workers.notifications import Notifications
 from app.workers.outbox import Executor, OutboxWorker
+from app.workers.realtime import Realtime
 from app.workers.sync import Synchronizer
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,10 @@ async def run(config):
         tasks.append(asyncio.create_task(Notifications(store, bot).run(stop), name="notifications"))
         if account.id:
             tasks.append(asyncio.create_task(sync.run(stop), name="playerok-sync"))
+            if config.realtime_enabled:
+                tasks.append(
+                    asyncio.create_task(Realtime(store, account, sync).run(stop), name="playerok-realtime")
+                )
         if config.writes_enabled:
             worker = OutboxWorker(store, Executor(store, api, products))
             tasks.append(asyncio.create_task(outbox_loop(worker, stop), name="outbox"))

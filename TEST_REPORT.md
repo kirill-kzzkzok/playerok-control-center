@@ -206,3 +206,28 @@ Positive photo evidence verifies count only; file contents require owner inspect
 Other mutations cannot be declared successful here. STOP_UNCERTAIN preserves unknown
 external outcome and blocks automatic replay; inventory/photos remain quarantined/protected.
 WebSocket, complete order cards/actions and later specification phases remain pending.
+
+
+## PHASE 4 — realtime checkpoint (2026-10-30)
+
+**256 passed in 35.26s**, JUnit data/phase4_realtime_results.xml; Ruff/pip check clean.
+test_realtime.py covers scoped subscribe frames, no mutation queries, hint coalescing,
+raw-message omission, invalid/foreign events, missing pong and absolute timeout despite
+native transport activity, cancellation/resource cleanup, durable restart, revision
+change during API await, request backoff/fairness, partial schema failure and reconnect.
+An actual local aiohttp server exercises the client handshake and redirect guard;
+credentials are never sent to the redirect handler. Other Telegram/operation tests pass.
+
+Live probes were read-only: first vendor query attempt closed 4500; isolated minimal
+userUpdated returned a union-field validation error (data/ws_schema_probe.json).
+Inline fragments fixed that. A 45-second probe after the outer heartbeat-deadline fix
+received connection_ack and JSON pong, with no subscription error in the observation
+window (data/ws_heartbeat_fixed_probe.json). TimeoutError is the intentional end of the
+bounded probe, not a claim of server failure. New buyer events were not induced or
+received: events_verified=false, mutations=0, telegram_sends=0. Do not claim full event
+flow acceptance from an idle connection. Earlier failed probes remain available.
+
+Local v7 migration followed backup; 217 orders/1 owner preserved. A real durable catchup
+request ran bounded API reads with errors={}, pending=0, BACKFILL/backlog=46; evidence
+ data/live_realtime_catchup_readonly.json. This proves processing of the request, not
+complete historical coverage. No bot was left polling after the probes.
