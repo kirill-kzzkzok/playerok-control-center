@@ -49,3 +49,7 @@ urllib3==2.8.0
 websocket-client==1.9.2
 wrapper-tls-requests==1.2.5
 yarl==1.25.1
+Telethon==1.45.0
+pyaes==1.6.1
+rsa==4.9.1
+pyasn1==0.6.5

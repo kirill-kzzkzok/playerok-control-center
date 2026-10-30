@@ -1,5 +1,55 @@
 # Проверки
 
+## Telegram Gifts integration — 2026-10-30
+
+ZIP изучен и переработан вручную, apply.py не выполнялся. Первый gift запуск:
+6 failures/28 pass из-за отсутствующего API lock в mock fixture; после исправления
+34 passed. Расширенные проверки53 и60 passed; отдельный compatibility slice88 passed.
+Полные срезы783/116.83s,813/117.97s,815/121.09s. Последний целевой набор после
+усиления private-error boundary:87 passed/19.85s. Финальный результат см. ниже.
+
+Тесты: настоящий aiogram Dispatcher, SQLiteStorage/временная WAL, общий
+OutboxWorker/Executor/Fulfillment, настоящие TL types/requests Telethon с локальным
+transport. Refund отдельно проходит SafeAccount permit, mock HTTP updateDeal и
+независимый get_deal. Это не реальный возврат или отправка Telegram.
+
+| Обязательный сценарий | Доказательство в tests/test_gifts.py |
+|---|---|
+| PAID → верный подарок/получатель → receipt → notice → legacy SENT | shared_outbox_success_receipt_notice_and_automatic_completion |
+| Несуществующий/некорректный username, окончательный RPC отказ | definitive_username_failure_refund_or_honest_manual_fallback |
+| Формат/нет поля/канал/смена username | preflight_failures_never_spend_or_refund |
+| Exact receiving field, без comment/Playerok/automation fallback | exact_receiving_field_only_no_label_comment_or_automation_fallback |
+| FloodWait/timeout/auth/network не означают invalid username | transient_mtproto_failures + preflight temporary |
+| Недостаточно Stars / подарок исчез / цена изменилась / неверная форма | preflight balance/catalog/price/form_price |
+| Запрет получения подарков | receiver_privacy_blocks_before_payment |
+| Duplicate PAID / параллельные workers | duplicate_paid_and_concurrent_outbox_workers_charge_once |
+| Одновременные заказы, paid lock, безопасный явный recheck | two_concurrent_orders_payment_lock_and_explicit_safe_retry |
+| Суточный бюджет | two_orders_and_daily_limit_persist |
+| Рестарт при resolve / до и после paid dispatch | restart_during_recipient_check + expired_lease_restart + cancellation_at_paid_boundary |
+| Потеря ACK после списания / read-only сверка без новой формы | lost_payment_ack_restart_reconcile_without_second_form_or_refund |
+| PaymentResult не является квитанцией доставки | payment_ack_alone_is_not_delivery_evidence (5 вариантов) |
+| Смена личной сессии | account_switch_blocks_payment_and_receipt_adoption |
+| Refund success/unsupported/off/lost ACK | definitive_username_failure + refunds_need_separate_permission + lost_refund_ack |
+| Native refund admission / permit / HTTP / readback | production_refund_admission_contract + real_playerok_refund_permit_http_and_independent_readback |
+| Ошибка buyer notice не повторяет подарок | notice_failure_does_not_repeat_gift |
+| Остановка во время подготовки / правка описания | preflight stop + description_edit_queue_stops_gifts_before_remote_write |
+| Конфликт склада и подарков | stock_and_gifts_exclude_each_other |
+| Реальный Dispatcher: bind/price CAS/FSM restart/limits/arm/stop/access/reconcile | dispatcher_* tests |
+| Старые100+ jobs не блокируют новые уведомления | followups_dont_starve_after_one_hundred_completed_orders |
+| Read-only transport / private errors / старый secret input FSM | read_only_sender + raw_mtproto_valueerror + gift_order_navigation tests |
+
+Безопасные live reads: свежая схема Playerok и официальный JS rollback HTTP200 с
+совпавшими hash (data/gifts_readonly_schema.json, data/gifts_refund_contract.json).
+Личных API credentials/session нет: MTProto reads/платежи/refunds/buyer sends не
+выполнялись. Отдельный Bot API catalog probe пропущен из-за custom proxy; это
+не проверка и не ошибка личного MTProto.
+
+Копия рабочей DB18→21: counts/integrity/FK/reopen OK, нет enabled gifts/jobs; source
+не менялась (data/gifts_migration_check.json). Selfcheck102 imports/schema21,
+backup/reopen/images OK. pip check/Ruff чистые. Actual-secret/JWT scan221 tracked/
+candidate files:0 утечек; .env/spec/session ignored; старые значения .env сохранены,
+добавлены безопасные Gifts defaults. Все допуски false. Настройка:README_GIFTS.md.
+
 Начальное состояние: тестов и исходников в рабочем репозитории не было.
 Результаты добавляются после фактических запусков, не по наличию кода.
 
@@ -955,3 +1005,6 @@ audit_followup_cleanup_before.xml. До исправления квитанци�
 data/audit_followup_full_results.xml. Ruff160 files и pip check clean; реальные
 секреты/JWT в tracked/unignored files не обнаружены, runtime flagsfalse.
 Подробности FA2 в FUNCTIONAL_AUDIT.md. Все проверки локальные; новых live writes нет.
+
+
+Gifts final checkpoint (2026-10-30):816 passed in124.39s; data/gifts_full_final.xml. Final relevant Dispatcher/receipt/audit slice87 passed19.85s (67 gift cases). Ruff check/format181 files, pip check, source selfcheck and isolated installed-wheel selfcheck102 imports/schema21 all pass. Wheel includes catalog.json and migration021; initial --no-build-isolation attempt lacked setuptools, normal isolated build succeeded (no project/runtime change). Migration18→21 verified only on private temporary DB copy, original rows/integrity/FK/reopen preserved. Actual-secret/JWT scan clean, old .env values unchanged, all write/automation/gift-payment/gift-refund permissions false. Public schema and official rollback UI contract re-read without mutations. Personal MTProto credentials/session absent: real catalog/balance/payment/delivery/refund/customer notices/auto-SENT remain LIVE UNVERIFIED. Playerok receiving username is optional at checkout; app requires exact field and fails closed. Scope complete for local integration; next action is owner-local authorization and separately approved one-real-gift acceptance, not another development phase. Setup/limitations:README_GIFTS.md.

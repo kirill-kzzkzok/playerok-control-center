@@ -1,5 +1,26 @@
 # Playerok Control Center — проверка требований
 
+## Telegram Gifts — локальная интеграция, live gate открыт (2026-10-30)
+
+Добавлены общий Outbox payment/refund/notice pipeline, schema21, personal Telethon,
+строгий receiving-field/resolveUsername, независимый gift receipt, бюджеты,
+восстановление UNKNOWN, исключение склада, owner Dispatcher/FSM и отдельный
+opt-in legacy auto-SENT. Каталог ZIP — только seed; стоимость/ограничения читаются
+перед покупкой. Локальные TL/mock-HTTP проверки не доказывают live-доставку.
+
+Read-only Playerok: способ «Подарок» и точный OBTAINING_DATA username ID подтверждены;
+required=false — обязательность checkout НЕ закрыта. Приложение запрещает покупку
+без значения. Официальный JS повторно получен HTTP200 и подтвердил seller OUT /
+active / non-system rollback через updateDeal ROLLED_BACK. Адаптер допускает только
+консервативный USER/PAID subset; нужны отдельный допуск и независимый readback.
+
+Личный API ID/hash/session отсутствуют. Баланс/каталог личного MTProto, покупка,
+доставка, buyer notice, реальный refund и auto-SENT этой интеграцией НЕ приняты live.
+Реальных расходов/buyer sends/возвратов0. Global writes/automation/gift payments/
+gift refunds остаются false; рабочая SQLite не мигрировалась, только копия18→21.
+Существующая live-приёмка управления лотами этим этапом не расширяется.
+Настройка и необходимые разрешения одного теста: README_GIFTS.md.
+
 Состояние: 30.10.2026. Это карта доказательств, не акт полной приёмки.
 Рабочая конфигурация: writes=false, automation=false; платные операции запрещены.
 По последнему указанию пользователя любые новые live-записи требуют отдельного разрешения.
@@ -408,3 +429,6 @@ P2 и live stock acceptance. Матрица46 функций/доказател�
 выдача постоянного текста блокируется поздней локально сохранённой server problem;
 operation receipts защищены от menu edit и interface cleanup/stale snapshot.
 Новых live-критериев не закрывает. См.FUNCTIONAL_AUDIT.md FA2.
+
+
+Gifts offline acceptance:816 full pytest +87 relevant checks passed; Ruff/dependencies/packaged selfcheck/schema21/secret scan pass. These close local integration checks only. Personal-account login and live send/refund/fulfillment gates above remain open. All runtime permissions remain OFF.

@@ -26,6 +26,13 @@ class DeliveryChains:
             raise ValidationError("Политика автоматики выключена или имеет ручной режим")
         item_id = order["item"]["id"]
         with self.store.transaction() as db:
+            if (
+                db.execute("SELECT 1 FROM gift_jobs WHERE order_id=?", (ident,)).fetchone()
+                or db.execute(
+                    "SELECT 1 FROM gift_listings WHERE item_id=? AND enabled=1", (item_id,)
+                ).fetchone()
+            ):
+                raise Conflict("Для этого заказа/лота уже настроена подарочная выдача")
             existing = db.execute(
                 "SELECT order_id FROM delivery_chains WHERE order_id=?", (ident,)
             ).fetchone()

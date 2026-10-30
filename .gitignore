@@ -10,5 +10,9 @@ __pycache__/
 .ruff_cache/
 data/
 logs/
+*.session
+*.session-journal
+*.session-wal
+*.session-shm
 *.egg-info/
 build/

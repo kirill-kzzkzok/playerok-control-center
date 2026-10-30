@@ -24,9 +24,9 @@ class OrdersPanel:
         if not 0 <= page <= 100000:
             raise Conflict("Страница недоступна")
         rows = self.store.rows(
-            "SELECT o.id,o.payload FROM orders o WHERE o.status='PAID' AND EXISTS("
+            "SELECT o.id,o.payload FROM orders o WHERE o.status='PAID' AND (EXISTS("
             "SELECT 1 FROM outbox b WHERE b.target=o.id AND b.status='SUCCEEDED' AND (b.kind='delivery_text' OR "
-            "(b.kind='delivery' AND EXISTS(SELECT 1 FROM reservations r JOIN inventory i ON i.id=r.inventory_id WHERE r.order_id=o.id AND i.status='DELIVERED')))) ORDER BY o.created_at DESC,o.id DESC LIMIT 11 OFFSET ?",
+            "(b.kind='delivery' AND EXISTS(SELECT 1 FROM reservations r JOIN inventory i ON i.id=r.inventory_id WHERE r.order_id=o.id AND i.status='DELIVERED')))) OR EXISTS(SELECT 1 FROM gift_jobs g WHERE g.order_id=o.id AND g.state='SUCCEEDED' AND g.receipt IS NOT NULL)) ORDER BY o.created_at DESC,o.id DESC LIMIT 11 OFFSET ?",
             (page * 10,),
         )
         buttons = []
@@ -42,7 +42,7 @@ class OrdersPanel:
         if nav:
             buttons.append(nav)
         return "📦 <b>Выдано — ожидает подтверждения</b>\n" + (
-            "Отправка подтверждена, но серверный статус заказа ещё PAID. Проверьте результат перед личным подтверждением выполнения. Автоматический SENT выключен."
+            "Отправка подтверждена, но серверный статус заказа ещё PAID. Проверьте результат и способ Fulfillment. Авто-SENT подарков требует отдельного разрешения и подтверждения доставки."
             if rows
             else "Таких заказов нет."
         ), keyboard(buttons)
@@ -101,6 +101,10 @@ class OrdersPanel:
         operation = self.store.rows(
             "SELECT id,status FROM outbox WHERE operation_key=?", ("delivery:" + ident,)
         )
+        gifts = self.store.rows("SELECT state,refund_state FROM gift_jobs WHERE order_id=?", (ident,))
+        gift_listing = self.store.rows(
+            "SELECT enabled FROM gift_listings WHERE item_id=? AND enabled=1", (item["id"],)
+        )
         history_count = self.store.rows("SELECT COUNT(*) AS n FROM order_history WHERE order_id=?", (ident,))[
             0
         ]["n"]
@@ -121,6 +125,8 @@ class OrdersPanel:
             text += "\nЗаметка: " + escaped(annotation["note"], 500)
         if operation:
             text += "\nВыдача: " + escaped(operation[0]["status"], 50)
+        if gifts:
+            text += f"\nПодарочная выдача: {gifts[0]['state']} · возврат: {gifts[0]['refund_state']}"
         text += "\n\nSENT означает отметку продавца о выполнении. Окончательное подтверждение — действие покупателя."
         rows = []
         chat = (order.get("chat") or {}).get("id")
@@ -128,9 +134,12 @@ class OrdersPanel:
             rows.append([("💬 Диалог", "chat:" + chat), ("✉️ Написать", "reply:" + chat)])
         if not cached and order["status"] == "PAID":
             rows.append([("✅ Я выполнил заказ", "ff:start:" + ident)])
-            if not operation:
+            if not operation and not gifts and not gift_listing:
                 rows.append([("📦 Выдать из запаса", "od:prepare:" + ident)])
-            rows.append([("➕ Добавить уникальные коды", "od:stock:" + ident)])
+            if not gifts and not gift_listing:
+                rows.append([("➕ Добавить уникальные коды", "od:stock:" + ident)])
+        if gifts:
+            rows.append([("🎁 Подарок / сверка / возврат", "gft:job:" + ident)])
         if operation:
             rows.append([("Операция выдачи", "ops:show:" + operation[0]["id"])])
         rows.extend(

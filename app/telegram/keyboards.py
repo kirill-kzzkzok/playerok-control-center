@@ -18,6 +18,7 @@ def main_menu():
             [("🛒 Заказы", "orders"), ("💬 Сообщения", "chats")],
             [("⚡ Автоматизация", "automation"), ("⚙️ Настройки", "settings")],
             [("💾 Черновики", "drafts"), ("🩺 Диагностика", "diagnostics")],
+            [("🎁 Telegram-подарки", "gft:home")],
             [("🧾 Результаты операций", "result:list:0"), ("📦 Выдано — подтвердить", "delivered:0")],
         ],
         home=False,

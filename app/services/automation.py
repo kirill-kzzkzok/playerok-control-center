@@ -127,6 +127,13 @@ class Automation:
         }
 
     def status_text(self, ident):
+        if self.store.rows("SELECT 1 FROM gift_listings WHERE item_id=?", (ident,)):
+            from app.gifts.service import GiftService
+            from app.gifts.settings import GiftSettings
+
+            return GiftService(
+                self.store, self.api, getattr(self.api, "gift_settings", None) or GiftSettings.load()
+            ).status_text(ident)
         v = self.readiness(ident)
         mode = {"manual": "Ручной", "text": "Постоянный текст", "stock": "Уникальный запас"}[v["mode"]]
         text = f"⚡ Автоматизация: {v['status']}\nДействующий режим: {mode} · политика v{v['revision']}"
@@ -152,6 +159,13 @@ class Automation:
             raise Conflict("Состояние лота больше не разрешает возобновление")
         with self.store.transaction() as db:
             row = db.execute("SELECT revision FROM delivery_policies WHERE item_id=?", (ident,)).fetchone()
+            if (
+                policy.enabled
+                and db.execute(
+                    "SELECT 1 FROM gift_listings WHERE item_id=? AND enabled=1", (ident,)
+                ).fetchone()
+            ):
+                raise Conflict("Сначала остановите подарочную выдачу для этого лота")
             revision = row[0] if row else 0
             if revision != expected:
                 raise Conflict("Настройки изменились в другом сценарии. Откройте их заново")

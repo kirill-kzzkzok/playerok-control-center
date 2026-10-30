@@ -13,6 +13,8 @@ from aiogram.fsm.strategy import FSMStrategy
 
 from app.config import Config, ConfigurationError
 from app.database.store import Store
+from app.gifts.settings import GiftSettings
+from app.gifts.worker import GiftWorker
 from app.playerok.adapter import APIError, Playerok, SafeAccount
 from app.playerok.thread_calls import begin_close_calls, close_calls
 from app.security.access import OwnerMiddleware
@@ -133,6 +135,14 @@ async def run(config):
                 tasks.append(
                     supervisor.start("delivery-chains", lambda: ChainWorker(store, api).run(stop), stop)
                 )
+                settings = getattr(api, "gift_settings", None) or GiftSettings.load()
+                tasks.append(
+                    supervisor.start(
+                        "telegram-gifts",
+                        lambda: GiftWorker(store, api, settings, api.gift_sender).run(stop),
+                        stop,
+                    )
+                )
             worker = OutboxWorker(store, Executor(store, api, products))
             tasks.append(supervisor.start("outbox", lambda: outbox_loop(worker, stop), stop))
         logger.info(
@@ -155,6 +165,8 @@ async def run(config):
         await asyncio.gather(*tasks, return_exceptions=True)
         # Cancelling a waiter cannot interrupt synchronous HTTP or its thread-side guards.
         await close_calls(api)
+        if getattr(api, "gift_sender", None):
+            await api.gift_sender.close()
         await bot.session.close()
         account.close()
         store.close()
@@ -163,7 +175,7 @@ async def run(config):
 def main():
     try:
         config = Config.load()
-        configure_logging([config.telegram_token, config.playerok_header])
+        configure_logging([config.telegram_token, config.playerok_header, GiftSettings.load().api_hash])
         config.require_owner()
         with InstanceLock(str(config.database_path) + ".lock"):
             asyncio.run(run(config))

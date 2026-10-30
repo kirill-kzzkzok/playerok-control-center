@@ -1,0 +1,71 @@
+{
+  "source": "User-provided Telegram Bot API getAvailableGifts snapshot; every send rechecks MTProto",
+  "gifts": [
+    {
+      "code": "heart",
+      "emoji": "💝",
+      "gift_id": "5170145012310081615",
+      "stars": 15
+    },
+    {
+      "code": "bear",
+      "emoji": "🧸",
+      "gift_id": "5170233102089322756",
+      "stars": 15
+    },
+    {
+      "code": "present",
+      "emoji": "🎁",
+      "gift_id": "5170250947678437525",
+      "stars": 25
+    },
+    {
+      "code": "rose",
+      "emoji": "🌹",
+      "gift_id": "5168103777563050263",
+      "stars": 25
+    },
+    {
+      "code": "cake",
+      "emoji": "🎂",
+      "gift_id": "5170144170496491616",
+      "stars": 50
+    },
+    {
+      "code": "bouquet",
+      "emoji": "💐",
+      "gift_id": "5170314324215857265",
+      "stars": 50
+    },
+    {
+      "code": "rocket",
+      "emoji": "🚀",
+      "gift_id": "5170564780938756245",
+      "stars": 50
+    },
+    {
+      "code": "champagne",
+      "emoji": "🍾",
+      "gift_id": "6028601630662853006",
+      "stars": 50
+    },
+    {
+      "code": "trophy",
+      "emoji": "🏆",
+      "gift_id": "5168043875654172773",
+      "stars": 100
+    },
+    {
+      "code": "ring",
+      "emoji": "💍",
+      "gift_id": "5170690322832818290",
+      "stars": 100
+    },
+    {
+      "code": "diamond",
+      "emoji": "💎",
+      "gift_id": "5170521118301225164",
+      "stars": 100
+    }
+  ]
+}

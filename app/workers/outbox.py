@@ -35,6 +35,16 @@ class Executor:
     def __init__(self, store, api, products):
         self.store, self.api, self.products = store, api, products
 
+    def gifts(self):
+        from app.gifts.mtproto import PersonalGiftSender
+        from app.gifts.service import GiftService
+        from app.gifts.settings import GiftSettings
+
+        settings = getattr(self.api, "gift_settings", None) or GiftSettings.load()
+        if not getattr(self.api, "gift_sender", None):
+            self.api.gift_sender = PersonalGiftSender(settings)
+        return GiftService(self.store, self.api, settings, self.api.gift_sender)
+
     @staticmethod
     def item_result(result):
         return {
@@ -59,6 +69,23 @@ class Executor:
             DeliveryChains(self.store, self.api).dispatchable(action)
         if action["payload"].get("auto_reply"):
             AutoReplies(self.store, self.api).dispatchable(action)
+        if action["kind"] in {"gift_refund", "gift_notice"}:
+            from app.gifts.execution import guard
+
+            guard(self.gifts(), action)
+        if action["payload"].get("gift_proof"):
+            j = self.gifts().job(action["target"])
+            l = self.gifts().listing(j["item_id"])
+            if (
+                j["state"] != "SUCCEEDED"
+                or not j["receipt"]
+                or j["refund_state"] != "NONE"
+                or not l["enabled"]
+                or not l["auto_fulfill"]
+                or not self.gifts().runtime()
+                or j["listing_revision"] != l["revision"]
+            ):
+                raise ValidationError("Подтверждение подарочной доставки больше не разрешает выполнение")
         if action["kind"] in {"delivery", "fulfill"}:
             orders = self.store.rows("SELECT payload,status FROM orders WHERE id=?", (action["target"],))
             if not orders or orders[0]["status"] != "PAID":
@@ -128,6 +155,26 @@ class Executor:
 
     async def __call__(self, action):
         kind, target, payload = action["kind"], action["target"], action["payload"]
+        if kind == "gift_send":
+            from app.gifts.core import GiftValidationError
+            from app.gifts.mtproto import GiftFailure
+
+            service = self.gifts()
+            try:
+                async with asyncio.timeout(90):
+                    return await service.execute(action)
+            except (GiftFailure, GiftValidationError, ValidationError, Conflict) as exc:
+                spending = service.job(target)["state"] in {"SPENDING", "UNCERTAIN"}
+                raise APIError(getattr(exc, "code", "GIFT_VALIDATION_FAILED"), uncertain=spending) from None
+            except Exception:  # noqa: BLE001 -- protect personal RPC details and preserve paid uncertainty
+                spending = service.job(target)["state"] in {"SPENDING", "UNCERTAIN"}
+                raise APIError(
+                    "GIFT_PAYMENT_UNKNOWN" if spending else "GIFT_CHECK_FAILED", uncertain=spending
+                ) from None
+        if kind in {"gift_refund", "gift_notice"}:
+            from app.gifts.execution import execute_followup
+
+            return await execute_followup(self, action)
         chain_chat = None
         if payload.get("chain_id"):
             chain_chat = await DeliveryChains(self.store, self.api).verify_step(action)

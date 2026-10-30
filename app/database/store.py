@@ -140,6 +140,14 @@ class Store:
             existing = connection.execute("SELECT id FROM outbox WHERE operation_key=?", (key,)).fetchone()
             if existing:
                 return existing[0]
+            if kind in {"delivery", "delivery_text", "chain_message", "fulfill"}:
+                gift = connection.execute(
+                    "SELECT state FROM gift_jobs WHERE order_id=?", (target,)
+                ).fetchone()
+                if gift and (kind != "fulfill" or gift[0] != "SUCCEEDED"):
+                    raise Conflict(
+                        "Для заказа уже зарегистрирована подарочная выдача; другая выдача запрещена"
+                    )
             if kind in {"delivery", "delivery_text", "fulfill"}:
                 chain = connection.execute(
                     "SELECT order_id FROM delivery_chains WHERE order_id=?", (target,)
@@ -183,6 +191,11 @@ class Store:
                 "INSERT OR IGNORE INTO outbox(id,operation_key,kind,target,payload,created_at) VALUES(?,?,?,?,?,?)",
                 (ident, key, kind, target, encode(payload), now()),
             )
+            if kind in {"delete", "edit_fields"} or (kind == "edit" and "description" in payload):
+                connection.execute(
+                    "UPDATE gift_listings SET enabled=0,revision=revision+1 WHERE item_id=? AND enabled=1",
+                    (target,),
+                )
             if actor is None and payload.get("chain_id"):
                 chain = connection.execute(
                     "SELECT actor FROM delivery_chains WHERE order_id=?", (target,)
@@ -198,6 +211,9 @@ class Store:
                 "delivery",
                 "delivery_text",
                 "fulfill",
+                "gift_send",
+                "gift_refund",
+                "gift_notice",
             }:
                 connection.execute(
                     "INSERT OR IGNORE INTO operation_receipts(operation_id,owner_id) SELECT id,? FROM outbox WHERE operation_key=? AND EXISTS(SELECT 1 FROM administrators WHERE user_id=?)",
@@ -231,6 +247,10 @@ class Store:
                 raise Conflict("Lease операции потерян")
             # Delivery state and external outcome must commit together.
             row = db.execute("SELECT operation_key,kind,target FROM outbox WHERE id=?", (ident,)).fetchone()
+            if row["kind"] in {"gift_send", "gift_refund"}:
+                from app.gifts.outcomes import finish
+
+                finish(db, row, status, result, error)
             if row[0].startswith("delivery:"):
                 order = row[0].removeprefix("delivery:")
                 state = "DELIVERED" if status == "SUCCEEDED" else "QUARANTINED"
@@ -272,6 +292,10 @@ class Store:
                 (time.time(),),
             )
             for row in affected:
+                if row["kind"] in {"gift_send", "gift_refund"}:
+                    from app.gifts.outcomes import recover
+
+                    recover(db, row)
                 if row["operation_key"].startswith("delivery:"):
                     db.execute(
                         "UPDATE inventory SET status='QUARANTINED' WHERE id=(SELECT inventory_id FROM reservations WHERE order_id=?)",

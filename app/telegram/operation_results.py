@@ -11,6 +11,9 @@ from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 
 TITLES = {
+    "gift_send": "Telegram-подарок",
+    "gift_refund": "Возврат подарочного заказа",
+    "gift_notice": "Уведомление по подарку",
     "create": "Создание лота",
     "publish": "Публикация",
     "edit": "Изменение лота",
@@ -89,7 +92,14 @@ class OperationResults:
                 base = result.get("raw_price")
                 if base is not None:
                     text += "\nБазовая цена: " + escaped(base, 40) + " ₽"
-        if kind in {"delivery", "delivery_text", "fulfill"}:
+        if kind.startswith("gift_"):
+            job = self.store.rows(
+                "SELECT state,refund_state FROM gift_jobs WHERE order_id=?", (row["target"],)
+            )
+            if job:
+                text += f"\nПодарок: {job[0]['state']} · возврат: {job[0]['refund_state']}"
+            buttons.append([("Подарочный заказ и безопасная сверка", "gft:job:" + row["target"])])
+        elif kind in {"delivery", "delivery_text", "fulfill"}:
             buttons.append([("Заказ и состояние склада", "order:" + row["target"])])
             if status == "SUCCEEDED" and kind != "fulfill":
                 buttons.append([("Выдано — ожидает подтверждения", "delivered:0")])

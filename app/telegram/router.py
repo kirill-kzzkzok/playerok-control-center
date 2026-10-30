@@ -24,6 +24,7 @@ from app.telegram.drafts_panel import DraftsPanel
 from app.telegram.finance_panel import FinancePanel
 from app.telegram.formatting import escaped
 from app.telegram.fulfillment_panel import FulfillmentPanel
+from app.telegram.gifts_panel import GiftsPanel
 from app.telegram.interface_cleanup_panel import InterfaceCleanupPanel
 from app.telegram.item_panel import ItemPanel
 from app.telegram.keyboards import keyboard, main_menu
@@ -79,13 +80,14 @@ def create_router(store, api, products, synchronizer):
     item_panel = ItemPanel(api)
     listings_panel = ListingsPanel(api)
     stock_panel = StockPanel(store, api)
+    gifts_panel = GiftsPanel(store, api)
     operation_results = OperationResults(store)
 
     @router.message(CommandStart())
     async def start(message, state):
         await state.clear()
         await message.answer(
-            "🟣 <b>PLAYEROK CONTROL CENTER</b>\n\nПанель магазина. Платные операции запрещены.\n"
+            "🟣 <b>PLAYEROK CONTROL CENTER</b>\n\nПанель магазина. Платежи за подарки требуют отдельных разрешений.\n"
             "Черновики и история сохраняются локально.",
             reply_markup=main_menu(),
         )
@@ -121,6 +123,13 @@ def create_router(store, api, products, synchronizer):
                     "aq:chain:",
                     "aq:target:",
                     "aq:evaluation:",
+                    "gft:item:",
+                    "gft:job:",
+                    "gft:list:",
+                    "gft:catalog",
+                    "gft:bindings",
+                    "gft:reconcile:",
+                    "gft:refundcheck:",
                 )
             ):
                 await state.clear()
@@ -134,6 +143,8 @@ def create_router(store, api, products, synchronizer):
                 )
             if action == "create":
                 text, markup = await wizard.start(owner, state)
+            elif action.startswith("gft:"):
+                text, markup = await gifts_panel.callback(action, owner, state)
             elif finance.handles(action):
                 text, markup = await finance.callback(action, owner, state)
             elif action.startswith("pf:"):
@@ -248,9 +259,14 @@ def create_router(store, api, products, synchronizer):
             elif action.startswith("item:"):
                 ident = action.split(":", 1)[1]
                 item, text, photo_rows = await item_panel.card(ident, state)
-                text += "\n\n" + escaped(Automation(store, api).status_text(ident), 1600)
+                text += "\n\n" + (
+                    gifts_panel.summary(ident)
+                    if gifts_panel.service.listing(ident)
+                    else escaped(Automation(store, api).status_text(ident), 1600)
+                )
                 rows = [
                     [("📚 Склад", "stock:view:" + ident)],
+                    [("🎁 Telegram-подарок", "gft:item:" + ident)],
                     [("💰 Цена / Скидка", "discount:" + ident), ("📋 Описание", "editdesc:" + ident)],
                     [("📝 Название", "editname:" + ident), ("🖼 Заменить фото", "editphoto:" + ident)],
                     [("🧩 Атрибуты и данные", "editfields:" + ident)],
@@ -488,6 +504,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await wizard.message(message, state)
             elif current == "stock:input":
                 text, markup = await stock_panel.message(message, state)
+            elif current and current.startswith("gifts:"):
+                text, markup = await gifts_panel.message(message, state)
             elif current and current.startswith("finance:"):
                 text, markup = await finance.message(message, state)
             elif current and current.startswith("quick:"):

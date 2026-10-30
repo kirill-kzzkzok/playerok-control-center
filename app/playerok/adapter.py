@@ -303,6 +303,26 @@ class Playerok:
         self.account = account
         self.lock = asyncio.Lock()
 
+    async def gift_refund_capability(self, order):
+        """Subset of the official seller UI rollback contract verified 2026-10-30.
+
+        UI: active PAID/SENT, non-system item, participant seller with OUT direction.
+        Here only fresh PAID/no-problem and a known regular seller are admitted.
+        Admission is not refund proof: execution requires independent server readback.
+        """
+        item = order.get("item") or {}
+        user = item.get("user") or {}
+        return bool(
+            self.account.id
+            and user.get("id") == self.account.id
+            and order.get("direction") == "OUT"
+            and order.get("status") == "PAID"
+            and order.get("has_problem") is False
+            and order.get("is_automated") is False
+            and item.get("seller_type") == "USER"
+            and user.get("role") == "USER"
+        )
+
     async def call(self, method, **kwargs):
         if method not in {
             "get",

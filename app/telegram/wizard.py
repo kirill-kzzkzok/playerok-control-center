@@ -17,6 +17,19 @@ from app.telegram.keyboards import keyboard
 
 
 class Wizard:
+    def validate_gift(self, payload):
+        from app.gifts.core import gift_code_from_description
+        from app.gifts.settings import GiftSettings
+
+        settings = getattr(self.api, "gift_settings", None) or GiftSettings.load()
+        if (
+            settings.category_id
+            and settings.obtaining_type_id
+            and payload.get("category_id") == settings.category_id
+            and payload.get("obtaining_type_id") == settings.obtaining_type_id
+        ):
+            gift_code_from_description(payload.get("description", ""))
+
     def __init__(self, store, api, products, attachments=None):
         self.store, self.api, self.products = store, api, products
         self.attachments = attachments or Attachments()
@@ -240,6 +253,14 @@ class Wizard:
             text = "📝 <b>Название</b>\nВведите название от 10 до 72 символов по текущим правилам формы Playerok."
         elif step == "description":
             text = "📋 <b>Описание</b>\nВведите многострочный текст от 10 до 2048 символов."
+            from app.gifts.settings import GiftSettings
+
+            gift_settings = getattr(self.api, "gift_settings", None) or GiftSettings.load()
+            if (
+                payload.get("category_id") == gift_settings.category_id
+                and payload.get("obtaining_type_id") == gift_settings.obtaining_type_id
+            ):
+                text += "\nДля подарков последняя непустая строка обязательна: gift: heart (или другой код каталога). Привязка и разрешение расходов — отдельно после создания."
         elif step == "photos":
             text = f"🖼 <b>Фотографии: {len(payload['photos'])}</b>\nПришлите фото или файл JPEG/PNG/WEBP до 10 МБ. Локальный предел — 10 фото; лимиты API ещё не подтверждены."
             rows = [
@@ -660,6 +681,7 @@ class Wizard:
             if target == "fields":
                 payload["field_index"] = 0
         elif action == "submit" and step == "preview":
+            self.validate_gift(payload)
             if not self.api.account.writes_enabled:
                 raise ValidationError("Записи Playerok отключены в .env. Локальный черновик сохранён.")
             method = (
@@ -694,6 +716,8 @@ class Wizard:
             payload["field_index"] += 1
         elif step in {"name", "description"}:
             payload[step] = listing_text(text, step)
+            if step == "description":
+                self.validate_gift(payload)
             payload["step"] = (
                 "preview" if payload.get("return_preview") else "description" if step == "name" else "photos"
             )

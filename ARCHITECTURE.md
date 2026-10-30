@@ -1,5 +1,71 @@
 # Playerok Control Center
 
+## Personal Telegram Gifts (schema21, 2026-10-30)
+
+app.gifts is an integration into the existing bot/runtime, not a second bot or
+independent payment queue. GiftWorker only enrolls future PAID own orders and
+orchestrates follow-ups; gift_send/gift_refund/gift_notice run through the shared
+OutboxWorker/Executor. Store.finish and lease recovery atomically update gift_jobs.
+Inventory, Orders, existing chains and manual Fulfillment keep their original roles.
+
+gift_listings pins owner/item/category/obtaining/receiving-field IDs, code, actual
+approved Stars price, description hash, arm cutoff, revision and independent auto-SENT
+opt-in. gift_catalog stores read MTProto observations, never treats seed prices as
+current proof. gift_jobs is one durable intent per order, unique outbox/form/reference,
+with recipient/payer IDs, private peer access hash, cost, form ID, dispatch time,
+delivery receipt, refund state and completion outcome. These fields stay in private
+SQLite/backups; public receipts use bounded outcomes and IDs without recipient data.
+
+Before payment, fresh Playerok PAID ownership/field/schema/listing checks surround
+MTProto preflight. resolveUsername is uncached and repeated before spending. Only
+User/InputPeerUser is supported. getFullUser disallowed_gifts, catalog restrictions,
+checkCanSendGift, balance, exact XTR form price and configured budgets must pass.
+The personal account ID binds once to the DB; a changed session identity fails closed.
+A session file lock also prevents concurrent use by local login/another runtime.
+
+SPENDING is persisted in BEGIN IMMEDIATE with lease/policy/local-order checks and a
+global paid-intent lock before exactly one sendStarsForm. Telethon request_retries=0,
+auto_reconnect=false and flood_sleep_threshold=0 prevent implicit RPC-level replay.
+The fixed pinned Telethon version is1.45.0 (layer229). Telegram documents same-form-ID
+idempotency, but the application never relies on automatic resend/new forms after
+an ambiguous paid call. UNKNOWN holds global purchase admission across day changes.
+
+PaymentResult alone is not delivery. Independent message read must match an outbound
+MessageActionStarGift, recipient, gift ID, date, non-refunded state and random opaque
+invoice message reference. Receipt and SUCCEEDED commit together in Store.finish.
+Cancellation/lease expiry after intent becomes UNCERTAIN. Pre-intent interruption is
+BLOCKED, not automatically replayed. Explicit owner retry is allowed only for a proved
+PERMANENT_FAILED preflight with no form/dispatch/refund; it retains the old receipt and
+creates a new operation linked to the same unique order intent.
+
+Gift and stock/chain enrollment/reservation are mutually exclusive under the same
+transactions. Description/schema edit admission immediately disarms gift policies;
+external edits are caught by fresh preflight. Price/availability changes require
+explicit rebind. Completed follow-ups are excluded from bounded scans, avoiding
+starvation by old deliveries. Customer notice failure never changes payment outcome.
+
+Automatic completion is a separate explicit per-listing permission and only applies
+to existing legacy Fulfillment after stored gift receipt proof. Fields/draft report
+requirements remain in the existing owner form; provider identities are not invented.
+The normal stock engine still never issues automatic SENT. Gift delivery confirmation
+is independent of Playerok order completion and buyer confirmation.
+
+Rollback contract was independently verified in fresh public Playerok deal-page JS:
+seller OUT participant, active PAID/SENT, non-system; same updateDeal/ROLLED_BACK mutation.
+The adapter admits a conservative subset: own PAID/no-problem/non-automated, known USER
+seller_type/role. TG_GIFT_REFUNDS_ENABLED is an additional OFF-by-default permission.
+Only definitive resolveUsername USERNAME_INVALID/USERNAME_NOT_OCCUPIED may enqueue a
+single gift_refund before any Stars intent. Server rejection or lost ACK never creates
+another refund. Independent get_deal ROLLED_BACK is required before refund-success
+notice; unsupported/disabled/unknown cases are manual with honest buyer notification.
+Telegram payment uncertainty permanently excludes automatic refund for that order.
+
+Production checkout receiving field is OBTAINING_DATA with required=false. The app
+requires its exact ID/value and fails closed; it cannot change Playerok's checkout
+schema. No label/comment/chat/automation-field fallback exists. No real MTProto login,
+paid gift, buyer message or rollback was executed for this integration. See README_GIFTS.md
+for setup, documented contracts and the remaining controlled-live acceptance gate.
+
 Python 3.12, aiogram 3, SQLite WAL. Один магазин и один активный экземпляр.
 Universal изучен, но запуск его монолитного runtime небезопасен для существующего магазина.
 Переиспользуются запросы, парсеры, модели и интерфейсы PlayerokAPI с MIT attribution.

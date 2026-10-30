@@ -131,6 +131,13 @@ class Orders:
     def reserve(self, order_id, actor=None):
         with self.store.transaction() as db:
             order = db.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+            if order and (
+                db.execute("SELECT 1 FROM gift_jobs WHERE order_id=?", (order_id,)).fetchone()
+                or db.execute(
+                    "SELECT 1 FROM gift_listings WHERE item_id=? AND enabled=1", (order["item_id"],)
+                ).fetchone()
+            ):
+                raise Conflict("Для заказа настроена подарочная выдача; складское резервирование запрещено")
             if not order or order["status"] != "PAID" or not order["chat_id"]:
                 raise Conflict("Выдача разрешена только оплаченной продаже с известным чатом")
             existing = db.execute(
