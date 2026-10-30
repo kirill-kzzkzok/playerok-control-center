@@ -752,9 +752,14 @@ BEGIN IMMEDIATE serializes competing first binds. No old queue/stock/finance is 
 by another account. A different shop requires a different DATABASE_PATH. This explicitly
 supports a single shop per database rather than claiming multi-account isolation.
 
-Writes-enabled startup requires successful verification in this startup, not merely a
-nonempty client ID or old saved connection status. On APIError read-only startup retains
-local access; write startup stops before workers. Credentials/IDs are omitted from binding
+PlayerokConnection shares SafeAccount/get and AccountBinding with ProfilePanel. Every
+startup requires fresh verification; stored success is historical only. Auth/account
+rejection is distinct from unknown network/challenge results. Failed verification keeps
+local owner diagnostics available while write/automation admission is closed and read
+workers wait. Explicit successful profile verification resumes configured workers within
+existing permissions. Checks are serialized with a five-second completion cooldown;
+the final HTTP write boundary also checks the verified account identity. Read responses
+are rejected if identity changes during the call. Credentials/IDs are omitted from binding
 errors, and conflict does not reset or reassign old data. No binding schema migration is
 needed; canonical identity is stored in existing settings only after successful checks.
 
@@ -903,3 +908,15 @@ order cutoff; wizard delivery preferences do not silently enable automation. Con
 MVP test covers native service/worker handoffs, duplicate ingest, restart, quarantine
 and existing explicit owner fulfillment. Stars/gift/provider transfers are outside this
 stock-code engine and cannot be attested from a chat message receipt.
+
+## Final gift boundary audit (31.10.2026)
+
+Before a gift intent is committed, the current payer is compared again to the pinned
+personal identity. Definitive recipient rejection persists the exact private receiving
+value; refund queueing and final dispatch recheck that field and item against a fresh
+deal. Native item.user.id participates in SQLite account ownership validation.
+PersonalGiftSender.close is terminal and serialized with connect; the session file lock
+is released only after disconnect. Shop event handler failures cannot interrupt durable
+worker transitions. Existing Outbox/intents/UNKNOWN/refund/stock contracts remain in place;
+no new subsystem or migration was introduced. Evidence and residual transaction boundaries:
+GIFT_SAFETY_AUDIT.md.

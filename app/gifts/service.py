@@ -424,6 +424,11 @@ class GiftService:
             )
         order = await self.fresh_order(j)
         username = buyer_recipient(order, field_id=l["username_field_id"])
+        self.store.execute(
+            "UPDATE gift_jobs SET recipient_username=? WHERE order_id=? AND state='CHECKING'",
+            (username, j["order_id"]),
+        )
+        j["recipient_username"] = username
         try:
             recipient = await self.sender.resolve(username)
         except InvalidRecipient as exc:
@@ -479,6 +484,10 @@ class GiftService:
             raise GiftFailure("RECIPIENT_CHANGED") from None
         if again.user_id != recipient.user_id:
             raise GiftFailure("RECIPIENT_CHANGED")
+        if self.sender.me.id != j.get("payer_id", self.sender.me.id) and j.get("payer_id"):
+            raise GiftFailure("PERSONAL_ACCOUNT_CHANGED")
+        if self.sender.me.id != self.store.setting("gifts:personal_account_id"):
+            raise GiftFailure("PERSONAL_ACCOUNT_CHANGED")
         with self.store.transaction() as db:
             self.guard(action)
             db.execute(
@@ -586,6 +595,11 @@ class GiftService:
         )
         order = await self.api.call("get_deal", deal_id=job["order_id"])
         deliverable(order, job["order_id"], self.api.account.id)
+        listing = self.listing(job["item_id"])
+        if (order.get("item") or {}).get("id") != job["item_id"] or buyer_recipient(
+            order, field_id=listing["username_field_id"]
+        ).casefold() != (job.get("recipient_username") or "").casefold():
+            raise GiftFailure("REFUND_RECIPIENT_CHANGED")
         Orders(self.store).ingest(order)
         # Native updateDeal is confirmed in the official seller UI, with the adapter's
         # conservative status/ownership/non-system guard and independent readback.

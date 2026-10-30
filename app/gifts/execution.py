@@ -3,6 +3,7 @@
 import json
 
 from app.database.store import now
+from app.gifts.core import buyer_recipient
 from app.playerok.adapter import APIError
 from app.security.logging import event
 from app.services.order_management import deliverable, sale
@@ -53,6 +54,13 @@ def guard(service, action):
         ):
             raise ValidationError("Сохранённая история больше не разрешает возврат")
         deliverable(json.loads(local[0]["payload"]), job["order_id"], service.api.account.id)
+        if (
+            buyer_recipient(
+                json.loads(local[0]["payload"]), field_id=service.listing(job["item_id"])["username_field_id"]
+            ).casefold()
+            != (job["recipient_username"] or "").casefold()
+        ):
+            raise ValidationError("Данные получения изменились; возврат требует ручного решения")
     elif not permitted_notice(job, action["payload"].get("outcome")):
         raise ValidationError("Текст уведомления больше не соответствует результату операции")
 
@@ -72,6 +80,11 @@ async def execute_followup(executor, action):
     Orders(executor.store).ingest(order)
     if action["kind"] == "gift_refund":
         deliverable(order, target, executor.api.account.id)
+        if (
+            buyer_recipient(order, field_id=service.listing(j["item_id"])["username_field_id"]).casefold()
+            != (j["recipient_username"] or "").casefold()
+        ):
+            raise ValidationError("Данные получения изменились; возврат требует ручного решения")
         capability = getattr(executor.api, "gift_refund_capability", None)
         if (
             not capability

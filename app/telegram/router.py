@@ -76,7 +76,7 @@ def create_router(store, api, products, synchronizer):
     drafts_panel = DraftsPanel(store)
     interface_cleanup = InterfaceCleanupPanel(store)
     order_finance_panel = OrderFinancePanel(store, api)
-    profile_panel = ProfilePanel(api)
+    profile_panel = ProfilePanel(api, store)
     item_panel = ItemPanel(api)
     listings_panel = ListingsPanel(api)
     stock_panel = StockPanel(store, api)
@@ -106,7 +106,7 @@ def create_router(store, api, products, synchronizer):
             )
         )
         try:
-            if action in {"profile", "diagnostics", "backup"} or action.startswith(
+            if action in {"profile", "profile:check", "diagnostics", "backup"} or action.startswith(
                 (
                     "item:",
                     "order:",
@@ -413,8 +413,8 @@ def create_router(store, api, products, synchronizer):
                     + ". Сохранённая история доступна локально; полная загрузка может занять несколько циклов.",
                     keyboard([[("🛒 Заказы", "orders")]]),
                 )
-            elif action == "profile":
-                return await profile_panel.handle(message)
+            elif action in {"profile", "profile:check"}:
+                return await profile_panel.handle(message, refresh=action == "profile:check")
             elif action.startswith(("stats:", "st:", "sd:")):
                 return await statistics_panel.handle(action, message, owner=owner)
             elif action == "settings" or action.startswith("sp:"):

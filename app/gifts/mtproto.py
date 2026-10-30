@@ -50,9 +50,12 @@ class PersonalGiftSender:
         self.lock = asyncio.Lock()
         self.me = None
         self.session_lock = None
+        self.closed = False
 
     async def connect(self):
         async with self.lock:
+            if self.closed:
+                raise GiftFailure("SESSION_CLOSED")
             if self.me is not None and getattr(self.client, "is_connected", lambda: True)():
                 return
             if self.client is None:
@@ -87,17 +90,19 @@ class PersonalGiftSender:
             event("INFO", "Личный Telegram подключён")
 
     async def close(self):
-        connected = self.me is not None
-        try:
-            if self.client:
-                await self.client.disconnect()
-        finally:
-            self.me = None
-            if self.session_lock:
-                self.session_lock.__exit__(None, None, None)
-                self.session_lock = None
-            if connected:
-                event("INFO", "Личный Telegram отключён")
+        self.closed = True
+        async with self.lock:
+            connected = self.me is not None
+            try:
+                if self.client:
+                    await self.client.disconnect()
+            finally:
+                self.me = None
+                if self.session_lock:
+                    self.session_lock.__exit__(None, None, None)
+                    self.session_lock = None
+                if connected:
+                    event("INFO", "Личный Telegram отключён")
 
     async def resolve(self, username):
         normalized = telegram_username(username)
@@ -218,6 +223,8 @@ class PersonalGiftSender:
     async def pay(self, prepared):
         if not self.settings.payment_enabled:
             raise GiftFailure("GIFT_PAYMENTS_DISABLED")
+        if self.closed or self.me is None:
+            raise GiftFailure("SESSION_CLOSED")
         result = await self.client(
             functions.payments.SendStarsFormRequest(
                 form_id=prepared.form_id,

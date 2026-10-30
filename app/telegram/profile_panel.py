@@ -2,11 +2,13 @@ import asyncio
 from decimal import Decimal, InvalidOperation
 
 import httpx
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import BufferedInputFile
 
 from app.playerok.adapter import safe_media_url
 from app.rendering.cards import profile_card
 from app.services.finance import checked_time
+from app.services.playerok_connection import REASONS, PlayerokConnection
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 
@@ -69,11 +71,53 @@ def profile_caption(viewer):
 
 
 class ProfilePanel:
-    def __init__(self, api):
-        self.api = api
+    def __init__(self, api, store=None):
+        self.api, self.store = api, store
 
-    async def handle(self, message):
+    def connection_caption(self, status):
+        label = {
+            "CONNECTED": "🟢 Подключён",
+            "DISCONNECTED": "🔴 Не подключён",
+            "UNKNOWN": "🟡 Не удалось проверить",
+        }[status["status"]]
+        lines = [
+            "👤 <b>Профиль · Playerok</b>",
+            label,
+            "Аккаунт последней успешной проверки: " + escaped(status.get("username") or "не подтверждён", 80),
+            "Успешная проверка: " + checked_time(status.get("last_success")),
+            "Последняя попытка: " + checked_time(status.get("last_attempt")),
+        ]
+        if status.get("reason"):
+            lines.append(REASONS.get(status["reason"], REASONS["CHECK_FAILED"]))
+        if status.get("busy"):
+            lines.append("Проверка уже выполняется либо прошло менее5 секунд. Новый запрос не отправлен.")
+        return "\n".join(lines)
+
+    async def handle(self, message, *, refresh=False):
+        if self.store is not None:
+            connection = getattr(self.api, "connection", None) or PlayerokConnection(self.store, self.api)
+            status = await connection.check()
+            text = self.connection_caption(status)
+            markup = keyboard([[("🔄 Проверить соединение", "profile:check")]])
+            if refresh:
+                try:
+                    return await message.edit_text(text, reply_markup=markup)
+                except TelegramBadRequest as error:
+                    if "message is not modified" in error.message.lower():
+                        return None
+                    if any(
+                        v in error.message.lower()
+                        for v in ("message to edit not found", "message can't be edited")
+                    ):
+                        return await message.answer(text, reply_markup=markup)
+                    raise
+            if status["status"] == "CONNECTED" and connection.viewer:
+                await self.photo(message, connection.viewer)
+            return await message.answer(text, reply_markup=markup)
         viewer = await self.api.call("get")
+        return await self.photo(message, viewer)
+
+    async def photo(self, message, viewer):
         profile = dict(viewer.get("profile") or {})
         profile["username"] = profile.get("username") or viewer.get("username")
         avatar = await profile_avatar(profile.get("avatar_url"))

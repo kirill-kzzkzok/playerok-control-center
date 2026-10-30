@@ -33,6 +33,12 @@ def bind_account(store, account_id):
                 "WHERE json_extract(payload,'$.seller.id') IS NOT NULL"
             )
         )
+        identities.update(
+            row[0]
+            for row in db.execute(
+                "SELECT DISTINCT json_extract(payload,'$.item.user.id') FROM orders WHERE json_extract(payload,'$.item.user.id') IS NOT NULL"
+            )
+        )
         if identities and identities != {account_id}:
             raise AccountBindingError(
                 "База привязана к другому аккаунту Playerok. Используйте отдельную базу для нового магазина; "

@@ -143,6 +143,12 @@ class SafeAccount(Account):
             time.sleep(max(0, 0.3 - (time.monotonic() - self._last_request)))
             if not read and self._dispatch_guard:
                 self._dispatch_guard()
+            if not read and (
+                not self.writes_enabled
+                or getattr(self, "connection_verified", True) is not True
+                or getattr(self, "verified_account_id", self.id) != self.id
+            ):
+                raise APIError("CONNECTION_NOT_VERIFIED")
             try:
                 if method == "get":
                     response = self.client.get(url, params=payload, headers=request_headers)
@@ -324,6 +330,12 @@ class Playerok:
         )
 
     async def call(self, method, **kwargs):
+        if (
+            method != "get"
+            and getattr(self, "connection", None)
+            and self.connection.state["status"] != "CONNECTED"
+        ):
+            raise APIError("CONNECTION_NOT_VERIFIED")
         if method not in {
             "get",
             "get_user",
@@ -396,8 +408,27 @@ class Playerok:
                 raise APIError("UPSTREAM_SCHEMA_ERROR") from None
 
         try:
-            return await calls_for(self).call(run)
+            result = await calls_for(self).call(run)
+            if (
+                method != "get"
+                and getattr(self, "connection", None)
+                and self.connection.state["status"] != "CONNECTED"
+            ):
+                raise APIError("CONNECTION_NOT_VERIFIED")
+            return result
         except APIError as error:
+            connection = getattr(self, "connection", None)
+            if connection and error.code in {
+                "SESSION_EXPIRED",
+                "UNAUTHORIZED_OR_CHALLENGE",
+                "NETWORK_ERROR",
+                "NON_JSON_RESPONSE",
+                "HTTP_500",
+                "HTTP_502",
+                "HTTP_503",
+                "HTTP_504",
+            }:
+                connection.invalidate(error.code, error.diagnostics)
             from app.security.logging import event
 
             previous = getattr(self, "_last_logged_error", None)

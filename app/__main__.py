@@ -15,14 +15,14 @@ from app.config import Config, ConfigurationError
 from app.database.store import Store
 from app.gifts.settings import GiftSettings
 from app.gifts.worker import GiftWorker
-from app.playerok.adapter import APIError, Playerok, SafeAccount
+from app.playerok.adapter import Playerok, SafeAccount
 from app.playerok.thread_calls import begin_close_calls, close_calls
 from app.security.access import OwnerMiddleware
 from app.security.instance import InstanceLock
 from app.security.logging import configure_logging, event
-from app.services.account_binding import AccountBindingError, bind_account
 from app.services.interface_cleanup import InterfaceCleanup
 from app.services.orders import Orders
+from app.services.playerok_connection import PlayerokConnection
 from app.services.products import Products
 from app.telegram.panel_tracking import PanelTracking
 from app.telegram.router import create_router
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 async def outbox_loop(worker, stop):
     while not stop.is_set():
-        processed = await worker.once()
+        processed = await worker.once() if worker.executor.api.account.writes_enabled else False
         if not processed:
             try:
                 await asyncio.wait_for(stop.wait(), timeout=2)
@@ -66,6 +66,16 @@ async def run(config):
     tasks = []
     stop = asyncio.Event()
     supervisor = Supervisor(store)
+
+    async def when_connected(factory):
+        while not stop.is_set():
+            if getattr(api, "connection", None) and api.connection.state["status"] == "CONNECTED":
+                return await factory()
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=2)
+            except TimeoutError:
+                pass
+
     try:
         for owner in config.owner_ids:
             store.execute("INSERT OR IGNORE INTO administrators VALUES(?)", (owner,))
@@ -73,25 +83,11 @@ async def run(config):
         InterfaceCleanup(store).recover()
         if recovered:
             logger.warning("Recovered %s operations as UNCERTAIN", recovered)
+        event("CHECK", "Проверка Telegram Bot...")
         await bot.get_me()
-        event("INFO", "Telegram Bot подключён")
-        verified_account = False
-        try:
-            await api.call("get")
-            try:
-                bind_account(store, account.id)
-            except AccountBindingError as error:
-                raise ConfigurationError(str(error)) from None
-            store.set_setting("playerok:connection", "OK")
-            verified_account = True
-            event("INFO", "Playerok подключён")
-        except APIError as error:
-            store.set_setting("playerok:connection", error.code)
-            logger.warning("Playerok connection: %s; local data preserved", error.code)
-        if config.writes_enabled and not verified_account:
-            raise ConfigurationError(
-                "Очередь записей не запущена: сначала требуется успешная проверка аккаунта Playerok"
-            )
+        event("SUCCESS", "Telegram Bot подключён")
+        connection = PlayerokConnection(store, api)
+        await connection.check(cooldown=0)
         store.backup(
             Path("data/backups") / (datetime.now(UTC).strftime("startup-%Y%m%dT%H%M%S") + ".sqlite3")
         )
@@ -109,22 +105,29 @@ async def run(config):
         dispatcher.include_router(create_router(store, api, products, sync))
         tasks.append(supervisor.start("upload-cleanup", lambda: UploadCleanup(store).run(stop), stop))
         tasks.append(supervisor.start("notifications", lambda: Notifications(store, bot).run(stop), stop))
-        if account.id:
+        tasks.append(
+            supervisor.start(
+                "account-transactions",
+                lambda: when_connected(lambda: TransactionWorker(store, api).run(stop)),
+                stop,
+            )
+        )
+        tasks.append(
+            supervisor.start(
+                "promotion-dry-run",
+                lambda: when_connected(lambda: PromotionWorker(store, api).run(stop)),
+                stop,
+            )
+        )
+        tasks.append(supervisor.start("playerok-sync", lambda: when_connected(lambda: sync.run(stop)), stop))
+        if config.realtime_enabled:
             tasks.append(
                 supervisor.start(
-                    "account-transactions", lambda: TransactionWorker(store, api).run(stop), stop
+                    "playerok-realtime",
+                    lambda: when_connected(lambda: Realtime(store, account, sync).run(stop)),
+                    stop,
                 )
             )
-            tasks.append(
-                supervisor.start("promotion-dry-run", lambda: PromotionWorker(store, api).run(stop), stop)
-            )
-            tasks.append(supervisor.start("playerok-sync", lambda: sync.run(stop), stop))
-            if config.realtime_enabled:
-                tasks.append(
-                    supervisor.start(
-                        "playerok-realtime", lambda: Realtime(store, account, sync).run(stop), stop
-                    )
-                )
         if config.writes_enabled:
             if config.automation_enabled:
                 tasks.append(
@@ -152,6 +155,12 @@ async def run(config):
             "Telegram panel started; writes=%s; first_start_claim=%s",
             config.writes_enabled,
             config.first_start_claim,
+        )
+        event(
+            "INFO",
+            "Бот готов к работе"
+            if connection.state["status"] == "CONNECTED"
+            else "Telegram-панель доступна для диагностики; операции записи и автовыдача заблокированы",
         )
         # Never delete webhook or drop pending updates silently.
         webhook = await bot.get_webhook_info()

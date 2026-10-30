@@ -452,3 +452,9 @@ Gifts offline acceptance:816 full pytest +87 relevant checks passed; Ruff/depend
 
 
 Console/bundle offline acceptance:860 full pytest,125 related targeted, Ruff/deps, source/installed-wheel selfcheck/schema22 and secret scan pass. Both features locally accepted only; native terminal visual and real paid bundle/refund/customer notice/Fulfillment are not live accepted. Runtime paid permissions remain OFF.
+
+## Final critical safety audit — 31.10.2026
+
+Fresh Playerok connection status/startup/offline owner diagnostics are locally accepted through Dispatcher and native mock HTTP. A safe real get probe on a temporary DB clone confirmed HTTP200 and the existing account binding. No working SQLite/environment/session changes or live mutations were made. Saved historical success does not authorize current writes.
+
+GA-01–GA-05 reproductions fixed; full suite896 passes, with fault-injection/process-restart/concurrency coverage and stock/Outbox regressions. Audit evidence: GIFT_SAFETY_AUDIT.md and TEST_REPORT.md. Local acceptance does **not** accept real gift payment, delivery, refund, buyer notification or auto-SENT. Immediate paid test verdict **NOT READY**: personal session and read-only identity/catalog/balance/recipient preflight outstanding; all spending/automation permissions remain disabled. No new live acceptance claimed.

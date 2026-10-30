@@ -100,16 +100,20 @@ def ansi_supported(stream):
 
 
 def event(category, message, *, order=None, operation=None, position=None, level=logging.INFO):
-    logging.getLogger("pcc.shop").log(
-        level,
-        message,
-        extra={
-            "event_type": category,
-            "order_id": order,
-            "operation_id": operation,
-            "gift_position": position,
-        },
-    )
+    try:
+        logging.getLogger("pcc.shop").log(
+            level,
+            message,
+            extra={
+                "event_type": category,
+                "order_id": order,
+                "operation_id": operation,
+                "gift_position": position,
+            },
+        )
+    except Exception:  # noqa: BLE001 -- never recursively log into a failed sink or alter paid transitions
+        return False
+    return True
 
 
 def configure_logging(secrets=()):

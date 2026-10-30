@@ -1,3 +1,4 @@
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -5,7 +6,6 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from app.__main__ import run
-from app.config import ConfigurationError
 from app.database.store import Store
 from app.playerok.adapter import APIError
 from app.services.account_binding import AccountBindingError, bind_account
@@ -105,16 +105,20 @@ def test_corrupt_legacy_binding_is_not_reset(store, value):
 
 
 @pytest.mark.parametrize("failure", ["different_account", "unauthorized"])
-async def test_startup_stops_before_backup_workers_or_writes(store, monkeypatch, failure):
+async def test_startup_unverified_account_retains_local_panel_without_write_permission(
+    store, monkeypatch, failure
+):
     store.set_setting("playerok:account_id", "old")
-    account = SimpleNamespace(id="new", close=Mock())
-    api = SimpleNamespace(call=AsyncMock())
+    account = SimpleNamespace(id="new", close=Mock(), writes_enabled=True)
+    api = SimpleNamespace(account=account, call=AsyncMock(return_value={"id": "new"}))
     if failure == "unauthorized":
         # An account object with stale ID must not count as successful authentication.
         api.call.side_effect = APIError("UNAUTHORIZED_OR_CHALLENGE")
     session = SimpleNamespace(middleware=Mock(), close=AsyncMock())
-    bot = SimpleNamespace(get_me=AsyncMock(), session=session)
-    backup, start = Mock(), Mock()
+    bot = SimpleNamespace(
+        get_me=AsyncMock(), session=session, get_webhook_info=AsyncMock(return_value=SimpleNamespace(url=""))
+    )
+    backup = Mock()
     monkeypatch.setattr(store, "backup", backup)
     monkeypatch.setattr(store, "close", Mock())
     monkeypatch.setattr("app.__main__.Store", lambda path: store)
@@ -122,7 +126,9 @@ async def test_startup_stops_before_backup_workers_or_writes(store, monkeypatch,
     monkeypatch.setattr("app.__main__.Playerok", lambda account: api)
     monkeypatch.setattr("app.__main__.AiohttpSession", lambda **k: session)
     monkeypatch.setattr("app.__main__.Bot", lambda *a, **k: bot)
-    monkeypatch.setattr("app.__main__.Supervisor.start", start)
+    monkeypatch.setattr("app.__main__.Supervisor.start", lambda *a: asyncio.create_task(asyncio.sleep(3600)))
+    polling = AsyncMock()
+    monkeypatch.setattr("app.__main__.Dispatcher.start_polling", polling)
     config = SimpleNamespace(
         database_path=store.path,
         playerok_header="test",
@@ -131,13 +137,16 @@ async def test_startup_stops_before_backup_workers_or_writes(store, monkeypatch,
         use_proxy=False,
         telegram_token="test",
         owner_ids=(),
+        realtime_enabled=False,
+        first_start_claim=False,
     )
-    with pytest.raises(ConfigurationError):
-        await run(config)
+    await run(config)
+    polling.assert_awaited_once()
+    assert account.writes_enabled is False
+    assert account.automation_enabled is False
     assert store.setting("playerok:account_id") == "old"
     assert store.setting("playerok:bound_account_id") is None
-    backup.assert_not_called()
-    start.assert_not_called()
+    backup.assert_called_once()
     api.call.assert_awaited_once_with("get")
     session.close.assert_awaited_once()
     account.close.assert_called_once()
