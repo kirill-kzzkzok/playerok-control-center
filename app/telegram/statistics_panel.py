@@ -35,10 +35,14 @@ class StatisticsPanel:
         ]
         rows.extend([[(label, f"st:{days}:{view}")] for view, label in VIEWS.items()])
         if not details:
-            rows.append(
-                [("Подробности и покрытие", f"sd:{days}:details"), ("Лучшие товары", f"sd:{days}:items")]
-            )
-        rows.append([("Категории", f"sd:{days}:categories")])
+            rows.append([("Подробности и покрытие", f"sd:{days}:details")])
+        rows.append([("Топ по заказам", f"sd:{days}:bestsellers"), ("Топ по выручке", f"sd:{days}:items")])
+        rows.append(
+            [
+                ("Категории · заказы", f"sd:{days}:category_counts"),
+                ("Категории · выручка", f"sd:{days}:categories"),
+            ]
+        )
         rows.append([("Поступления и расходы по транзакциям", f"sd:{days}:transactions")])
         rows.append([("Прибыль по учтённым заказам", f"sd:{days}:profit")])
         rows.append([("Сверенные комиссии продажи", f"sd:{days}:settlements")])
@@ -131,6 +135,37 @@ class StatisticsPanel:
                     + checked_time(stats["last_sync"])
                     + "\n\nЗаказы сгруппированы по дате создания, статусы текущие. Суммы возвратов не означают дату движения денег. Локальное покрытие не доказывает полноту API-истории. Комиссии, поступления и прибыль требуют сверки транзакций; себестоимость в карточке не становится историческим расходом автоматически."
                 )
+            elif view in {"bestsellers", "category_counts"}:
+                by_item = view == "bestsellers"
+                counts = stats["item_orders" if by_item else "category_orders"]
+                revenues = stats["items" if by_item else "categories"]
+                unknown = stats["item_unknown_paid" if by_item else "category_unknown_paid"]
+                top = sorted(counts, key=lambda key: (-counts[key], key))[:15]
+                text = (
+                    "📊 <b>Топ-15 · "
+                    + ("товары" if by_item else "категории")
+                    + " по оплаченным заказам</b>"
+                    + f"\nПериод: {'всё время' if days == 0 else str(days * 24) + ' ч'}"
+                )
+                for index, key in enumerate(top, 1):
+                    label = stats["item_names"].get(key, key) if by_item else key
+                    text += f"\n\n{index}. {escaped(label, 80)}"
+                    if by_item:
+                        text += f" · <code>{escaped(key, 40)}</code>"
+                    known = counts[key] - unknown.get(key, 0)
+                    amount = f"{revenues.get(key, 0)} ₽" if known else "нет известных сумм"
+                    text += f"\nЗаказов: {counts[key]} · {amount}"
+                    if unknown.get(key, 0):
+                        text += f" · без суммы: {unknown[key]}"
+                if not top:
+                    text += "\nНет оплаченных заказов с серверной датой за период."
+                text += (
+                    "\n\nКоличество заказов, не единиц товара. По серверной дате создания, статусы текущие; "
+                    "возвраты исключены. Суммы до комиссий; неизвестные не заменяются нулём. "
+                    "Локальная история может быть неполной."
+                )
+                if not by_item:
+                    text += " Категории сгруппированы по сохранённому названию."
             elif view in {"items", "categories"}:
                 values = stats[view]
                 top = sorted(values.items(), key=lambda row: (-row[1], row[0]))[:15]

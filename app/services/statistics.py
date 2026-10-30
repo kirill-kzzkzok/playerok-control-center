@@ -48,7 +48,10 @@ def statistics(store, days=7, at=None):
         "categories": defaultdict(lambda: Decimal(0)),
         "items": defaultdict(lambda: Decimal(0)),
         "item_names": {},
+        "item_orders": defaultdict(int),
+        "item_unknown_paid": defaultdict(int),
         "category_orders": defaultdict(int),
+        "category_unknown_paid": defaultdict(int),
         "daily_orders": defaultdict(int),
         "daily_paid": defaultdict(int),
         "daily_unknown_paid": defaultdict(int),
@@ -70,6 +73,7 @@ def statistics(store, days=7, at=None):
         "basis": "created_order_cohort_current_status",
     }
     coverage = []
+    name_dates = {}
     for order in store.rows("SELECT * FROM orders"):
         payload = json.loads(order["payload"])
         # Missing upstream time cannot become a real historical date via ingest fallback.
@@ -102,12 +106,17 @@ def statistics(store, days=7, at=None):
             result["daily_paid"][day] += 1
             category = ((payload.get("item") or {}).get("category") or {}).get("name") or "Без категории"
             result["category_orders"][category] += 1
-            result["item_names"][order["item_id"]] = (payload.get("item") or {}).get("name") or order[
-                "item_id"
-            ]
+            item_id = order["item_id"]
+            result["item_orders"][item_id] += 1
+            name_order = (created, order["id"])
+            if item_id not in name_dates or name_order > name_dates[item_id]:
+                name_dates[item_id] = name_order
+                result["item_names"][item_id] = (payload.get("item") or {}).get("name") or item_id
             if amount is None:
                 result["unknown_paid_amounts"] += 1
                 result["daily_unknown_paid"][day] += 1
+                result["item_unknown_paid"][item_id] += 1
+                result["category_unknown_paid"][category] += 1
             else:
                 result["revenue"] += amount
                 result["daily"][day] += amount

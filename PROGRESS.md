@@ -1473,3 +1473,46 @@ data/retired_live_test_results.xml.18 новых regression cases, Ruff check/fo
 pip check/diff чистые. Actual-secret/JWT scan выполняется перед commit. Записи/API/
 сообщения/платежи/миграции не выполнялись; historical journal сохранён без изменений.
 Перед commit actual-secret/JWT scan прошёл; private paths ignored, writes=false/automation=false.
+
+
+## Топ товаров и категорий по количеству оплаченных заказов (§13)
+
+Сверка пользовательских функций после reliability этапов: серверные списки items/chats
+уже имеют next cursor. Обнаружен прямой функциональный пробел PHASE6/§13: «Лучшие товары»
+сортировались только по известной выручке; товар с неизвестной суммой полностью исчезал
+из этого ранжирования. План: отдельный count-based top при сохранении revenue top,
+достоверные счётчики покрытия, те же периоды/status/date semantics и Dispatcher tests.
+
+Statistics добавляет item_orders/item_unknown_paid и category_unknown_paid; существующие
+category_orders используются отдельно от monetary maps. PAID/SENT/CONFIRMED/automatic
+counted даже при unknown amount, без подстановки0. Товар определяется server item_id,
+одинаковые названия разных ID не сливаются. Имя берётся из самого нового серверного
+заказа за период, equal instant tie-break orderID, независимо от порядка INSERT/offset.
+Возвраты/pending/failed/out-of-period/future/undated не становятся paid ranking rows.
+
+Новые sd:{days}:bestsellers и category_counts показывают топ15 по count DESC, stable ID/
+name tie-break; рядом известная выручка и пропущенные суммы. Если все суммы неизвестны —
+«нет известных сумм», настоящий известный0 остаётся0.00. На товарной строке ID для
+различения одинаковых названий; количество — оплаченные заказы, не физические единицы
+или автоматически восстановленный SKU. Revenue top сохраняет старые callbacks и
+доступен отдельно. Категории пока сгруппированы по сохранённому названию, это явно
+указано в экране; объединение в проверенную taxonomy разных игр не заявляется.
+
+Targeted statistics/bestsellers:27 passed in45.13s.9 новых cases: multiple paid counts vs
+revenue, unknown-only/partial/zero, same-named IDs, current statuses/period/server dates,
+latest name/offset/ties, genuine Dispatcher5periods+markup+owner isolation, top15 stable
+ordering/long escaped names under Telegram limit. No API/outbox effects; chart code,
+сглаживание реальных точек и существующие financial/profit/settlement semantics не менялись.
+
+Read-only working-cache probe:217 dated orders,183 paid orders/183 distinct native item
+IDs. Item/category counts и unknown coverage точно сходятся с агрегатами. Все текущие
+native item counts поэтому равны1: это не фиктивное объединение одноимённых лотов и не
+полный SKU-рейтинг магазина. Отчёт counts/booleans без IDs/названий/денег:
+ data/bestsellers_readonly_check.json; external_requests=0/database_writes=0.
+Полный набор запущен; schema migration не требуется, writes/automation остаются false.
+
+Контрольная точка volume ranking: полный JUnit data/bestsellers_results.xml
+подтверждает **603 tests, failures=0/errors=0/skipped=0, time113.135s**. Process handle
+после продолжения отсутствовал; завершение подтверждено полным XML, повторный запуск
+не требовался. Ruff check/format140 files, pip check, diff и actual-secret/JWT scan
+чистые. Working-cache read-only probe counts reconcile; external_requests=0/DBwrites=0.

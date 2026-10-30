@@ -725,3 +725,19 @@ default/mounted transport. Existing multipart/create/edit/fields/agreements cont
 remain tested; normal durable product execution code unchanged. No restored technical
 listing or claim of live acceptance. A future authorized real-goods acceptance scenario
 is still required; PHASE8 and the overall project remain open.
+
+
+## Paid-order volume rankings — 2026-10-30
+
+Full JUnit: **603 tests, failures=0/errors=0/skipped=0**, time113.135s,
+ data/bestsellers_results.xml. Completed process handle was no longer available on
+continuation; authoritative full XML inspected instead of restarting. Targeted27 passed
+in45.13s. Nine new cases cover distinct native IDs/same names, count vs revenue,
+unknown-only/partial/zero, paid statuses/period/date boundaries, latest name/offset/ties,
+actual Dispatcher five periods, owner restriction, escaping/top15/length and no API/outbox.
+Ruff check/format140 files, pip check, diff and actual-secret/JWT scan clean.
+Working read-only cache:217 dated orders,183 paid/183 distinct native IDs; item/category
+counts and unknown coverage reconcile. data/bestsellers_readonly_check.json contains
+counts/booleans only. No database writes, API request, migration, buyer send or payment.
+Counts represent paid orders by native listing ID, not inferred logical SKU/units;
+category names are not a verified cross-game taxonomy. Existing revenue top remains.

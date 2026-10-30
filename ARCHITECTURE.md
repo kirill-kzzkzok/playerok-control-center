@@ -700,3 +700,18 @@ requiring MockTransport both as default and for nonempty mounts. Tests are not i
 in installable app/playerokapi packages. Production mutations remain in durable
 Executor/Products/Wizard paths. Future live acceptance needs a separately authorized
 real-goods scenario; the retired technical listing is never retried.
+
+
+## Volume ranking separate from known revenue
+
+Statistics tracks paid order counts per native item ID and category name independently
+of known money. Unknown amounts still count; per-group unknown counters disclose
+coverage. Item names use latest aware server order time with order-ID tie-break, not
+SQLite insertion order. Count ranking uses the same created-order cohort/current paid
+statuses as existing revenue analytics; refunds/future/undated rows are excluded.
+
+StatisticsPanel exposes bestsellers/category_counts for top15 count-based rows, while
+items/categories remain known-revenue views. Unknown-only groups show no known sums;
+true zero remains zero. Native IDs prevent merging same-named listings, but are not an
+automatically inferred logical SKU. Current category grouping is by saved name and is
+labelled accordingly. Count data does not change charts, quotes, transactions or profit.

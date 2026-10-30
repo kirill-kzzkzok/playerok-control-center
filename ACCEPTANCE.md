@@ -208,3 +208,14 @@ missing directory, state handling and no credential/client construction. Native 
 contract helper moved to non-packaged tests with default/mounted MockTransport checks;
 existing create/edit/agreements/fields contracts retained. No live operation occurred;
 future real-goods live acceptance still requires separate authorization and evidence.
+
+
+## §13: paid-order volume ranking
+
+Separate bestsellers/category_counts views implement top15 by paid order count, retaining
+known-revenue views. Test_bestsellers covers count vs revenue, unknown-only/partial/zero,
+status/period/date exclusions, same-name IDs, latest server name/ties, actual Dispatcher
+five periods/owner/escaping/length/stable cutoff. Read-only cache probe reconciles217
+orders/183 paid with183 distinct native item IDs; all actual counts1 are disclosed,
+not grouped into invented SKU families. Categories remain name-grouped and labelled.
+No API, outbox, working data rewrite or financial interpretation change occurred.
