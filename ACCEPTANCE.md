@@ -101,3 +101,43 @@ message registration, bounded worker/backoff, fresh chat/message validation, tra
 stop guards and existing reply outbox/reconciliation. `tests/test_auto_replies.py` covers
 these paths including Dispatcher/restart/arming. Production runtime flags false, zero
 rules, no actual buyer sends. This is mock acceptance; live delivery remains unverified.
+
+## Критерии §20: текущая карта приёмки
+
+Здесь «локально»/«mock»/«live-read» обозначают разные уровни доказательств; ни один
+из них автоматически не доказывает остальные. Успехи live относятся к датированным
+проверкам, не обещают бессрочную авторизацию или непрерывную работу остановленного бота.
+
+| № | Критерий | Состояние и доказательство |
+|---|---|---|
+| 1 | Запуск бота с реальной конфигурацией | Ранее подтверждён polling/owner claim в PROGRESS; длительная непрерывная работа не принята |
+| 2 | Авторизация Playerok | Live-read viewer/user/transactions HTTP200: data/playerok_auth_diagnostics.json; будущая сессия может истечь |
+| 3 | Доступ только владельцу | OwnerMiddleware, real first claim, test_telegram_integration/test_ui_and_rendering; групповые/чужие callbacks отклоняются |
+| 4 | Полный мастер | Mock Dispatcher/schema/photo/preview/durable FSM в test_telegram_integration/test_wizard_attachments; успешный live create не принят |
+| 5 | Динамические поля | test_category_contracts/test_item_fields/test_agreements; актуальные schema read, unknown types fail closed |
+| 6 | Реальная загрузка фото | Telegram attachments и native multipart mock проверены; подтверждённого Playerok live upload/create нет — открыто |
+| 7 | Live create/edit/publish тестового лота | Открыто: create отклонён правилами, отсутствие объекта проверено; новые live-записи требуют разрешения |
+| 8 | PREMIUM до оплаты | Read-only quotes + Decimal preview, test_finance_panel/test_placement_basis; платная покупка не выполнялась |
+| 9 | Комиссии без вымысла | Provenance/Decimal/unknown guard, financial/transaction tests; неоднозначные реальные удержания не объявляются точными |
+| 10 | Управление существующими товарами | Read/schema/inline actions и mock executor; live working listings не менялись, реальное изменение не принято |
+| 11 | Автовыдача в тестах | test_delivery_chains/test_enrollment/test_durability, ordered steps/stock; live buyer send не принят |
+| 12 | Дубликаты без повторной выдачи | Unique inventory/reservation/inbox/outbox, concurrency/recovery tests и subprocess crash |
+| 13 | Состояние после restart | SQLite FSM, migrations, backup, cursor/chain/outbox/reply recovery tests; working v18 retained data |
+| 14 | Повтор callback без дублей | Real Dispatcher concurrent publish confirmations + queue CAS, test_dispatch_recovery/test_telegram_integration |
+| 15 | Устойчивые сообщения/уведомления | Dedup, unknown/no retry, preference/suppression, auto_reply source/stop guards; live replies не приняты |
+| 16 | Условия/стоимость поднятия | Read-only promotion policy/quotes/position/scheduling; реальный платный executor не принят/не включён |
+| 17 | Денежные лимиты | Promotion dry-run budgets count RESERVED/UNCERTAIN, tests; реальные расходы запрещены, не выдаём dry-run за charge gate live |
+| 18 | Реальный профиль | Native parser contract + real profile read; PNG rendering, avatar fallback; окончательная визуальная live-приёмка отдельно |
+| 19 | Реальные/помеченные графики | Real cached history vs separate demo fixtures, visual QA; smooth points/gap/calendar tests |
+| 20 | Ошибки сети/API | §16 matrix above, read429/backoff/401/403/sanitized trace, mutation unknown, cancellation/late ack |
+| 21 | Все автоматические тесты | Последний полный результат фиксируется в TEST_REPORT/PROGRESS; успешный набор не закрывает live gaps |
+| 22 | Live evidence documented | PLAYEROK_RESEARCH/TEST_REPORT and ignored data reports; successful/read-only and rejected/unverified operations distinguished |
+| 23 | Рабочий магазин не повреждён | Новые записи/платежи/выдачи не выполнялись; настройки writes/automation false; исходный rejected create reconciled |
+| 24 | Код/зависимости/настройки запуска | Lockfile/install/start, wheel resources/isolated-origin smoke и selfcheck; текущая Windows/dependency конфигурация, не все платформы |
+| 25 | README | Установка/конфигурация/ограничения/восстановление/диагностика и private remote; общая приёмка всё ещё открыта |
+| 26 | Честный отчёт | Настоящая карта/TEST_REPORT перечисляют непринятые возможности; проект не объявлен завершённым |
+
+История и текущая ветка теперь синхронизируются с приватным origin по прямому указанию
+пользователя; Git не содержит .env/PROJECT_SPEC/data/logs. Перед первым push проверены
+все 449 исторических blobs, actual secrets/JWT/private paths отсутствуют. Будущие изменения
+также проверяются перед commit/push; рабочие secret/state files остаются только локально.

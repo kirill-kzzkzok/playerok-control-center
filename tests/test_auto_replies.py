@@ -157,6 +157,22 @@ async def test_message_before_enable_cutoff_never_replayed_on_enable(setup):
     assert not store.rows("SELECT * FROM outbox")
 
 
+async def test_same_clock_tick_distinguishes_old_inbox_from_future_message(setup, monkeypatch):
+    store, api, messages, service = setup
+    fixed = datetime.now(UTC).isoformat()
+    monkeypatch.setattr("app.services.auto_replies.now", lambda: fixed)
+    monkeypatch.setattr("app.services.orders.now", lambda: fixed)
+    incoming(store, messages, "old", created_at=fixed)
+    enable(service)
+    incoming(store, messages, "new", created_at=fixed)
+    await AutoReplyWorker(store, api).once()
+    assert store.rows("SELECT message_id,status FROM auto_reply_events ORDER BY message_id") == [
+        {"message_id": "new", "status": "QUEUED"},
+        {"message_id": "old", "status": "SKIPPED"},
+    ]
+    assert len(store.rows("SELECT * FROM outbox")) == 1
+
+
 @pytest.mark.parametrize("change", ["policy", "runtime", "edit", "reply"])
 async def test_stop_while_waiting_api_lock_blocks_auto_send(setup, change):
     store, api, messages, service = setup

@@ -577,3 +577,27 @@ reply executor and its read reconciliation; registration alone never sends a mes
 UI exposes create/edit disabled, separate arm confirmation, full paginated response
 preview, stop, disabled delete and bounded journal. No secrets/content enter audits.
 No runtime permission flag is changed by rule configuration; production stays disabled.
+
+## Packaging and offline installation check
+
+app.selfcheck imports packaged application modules, checks migration continuity and
+certificate, exercises a disposable SQLite database/backup/reopen and PNG rendering.
+It never calls Config.load or remote services and never opens the working database.
+Reports contain module/dependency/schema metadata and fixed allowlisted error codes.
+Console scripts expose pcc/pcc-check; README is wheel metadata and vendored MIT license
+remains included. Installed-wheel smoke runs outside the source directory with editable
+package discovery disabled and verifies package origins under the isolated target.
+
+Store.backup uses contextlib.closing for its destination connection. A sqlite3 connection
+context only commits/rolls back; it does not close. Retaining that handle prevented prompt
+cleanup of backup files on Windows, exposed by offline installation checks. The regression
+test asserts the destination connection is closed and the file can be immediately removed.
+
+## Auto-reply arm boundary under equal clock timestamps
+
+A rule save atomically captures MAX(inbox.rowid) into its settings boundary alongside
+rule revision/cutoff. Matching requires a strictly newer first inbox row plus aware
+created/received dates not before cutoff and recent age. This prevents historical
+messages on the same clock tick from being armed retroactively. Duplicate imports do
+not replace the original inbox row; missing boundary fails closed. The deterministic
+regression fixes all three event timestamps equal and proves old skipped/new eligible.

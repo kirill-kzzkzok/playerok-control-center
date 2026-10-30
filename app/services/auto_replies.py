@@ -113,6 +113,13 @@ class AutoReplies:
             ):
                 raise Conflict("Правило изменилось; откройте заново")
             db.execute(
+                "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (
+                    f"auto_reply:{ident}:inbox_cutoff",
+                    encode(db.execute("SELECT COALESCE(MAX(rowid),0) FROM inbox").fetchone()[0]),
+                ),
+            )
+            db.execute(
                 "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'AUTO_REPLY_RULE',?,?,?)",
                 (actor, ident, "ARMED_FUTURE_ONLY" if enabled else "DISABLED", now()),
             )
@@ -146,6 +153,12 @@ class AutoReplies:
 
     def matches(self, message, rule, received_at, at=None):
         at = at or datetime.now(UTC)
+        boundary = self.store.setting(f"auto_reply:{rule['id']}:inbox_cutoff")
+        source = self.store.rows(
+            "SELECT rowid AS sequence FROM inbox WHERE key=?", ("message:" + str(message.get("id")),)
+        )
+        if type(boundary) is not int or not source or source[0]["sequence"] <= boundary:
+            return False
         created, received, cutoff = map(
             parsed_time, (message.get("created_at"), received_at, rule["updated_at"])
         )

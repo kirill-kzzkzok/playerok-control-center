@@ -575,3 +575,33 @@ zero rules/events, worker once DISABLED, no external requests or mutations.
 data/auto_replies_migration_check.json. No live auto-reply/customer sending performed;
 mock acceptance does not prove live sending. Production flags remain disabled. Existing
 reply reconciliation/uncertain alerts and stock-chain tests still pass with added guards.
+
+## Installed wheel / backup handle / same-tick cutoff / private remote (2026-10-30)
+
+**518 passed in 86.96s**; data/installation_results.xml. Ruff/format (129 files), pip
+check clean. New offline selfcheck tests deny Config.load/Python socket connect, validate
+temporary schema/backup/reopen/PNG and a missing migration error. Regression proves
+backup destination connection is actually closed and the file can be removed immediately.
+
+Initial installed-wheel smoke and full suite exposed PermissionError: sqlite3 context
+only commits, leaving the backup connection open on Windows. Fixed with closing; no
+failure concealed. Another full-suite failure exposed same-tick old/new auto-reply cutoff;
+new deterministic regression + atomic inbox-row boundary fixes it without clock sleeps.
+Targeted autoreply/installation suite: 35 passed in 15.84s, followed by the full result above.
+
+Final wheel SHA256 a625f40ed9a3943575d48ed30acb7cb22dbb59b90017a354fb6091dcba3caef0. Installed --no-index --no-deps into a fresh
+ignored target and executed outside the repository with editable discovery disabled.
+Both app/playerokapi origins verified under that target; all 80 application modules
+imported, 17 migration files/schema1–18/packaged certificate/MIT license present, SQLite
+backup and PNG checks OK. Report data/wheel_installation_check.json, exit=0. Dependencies
+were the current verified venv, not a newly provisioned OS/Python environment. Wheel
+secret scan CLEAN, no .env/PROJECT_SPEC/data included. Runtime credentials never read by
+selfcheck; production state/API not exercised. The initial --no-build-isolation command
+failed for absent setuptools; the normal isolated PEP517 build succeeded.
+
+Private GitHub repository created per updated user objective:
+https://github.com/kirill-kzzkzok/playerok-control-center, isPrivate=true. First push of
+verified history succeeded; local/remote master matched 9980c4050a069125be7b20035f45a36fdb6bc4cf.
+Before that push, 449 historical blobs scanned: known secrets=0/JWT candidates=0/private
+paths=0; data/git_history_secret_audit.json. Current changes are scanned before push too.
+Remaining project acceptance/live gaps are still open, mapped against all 26 §20 criteria.

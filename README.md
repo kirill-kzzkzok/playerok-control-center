@@ -18,6 +18,7 @@ GET/POST `getMe` и корректный отказ неверному токе�
 
 Проверка подключений: `.venv\Scripts\python.exe -m app.diagnostics`.
 Тесты: `.venv\Scripts\python.exe -m pytest -q`.
+Офлайн-проверка установки: `.venv\Scripts\python.exe -m app.selfcheck` (без .env, сети и рабочей БД).
 Статическая проверка: `.venv\Scripts\python.exe -m ruff check app tests`.
 
 ## Возможности текущей реализации
@@ -342,3 +343,20 @@ Live-удаление ещё не проверялось, тесты выпол�
 очередь ответа/выдачи или источник изменился, автоответ блокируется. Неизвестный результат
 отправки не повторяется. Журнал доступен в панели. Не используйте автоответ для уникальных
 кодов: запас выдаётся отдельным механизмом. Live-автоответы ещё не проверялись.
+
+## Проверка установленного пакета
+
+`python -m app.selfcheck --output data/installation_check.json` импортирует модули,
+проверяет упакованные SQL-миграции и сертификат, создаёт временную SQLite БД, проверяет
+backup/reopen и PNG профиля/графика. Рабочие данные и секреты не читаются. Ненулевой код
+выхода означает ошибку установки; это не проверка авторизации и не live-приёмка магазина.
+После установки пакета также доступны команды `pcc-check` и `pcc`.
+
+Сборка wheel: `python -m pip wheel --no-deps --wheel-dir data/dist .`.
+Не отключайте build isolation без отдельно установленных build dependencies. Зависимости
+для запуска фиксированы в requirements.lock.txt. Успешная проверка wheel с текущими
+зависимостями не гарантирует работу на всех версиях Python/Windows/Linux.
+
+Приватный удалённый репозиторий:
+[GitHub — Playerok Control Center](https://github.com/kirill-kzzkzok/playerok-control-center).
+Приватные .env/PROJECT_SPEC.md, рабочая БД, коды, логи и build output не публикуются.

@@ -1155,3 +1155,55 @@ Ruff/format 127 files, pip clean. v18 после backup before-auto-replies-v18-
 217 orders/462 transactions/1 owner сохранены, rules=events=processed=0, DISABLED,
 external_requests=0/mutations=0; data/auto_replies_migration_check.json. Writes и automation
 в .env остаются false. Бот не запущен, live buyer messages/выдачи/платные операции не делались.
+
+## Packaging / offline runtime readiness / private GitHub (2026-10-30)
+
+По дополнению пользователя создан приватный репозиторий GitHub:
+https://github.com/kirill-kzzkzok/playerok-control-center. gh repo view подтвердил isPrivate=true;
+origin HTTPS добавлен. Connector не предоставляет create-repository, использован уже
+авторизованный gh CLI. Перед первым push проверены 449 history blobs: actual env secrets=0,
+JWT candidates=0, .env/PROJECT_SPEC/data paths=0; data/git_history_secret_audit.json.
+Существующий master сохраняется, новая ветка/переписывание истории не требовались.
+
+Добавлены offline app.selfcheck и console commands pcc/pcc-check, README metadata в wheel,
+build/ игнорируется. Selfcheck не загружает .env/Config, не трогает рабочую БД, импортирует
+модули, проверяет SQL/certificate, временные migrations/integrity/backup/reopen и PNG.
+Тест блокирует Python socket connect и Config.load. Отчёт об ошибке не печатает raw
+exception/credentials, только type и фиксированные коды.
+
+Первый pip wheel с --no-build-isolation не имел установленного setuptools; штатная
+PEP517 isolated сборка прошла. Wheel содержит schema/all migrations/cacert/MIT license,
+без private files и env secrets. Отдельный smoke вне репозитория с отключённым editable
+finder выявил PermissionError, затем полный тест воспроизвёл его. Причина найдена в
+Store.backup: sqlite3 connection context не закрывал destination connection. Исправлено
+через contextlib.closing; regression проверяет закрытый handle и immediate unlink на
+Windows. Не объявляли failed сборку/проверку успешной и не обходили её.
+
+Сравнение §8/§20: automatic buyer CONFIRMED не реализуется/не подделывается; legacy SENT
+и official report требуют отдельной owner attestation. Полностью automatic seller
+confirmation остаётся непроверенным/незавершённым условным требованием, не названо
+площадкой неподдерживаемым только потому, что наш workflow пока ручной.
+
+В полном прогоне также обнаружен реальный same-clock-tick дефект v18: сообщение,
+поступившее до enable, могло иметь created_at/received_at == updated_at и пройти cutoff.
+Теперь save/arm в той же transaction сохраняет MAX(inbox.rowid) в settings для rule ID;
+matches требует first inbox rowid строго выше границы плюс прежние date/age guards.
+Отсутствующая граница fail-closed (правило нужно пересохранить); рабочих rules=0.
+Детерминированный test_same_clock_tick_distinguishes_old_inbox_from_future_message
+ставит совершенно одинаковые timestamps: old SKIPPED, new QUEUED. Изменение схемы не
+требуется, gate и rule сохраняются атомарно. Старые inbox payload не подделываются.
+
+ACCEPTANCE.md расширен до всех 26 критериев §20 с уровнями mock/local/live-read и
+открытыми пунктами. Не выдаём эту карту за завершённую приёмку. Private origin содержит
+всю прежнюю проверенную историю; текущее packaging/backup/cutoff исправление будет
+записано и отправлено после полного повторного прогона и scans.
+
+Контрольная точка packaging: **518 passed in 86.96s**, data/installation_results.xml;
+Ruff/pip/format clean. Final installed wheel SHA256 a625f40ed9a3943575d48ed30acb7cb22dbb59b90017a354fb6091dcba3caef0, exit0,
+80 app modules, schema1–18, metadata-only report data/wheel_installation_check.json.
+Dependencies reused from verified venv; this is not all-platform/fresh-OS certification.
+
+По новому указанию пользователя дальнейшие checkpoints не только commit локально, но и
+push в приватный origin после тестов/secret scan. Не загружать private .env/PROJECT_SPEC,
+DB/data/logs/build artifacts; не менять visibility/не создавать public releases. Цель
+остаётся активной: §20 live mutation/photo/automation/long soak/financial gaps не закрыты.

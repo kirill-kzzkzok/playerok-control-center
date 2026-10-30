@@ -3,7 +3,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -303,7 +303,7 @@ class Store:
     def backup(self, destination):
         destination = Path(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        with self.lock, sqlite3.connect(destination) as target:
+        with self.lock, closing(sqlite3.connect(destination)) as target:
             self.db.backup(target)
 
     def close(self):
