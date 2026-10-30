@@ -397,6 +397,14 @@ class Playerok:
 
         try:
             return await calls_for(self).call(run)
+        except APIError as error:
+            from app.security.logging import event
+
+            previous = getattr(self, "_last_logged_error", None)
+            if not previous or previous[0] != error.code or time.monotonic() - previous[1] >= 60:
+                event("WARNING", f"Playerok: ошибка чтения {method} · {error.code}", level=30)
+                self._last_logged_error = (error.code, time.monotonic())
+            raise
         except CallsClosedError:
             raise APIError("API_CLOSING") from None
 

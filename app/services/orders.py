@@ -2,6 +2,7 @@ import hashlib
 import json
 
 from app.database.store import Conflict, encode, now, server_time
+from app.security.logging import event
 
 
 class Orders:
@@ -72,6 +73,24 @@ class Orders:
                             now(),
                         ),
                     )
+            if added and status == "PAID":
+                gift = db.execute(
+                    "SELECT 1 FROM gift_listings WHERE item_id=? AND enabled=1", (item["id"],)
+                ).fetchone()
+                policy = db.execute(
+                    "SELECT payload FROM delivery_policies WHERE item_id=?", (item["id"],)
+                ).fetchone()
+                mode = (
+                    "подарки"
+                    if gift
+                    else (json.loads(policy[0]).get("mode", "manual") if policy else "manual")
+                )
+                event(
+                    "ORDER",
+                    "Обнаружен оплаченный заказ · товар: " + str(item.get("name") or item["id"])[:120],
+                    order=ident,
+                )
+                event("ORDER", "Режим выдачи: " + mode, order=ident)
             return bool(added)
 
     def annotate(self, order_id, actor, revision, problem, note):

@@ -250,7 +250,7 @@ class Store:
             if row["kind"] in {"gift_send", "gift_refund"}:
                 from app.gifts.outcomes import finish
 
-                finish(db, row, status, result, error)
+                finish(db, {**dict(row), "id": ident}, status, result, error, store=self)
             if row[0].startswith("delivery:"):
                 order = row[0].removeprefix("delivery:")
                 state = "DELIVERED" if status == "SUCCEEDED" else "QUARANTINED"

@@ -28,7 +28,7 @@ class Wizard:
             and payload.get("category_id") == settings.category_id
             and payload.get("obtaining_type_id") == settings.obtaining_type_id
         ):
-            gift_code_from_description(payload.get("description", ""))
+            gift_code_from_description(payload.get("description", ""), max_count=settings.max_gifts)
 
     def __init__(self, store, api, products, attachments=None):
         self.store, self.api, self.products = store, api, products

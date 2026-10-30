@@ -19,6 +19,7 @@ class GiftSettings:
     max_order_stars: int
     max_daily_stars: int
     refund_enabled: bool = False
+    max_gifts: int = 5
 
     @classmethod
     def load(cls, path: str = ".env") -> "GiftSettings":
@@ -46,6 +47,7 @@ class GiftSettings:
             max_order_stars=positive("TG_GIFT_MAX_ORDER_STARS", "100"),
             max_daily_stars=positive("TG_GIFT_MAX_DAILY_STARS", "300"),
             refund_enabled=str(env.get("TG_GIFT_REFUNDS_ENABLED") or "false").lower() == "true",
+            max_gifts=min(20, positive("TG_GIFT_MAX_COUNT", "5")),
         )
 
     def require_configured(self):

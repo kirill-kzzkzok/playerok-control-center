@@ -19,7 +19,7 @@ from app.playerok.adapter import APIError, Playerok, SafeAccount
 from app.playerok.thread_calls import begin_close_calls, close_calls
 from app.security.access import OwnerMiddleware
 from app.security.instance import InstanceLock
-from app.security.logging import configure_logging
+from app.security.logging import configure_logging, event
 from app.services.account_binding import AccountBindingError, bind_account
 from app.services.interface_cleanup import InterfaceCleanup
 from app.services.orders import Orders
@@ -53,6 +53,7 @@ async def outbox_loop(worker, stop):
 
 
 async def run(config):
+    event("INFO", "Запуск Playerok Control Center")
     store = Store(config.database_path)
     account = SafeAccount(config.playerok_header, writes_enabled=config.writes_enabled)
     account.automation_enabled = config.automation_enabled
@@ -73,6 +74,7 @@ async def run(config):
         if recovered:
             logger.warning("Recovered %s operations as UNCERTAIN", recovered)
         await bot.get_me()
+        event("INFO", "Telegram Bot подключён")
         verified_account = False
         try:
             await api.call("get")
@@ -82,6 +84,7 @@ async def run(config):
                 raise ConfigurationError(str(error)) from None
             store.set_setting("playerok:connection", "OK")
             verified_account = True
+            event("INFO", "Playerok подключён")
         except APIError as error:
             store.set_setting("playerok:connection", error.code)
             logger.warning("Playerok connection: %s; local data preserved", error.code)
@@ -158,6 +161,7 @@ async def run(config):
             bot, allowed_updates=["message", "callback_query"], close_bot_session=False, polling_timeout=20
         )
     finally:
+        event("INFO", "Остановка приложения: новые операции запрещены, ожидание текущих запросов")
         stop.set()
         begin_close_calls(api)
         for task in tasks:
@@ -170,6 +174,7 @@ async def run(config):
         await bot.session.close()
         account.close()
         store.close()
+        event("INFO", "Telegram Bot и Playerok отключены. Приложение остановлено")
 
 
 def main():

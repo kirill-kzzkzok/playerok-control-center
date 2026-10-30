@@ -8,8 +8,15 @@ from datetime import UTC, datetime, timedelta
 from html import escape
 
 from app.database.store import Conflict, encode, now, server_time
-from app.gifts.core import SEED_GIFTS, GiftValidationError, buyer_recipient, gift_code_from_description
+from app.gifts.core import (
+    SEED_GIFTS,
+    GiftValidationError,
+    buyer_recipient,
+    gift_code_from_description,
+    gift_codes,
+)
 from app.gifts.mtproto import GiftFailure, InvalidRecipient
+from app.security.logging import event
 from app.services.order_management import deliverable, sale
 from app.services.orders import Orders
 
@@ -54,7 +61,7 @@ class GiftService:
             raise GiftValidationError("Не совпадает настроенная категория или способ «Подарок»")
         if item.get("deleted_at") or item.get("status") not in {"DRAFT", "APPROVED"}:
             raise GiftValidationError("Лот удалён или недоступен для настройки")
-        code = gift_code_from_description(item.get("description"))
+        code = gift_code_from_description(item.get("description"), max_count=self.settings.max_gifts)
         # The schema is authoritative for field identity/type, never a label/substring heuristic.
         fields = []
         async for page in self.api.pages(
@@ -114,21 +121,29 @@ class GiftService:
                 "INSERT INTO settings VALUES('gifts:connection',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (encode({"status": "OK", "at": now()}),),
             )
+        event("CHECK", f"Баланс личного Telegram: {balance} Stars; каталог обновлён")
         return balance
 
-    async def bind(self, owner, item_id, confirmed_code, *, expected_stars=None, expected_revision=None):
+    async def bind(
+        self,
+        owner,
+        item_id,
+        confirmed_code,
+        *,
+        expected_stars=None,
+        expected_revision=None,
+        expected_bundle=None,
+    ):
         data = await self.inspect_item(owner, item_id)
         if confirmed_code != data["code"]:
             raise GiftValidationError("Подтверждённый код не совпадает с последней строкой описания")
         await self.refresh()
-        catalog = self.store.rows(
-            "SELECT * FROM gift_catalog WHERE code=? AND available=1", (confirmed_code,)
-        )
-        if not catalog:
-            raise GiftValidationError("Подарка нет в актуальном каталоге Telegram")
-        c = catalog[0]
+        bundle = self.catalog_bundle(data["code"])
+        c = {"gift_id": bundle[0]["gift_id"], "stars": sum(g["stars"] for g in bundle)}
         if expected_stars is not None and c["stars"] != expected_stars:
             raise Conflict("Цена изменилась после подтверждения; проверьте новую цену")
+        if expected_bundle is not None and bundle != expected_bundle:
+            raise Conflict("Цена отдельного подарка изменилась: подтвердите весь пакет заново")
         with self.store.transaction() as db:
             old = db.execute(
                 "SELECT enabled,revision FROM gift_listings WHERE item_id=?", (item_id,)
@@ -156,7 +171,29 @@ class GiftService:
                     self.settings.buyer_username_field_id,
                 ),
             )
+            db.execute("UPDATE gift_listings SET bundle=? WHERE item_id=?", (encode(bundle), item_id))
         return data
+
+    def catalog_bundle(self, code):
+        bundle = []
+        for value in gift_codes(code):
+            rows = self.store.rows("SELECT * FROM gift_catalog WHERE code=? AND available=1", (value,))
+            if not rows:
+                raise GiftValidationError("Подарка нет в актуальном каталоге Telegram")
+            g = rows[0]
+            bundle.append({"code": value, "gift_id": g["gift_id"], "stars": g["stars"]})
+        return bundle
+
+    def steps(self, order_id):
+        return self.store.rows("SELECT * FROM gift_steps WHERE order_id=? ORDER BY position", (order_id,))
+
+    def step(self, action):
+        rows = self.store.rows(
+            "SELECT * FROM gift_steps WHERE operation_id=? AND order_id=?", (action["id"], action["target"])
+        )
+        if len(rows) != 1:
+            raise GiftFailure("GIFT_STEP_NOT_FOUND")
+        return rows[0]
 
     def limits(self):
         v = self.store.setting("gifts:limits", {})
@@ -194,6 +231,7 @@ class GiftService:
             db.execute(
                 "INSERT INTO settings VALUES('gifts:stopped','true') ON CONFLICT(key) DO UPDATE SET value='true'"
             )
+        event("WARNING", "Экстренная остановка новых подарочных покупок", level=30)
 
     async def arm(self, owner, item_id, revision, *, auto_fulfill=False):
         data = await self.inspect_item(owner, item_id)
@@ -217,8 +255,7 @@ class GiftService:
                 or row["enabled"]
             ):
                 raise Conflict("Привязка изменилась; подтвердите код и цену заново")
-            live = db.execute("SELECT * FROM gift_catalog WHERE code=?", (row["gift_code"],)).fetchone()
-            if not live or not live["available"] or live["stars"] != row["approved_stars"]:
+            if json.loads(row["bundle"]) != self.catalog_bundle(data["code"]):
                 raise Conflict("Цена / доступность подарка изменилась: обновите привязку")
             policy = db.execute(
                 "SELECT payload FROM delivery_policies WHERE item_id=?", (item_id,)
@@ -292,6 +329,30 @@ class GiftService:
                         now(),
                     ),
                 )
+                bundle = json.loads(self.listing(row["item_id"])["bundle"])
+                db.execute(
+                    "UPDATE gift_jobs SET bundle=?,description_sha256=? WHERE order_id=?",
+                    (encode(bundle), self.listing(row["item_id"])["description_sha256"], row["id"]),
+                )
+                for position, gift in enumerate(bundle):
+                    db.execute(
+                        "INSERT INTO gift_steps(order_id,position,code,gift_id,stars,operation_id,reference) VALUES(?,?,?,?,?,?,?)",
+                        (
+                            row["id"],
+                            position,
+                            gift["code"],
+                            gift["gift_id"],
+                            gift["stars"],
+                            op if position == 0 else None,
+                            "PCC-" + uuid.uuid4().hex,
+                        ),
+                    )
+                event(
+                    "ORDER",
+                    "Пакет подарков поставлен в очередь: " + row["gift_code"],
+                    order=row["id"],
+                    operation=op,
+                )
                 count += 1
         return count
 
@@ -306,7 +367,7 @@ class GiftService:
             or l["revision"] != j["listing_revision"]
             or l["gift_code"] != j["gift_code"]
             or l["gift_id"] != j["gift_id"]
-            or SEED_GIFTS.get(l["gift_code"], ("", 0, 0))[1] != int(l["gift_id"])
+            or l["bundle"] != j["bundle"]
             or lease["status"] != "PROCESSING"
             or lease["lease_token"] != action["lease_token"]
             or (lease["lease_until"] or 0) <= time.time()
@@ -320,6 +381,14 @@ class GiftService:
         ):
             raise GiftFailure("ORDER_BLOCKED")
         deliverable(json.loads(local["payload"]), j["order_id"], self.api.account.id)
+        step = self.step(action)
+        if step["state"] not in ({"SPENDING"} if spending else {"PENDING", "CHECKING"}):
+            raise GiftFailure("GIFT_STEP_BLOCKED")
+        if self.store.rows(
+            "SELECT 1 FROM gift_steps WHERE order_id=? AND position<? AND state!='SUCCEEDED'",
+            (j["order_id"], step["position"]),
+        ):
+            raise GiftFailure("PREVIOUS_GIFT_NOT_CONFIRMED")
         return j, l
 
     async def fresh_order(self, job):
@@ -340,74 +409,174 @@ class GiftService:
 
     async def execute(self, action):
         j, l = self.guard(action)
-        if (
-            self.store.execute(
-                "UPDATE gift_jobs SET state='CHECKING',updated_at=? WHERE order_id=? AND state='PENDING'",
-                (now(), j["order_id"]),
-            ).rowcount
-            != 1
-        ):
-            raise GiftFailure("GIFT_ALREADY_CHECKED")
+        step = self.step(action)
+        with self.store.transaction() as db:
+            if (
+                db.execute(
+                    "UPDATE gift_steps SET state='CHECKING' WHERE operation_id=? AND state='PENDING'",
+                    (action["id"],),
+                ).rowcount
+                != 1
+            ):
+                raise GiftFailure("GIFT_ALREADY_CHECKED")
+            db.execute(
+                "UPDATE gift_jobs SET state='CHECKING',updated_at=? WHERE order_id=?", (now(), j["order_id"])
+            )
         order = await self.fresh_order(j)
         username = buyer_recipient(order, field_id=l["username_field_id"])
         try:
             recipient = await self.sender.resolve(username)
         except InvalidRecipient as exc:
-            await self.invalid_recipient(j, exc.code)
+            if not j["spent_at"]:
+                await self.invalid_recipient(j, exc.code)
             raise
-        if self.store.setting("gifts:personal_account_id") != self.sender.me.id:
-            raise GiftFailure("PERSONAL_ACCOUNT_CHANGED")
+        if self.store.setting("gifts:personal_account_id") != self.sender.me.id or (
+            j["recipient_id"] and j["recipient_id"] != recipient.user_id
+        ):
+            raise GiftFailure("RECIPIENT_CHANGED" if j["recipient_id"] else "PERSONAL_ACCOUNT_CHANGED")
+        event("CHECK", "Получатель @[скрыто] проверен", order=j["order_id"], operation=action["id"])
         self.store.execute(
-            "UPDATE gift_jobs SET recipient_username=?,recipient_id=?,recipient_access_hash=?,updated_at=? WHERE order_id=? AND state='CHECKING'",
-            (username, recipient.user_id, str(recipient.access_hash), now(), j["order_id"]),
+            "UPDATE gift_jobs SET recipient_username=?,recipient_id=?,recipient_access_hash=?,payer_id=?,updated_at=? WHERE order_id=? AND state='CHECKING'",
+            (
+                username,
+                recipient.user_id,
+                str(recipient.access_hash),
+                self.sender.me.id,
+                now(),
+                j["order_id"],
+            ),
         )
-        self.store.execute(
-            "UPDATE gift_jobs SET payer_id=? WHERE order_id=? AND state='CHECKING'",
-            (self.sender.me.id, j["order_id"]),
-        )
+        bundle = json.loads(j["bundle"])
+        total = sum(g["stars"] for g in bundle)
         try:
-            prepared = await self.sender.prepare(
-                int(j["gift_id"]), l["approved_stars"], recipient, j["reference"]
-            )
+            await self.sender.check_quantities(bundle[step["position"] :])
+            # Validate every remaining gift before the first paid request. Forms are read-only;
+            # only the current position's form is used, no new form after unknown dispatch.
+            prepared = None
+            for index, gift in enumerate(bundle):
+                if index < step["position"]:
+                    continue
+                candidate = await self.sender.prepare(
+                    int(gift["gift_id"]),
+                    gift["stars"],
+                    recipient,
+                    self.steps(j["order_id"])[index]["reference"],
+                )
+                if index == step["position"]:
+                    prepared = candidate
         except GiftFailure as exc:
             if exc.code in {"PRICE_CHANGED", "GIFT_UNAVAILABLE"}:
                 self.disarm(l["owner_id"], j["item_id"])
             raise
+        generation = self.store.rows("SELECT COUNT(*) n FROM gift_steps WHERE spent_at IS NOT NULL")[0]["n"]
+        balance = await self.sender.balance()
         fresh = await self.fresh_order(j)
         if buyer_recipient(fresh, field_id=l["username_field_id"]).casefold() != username.casefold():
             raise GiftFailure("RECIPIENT_CHANGED")
         try:
-            resolved_again = await self.sender.resolve(username)
+            again = await self.sender.resolve(username)
         except InvalidRecipient:
-            # It existed in this attempt; a changed binding is not evidence for auto refund.
             raise GiftFailure("RECIPIENT_CHANGED") from None
-        if resolved_again.user_id != recipient.user_id:
+        if again.user_id != recipient.user_id:
             raise GiftFailure("RECIPIENT_CHANGED")
         with self.store.transaction() as db:
             self.guard(action)
+            db.execute(
+                "UPDATE gift_steps SET recipient_id=?,payer_id=? WHERE order_id=? AND recipient_id IS NULL",
+                (recipient.user_id, self.sender.me.id, j["order_id"]),
+            )
+            if (
+                db.execute("SELECT COUNT(*) FROM gift_steps WHERE spent_at IS NOT NULL").fetchone()[0]
+                != generation
+            ):
+                raise GiftFailure("BALANCE_OBSERVATION_STALE")
             if db.execute(
-                "SELECT 1 FROM gift_jobs WHERE state IN ('SPENDING','UNCERTAIN') AND order_id!=?",
+                "SELECT 1 FROM gift_steps WHERE state IN ('SPENDING','UNCERTAIN') AND order_id!=?",
                 (j["order_id"],),
             ).fetchone():
                 raise GiftFailure("PAYMENT_LOCKED")
             per_order, daily = self.limits()
-            spent = db.execute(
-                "SELECT COALESCE(SUM(stars),0) FROM gift_jobs WHERE spent_at>=?",
-                (datetime.now(UTC).date().isoformat(),),
+            day = datetime.now(UTC).date().isoformat()
+            # Outstanding reservations + actual/unknown dispatches today are both charged.
+            actual = db.execute(
+                "SELECT COALESCE(SUM(stars),0) FROM gift_steps WHERE spent_at>=?", (day,)
             ).fetchone()[0]
-            if prepared.stars > per_order or spent + prepared.stars > daily:
+            reservations = db.execute("SELECT COALESCE(SUM(reserved_stars),0) FROM gift_jobs").fetchone()[0]
+            current = db.execute(
+                "SELECT reserved_stars,reserved_day FROM gift_jobs WHERE order_id=?", (j["order_id"],)
+            ).fetchone()
+            remaining = db.execute(
+                "SELECT COALESCE(SUM(stars),0) FROM gift_steps WHERE order_id=? AND spent_at IS NULL",
+                (j["order_id"],),
+            ).fetchone()[0]
+            reserved_other = reservations - current["reserved_stars"]
+            if total > per_order or actual + reserved_other + remaining > daily:
                 raise GiftFailure("BUDGET_EXCEEDED")
-            if db.execute("SELECT 1 FROM gift_jobs WHERE form_id=?", (str(prepared.form_id),)).fetchone():
+            if balance < reserved_other + remaining:
+                raise GiftFailure("BALANCE_TOO_LOW")
+            if db.execute("SELECT 1 FROM gift_steps WHERE form_id=?", (str(prepared.form_id),)).fetchone():
                 raise GiftFailure("PAYMENT_FORM_ALREADY_USED")
             db.execute(
-                "UPDATE gift_jobs SET state='SPENDING',stars=?,form_id=?,spent_at=?,updated_at=? WHERE order_id=? AND state='CHECKING'",
-                (prepared.stars, str(prepared.form_id), now(), now(), j["order_id"]),
+                "UPDATE gift_jobs SET reserved_day=?,reserved_stars=?,state='SPENDING',spent_at=COALESCE(spent_at,?),form_id=?,updated_at=? WHERE order_id=?",
+                (day, remaining - prepared.stars, now(), str(prepared.form_id), now(), j["order_id"]),
             )
-        # No await between this final permission check and entering the single payment RPC.
+            db.execute(
+                "UPDATE gift_steps SET state='SPENDING',recipient_id=?,payer_id=?,form_id=?,spent_at=? WHERE operation_id=? AND state='CHECKING'",
+                (recipient.user_id, self.sender.me.id, str(prepared.form_id), now(), action["id"]),
+            )
+        event(
+            "CHECK",
+            f"Стоимость пакета: {total} Stars; баланс и лимиты проверены",
+            order=j["order_id"],
+            operation=action["id"],
+        )
         self.guard(action, spending=True)
+        event(
+            "GIFT",
+            f"{step['code']} {step['position'] + 1}/{len(bundle)} — отправка",
+            order=j["order_id"],
+            operation=action["id"],
+            position=step["position"] + 1,
+        )
         result = await self.sender.pay(prepared)
-        receipt = await self.sender.receipt(self.job(j["order_id"]), result)
+        evidence = {**self.job(j["order_id"]), **self.step(action)}
+        receipt = await self.sender.receipt(evidence, result)
         return {"gift_receipt": receipt}
+
+    def continue_bundle(self, order_id, db):
+        j = self.job(order_id)
+        steps = self.steps(order_id)
+        pending = next((g for g in steps if g["state"] != "SUCCEEDED"), None)
+        if pending is None:
+            receipts = [json.loads(g["receipt"]) for g in steps]
+            db.execute(
+                "UPDATE gift_jobs SET state='SUCCEEDED',receipt=?,stars=?,reserved_stars=0,updated_at=? WHERE order_id=?",
+                (
+                    encode(receipts[0] if len(receipts) == 1 else {"gifts": receipts}),
+                    sum(g["stars"] for g in steps),
+                    now(),
+                    order_id,
+                ),
+            )
+            return
+        if pending["state"] != "PENDING" or pending["operation_id"]:
+            return
+        op = self.store.enqueue(
+            f"gift:{order_id}:{pending['position']}",
+            "gift_send",
+            order_id,
+            {"position": pending["position"]},
+            db,
+            actor=self.listing(j["item_id"])["owner_id"],
+        )
+        db.execute(
+            "UPDATE gift_steps SET operation_id=? WHERE order_id=? AND position=?",
+            (op, order_id, pending["position"]),
+        )
+        db.execute(
+            "UPDATE gift_jobs SET operation_id=?,state='PENDING',updated_at=? WHERE order_id=?",
+            (op, now(), order_id),
+        )
 
     async def invalid_recipient(self, job, code):
         # Only two definitive resolveUsername RPC errors reach here, never timeout/FloodWait.
@@ -450,47 +619,64 @@ class GiftService:
     async def reconcile(self, owner, order_id):
         self.owner(owner)
         job = self.job(order_id)
-        if job["state"] != "UNCERTAIN" or not job["spent_at"]:
+        unknown = [g for g in self.steps(order_id) if g["state"] == "UNCERTAIN" and g["spent_at"]]
+        if job["state"] != "UNCERTAIN" or len(unknown) != 1:
             raise GiftValidationError("Сверка доступна только для неизвестного результата отправки")
-        receipt = await self.sender.receipt(job)
+        step = unknown[0]
+        receipt = await self.sender.receipt({**job, **step})
         with self.store.transaction() as db:
             if (
                 db.execute(
-                    "UPDATE gift_jobs SET state='SUCCEEDED',receipt=?,message_id=?,updated_at=? WHERE order_id=? AND state='UNCERTAIN' AND refund_state='NONE'",
-                    (encode(receipt), receipt["message_id"], now(), order_id),
+                    "UPDATE gift_steps SET state='SUCCEEDED',receipt=?,message_id=? WHERE order_id=? AND position=? AND state='UNCERTAIN'",
+                    (encode(receipt), receipt["message_id"], order_id, step["position"]),
                 ).rowcount
                 != 1
             ):
                 raise Conflict("Состояние подарка изменилось")
-            # Keep the immutable outbox UNKNOWN record; this is a separate confirmed read receipt.
-            self.queue_notice(db, job, "DELIVERED")
+            self.continue_bundle(order_id, db)
+            if self.job(order_id)["state"] == "SUCCEEDED":
+                self.queue_notice(db, job, "DELIVERED")
+        event("SUCCESS", "Доставка подтверждена сверкой", order=order_id, position=step["position"] + 1)
         return receipt
 
     def retry_preflight(self, owner, order_id):
-        """Explicit owner retry of a proved pre-payment failure; never resets an unknown payment."""
         self.owner(owner)
         with self.store.transaction() as db:
             j = self.job(order_id)
             l = self.listing(j["item_id"])
-            op = db.execute("SELECT status FROM outbox WHERE id=?", (j["operation_id"],)).fetchone()
+            candidates = [g for g in self.steps(order_id) if g["state"] != "SUCCEEDED"]
+            step = candidates[0] if candidates else None
+            op = (
+                db.execute("SELECT status FROM outbox WHERE id=?", (step["operation_id"],)).fetchone()
+                if step
+                else None
+            )
             if (
                 j["state"] != "BLOCKED"
-                or j["spent_at"]
-                or j["form_id"]
+                or not step
+                or step["state"] != "BLOCKED"
+                or step["spent_at"]
+                or step["form_id"]
                 or j["refund_state"] != "NONE"
                 or not op
-                or op[0] != "PERMANENT_FAILED"
+                or op[0] not in {"PERMANENT_FAILED", "UNCERTAIN"}
                 or not self.runtime()
                 or not l["enabled"]
+                or j["bundle"] != l["bundle"]
+                or j["description_sha256"] != l["description_sha256"]
             ):
                 raise Conflict("Повтор безопасной проверки недоступен; неизвестные оплаты не повторяются")
             operation = self.store.enqueue(
                 "gift-recheck:" + order_id + ":" + uuid.uuid4().hex,
                 "gift_send",
                 order_id,
-                {},
+                {"position": step["position"]},
                 db,
                 actor=owner,
+            )
+            db.execute(
+                "UPDATE gift_steps SET state='PENDING',operation_id=?,error_code=NULL WHERE order_id=? AND position=?",
+                (operation, order_id, step["position"]),
             )
             db.execute(
                 "UPDATE gift_jobs SET state='PENDING',operation_id=?,listing_revision=?,error_code=NULL,updated_at=? WHERE order_id=?",

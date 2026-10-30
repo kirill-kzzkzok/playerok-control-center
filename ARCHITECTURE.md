@@ -1,5 +1,45 @@
 # Playerok Control Center
 
+## Ordered gift bundles and console events (schema22, 2026-10-31)
+
+This extends schema21's GiftService/Outbox, not a second delivery engine. Canonical
+gift_code now supports an ordered comma list; repetitions are quantity. Listings
+and jobs retain a JSON bundle snapshot; gift_steps(order_id,position) stores each
+paid intent/receipt with unique reference/form/Outbox IDs. Migration22 copies old
+single intents with their states unchanged and never creates/rearms operations.
+
+Enrollment atomically snapshots all positions, approved prices, description hash
+and policy revision. Before initial dispatch every remaining gift is preflighted,
+recipient is pinned, cumulative availability/balance/whole-order/day limits checked.
+SQLite BEGIN IMMEDIATE reserves the remaining Stars. Daily accounting adds actual
+or uncertain dispatches today plus all outstanding reservations (including old-day
+reservations). A dispatch-count fence rejects stale balance observations from a
+concurrent preflight. One SPENDING/UNCERTAIN paid operation blocks concurrent spends.
+
+Each step uses existing gift_send and leases. Store.finish atomically commits the
+step receipt and registers only the next pending position; all-step success sets
+parent SUCCEEDED and the exact Stars sum. Partial failures retain successful steps,
+parent BLOCKED/UNCERTAIN and reserved remainder. No full refund or SENT after any
+payment intent unless the existing separate completion conditions are satisfied.
+Owner retry only admits a blocked step that provably has no form/dispatch, unchanged
+bundle/description and enabled current policy. UNKNOWN is only resolved by reliable
+read evidence, never by an empty search or new purchase. Explicit read reconciliation
+can advance one confirmed position while retaining the original UNKNOWN Outbox row.
+
+GiftWorker still owns one final buyer notice/eligible Fulfillment after parent success.
+Existing Inventory/DeliveryChains exclusion applies to every gift job. Owner receipts
+and gift UI show per-position progress, confirmed versus unknown Stars, partial
+state, reasons and operation history. Public lists/logs omit recipient/private peers.
+
+Standard logging retains SecretFilter and rotating files, with Moscow-time console
+formatter, ANSI feature detection and structured event/order/operation/position.
+Console and file handlers flush normally; launcher is foreground/unbuffered UTF-8,
+one process and existing InstanceLock. No new windows/background log process.
+Success events follow committed receipts; preflight/dispatch are distinct. Unchanged
+sync cycles are DEBUG, state changes INFO, repeated identical API read errors bounded.
+SecretFilter also masks usernames, dict-form credential fields, JWT, session paths,
+control characters and context injection even at DEBUG. Raw tracebacks remain excluded.
+
 ## Personal Telegram Gifts (schema21, 2026-10-30)
 
 app.gifts is an integration into the existing bot/runtime, not a second bot or

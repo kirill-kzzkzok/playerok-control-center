@@ -9,6 +9,7 @@ from telethon import TelegramClient, errors, functions, types
 
 from app.gifts.core import telegram_username
 from app.security.instance import InstanceLock
+from app.security.logging import event
 
 
 class GiftFailure(ValueError):
@@ -83,8 +84,10 @@ class PersonalGiftSender:
                 await self.client.disconnect()
                 raise GiftFailure("PERSONAL_ACCOUNT_REQUIRED")
             self.me = me
+            event("INFO", "Личный Telegram подключён")
 
     async def close(self):
+        connected = self.me is not None
         try:
             if self.client:
                 await self.client.disconnect()
@@ -93,6 +96,8 @@ class PersonalGiftSender:
             if self.session_lock:
                 self.session_lock.__exit__(None, None, None)
                 self.session_lock = None
+            if connected:
+                event("INFO", "Личный Telegram отключён")
 
     async def resolve(self, username):
         normalized = telegram_username(username)
@@ -192,6 +197,23 @@ class PersonalGiftSender:
         ):
             raise GiftFailure("PAYMENT_FORM_MISMATCH")
         return PreparedGift(recipient, gift_id, gift.stars, form.form_id, invoice)
+
+    async def check_quantities(self, gifts):
+        from collections import Counter
+
+        counts = Counter(int(g["gift_id"]) for g in gifts)
+        catalog = await self.catalog()
+        for gift_id, count in counts.items():
+            gift = next((g for g in catalog if isinstance(g, types.StarGift) and g.id == gift_id), None)
+            if not gift or gift.sold_out or gift.auction:
+                raise GiftFailure("GIFT_UNAVAILABLE")
+            if (
+                gift.limited_per_user
+                and (gift.per_user_remains or 0) < count
+                or gift.limited
+                and (gift.availability_remains or 0) < count
+            ):
+                raise GiftFailure("GIFT_QUANTITY_UNAVAILABLE")
 
     async def pay(self, prepared):
         if not self.settings.payment_enabled:

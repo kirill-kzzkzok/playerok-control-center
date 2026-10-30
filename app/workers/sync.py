@@ -106,7 +106,21 @@ class Synchronizer(PageScanner):
 
     async def once(self):
         async with self.lock:
+            from app.security.logging import event
+
+            # Regular unchanged polling is DEBUG; state transitions stay visible at INFO.
+            before = self.health.get("status")
+            event(
+                "CHECK",
+                "Начало синхронизации заказов",
+                level=logging.INFO if before == "NOT_STARTED" else logging.DEBUG,
+            )
             await self._once()
+            event(
+                "CHECK",
+                "Синхронизация заказов завершена: " + self.health["status"],
+                level=logging.INFO if before != self.health["status"] else logging.DEBUG,
+            )
 
     def queue_order_details(self, limit=32):
         """Persist a bounded read-only backfill, once per missing-date order.

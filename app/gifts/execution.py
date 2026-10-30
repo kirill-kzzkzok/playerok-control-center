@@ -4,13 +4,14 @@ import json
 
 from app.database.store import now
 from app.playerok.adapter import APIError
+from app.security.logging import event
 from app.services.order_management import deliverable, sale
 from app.services.orders import Orders
 from app.services.products import ValidationError
 from playerokapi.enums import ItemDealStatuses
 
 MESSAGES = {
-    "DELIVERED": "Telegram-подарок отправлен на указанный при оплате аккаунт. Доставка подтверждена Telegram.",
+    "DELIVERED": "Все предусмотренные заказом Telegram-подарки отправлены на указанный при оплате аккаунт. Доставка каждого подтверждена Telegram.",
     "REFUNDED": "Заказ отменён: указанный Telegram username не существует или некорректен. Возврат подтверждён Playerok.",
     "INVALID": "Возникла проблема с указанным Telegram username. Заказ передан продавцу для решения. Завершённый возврат пока не подтверждён.",
 }
@@ -104,6 +105,7 @@ async def execute_followup(executor, action):
         ):
             raise APIError("REFUND_NOT_CONFIRMED", uncertain=True)
         Orders(executor.store).ingest(confirmed)
+        event("SUCCESS", "Возврат подтверждён Playerok", order=target, operation=action["id"])
         return {"remote_id": target, "remote_status": "ROLLED_BACK"}
     outcome = action["payload"].get("outcome")
     if not permitted_notice(j, outcome):
@@ -117,4 +119,5 @@ async def execute_followup(executor, action):
     )
     if not result.get("id"):
         raise APIError("GIFT_NOTICE_UNKNOWN", uncertain=True)
+    event("SUCCESS", "Уведомление покупателю отправлено", order=target, operation=action["id"])
     return {"message_id": result["id"], "outcome": outcome}

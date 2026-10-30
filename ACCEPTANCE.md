@@ -1,5 +1,22 @@
 # Playerok Control Center — проверка требований
 
+## Console + gift bundles — локальная приёмка,31.10.2026
+
+Поддерживается последний gift: ordered comma list с сохранением повторов,
+default5/configurable cap, целый snapshot и резерв бюджета/баланса перед первой
+оплатой, отдельные последовательные Outbox intents и независимый receipt каждой
+позиции. Partial BLOCKED/UNKNOWN не даёт полный refund/SENT; owner UI показывает
+прогресс/стоимости/причины/историю и безопасный recheck только неотправленного шага.
+Legacy single migration сохраняет статусы и очередь без новых операций.
+
+start.bat запускает один foreground unbuffered UTF-8 процесс и сохраняет окно после
+выхода. Живые события используют московское время, ANSI fallback, ротацию и маску
+recipient/секретов даже в DEBUG. Production-path и реальные stdout/file checks
+локальные; реальный внешний вид double-click консоли и paid package не приняты live.
+Read-only schema/refund contract прошлого этапа не равен новой live-приёмке.
+Платежи/возвраты/buyer sends/изменения объявлений в этом этапе0. Требования live
+личной авторизации, получения подарков и возврата остаются открыты.
+
 ## Telegram Gifts — локальная интеграция, live gate открыт (2026-10-30)
 
 Добавлены общий Outbox payment/refund/notice pipeline, schema21, personal Telethon,
@@ -432,3 +449,6 @@ operation receipts защищены от menu edit и interface cleanup/stale sn
 
 
 Gifts offline acceptance:816 full pytest +87 relevant checks passed; Ruff/dependencies/packaged selfcheck/schema21/secret scan pass. These close local integration checks only. Personal-account login and live send/refund/fulfillment gates above remain open. All runtime permissions remain OFF.
+
+
+Console/bundle offline acceptance:860 full pytest,125 related targeted, Ruff/deps, source/installed-wheel selfcheck/schema22 and secret scan pass. Both features locally accepted only; native terminal visual and real paid bundle/refund/customer notice/Fulfillment are not live accepted. Runtime paid permissions remain OFF.

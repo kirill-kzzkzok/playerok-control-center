@@ -1,11 +1,13 @@
 """Owner's gift control in the existing Dispatcher; SQLite FSM confirmations survive restart."""
 
 import asyncio
+import json
 import secrets
+from collections import Counter
 from html import escape
 
 from app.database.store import Conflict
-from app.gifts.core import SEED_GIFTS, GiftValidationError, gift_code_from_description
+from app.gifts.core import SEED_GIFTS, GiftValidationError, gift_code_from_description, gift_reason
 from app.gifts.mtproto import GiftFailure, PersonalGiftSender
 from app.gifts.service import GiftService
 from app.gifts.settings import GiftSettings
@@ -22,6 +24,16 @@ class GiftsPanel:
 
     def summary(self, item_id):
         return self.service.status_text(item_id)
+
+    @staticmethod
+    def bundle_text(bundle):
+        counts = Counter(g["code"] for g in bundle)
+        prices = {g["code"]: g["stars"] for g in bundle}
+        lines = ["🎁 Привязка подарков"]
+        for code, count in counts.items():
+            lines.append(f"{SEED_GIFTS[code][0]} {escape(code)} ×{count} — {prices[code] * count} Stars")
+        lines += [f"Всего: {len(bundle)} подарка", f"Стоимость: {sum(g['stars'] for g in bundle)} Stars"]
+        return "\n".join(lines)
 
     async def callback(self, action, owner, state):
         try:
@@ -174,8 +186,48 @@ class GiftsPanel:
                 f"Причина: {escape(j['error_code'] or 'нет')}\n"
                 "Получатель скрыт в общем журнале. Нет автоматического повтора UNCERTAIN."
             )
+            steps = s.steps(ident)
+            done = sum(g["state"] == "SUCCEEDED" for g in steps)
+            text += f"\nПрогресс: {done}/{len(steps)}"
+            confirmed = sum(g["stars"] for g in steps if g["state"] == "SUCCEEDED")
+            unknown = sum(g["stars"] for g in steps if g["state"] in {"SPENDING", "UNCERTAIN"})
+            text += f"\nПодтверждено: {confirmed} Stars · неизвестный расход: {unknown} Stars"
+            text += f"\nСогласованная стоимость пакета: {sum(g['stars'] for g in steps)} Stars"
+            if done and done < len(steps):
+                text += "\n⚠️ PARTIALLY_DELIVERED — полный возврат и SENT запрещены"
+            for g in steps:
+                icon = (
+                    "✅"
+                    if g["state"] == "SUCCEEDED"
+                    else "❓"
+                    if g["state"] == "UNCERTAIN"
+                    else "⛔"
+                    if g["state"] == "BLOCKED"
+                    else "⏳"
+                )
+                text += f"\n{icon} {escape(g['code'])} {g['position'] + 1}/{len(steps)} · {g['stars']} ⭐ · {g['state']}"
+                if g["error_code"]:
+                    text += (
+                        "\nПричина: " + escape(gift_reason(g["error_code"])) + " · " + escape(g["error_code"])
+                    )
+                if g["message_id"]:
+                    text += f"\nСерверное подтверждение: сообщение {g['message_id']}"
+                if g["spent_at"]:
+                    text += "\nПлатёжное намерение: " + escape(g["spent_at"])
             rows = [[("Открыть заказ", "order:" + ident)]]
-            if j["state"] == "BLOCKED" and not j["spent_at"] and not j["form_id"]:
+            for g in steps:
+                if g["operation_id"]:
+                    rows.append(
+                        [
+                            (
+                                f"История {g['code']} {g['position'] + 1}/{len(steps)}",
+                                "ops:show:" + g["operation_id"],
+                            )
+                        ]
+                    )
+            if j["state"] == "BLOCKED" and any(
+                g["state"] == "BLOCKED" and not g["spent_at"] and not g["form_id"] for g in steps
+            ):
                 rows.append([("Повторить только безопасную проверку", "gft:retrycheck:" + ident)])
             if j["state"] == "SUCCEEDED":
                 text += "\nВыдано — проверьте завершение сделки. Для отчёта с полями требуется существующая форма Fulfillment."
@@ -193,7 +245,12 @@ class GiftsPanel:
             if data["hash"] != p["hash"]:
                 raise Conflict("Описание изменилось; выберите код заново")
             await s.bind(
-                owner, p["item"], p["code"], expected_stars=p["stars"], expected_revision=p["revision"]
+                owner,
+                p["item"],
+                p["code"],
+                expected_stars=p["stars"],
+                expected_revision=p["revision"],
+                expected_bundle=p.get("bundle"),
             )
             await state.clear()
             return (
@@ -208,7 +265,7 @@ class GiftsPanel:
                 await state.clear()
                 await state.set_data({"gift_retry": {"order": ident, "nonce": nonce}})
                 return (
-                    "Повторить проверку заказа? Предыдущая попытка остановлена до платёжного намерения. При успешной проверке возможна реальная покупка. UNCERTAIN оплаты не повторяются.",
+                    "Продолжить с первой неотправленной позиции? Её предыдущая проверка остановлена до платёжного намерения. Доставленные подарки не повторяются. Возможна реальная покупка оставшихся подарков. UNCERTAIN не повторяется.",
                     keyboard(
                         [
                             [("Подтверждаю", f"gft:confirmretry:{ident}:{nonce}")],
@@ -234,7 +291,9 @@ class GiftsPanel:
                 if data["required"]
                 else "⚠️ На Playerok поле необязательное. Приложение запрещает отправку без его значения."
             )
-            text += "\nКод и актуальная цена подтверждаются при привязке."
+            if l:
+                text += "\n" + self.bundle_text(json.loads(l["bundle"]))
+            text += "\nСписок и актуальная цена подтверждаются при привязке."
             rows = [[("Подтвердить код / обновить привязку", "gft:bind:" + ident)]]
             if l:
                 rows += (
@@ -246,11 +305,8 @@ class GiftsPanel:
         if command == "bind":
             data = await s.inspect_item(owner, ident)
             await s.refresh()
-            catalog = self.store.rows(
-                "SELECT * FROM gift_catalog WHERE code=? AND available=1", (data["code"],)
-            )
-            if not catalog:
-                raise GiftValidationError("Подарок недоступен в Telegram")
+            bundle = s.catalog_bundle(data["code"])
+            total = sum(g["stars"] for g in bundle)
             nonce = secrets.token_hex(5)
             await state.clear()
             await state.set_data(
@@ -260,16 +316,17 @@ class GiftsPanel:
                         "code": data["code"],
                         "hash": data["hash"],
                         "nonce": nonce,
-                        "stars": catalog[0]["stars"],
+                        "stars": total,
+                        "bundle": bundle,
                         "revision": (s.listing(ident) or {}).get("revision", 0),
                     }
                 }
             )
             return (
-                f"Подтвердите код <b>{escape(data['code'])}</b>: Telegram gift ID {catalog[0]['gift_id']}, актуальная цена {catalog[0]['stars']} ⭐. Автовыдача останется выключена.",
+                self.bundle_text(bundle) + "\nАвтовыдача останется выключена.",
                 keyboard(
                     [
-                        [("Подтвердить " + data["code"], "gft:confirmbind:" + nonce)],
+                        [("Подтвердить пакет", "gft:confirmbind:" + nonce)],
                         [("Отмена", "gft:item:" + ident)],
                     ]
                 ),
@@ -323,7 +380,7 @@ class GiftsPanel:
         current = await state.get_state()
         text = message.text or ""
         if current == "gifts:description":
-            code = gift_code_from_description(text)
+            code = gift_code_from_description(text, max_count=self.service.settings.max_gifts)
             await state.clear()
             return (
                 f"Метка корректна: <code>gift: {escape(code)}</code>. Привязка лота и отправки не изменены.",

@@ -98,6 +98,18 @@ class OperationResults:
             )
             if job:
                 text += f"\nПодарок: {job[0]['state']} · возврат: {job[0]['refund_state']}"
+                steps = self.store.rows(
+                    "SELECT code,position,state,stars,error_code FROM gift_steps WHERE order_id=? ORDER BY position",
+                    (row["target"],),
+                )
+                done = sum(g["state"] == "SUCCEEDED" for g in steps)
+                text += f"\nПрогресс пакета: {done}/{len(steps)}"
+                if done and done < len(steps):
+                    text += "\nPARTIALLY_DELIVERED — оставшиеся подарки не подтверждены; полный возврат и SENT запрещены."
+                for g in steps:
+                    text += f"\n{escaped(g['code'], 40)} {g['position'] + 1}/{len(steps)} · {g['state']} · {g['stars']} Stars"
+                    if g["error_code"]:
+                        text += " · " + escaped(g["error_code"], 70)
             buttons.append([("Подарочный заказ и безопасная сверка", "gft:job:" + row["target"])])
         elif kind in {"delivery", "delivery_text", "fulfill"}:
             buttons.append([("Заказ и состояние склада", "order:" + row["target"])])

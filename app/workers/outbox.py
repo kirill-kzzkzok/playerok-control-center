@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from app.database.store import Conflict
 from app.playerok.adapter import APIError, SafeAccount, plain
 from app.playerok.thread_calls import CallsClosedError, calls_for
+from app.security.logging import event
 from app.services.agreements import Agreements, require_conditions
 from app.services.attachments import Attachments
 from app.services.auto_replies import AutoReplies
@@ -166,8 +167,15 @@ class Executor:
             except (GiftFailure, GiftValidationError, ValidationError, Conflict) as exc:
                 spending = service.job(target)["state"] in {"SPENDING", "UNCERTAIN"}
                 raise APIError(getattr(exc, "code", "GIFT_VALIDATION_FAILED"), uncertain=spending) from None
-            except Exception:  # noqa: BLE001 -- protect personal RPC details and preserve paid uncertainty
+            except Exception as error:  # noqa: BLE001 -- protect RPC details and preserve paid uncertainty
                 spending = service.job(target)["state"] in {"SPENDING", "UNCERTAIN"}
+                event(
+                    "WARNING",
+                    "Ошибка личного Telegram: " + type(error).__name__,
+                    order=target,
+                    operation=action["id"],
+                    level=30,
+                )
                 raise APIError(
                     "GIFT_PAYMENT_UNKNOWN" if spending else "GIFT_CHECK_FAILED", uncertain=spending
                 ) from None
@@ -521,10 +529,17 @@ class OutboxWorker:
             self.store.record_late_result(ident, token, status, result=result, error=error)
 
     async def once(self):
-        self.store.recover()
+        recovered = self.store.recover()
+        if recovered:
+            event(
+                "WARNING",
+                f"Восстановлено операций после истечения lease: {recovered}. Неизвестные отправки не повторяются.",
+                level=30,
+            )
         action = self.store.claim(lease_seconds=180)
         if not action:
             return False
+        event("INFO", "Начало операции: " + action["kind"], order=action["target"], operation=action["id"])
         try:
             result = await self.executor(action)
         except ValidationError:
@@ -549,4 +564,46 @@ class OutboxWorker:
             action["target"],
             self.store.rows("SELECT status FROM outbox WHERE id=?", (action["id"],))[0]["status"],
         )
+        outcome = self.store.rows("SELECT status,error_code FROM outbox WHERE id=?", (action["id"],))[0]
+        if action["kind"] == "gift_send" and outcome["status"] == "SUCCEEDED":
+            service = self.executor.gifts()
+            step = service.step(action)
+            event(
+                "SUCCESS",
+                f"{step['code']} {step['position'] + 1}/{len(service.steps(action['target']))} — доставка подтверждена",
+                order=action["target"],
+                operation=action["id"],
+                position=step["position"] + 1,
+            )
+            if service.job(action["target"])["state"] == "SUCCEEDED":
+                event("ORDER", "Все подарки доставлены", order=action["target"])
+        if outcome["status"] != "SUCCEEDED":
+            from app.gifts.core import gift_reason
+
+            event(
+                "WARNING",
+                (
+                    gift_reason(outcome["error_code"]) + " · "
+                    if action["kind"].startswith("gift_")
+                    else "Операция остановлена: "
+                )
+                + str(outcome["error_code"] or outcome["status"]),
+                order=action["target"],
+                operation=action["id"],
+                level=30,
+            )
+        elif action["kind"] == "fulfill":
+            event(
+                "SUCCESS",
+                "Выполнение заказа подтверждено Playerok",
+                order=action["target"],
+                operation=action["id"],
+            )
+        elif action["kind"] in {"delivery", "delivery_text", "chain_message", "reply"}:
+            event(
+                "SUCCESS",
+                "Сервер подтвердил отправку сообщения/товара",
+                order=action["target"],
+                operation=action["id"],
+            )
         return True

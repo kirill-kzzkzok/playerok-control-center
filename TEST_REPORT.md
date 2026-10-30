@@ -1,5 +1,55 @@
 # Проверки
 
+## Живая консоль и упорядоченные пакеты подарков — 31.10.2026
+
+Изменения продолжают07bb75b без второго бота/очереди. Миграция22, существующие
+GiftService/Outbox/Inventory/Chains/Fulfillment и настоящий Dispatcher.
+Первые parser checks:1 red/7 pass (старый код отклонял запятые). Затем29 пакетных
+passed; расширенный набор сначала остановился из-за неверного alias фикстуры и
+двух перекодированных строк теста — исправлены, failures не скрыты. Последовательно
+36/103/41/42 новых и совместимых checks прошли. Дополнительно red→green воспроизведён
+переход цен15+25→20+20: одинаковая сумма больше не позволяет принять изменённые
+индивидуальные цены без нового подтверждения. XML:bundle_price_snapshot_red.xml.
+Первый полный срез852 passed81.32s. Итоговые результаты фиксируются ниже.
+
+Все удалённые транспорты в этих проверках локальные. Никаких новых live-запросов,
+подарочных платежей/возвратов/buyer sends/изменений лотов не выполнялось.
+
+| Требуемый сценарий | Проверка |
+|---|---|
+| Одиночный / одинаковые / разные /3+ подарка | ordered_bundle_all_receipts_once_notice_and_fulfillment (5 вариантов) + прежние67 Gifts checks |
+| Неверная метка / пустые элементы / разделители / предел | bad_bundle_tags + configured_count_limit_blocks_inspection |
+| Недостаточен бюджет всего пакета / баланс | whole_package_preflight_before_first_payment |
+| Цена/доступность второго подарка / суммарная квота повторов | whole_package_preflight + repeated_gifts_check_cumulative_availability |
+| Первый выдан, второй blocked | partial_delivery_blocks_later_steps (7 причин) |
+| Потерян ACK первого/второго | lost_ack_blocks_remaining_and_reconciliation_continues_without_resend |
+| Рестарт между шагами / после partial failure | restart_between_steps_and_after_partial_block |
+| Крах после RPC до commit / lease / сверка | expired_paid_step_lease_blocks_whole_package_after_restart |
+| Повтор PAID / параллельные заказы / резерв Stars | duplicate_paid_and_concurrent_package_reservations |
+| Баланс устарел между preflight и intent | stale_balance_between_concurrent_preflight_and_intent_is_rejected |
+| Изменение описания / отмена посреди пакета | partial_delivery description/cancel |
+| Возврат до первой оплаты / запрет после partial или UNKNOWN | full_refund_only_before_any_payment + partial invalid-username + lost ACK |
+| Одно итоговое buyer notice / SENT только после всех receipt | ordered_bundle_all_receipts_once_notice_and_fulfillment |
+| Остановка между шагами / сразу после RPC | partial stop + stop_after_paid_rpc_keeps_confirmed_delivery |
+| Реальный Dispatcher, FSM restart, binding snapshot, прогресс/retry | bundle_dispatcher_preview_restart_progress_and_partial_retry + binding_preview_rejects_changed_individual_prices_even_same_total |
+| Legacy21→22 completed/unknown/pending сохранены | single_gift_migration_preserves_completed_unknown_and_pending |
+| Owner notice partial / расход / отсутствие username | owner_notice_shows_partial_delivery_without_recipient_or_false_success |
+| Windows launcher foreground1 process / UTF-8 / pause | windows_launcher_runs_foreground_once_and_keeps_error_visible |
+| Реальный stdout + файл/ротация/нет повторных handlers | subprocess test_live_console_file_rotation_no_duplicate_or_private_data |
+| ANSI fallback/московские часы/DEBUG-секреты | console_color_fallback + debug_dict_private_fields |
+| Production logs / отсутствие ложного SUCCESS при SQL failure | live_console_records_only_committed_receipt + sqlite_failure_during_receipt_commit |
+
+Локальный XML/артефакты в ignored data/. Native double-click/внешний вид терминала
+не проверялся запуском рабочего бота: launcher проверен как файл и через поведение
+настоящих stdout/logging subprocess. Ctrl+C использует прежний runtime shutdown;
+проверки cancellation/lease/restart не выполняют реальных сетевых отправок.
+
+Временная копия рабочей DB18→22: counts/integrity/FK/reopen OK, источник не изменён
+(bundle_migration_check.json). Дополнительно synthetic populated21→22 сохраняет
+receipt/form/состояния и не создаёт Outbox operations. До изменений сделан private
+source+SQLite backup data/backups/bundles-before-*. Новая миграция не применялась
+к рабочей DB. Все платные/автоматические допуски остаются выключенными.
+
 ## Telegram Gifts integration — 2026-10-30
 
 ZIP изучен и переработан вручную, apply.py не выполнялся. Первый gift запуск:
@@ -1008,3 +1058,6 @@ data/audit_followup_full_results.xml. Ruff160 files и pip check clean; реал
 
 
 Gifts final checkpoint (2026-10-30):816 passed in124.39s; data/gifts_full_final.xml. Final relevant Dispatcher/receipt/audit slice87 passed19.85s (67 gift cases). Ruff check/format181 files, pip check, source selfcheck and isolated installed-wheel selfcheck102 imports/schema21 all pass. Wheel includes catalog.json and migration021; initial --no-build-isolation attempt lacked setuptools, normal isolated build succeeded (no project/runtime change). Migration18→21 verified only on private temporary DB copy, original rows/integrity/FK/reopen preserved. Actual-secret/JWT scan clean, old .env values unchanged, all write/automation/gift-payment/gift-refund permissions false. Public schema and official rollback UI contract re-read without mutations. Personal MTProto credentials/session absent: real catalog/balance/payment/delivery/refund/customer notices/auto-SENT remain LIVE UNVERIFIED. Playerok receiving username is optional at checkout; app requires exact field and fails closed. Scope complete for local integration; next action is owner-local authorization and separately approved one-real-gift acceptance, not another development phase. Setup/limitations:README_GIFTS.md.
+
+
+Console/bundles final (31.10.2026):860 passed79.33s (data/bundle_full_final.xml),125 targeted passed20.02s (bundle_final_targeted.xml),44 new console/bundle cases. Ruff check/format183 files and pip check pass. Source + installed-wheel selfcheck102 imports/schema22/backup-reopen/PNG all pass; packaged parser preserves repeated codes and migration022 included. Actual-secret/JWT scan224 candidate files:0 leaks; .env/spec/session/logs ignored, all global write/automation/gift-payment/refund permissions false. Working DB untouched; consistent private backup and clone18→22 + populated legacy21→22 checks preserved rows/receipts/states with no new/rearmed operations. Added full per-component binding price CAS (red→green evidence), cumulative quantity check, stale balance fence, committed-only SUCCESS logs and SQL-failure recovery proof. No real network operations, gifts, refunds, buyer messages or listing changes in this feature task. Native Windows double-click appearance and real multi-gift delivery remain live-unverified; stdout/launcher/ANSI fallback and actual Dispatcher flows were checked locally. Both requested features complete locally; after commit/push STOP, no new audit/phase. Usage:README_GIFTS.md.

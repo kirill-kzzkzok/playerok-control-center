@@ -18,7 +18,7 @@ SEED_GIFTS: dict[str, tuple[str, int, int]] = {
     row["code"]: (row["emoji"], int(row["gift_id"]), int(row["stars"])) for row in _catalog["gifts"]
 }
 
-TAG = re.compile(r"^gift:\s*([a-z][a-z0-9_-]{0,30})\s*$", re.IGNORECASE)
+TAG = re.compile(r"^gift:\s*(.+?)\s*$", re.IGNORECASE)
 USERNAME = re.compile(r"^@?([A-Za-z][A-Za-z0-9_]{4,31})$")
 
 
@@ -26,7 +26,29 @@ class GiftValidationError(ValueError):
     pass
 
 
-def gift_code_from_description(description: str, *, required: bool = True) -> str | None:
+def gift_reason(code):
+    return {
+        "BALANCE_TOO_LOW": "Недостаточно Stars для оставшегося пакета",
+        "BUDGET_EXCEEDED": "Суммарная стоимость превышает лимит заказа или суток",
+        "PRICE_CHANGED": "Изменилась цена подарка: подтвердите новую привязку",
+        "GIFT_UNAVAILABLE": "Подарок недоступен: требуется ручное решение",
+        "GIFT_QUANTITY_UNAVAILABLE": "Недостаточно доступных подарков выбранного вида",
+        "RECIPIENT_CHANGED": "Получатель изменился: отправка заблокирована",
+        "RECIPIENT_GIFTS_FORBIDDEN": "Получатель запретил приём этого вида подарков",
+        "RECIPIENT_NOT_USER": "Адресат не является поддерживаемым пользователем Telegram",
+        "USERNAME_INVALID": "Telegram подтвердил некорректный username",
+        "USERNAME_NOT_OCCUPIED": "Telegram подтвердил отсутствие username",
+        "PAYMENT_LOCKED": "Другая подарочная оплата выполняется или требует сверки",
+        "BALANCE_OBSERVATION_STALE": "Баланс проверен до другого списания: нужна новая безопасная проверка",
+        "AUTOMATION_STOPPED_OR_STALE": "Выдача остановлена или политика изменилась",
+        "LISTING_CHANGED": "Описание или способ передачи изменились",
+        "GIFT_CHECK_FAILED": "Ошибка проверки Telegram до новой оплаты; проверьте подключение",
+        "GIFT_PAYMENT_UNKNOWN": "Ответ после начала оплаты потерян: только сверка, без повтора",
+        "PROCESS_CANCELLED": "Операция прервана: проверьте платёжный intent перед продолжением",
+    }.get(code, "Условия операции не подтверждены")
+
+
+def gift_code_from_description(description: str, *, required: bool = True, max_count: int = 5) -> str | None:
     """Only a unique gift: code on the final non-empty description line is authoritative."""
     if not isinstance(description, str):
         raise GiftValidationError("Описание должно быть текстом")
@@ -43,10 +65,16 @@ def gift_code_from_description(description: str, *, required: bool = True) -> st
         return None
     if len(matches) != 1 or matches[0][0] != len(lines) - 1:
         raise GiftValidationError("Метка gift: должна быть одна и строго последней строкой")
-    code = matches[0][1].group(1).lower()
-    if code not in SEED_GIFTS:
+    codes = [code.strip().lower() for code in matches[0][1].group(1).split(",")]
+    if not 1 <= len(codes) <= max_count:
+        raise GiftValidationError(f"Допустимо от 1 до {max_count} подарков")
+    if any(code not in SEED_GIFTS for code in codes):
         raise GiftValidationError("Неизвестный код подарка. Доступные: " + ", ".join(SEED_GIFTS))
-    return code
+    return ", ".join(codes)
+
+
+def gift_codes(value):
+    return value.split(", ")
 
 
 def telegram_username(value: str) -> str:
