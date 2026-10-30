@@ -651,3 +651,21 @@ nonempty client ID or old saved connection status. On APIError read-only startup
 local access; write startup stops before workers. Credentials/IDs are omitted from binding
 errors, and conflict does not reset or reassign old data. No binding schema migration is
 needed; canonical identity is stored in existing settings only after successful checks.
+
+
+## Cancellation ownership for synchronous API calls
+
+ThreadCalls owns each inner task, its async API lock and actual synchronous thread
+lifetime. Cancelling the shielded caller signals a threading.Event without releasing
+serialization. Queued calls check before thread entry; mutation transport guard also
+checks cancellation after throttling. Once HTTP is in flight, cancellation cannot revoke
+it. Outbox remains UNCERTAIN, never requeued. A late raw method result is not the full
+executor success predicate: only narrow message/remote IDs are retained as UNCERTAIN
+late observations, with no buyer text. Evidence observer errors log types only.
+
+Main runtime and read-only diagnostics drain pending calls/observers before client/DB
+close. Drain yields to completion callbacks explicitly (Python3.12 completed-future
+fast path); the registry includes evidence observers. Forced process death or storage
+failure may prevent late evidence persistence. Existing HTTPX20s inactivity limits do
+not establish an absolute total-request or shutdown deadline. Legacy controlled
+live_test helper is separate and must be reviewed before any new authorized use.

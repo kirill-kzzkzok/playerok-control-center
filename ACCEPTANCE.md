@@ -174,3 +174,14 @@ with fake services stopping before backup/workers on mismatch or failed authenti
 Read-only working cache check: 217 orders/462 transactions agree with saved identity;
 no real startup, database write or API request performed by this checkpoint. This is
 single-account enforcement, not a claim of multi-account support or live auth freshness.
+
+
+## Безопасная отмена и shutdown (§15/§16)
+
+ThreadCalls preserves API serialization after caller cancellation, blocks queued/
+pre-HTTP-cancelled mutations, drains work before client/DB close and retains allowlisted
+late IDs as UNCERTAIN evidence. Tests/test_thread_calls.py uses actual Playerok,
+SafeAccount+MockTransport, OutboxWorker and actual run shutdown with fake services.
+ACK/error paths issue exactly one HTTP request; throttle cancellation issues zero.
+This covers cooperative runtime/read-diagnostics shutdown; forced death, legacy live_test
+and an absolute wall-clock HTTP/shutdown deadline are not accepted by these tests.

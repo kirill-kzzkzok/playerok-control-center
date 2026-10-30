@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from app.playerok.response_diagnostics import response_facts
+from app.playerok.thread_calls import calls_for
 from playerokapi.account import Account
 from playerokapi.misc import PERSISTED_QUERIES, QUERIES
 
@@ -308,9 +309,10 @@ class Playerok:
             "get_fulfillment_entry",
         }:
             raise APIError("READ_METHOD_FORBIDDEN")
-        async with self.lock:
+
+        def run(cancelled):
             try:
-                result = await asyncio.to_thread(getattr(self.account, method), **kwargs)
+                result = getattr(self.account, method)(**kwargs)
                 # get() returns Account itself; don't expose cookies/client in plain().
                 if method == "get":
                     viewer = {
@@ -351,6 +353,8 @@ class Playerok:
                 raise
             except (KeyError, TypeError, AttributeError, ValueError):
                 raise APIError("UPSTREAM_SCHEMA_ERROR") from None
+
+        return await calls_for(self).call(run)
 
     async def pages(self, method, collection, **kwargs):
         cursor, seen = None, set()

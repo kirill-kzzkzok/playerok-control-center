@@ -14,6 +14,7 @@ from aiogram.fsm.strategy import FSMStrategy
 from app.config import Config, ConfigurationError
 from app.database.store import Store
 from app.playerok.adapter import APIError, Playerok, SafeAccount
+from app.playerok.thread_calls import drain_calls
 from app.security.access import OwnerMiddleware
 from app.security.instance import InstanceLock
 from app.security.logging import configure_logging
@@ -151,6 +152,8 @@ async def run(config):
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        # Cancelling a waiter cannot interrupt synchronous HTTP or its thread-side guards.
+        await drain_calls(api)
         await bot.session.close()
         account.close()
         store.close()

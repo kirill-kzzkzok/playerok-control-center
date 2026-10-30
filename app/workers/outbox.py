@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from app.database.store import Conflict
 from app.playerok.adapter import APIError, SafeAccount, plain
+from app.playerok.thread_calls import calls_for
 from app.services.agreements import Agreements, require_conditions
 from app.services.attachments import Attachments
 from app.services.auto_replies import AutoReplies
@@ -57,27 +58,45 @@ class Executor:
                 raise ValidationError("Резерв выдачи больше не разрешает отправку")
 
     async def mutate(self, action, operation, method, **kwargs):
-        async with self.api.lock:
+        def run(cancelled):
+            def guard():
+                if cancelled.is_set():
+                    raise ValidationError("Операция отменена до отправки")
+                self.dispatch_guard(action)
 
-            def run():
-                scope = (
-                    self.api.account.permit(operation, dispatch_guard=lambda: self.dispatch_guard(action))
-                    if isinstance(self.api.account, SafeAccount)
-                    else self.api.account.permit(operation)
-                )
-                with scope:
-                    self.dispatch_guard(action)
-                    try:
-                        return plain(getattr(self.api.account, method)(**kwargs))
-                    except APIError:
-                        raise
-                    except ValidationError:
-                        raise
-                    except Exception:  # noqa: BLE001 -- mutation may have succeeded; preserve uncertainty
-                        # Parsing may fail after the mutation already reached the server.
-                        raise APIError("MUTATION_RESULT_UNKNOWN", uncertain=True) from None
+            scope = (
+                self.api.account.permit(operation, dispatch_guard=guard)
+                if isinstance(self.api.account, SafeAccount)
+                else self.api.account.permit(operation)
+            )
+            with scope:
+                guard()
+                try:
+                    return plain(getattr(self.api.account, method)(**kwargs))
+                except (APIError, ValidationError):
+                    raise
+                except Exception:  # noqa: BLE001 -- mutation may have succeeded; preserve uncertainty
+                    raise APIError("MUTATION_RESULT_UNKNOWN", uncertain=True) from None
 
-            return await asyncio.to_thread(run)
+        def abandoned(result, error):
+            # A raw method return is evidence, not the full executor's success predicate.
+            if result is None and error is None:
+                return
+            receipt = {}
+            if isinstance(result, dict):
+                if operation == "createChatMessage" and result.get("id"):
+                    receipt["message_id"] = result["id"]
+                elif operation == "createItem" and result.get("id"):
+                    receipt["remote_id"] = result["id"]
+            self.store.record_late_result(
+                action["id"],
+                action["lease_token"],
+                "UNCERTAIN",
+                result=receipt,
+                error="CANCELLED_CALL_FAILED" if error else "CANCELLED_CALL_COMPLETED",
+            )
+
+        return await calls_for(self.api).call(run, on_abandoned=abandoned)
 
     async def owned_item(self, item_id):
         item = await self.api.call("get_item", id=item_id)

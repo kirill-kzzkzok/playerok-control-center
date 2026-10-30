@@ -289,3 +289,19 @@ props.amountAfterConversionRub, treating zero as absent. Our positive-debit zero
 now likewise unknown and cannot be allocated as an entire withdrawal's expense. No
 inference of old withdrawal fees from current provider settings is performed.
 Cached source verification only; no extra authenticated requests/mutations in this step.
+
+
+## 2026-10-30: synchronous transport cancellation
+
+Primary technical sources checked for the runtime cancellation audit:
+- Python3.12 concurrent.futures: running futures cannot be cancelled; process/thread
+  lifetime is distinct from cancelling the async waiter.
+  https://docs.python.org/3.12/library/concurrent.futures.html#concurrent.futures.Future.cancel
+- HTTPX timeout types: read/write timeout bounds waiting for each data chunk, not the
+  total request duration. Existing Client(timeout=20) is not a 20s wall-clock deadline.
+  https://www.python-httpx.org/advanced/timeouts/
+
+Inference applied to our adapter: shielding and retaining the inner thread task/lock,
+explicit cancellation guard before dispatch, and draining before closing shared
+resources are needed. Verified with local thread barriers and MockTransport, not live
+Playerok writes. No challenge handling or external mutation was performed in this audit.

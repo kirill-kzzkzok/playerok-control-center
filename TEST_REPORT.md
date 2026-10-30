@@ -661,3 +661,29 @@ transaction accounts and known order sellers; 217 orders/462 transactions. Ignor
 database writes=0; no real startup, binding update, migration or buyer message. The next
 normal authenticated startup will persist canonical binding after verification. This
 proves a single-account safety barrier, not support for switching shops within one DB.
+
+
+## Thread cancellation / resource shutdown — 2026-10-30
+
+Final full suite: **571 passed in 88.34s**, data/thread_cancellation_final_results.xml.
+Earlier intermediate: 569 passed in 96.08s; final suite includes added actual run
+shutdown-order and auth_diagnostics cancellation tests. Nine new thread-specific cases.
+Targeted first retry: 53 passed in15.83s; thread-specific then 8 passed in14.35s before
+last auth diagnostic case. Ruff check/format clean137 files, pip check and diff clean,
+actual-secret/JWT scan clean, private paths ignored, write/automation flags false.
+
+Initial drain implementation hung on Python3.12 done-future fast path. Minimal script
+with faulthandler reproduced starvation in drain; affected test/debug processes were
+explicitly terminated. Explicit yield now lets completion callbacks remove finished
+tasks/register observers; targeted and both subsequent full runs passed. No test was
+bypassed or failure hidden. Thread barriers and MockTransport prove lock retention,
+queued cancellation/no dispatch, cancellation during throttle with zero HTTP calls,
+late ACK/error one request/UNCERTAIN/allowlisted receipt and no resend. Actual run
+shutdown with fake services proves active call completion precedes account/session/DB
+close. Read-only auth diagnostics also drain before close on cancellation.
+
+No real network request, buyer message, write, database migration or production bot
+start. Work does not claim a hard shutdown/request deadline: HTTPX20s is inactivity/
+chunk timeout. Forced exit or unavailable persistence can lose late evidence; unknown
+operations still do not retry. Legacy live_test helper remains outside this runtime
+change and must be reviewed before any authorized future use; rejected create not retried.

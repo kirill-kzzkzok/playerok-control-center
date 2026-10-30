@@ -7,6 +7,7 @@ from pathlib import Path
 
 from app.config import Config
 from app.playerok.adapter import APIError, Playerok, SafeAccount
+from app.playerok.thread_calls import drain_calls
 
 
 async def diagnose_playerok(config, account=None):
@@ -33,6 +34,7 @@ async def diagnose_playerok(config, account=None):
     except Exception as error:  # noqa: BLE001 -- sanitized diagnostic boundary
         report["status"], report["error_type"] = "ERROR", type(error).__name__
     finally:
+        await drain_calls(api)
         report["http"] = list(account.response_diagnostics)
         account.close()
     return report

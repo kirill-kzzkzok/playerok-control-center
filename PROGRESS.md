@@ -1321,3 +1321,54 @@ external_requests=0/database_writes=0; writes=false/automation=false. Канон
 data/account_binding_results.xml; 20 новых regression cases, Ruff check/format
 (135 files), pip check, git diff --check и actual-secret/JWT scan чистые.
 Рабочий read-only probe не записывал БД и не обращался к сети.
+
+
+## Безопасная отмена синхронного API-вызова и завершение приложения
+
+Аудит PHASE 7/9 выявил конкретный runtime дефект: отмена await asyncio.to_thread
+освобождала api.lock, хотя синхронный вызов продолжал работать. Shutdown закрывал
+account/SQLite раньше завершения thread-side dispatch guard; поздний ACK терялся.
+План: task owns lock/thread, cancellation signal до отправки, реестр active calls,
+late evidence observer и drain перед закрытием ресурсов. Не пытаться убивать поток
+или трактовать отмену как доказательство неотправки.
+
+ThreadCalls теперь обслуживает Playerok.call и Executor.mutate. shield сохраняет
+внутреннюю задачу; блокировка удерживается фактическим исполнителем до выхода потока.
+Отмена caller немедленно ставит threading.Event: запросы, ещё ожидающие API lock или
+thread-pool entry, не запускают method; mutation guard проверяет event также после
+transport throttle до HTTP. Outbox caller сохраняет UNCERTAIN по прежним правилам.
+Уже переданный транспорту запрос не отзывается, не повторяется и не становится успехом
+по одному позднему raw return. Для createChatMessage/createItem сохраняется только
+message_id/remote_id как UNCERTAIN late evidence; без текста сообщения или cookies.
+
+Основной shutdown и оба read-only diagnostics drain API tasks и evidence observers
+перед закрытием клиента/БД. Отложенный observer даёт outer worker сначала записать
+UNCERTAIN. Observer persistence failure пишет только тип исключения и не заменяет
+авторитетное состояние. Первичная реализация drain зависла в тесте на Python 3.12:
+gather завершённых futures мог не уступать event loop для done callbacks. Зависание
+воспроизведено минимальным скриптом с faulthandler; только эти тестовые процессы были
+остановлены, добавлен явный sleep(0), тесты повторены успешно.
+
+Первый targeted после исправления: 53 passed in 15.83s. Затем thread-specific suite
+с actual shutdown: 8 passed in 14.35s. Промежуточный full: 569 passed in 96.08s;
+после него добавлены последние shutdown/auth-diagnostic coverage и запущен новый full.
+Новые случаи покрывают read cancellation/serialization, cancel waiting lock, cancel
+при transport throttle (HTTP count0), thread drain + success/error observers,
+post-HTTP cancellation с ACK/ReadTimeout (ровно один запрос, UNKNOWN + безопасный
+late journal), actual run shutdown order и отмену auth_diagnostics до client.close.
+
+HTTPX timeout=20 остаётся inactivity/chunk timeout, не общим wall-clock deadline;
+завершение drain ждёт реально исполняющийся вызов. Slow-drip/зависший сторонний transport
+и принудительное уничтожение процесса не объявляются ограниченными этим изменением.
+Источники проверены: Python3.12 concurrent.futures cancellation и HTTPX timeouts (см.
+PLAYEROK_RESEARCH). Live-инструмент app.live_test не запускался; его старый отдельный
+mutate helper не относится к runtime ThreadCalls, требует отдельного ревью перед
+любым новым разрешённым использованием. Повтор rejected listing запрещён.
+
+Финальная контрольная точка cancellation/shutdown: **571 passed in 88.34s**,
+data/thread_cancellation_final_results.xml. Ruff check/format (137 files), pip check,
+git diff --check и actual-secret/JWT scan чистые. 9 новых thread/shutdown случаев.
+Рабочая БД не открывалась/не изменялась; внешних запросов/мутаций/сообщений не было.
+Следующее ревью: legacy app.live_test helper/gating перед любым разрешённым запуском;
+не повторять rejected create, проверить shutdown admission новых handler calls и
+разделение inactivity timeout от общего deadline. Общая приёмка остаётся открытой.

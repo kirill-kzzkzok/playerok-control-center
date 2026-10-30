@@ -7,6 +7,7 @@ import httpx
 
 from app.config import Config
 from app.playerok.adapter import APIError, Playerok, SafeAccount
+from app.playerok.thread_calls import drain_calls
 
 
 async def diagnose(config):
@@ -61,6 +62,7 @@ async def diagnose(config):
     except APIError as error:
         result["playerok"] = {"authorized": False, "error_code": error.code}
     finally:
+        await drain_calls(api)
         account.close()
     return result
 
