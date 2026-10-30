@@ -34,6 +34,7 @@ from app.telegram.promotions_panel import PromotionsPanel
 from app.telegram.replies_panel import RepliesPanel
 from app.telegram.settings_panel import SettingsPanel
 from app.telegram.statistics_panel import StatisticsPanel
+from app.telegram.stock_panel import StockPanel
 from app.telegram.wizard import Wizard
 from playerokapi.enums import ItemStatuses
 
@@ -74,6 +75,7 @@ def create_router(store, api, products, synchronizer):
     profile_panel = ProfilePanel(api)
     item_panel = ItemPanel(api)
     listings_panel = ListingsPanel(api)
+    stock_panel = StockPanel(store, api)
 
     @router.message(CommandStart())
     async def start(message, state):
@@ -111,6 +113,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await finance.callback(action, owner, state)
             elif action.startswith("pf:"):
                 text, markup = await order_finance_panel.callback(action, owner, state)
+            elif action.startswith("stock:"):
+                text, markup = await stock_panel.callback(action, owner, state)
             elif action.startswith("ic:"):
                 text, markup = await interface_cleanup.callback(action, owner, state, message)
             elif action == "quickreplies":
@@ -211,6 +215,7 @@ def create_router(store, api, products, synchronizer):
                 ident = action.split(":", 1)[1]
                 item, text, photo_rows = await item_panel.card(ident, state)
                 rows = [
+                    [("📚 Склад", "stock:view:" + ident)],
                     [("💰 Цена / Скидка", "discount:" + ident), ("📋 Описание", "editdesc:" + ident)],
                     [("📝 Название", "editname:" + ident), ("🖼 Заменить фото", "editphoto:" + ident)],
                     [("🧩 Атрибуты и данные", "editfields:" + ident)],
@@ -220,6 +225,8 @@ def create_router(store, api, products, synchronizer):
                     [("🚀 Продвижение · dry-run", "promo:item:" + ident)],
                     [("🗑 Удалить", "delete:" + ident)],
                 ]
+                for draft_id in stock_panel.service.prepared(owner, ident):
+                    rows.append([("📥 Перенести запас из мастера", "stock:transfer:" + draft_id)])
                 if item.get("status") == "DRAFT":
                     rows.append([("Бесплатная публикация · превью", "publish:" + ident)])
                 markup = keyboard(photo_rows + rows)
@@ -439,6 +446,8 @@ def create_router(store, api, products, synchronizer):
             current = await state.get_state()
             if current == "wizard":
                 text, markup = await wizard.message(message, state)
+            elif current == "stock:input":
+                text, markup = await stock_panel.message(message, state)
             elif current and current.startswith("finance:"):
                 text, markup = await finance.message(message, state)
             elif current and current.startswith("quick:"):

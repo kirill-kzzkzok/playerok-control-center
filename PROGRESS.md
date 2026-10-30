@@ -1905,3 +1905,19 @@ Read-only рабочая SQLite:1 owner,0 inventory,0 policies,0 chains,0 delive
 Полный автоматический SENT отсутствует (Fulfillment требует owner attestation).
 Текущий DELIVERED означает receipt, не buyer read/use; independent actual message
 readback и подтверждение пригодности товара входят в live-план и ещё не приняты.
+
+
+## UX перед первой выдачей — блок1: склад (2026-10-30)
+
+Добавлены Inventory/StockPanel как небольшие расширения существующей SQLite/Orders
+архитектуры: кнопка склада в карточке каждого лота, четыре статуса и постраничные
+номера единиц без секретов, загрузка строк с preview количества/пустых/дубликатов.
+Свежая проверка owner/status до commit, повторный подсчёт в BEGIN IMMEDIATE; известные
+значения любых статусов не возвращаются в AVAILABLE. SQLite FSM сохраняет pending
+preview; stale/double confirm блокируется. Migration019 хранит однократный перенос
+запаса из wizard binding; stock+marker+неактивная policy создаются одной транзакцией.
+Пополнение не включает автоматику и не снимает empty guard; resume отдельно подтверждается.
+Целевые48 passed in11.76s (data/ux_stock_results.xml), включая настоящий Dispatcher,
+рестарт, foreign owner, смену лота и competing import; stock cycle regressions зелёные.
+Реальных mutations/выдач/сообщений нет; рабочая БД/.env не менялись.
+Далее по согласованному scope: общий статус, результаты операций, полное превью.
