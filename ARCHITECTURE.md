@@ -751,3 +751,15 @@ Existing filter dimensions survive selection; item page cursor is reset. Names n
 not be unique. Cancellation closes state; stale callbacks reject before API. Game pages
 use validate_page/cursor cycle detection; category list bounded1000 entries, searches
 1000 pages. Manual category-ID entry remains optional, not the only navigation path.
+
+
+## Read-only item card/gallery
+
+ItemPanel checks current account/item/user identity for card and every gallery read.
+Gallery FSM holds only bounded attachment IDs and nonce; fresh item provides current
+URL by ID, preserving selection through reordering and blocking removed/hidden media.
+Existing Attachments.remote enforces media host, no credentials/redirects, size/decode
+limits and temporary-file cleanup. Text card remains with a separate photo navigation
+button; existing edit/delete/preview workflows are retained. Counters require nonnegative
+int, with unknown distinct from0; deals_counter is labelled API deals, not settled sales.
+Position is explicitly within priority scope. Link path segment is URL-encoded.

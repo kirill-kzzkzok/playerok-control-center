@@ -1619,3 +1619,38 @@ data/item_category_picker_results.xml (JUnit tests632/errors0/failures0/skipped0
 time281.264s). При задержке получения вывода проверен тот же session91477 и полный
 JUnit; тесты не перезапускались. Ruff check/format146 files, pip/diff/secret scan чистые.
 No live request/write/payment/working DB access. Результаты и код сохраняются в origin.
+
+
+## §6: карточка лота — фотографии и доступные счётчики API
+
+Аудит карточки после picker выявил отсутствие read-only фото просмотра и deals_counter/
+views_counter, хотя pinned parser MyItem эти поля сохраняет. ItemPanel выделен из
+router для owned card и gallery; существующие mutation/preview кнопки сохранены.
+Владение проверяет непустой account.id, точный item.id и user.id и для карточки, и для
+каждого фото. is_editable=false не запрещает чтение (не используется edit-only service).
+
+Card показывает bounded escaped name/description, status/priority, position явно внутри
+приоритета, просмотры и «сделки по API». Counter принимает только неотрицательный int,
+не bool/string; zero известен, missing/invalid unknown. deals_counter не объявляется
+числом завершённых продаж. Фото открываются отдельной read-only кнопкой с навигацией:
+public attachment IDs snapshot/nonce в SQLite FSM, URL не хранится. Fresh get_item
+перед каждым download проверяет owner/identity/hidden/current imageID; изменение порядка
+не меняет выбранное фото, удалённое/скрытое не скачивается. Максимум100 images.
+
+Attachments.remote использует прежние host/TLS/no-cookie/no-redirect/byte-limit/decode
+ограничения и удаляет temporary file после чтения. Card link закреплён Playerok domain,
+slug path-segment URL-encoded. Галерея не создаёт outbox, не меняет server attachments,
+не добавляет Telegram photo-send retry. Фотография отправляется по кнопке, не автоматически
+в текстовой карточке; API counters не заменяют проверенную финансовую статистику.
+
+Tests/test_item_panel.py:8 parametrized cases. Targeted вместе listing/Telegram integration:
+27 passed in14.26s. Проверены metadata/zero/unknown/escaping, gallery SQLite reconstruction,
+reorder stable IDs, foreign/mismatched/forbidden/removed block before download,
+stale nonce/bad index no API, actual Dispatcher owner gating/card/photo/no outbox.
+Full suite running. Всё tempDB/mock media/API; реальный бот, buyer sends, объявления,
+оплаты, рабочая DB и migrations не затронуты.
+
+Контрольная точка item card/gallery: **640 passed in103.96s**,
+data/item_card_gallery_results.xml. Ruff check/format148 files/pip/diff/secret scan
+чистые.8 новых regression cases. Рабочая БД/бот/сеть не использовались; live writes,
+платежи и migrations не выполнялись. Общая приёмка и live-доказательства остаются открыты.

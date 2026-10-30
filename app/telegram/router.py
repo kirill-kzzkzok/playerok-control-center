@@ -23,6 +23,7 @@ from app.telegram.finance_panel import FinancePanel
 from app.telegram.formatting import escaped
 from app.telegram.fulfillment_panel import FulfillmentPanel
 from app.telegram.interface_cleanup_panel import InterfaceCleanupPanel
+from app.telegram.item_panel import ItemPanel
 from app.telegram.keyboards import keyboard, main_menu
 from app.telegram.listings_panel import ListingsPanel
 from app.telegram.operations_panel import OperationsPanel
@@ -71,6 +72,7 @@ def create_router(store, api, products, synchronizer):
     interface_cleanup = InterfaceCleanupPanel(store)
     order_finance_panel = OrderFinancePanel(store, api)
     profile_panel = ProfilePanel(api)
+    item_panel = ItemPanel(api)
     listings_panel = ListingsPanel(api)
 
     @router.message(CommandStart())
@@ -207,15 +209,7 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await listings_panel.show(parts[1], state, nonce=parts[2])
             elif action.startswith("item:"):
                 ident = action.split(":", 1)[1]
-                item = await api.call("get_item", id=ident)
-                if (item.get("user") or {}).get("id") != api.account.id:
-                    raise ValidationError("Лот не принадлежит вашему аккаунту")
-                text = (
-                    f"📦 <b>{escape(item.get('name') or ident)}</b>\nЦена: {item.get('price')} ₽\n"
-                    f"Статус: {escape(item.get('status') or '?')}\nПриоритет: {escape(item.get('priority') or '?')}\n"
-                    f"Позиция: {item.get('priority_position') or 'нет данных'}\n\n{escaped(item.get('description') or '', 1700)}\n\n"
-                    f'<a href="https://playerok.com/products/{escape(item.get("slug") or ident, quote=True)}">Открыть на Playerok</a>'
-                )
+                item, text, photo_rows = await item_panel.card(ident, state)
                 rows = [
                     [("💰 Цена / Скидка", "discount:" + ident), ("📋 Описание", "editdesc:" + ident)],
                     [("📝 Название", "editname:" + ident), ("🖼 Заменить фото", "editphoto:" + ident)],
@@ -228,7 +222,13 @@ def create_router(store, api, products, synchronizer):
                 ]
                 if item.get("status") == "DRAFT":
                     rows.append([("Бесплатная публикация · превью", "publish:" + ident)])
-                markup = keyboard(rows)
+                markup = keyboard(photo_rows + rows)
+            elif action.startswith("itemmedia:"):
+                image, caption, markup = await item_panel.media(action, state)
+                await message.answer_photo(
+                    BufferedInputFile(image, filename="item.jpg"), caption=caption, reply_markup=markup
+                )
+                return
             elif action.startswith("editfields:"):
                 text, markup = await wizard.start_edit(owner, state, action.split(":", 1)[1])
             elif action.startswith("quote:"):

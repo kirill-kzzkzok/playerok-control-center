@@ -249,3 +249,14 @@ validated opaque game pages, category pages and membership refresh before apply.
 Test_item_category_picker covers restart/filter preservation, stale/cancel/foreign,
 duplicate names, changed membership, malformed/cyclic pages and real Dispatcher flow.
 No live API, write or full-history query acceptance is implied. ID entry remains optional.
+
+
+## §6: item card/gallery follow-up
+
+ItemPanel adds read-only photo navigation and explicit API view/deal counters with
+unknown-vs-zero semantics, priority-scope position and fixed-domain encoded link.
+Test_item_panel covers metadata/restart/reorder, fresh ownership/identity/hidden/removal,
+stale/index validation and actual Dispatcher sendPhoto/owner/no outbox. Photos are
+opened by button, not automatically included in the text card; counters are not claimed
+settled-sale totals. Media download uses existing bounded Attachments path. Mock only;
+no live screenshot/photo-send/listing mutation or server acceptance implied.

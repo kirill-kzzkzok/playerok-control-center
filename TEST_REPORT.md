@@ -785,3 +785,16 @@ checked rather than restarting. Ruff check/format146 files, pip check/diff/actua
 scan clean. No working DB access, API request, buyer send, mutation, payment or migration.
 Previous manual-ID-only category UX limitation resolved in mock acceptance; no full
 upstream history or live-write acceptance claim. Native ID entry stays optional.
+
+
+## Item card and read-only gallery — 2026-10-30
+
+Full640 passed in103.96s, data/item_card_gallery_results.xml; targeted27 passed in14.26s.
+Eight new cases cover card API counters/zero/unknown/escaping, photo SQLite restart and
+reorder by ID, fresh owner/item identity/hidden/removal rejection before download,
+stale/bad-index no API and actual Dispatcher card/sendPhoto/owner/no outbox. Ruff check/
+format148 files, pip check/diff and actual-secret/JWT scan clean. No working DB access,
+real API/Telegram request, mutation, payment or migration. Existing Attachments.remote
+security/cleanup reused; photo viewing uses a separate button. API deals counter is
+not settled sales, and priority position is not global marketplace ranking. No live
+photo-send or listing acceptance claim; general project acceptance remains open.
