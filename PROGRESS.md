@@ -1869,3 +1869,39 @@ LIVE_ACCEPTANCE_20261030.json. HTTP404 после удаления ожидае�
 глобальной автоматизации или изменений существующих лотов. Config после:
 writes=false/automation=false. Полный цикл продажи/автовыдачи остаётся незакрытым.
 Код не менялся; unit/mock tests не запускались и не используются как live-доказательство.
+
+
+## Складская автовыдача: локальный сквозной checkpoint —2026-10-30
+
+Предыдущий live этап управления лотом подтверждён: create+photo, price edit/discount,
+DEFAULT0 publication до APPROVED, delete + независимые404/list absence; свидетельство
+LIVE_ACCEPTANCE_20261030.json, commit8d03e8c. Это не приёмка продажи/автовыдачи.
+
+Выполнены целевые существующие проверки:97 passed in16.90s,
+data/stock_delivery_baseline_results.xml. Добавлен tests/test_stock_auto_cycle.py:
+реальные Synchronizer/Orders/EnrollmentWorker/ChainWorker/OutboxWorker/Fulfillment
+с SQLite, имитируется только удалённый Playerok. Baseline берётся actual sync machinery;
+новая PAID обнаруживается polling, repeated polling/deal hints дедуплицируются;
+stock RESERVED ровно1, restart с PENDING продолжает одну отправку. Независимый
+локальный chat-history read подтверждает receipt/text/sender. После receipt stock
+DELIVERED, chain NEEDS_FULFILLMENT; отдельное owner attestation → mock SENT/readback,
+stale PAID replay не откатывает SENT. Это mock remote, не live выдача.
+
+Crash до send после claim, crash после send до DB commit, lost ACK и missing message
+receipt после send дают UNCERTAIN/QUARANTINED/BLOCKED, PAID не повышается, повторных
+send/fulfill нет после reopen/repeated events. Два настоящих параллельных SQLite
+connections проверяют тот же order и два разных order на последнюю единицу:
+одна reservation/одна outbox operation. Новые связанные проверки:7 passed in1.58s,
+data/stock_auto_cycle_results.xml. В проверенных путях воспроизводимого P0/P1 не
+найдено; production код и архитектура не менялись. Полный suite:699 passed in89.84s;
+data/stock_delivery_checkpoint_results.xml. Ruff check/format153 files чистые.
+
+Read-only рабочая SQLite:1 owner,0 inventory,0 policies,0 chains,0 delivery/fulfill jobs;
+.env writes=false/automation=false. Настоящих Playerok/Telegram mutations на этом
+этапе0. STOCK_LIVE_PLAN.md содержит условия, exact stages, сверку и stop rules.
+Открыто: реальный допустимый складской товар/секрет, согласованный покупатель/оплата,
+разрешение на actual send и scoped runtime activation. Существующий auto enrollment
+ограничен item/future cutoff, но не exact buyer/order ID; это учитывать до включения.
+Полный автоматический SENT отсутствует (Fulfillment требует owner attestation).
+Текущий DELIVERED означает receipt, не buyer read/use; independent actual message
+readback и подтверждение пригодности товара входят в live-план и ещё не приняты.

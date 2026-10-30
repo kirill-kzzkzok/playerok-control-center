@@ -345,3 +345,20 @@ LIVE_ACCEPTANCE_20261030.json. HTTP404 после удаления ожидае�
 глобальной автоматизации или изменений существующих лотов. Config после:
 writes=false/automation=false. Полный цикл продажи/автовыдачи остаётся незакрытым.
 Код не менялся; unit/mock tests не запускались и не используются как live-доказательство.
+
+
+## Складская автоматика: connected local acceptance —2026-10-30
+
+Local only: tests/test_stock_auto_cycle.py проверяет polling baseline/PAID discovery,
+repeated events, one reservation, queued restart, successful message/history receipt,
+DELIVERED и отдельный Fulfillment с owner attestation/readback SENT. Четыре fault
+paths (lost ACK, missing ID, crash before dispatch/after send before commit) после
+reopen остаются UNCERTAIN/QUARANTINED/BLOCKED без повторной отправки. Два потока с
+разными SQLite connections не резервируют последнюю единицу дважды для одного либо
+двух заказов.7 passed, full699 passed. Новая реальная выдача не выполнялась.
+
+Остаются открытыми live PAID detection/reserve/send/message-history readback и
+seller fulfillment; требуется реальный складской товар и согласованный покупатель.
+Plan:STOCK_LIVE_PLAN.md. Автоматический SENT отсутствует; DELIVERED по receipt
+не означает прочтение/применение кода; auto enrollment не имеет buyer/order allowlist.
+Live lot-management acceptance8d03e8c остаётся подтверждённой отдельно.

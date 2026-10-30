@@ -873,3 +873,19 @@ LIVE_ACCEPTANCE_20261030.json. HTTP404 после удаления ожидае�
 глобальной автоматизации или изменений существующих лотов. Config после:
 writes=false/automation=false. Полный цикл продажи/автовыдачи остаётся незакрытым.
 Код не менялся; unit/mock tests не запускались и не используются как live-доказательство.
+
+
+## Stock automatic delivery checkpoint —2026-10-30
+
+Existing targeted pipeline suite97 passed in16.90s
+(data/stock_delivery_baseline_results.xml). New connected stock tests7 passed in1.58s
+(data/stock_auto_cycle_results.xml). Full suite699 passed in89.84s
+(data/stock_delivery_checkpoint_results.xml). Ruff check and format153 files clean.
+Production code unchanged; no reproduced P0/P1 in tested stock paths.
+
+Stock tests connect actual sync/discovery/enrollment/reservation/chains/outbox/
+fulfillment and SQLite across reopen, duplicate hints/polls, two-connection races,
+lost ACK/missing ID, crash before HTTP/after send before commit. Only remote API
+is simulated. Message-history verification is a test assertion, not a new production
+automatic readback gate. SENT requires explicit owner attestation. None of these
+checks accepts live stock delivery; see STOCK_LIVE_PLAN.md for exact remaining gates.
