@@ -11,12 +11,9 @@ from aiogram.filters import CommandStart
 from aiogram.types import BufferedInputFile
 
 from app.database.store import Conflict
-from app.playerok.adapter import APIError, safe_media_url
-from app.rendering.cards import profile_card
-from app.rendering.charts import revenue_chart
+from app.playerok.adapter import APIError
 from app.services.discounts import discount_plan
 from app.services.products import ValidationError, listing_price, listing_text, priority_price_basis
-from app.services.statistics import statistics
 from app.telegram.automation_panel import AutomationPanel
 from app.telegram.automation_queue import AutomationQueue
 from app.telegram.chat_panel import ChatPanel
@@ -26,8 +23,10 @@ from app.telegram.fulfillment_panel import FulfillmentPanel
 from app.telegram.keyboards import keyboard, main_menu
 from app.telegram.operations_panel import OperationsPanel
 from app.telegram.orders_panel import OrdersPanel
+from app.telegram.profile_panel import ProfilePanel
 from app.telegram.promotions_panel import PromotionsPanel
 from app.telegram.replies_panel import RepliesPanel
+from app.telegram.statistics_panel import StatisticsPanel
 from app.telegram.wizard import Wizard
 from playerokapi.enums import ItemStatuses
 
@@ -59,6 +58,8 @@ def create_router(store, api, products, synchronizer):
     automation_panel = AutomationPanel(store, api)
     promotions_panel = PromotionsPanel(store, api)
     automation_queue = AutomationQueue(store, api)
+    statistics_panel = StatisticsPanel(store)
+    profile_panel = ProfilePanel(api)
 
     @router.message(CommandStart())
     async def start(message, state):
@@ -363,67 +364,9 @@ def create_router(store, api, products, synchronizer):
                     keyboard([[("🛒 Заказы", "orders")]]),
                 )
             elif action == "profile":
-                viewer = await api.call("get")
-                profile = viewer.get("profile") or {}
-                avatar = None
-                url = profile.get("avatar_url")
-                if url and safe_media_url(url):
-                    import httpx
-
-                    try:
-                        async with (
-                            httpx.AsyncClient(timeout=10, follow_redirects=False) as client,
-                            client.stream("GET", url) as response,
-                        ):
-                            if response.status_code == 200:
-                                chunks = bytearray()
-                                async for chunk in response.aiter_bytes():
-                                    chunks.extend(chunk)
-                                    if len(chunks) > 5_000_000:
-                                        break
-                                if len(chunks) <= 5_000_000:
-                                    avatar = bytes(chunks)
-                    except httpx.HTTPError:
-                        pass
-                image = await asyncio.to_thread(profile_card, profile, avatar)
-                balance = profile.get("balance") or {}
-                caption = (
-                    f"👤 <b>{escape(viewer.get('username') or '?')}</b>\n"
-                    f"Рейтинг: {profile.get('rating', 'нет данных')} · Отзывов: {profile.get('reviews_count', 'нет данных')}\n"
-                    f"Баланс: {balance.get('value', 'нет данных')} ₽\nДоступно к выводу: {balance.get('withdrawable', 'нет данных')} ₽\n"
-                    f"Регистрация: {escape(viewer.get('created_at') or '?')}"
-                )
-                return await message.answer_photo(
-                    BufferedInputFile(image, filename="profile.png"),
-                    caption=caption,
-                    reply_markup=keyboard([]),
-                )
-            elif action.startswith("stats:"):
-                days = int(action.split(":")[1])
-                stats = await asyncio.to_thread(statistics, store, days)
-                image = await asyncio.to_thread(revenue_chart, stats)
-                caption = (
-                    f"📊 <b>Статистика · {'всё время' if days == 0 else str(days) + ' дн.'}</b>\n"
-                    f"Заказов: {stats['orders']} · Оплаченных: {stats['paid']}\n"
-                    f"Выручка до комиссий: {stats['revenue']} ₽\nПодтверждённые продажи: {stats['confirmed_revenue']} ₽\n"
-                    f"Возвраты: {stats['refunds']} ₽\nСредний чек: {stats['average'] if stats['average'] is not None else 'нет данных'}\n"
-                    f"Начало локального покрытия: {escape(str(stats['coverage_start'] or 'нет данных'))}\n"
-                    "История ограничена доступными API данными. Комиссии, поступления и прибыль не подтверждены."
-                )
-                markup = keyboard(
-                    [
-                        [
-                            ("24 ч", "stats:1"),
-                            ("48 ч", "stats:2"),
-                            ("7 дн", "stats:7"),
-                            ("30 дн", "stats:30"),
-                            ("Всё", "stats:0"),
-                        ]
-                    ]
-                )
-                return await message.answer_photo(
-                    BufferedInputFile(image, filename="statistics.png"), caption=caption, reply_markup=markup
-                )
+                return await profile_panel.handle(message)
+            elif action.startswith(("stats:", "st:", "sd:")):
+                return await statistics_panel.handle(action, message)
             elif action == "settings":
                 text = (
                     "⚙️ <b>Настройки</b>\nЗаписи API: "

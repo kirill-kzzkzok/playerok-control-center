@@ -29,6 +29,11 @@ class Orders:
             if stale:
                 db.execute("UPDATE inbox SET processed_at=? WHERE key=?", (now(), key))
                 return False
+            old_payload = json.loads(previous["payload"]) if previous else {}
+            # List responses can omit the immutable upstream date supplied by get_deal.
+            # Preserve that date in the payload; the SQL ingest fallback is not evidence.
+            if not order.get("created_at") and old_payload.get("created_at"):
+                order = {**order, "created_at": old_payload["created_at"]}
             db.execute(
                 "INSERT INTO orders(id,item_id,status,chat_id,amount,created_at,payload) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,chat_id=excluded.chat_id,amount=excluded.amount,payload=excluded.payload",
                 (
@@ -42,7 +47,7 @@ class Orders:
                 ),
             )
             db.execute("UPDATE inbox SET processed_at=? WHERE key=?", (now(), key))
-            old_problem = json.loads(previous["payload"]).get("has_problem") if previous else None
+            old_problem = old_payload.get("has_problem")
             if not previous or previous["status"] != status or old_problem != order.get("has_problem"):
                 history = db.execute(
                     "INSERT INTO order_history(order_id,source,old_status,new_status,problem,created_at) VALUES(?,'API_STATE',?,?,?,?)",

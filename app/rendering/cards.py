@@ -23,6 +23,7 @@ def profile_card(profile, avatar=None):
     draw.rounded_rectangle((30, 30, 1070, 450), radius=35, outline="#65519a", width=2)
     draw.text((70, 65), "PLAYEROK CONTROL CENTER", font=font(23, True), fill="#bc9aff")
     draw.ellipse((65, 150, 285, 370), fill="#44335e")
+    avatar_loaded = False
     if avatar:
         try:
             with Image.open(BytesIO(avatar)) as source:
@@ -31,9 +32,10 @@ def profile_card(profile, avatar=None):
                     mask = Image.new("L", (220, 220))
                     ImageDraw.Draw(mask).ellipse((0, 0, 219, 219), fill=255)
                     image.paste(cropped, (65, 150), mask)
+                    avatar_loaded = True
         except (OSError, Image.DecompressionBombError):
             pass  # Visible fallback initials, never fake avatar data.
-    else:
+    if not avatar_loaded:
         draw.text((145, 210), (profile.get("username") or "?")[:1].upper(), font=font(70), fill="white")
     draw.text((330, 155), str(profile.get("username") or "Без имени")[:28], font=font(44, True), fill="white")
     rating = profile.get("rating")

@@ -405,3 +405,25 @@ policy save восстанавливает desired guard; stock refill не вк
 Смена revision отменяет активные chains по прежним правилам и меняет future cutoff.
 SENT не выставляется без отдельного Fulfillment workflow; auto_enroll не является
 buyer CONFIRMED и не вызывает денежные API операции.
+
+## Statistics/profile data contract
+
+Statistics aggregates an order-created cohort with CURRENT order status. Only aware
+payload.created_at is historical evidence; the SQL ingest fallback is never used for
+period attribution. Previous windows are half-open at the current start; the current
+window includes its end. Amounts remain Decimal, unknown paid amounts block averages
+and percentage growth. Coverage bounds describe known cached dates, not API completeness.
+Confirmed RUB generic expenses and SUCCEEDED promotion ledger remain separate until
+cross-source reconciliation is implemented. No calculator quote becomes a real charge.
+
+Synchronizer schedules at most 32 missing-date deal details per full cycle through the
+existing durable request queue (8 reads per drain, revision/backoff retained). An existing
+completed detail request is not endlessly recreated merely because its date is absent.
+Orders preserves a server date from the prior payload when list responses omit it.
+
+StatisticsPanel and ProfilePanel own their Telegram output. Matplotlib generation uses
+the existing process lock/to_thread, with shape-preserving Hermite temporal curves,
+actual observation markers, real temporal spacing and explicit interpolation labels.
+Smoothing cannot affect totals or produce extra extrema. Categorical comparisons use
+bars. Profile fields follow AccountProfile parser contract, with no zero-to-unknown
+coercion; public avatar download has a host/size/no-redirect/no-credentials boundary.

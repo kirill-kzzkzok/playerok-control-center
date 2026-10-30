@@ -160,6 +160,27 @@ class Synchronizer:
         async with self.lock:
             await self._once()
 
+    def queue_order_details(self, limit=32):
+        """Persist a bounded read-only backfill, once per missing-date order.
+
+        Existing request revisions/backoff belong to event reconciliation. Do not
+        reset them or requeue an inaccessible/undated historical deal every cycle.
+        """
+        candidates = self.store.rows(
+            "SELECT id FROM orders WHERE (json_extract(payload,'$.created_at') IS NULL "
+            "OR json_extract(payload,'$.created_at')='') AND NOT EXISTS "
+            "(SELECT 1 FROM sync_requests WHERE key='deal:'||orders.id) ORDER BY id LIMIT ?",
+            (limit,),
+        )
+        for order in candidates:
+            self.store.execute(
+                "INSERT OR IGNORE INTO sync_requests(key,kind,target,updated_at) VALUES(?,'deal',?,?)",
+                ("deal:" + order["id"], order["id"], now()),
+            )
+        if candidates:
+            self.wake.set()
+        return len(candidates)
+
     async def _once(self):
         errors, counts = {}, {}
         streams = [
@@ -173,6 +194,7 @@ class Synchronizer:
                     self.store.set_setting("orders:last_complete_sync", now())
             except APIError as error:
                 errors[key] = error.code
+        self.queue_order_details()
         # Oldest attempted chat first. An inaccessible chat cannot starve the others.
         chats = self.store.rows(
             "SELECT id FROM sync_chats ORDER BY last_synced_at IS NOT NULL,last_synced_at,id LIMIT ?",

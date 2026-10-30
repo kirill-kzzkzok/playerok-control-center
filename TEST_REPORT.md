@@ -382,3 +382,30 @@ Local backup + migration v13 probe: data/enrollment_migration_check.json; 217 or
 live sending or modification of shop settings performed. Automatic SENT remains a
 separate explicit Fulfillment workflow; mock acceptance is not live buyer delivery
 evidence. Remaining original project scope and final acceptance remain open.
+
+## PHASE 6 — profile/statistics checkpoint (2026-10-30)
+
+**398 passed in 51.03s**, JUnit data/phase6_statistics_results.xml. Ruff check/format
+(103 files), pip check and actual-secret scan clean; .env and PROJECT_SPEC.md ignored.
+A final pairwise lint correction was separately rechecked by 4 smoothing tests.
+
+New tests cover server-date/timezone rolling boundaries, future/missing/naive dates,
+unknown pending vs paid amounts, prior-window unknowns, current-status cohorts,
+RUB-only generic expenses, SUCCEEDED-only promotion sources, empty/populated PNGs for
+all five views/periods, Dispatcher access/escaping/no API writes, durable bounded date
+backfill, preserved dates after sparse list updates, revision/backoff retention,
+shape-preserving curves with uneven intervals/zeros/extrema/exact observations.
+Profile tests use the actual PlayerokAPI parser/normalizer contract, distinguish
+available/withdrawable and incoming/outgoing counters, preserve zero values, check
+corrupt-avatar initials, bounded public media transport/no redirects/no credentials.
+
+All chart views and profile inspected visually; data/phase6_visual includes separate
+synthetic demo and existing-cache fixtures. Temporal charts changed to smooth factual
+curves per the user's explicit preference; no fake sinusoid is inserted into data.
+
+Read-only working-cache probe: 217 orders, 216 missing upstream dates. The subsequent
+live get() returned UNAUTHORIZED_OR_CHALLENGE, before detail reads; no dates backfilled,
+no external mutations. Evidence data/phase6_statistics_probe.json and
+ data/phase6_date_backfill.json; SQLite backup before-statistics-date-backfill.sqlite3.
+Financial transaction reconciliation/actual receipts/commissions/historical profit and
+remaining final live acceptance are still open. Passing mocks do not prove live writes.
