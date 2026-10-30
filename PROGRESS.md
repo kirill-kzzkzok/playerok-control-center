@@ -1832,3 +1832,40 @@ Live-критерии управления лотом остаются откр�
 не запускались: они не снимают запрет и не доказывают live create/delete.
 Для продолжения этого API-сценария нужно явное исключение/разрешённый тестовый
 контур от Playerok; повторный запрос пользователя сам по себе правила не меняет.
+
+
+## Реальная приёмка управления одним лотом — 2026-10-30 20:24:52 МСК
+
+Последний явный запрос пользователя разрешил реальный цикл, включая риск ограничений
+аккаунта. Предыдущая остановка preflight не является результатом этой попытки.
+Новый сценарий выполнен через Products.queue_create → OutboxWorker → Executor →
+SafeAccount и локальный отдельный operations.sqlite3; рабочая БД/глобальные флаги
+не включались. Создан ровно один объект, повторов mutation не было.
+
+- ID: `1f1d4868-3234-6930-63e5-505a0d142f79`, Telegram→Stars, amount=50 (схемное тестовое значение,
+  не подтверждение запаса), способ «По @username».
+- createItem HTTP200; fresh item HTTP200: DRAFT, current owner verified,
+  name=TEST TEST TEST, description=TEST TEST TEST — проверка работы системы.,
+  price=1000, raw_price=1000, attachment ID=1f1d4868-31a4-6880-aded-10a244e88c32.
+  Фото скачано обратно с i.playerok.com и визуально проверено: белый TEST + watermark.
+- updateItem HTTP200: price=749, raw_price=1000. Немедленное чтение ещё возвращало
+  1000/1000; дополнительное read-only чтение подтвердило749/1000. Mutation не повторяли.
+  Снижение25.10%; произвольное редактирование названия/фото этим не проверялось.
+- itemPriorityStatuses: DEFAULT, price=0, id=1efbe5bc-99a7-68e5-4534-85dad913b981.
+  Executor повторно сверил quote перед publishItem. Платёжные операции не запускались.
+- publishItem HTTP200: PENDING_APPROVAL. Последующие item HTTP200 подтвердили APPROVED,
+  approval_date=2026-10-30T17:24:17.501Z, исходный текст/тот же attachment/749/1000.
+  Moderation не объявлялась активной публикацией; APPROVED подтверждён отдельно.
+- removeItem HTTP200; строгий adapter проверил exact target ID и aware deletedAt,
+  штатный delete outbox SUCCEEDED. Независимое новое read-only соединение: item HTTP404,
+  GraphQL NOT_FOUND; полный get_my_items Stars/statuses=None не содержит этого ID.
+  Новых Stars ID после очистки относительно baseline нет. Итог DELETED_VERIFIED.
+
+Все4 штатные outbox операции SUCCEEDED. Доказательство сохранено локально:
+data/authorized_listing_20261030/report.json (HTTP facts/hash, readbacks, quote),
+operations.sqlite3, server_photo.jpg; краткое безопасное свидетельство в
+LIVE_ACCEPTANCE_20261030.json. HTTP404 после удаления ожидаем, не failure удаления.
+Не было buyer messages, передачи товара, покупки, PREMIUM, платного продвижения,
+глобальной автоматизации или изменений существующих лотов. Config после:
+writes=false/automation=false. Полный цикл продажи/автовыдачи остаётся незакрытым.
+Код не менялся; unit/mock tests не запускались и не используются как live-доказательство.
