@@ -180,6 +180,24 @@ class Reconciliation:
                     "UPDATE inventory SET status='DELIVERED' WHERE id=(SELECT inventory_id FROM reservations WHERE order_id=?) AND status='QUARANTINED'",
                     (action["target"],),
                 )
+            if status == "SUCCEEDED" and decision == "CONFIRM_MESSAGE":
+                chain = db.execute(
+                    "SELECT policy FROM delivery_chains WHERE order_id=? AND status='BLOCKED'",
+                    (action["target"],),
+                ).fetchone()
+                steps = db.execute(
+                    "SELECT o.status FROM delivery_chain_steps s LEFT JOIN outbox o ON o.id=s.operation_id WHERE s.order_id=?",
+                    (action["target"],),
+                ).fetchall()
+                # Finish a fully verified sequence, never resume pending/unknown sends.
+                if chain and steps and all(step["status"] == "SUCCEEDED" for step in steps):
+                    state = (
+                        "NEEDS_FULFILLMENT" if json.loads(chain["policy"]).get("mark_sent") else "SUCCEEDED"
+                    )
+                    db.execute(
+                        "UPDATE delivery_chains SET status=? WHERE order_id=? AND status='BLOCKED'",
+                        (state, action["target"]),
+                    )
             if action["kind"] == "delivery":
                 db.execute(
                     "INSERT INTO order_history(order_id,source,new_status,actor,note,created_at) SELECT id,'MANUAL_DELIVERY_RESOLUTION',status,?,?,? FROM orders WHERE id=?",

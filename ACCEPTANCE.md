@@ -387,3 +387,17 @@ Live lot-management acceptance8d03e8c остаётся подтверждённ�
 Existing DB migration18→20 проверена только на временной копии без изменения
 рабочей DB. Новые live writes/выдачи не выполнялись; описание локальной готовности
 не означает подтверждённую первую реальную автовыдачу.
+
+
+## Functional audit — завершён один проход
+
+FUNCTIONAL_AUDIT.md: четыре подтверждённые P0/P1 исправлены,739 tests pass.
+Native mock-HTTP доказал запрет ручной выдачи/fulfill после локального возврата/
+проблемы в окне ожидания lock; Dispatcher доказал отмену input context при root
+navigation. Positive owner reconciliation последнего шага теперь позволяет прежний
+manual Fulfillment без resend. Неподтверждённые шаги не запускаются автоматически.
+Новая live-приёмка не закрывалась; GAP-D1/D2/D3 и P2 остаются.
+
+Итоговый audit checkpoint:741 tests pass. Четыре дефекта исправлены; остаются
+отдельные P1 specification gaps (restore, fully automatic SENT, real paid promotion),
+P2 и live stock acceptance. Матрица46 функций/доказательства:FUNCTIONAL_AUDIT.md.

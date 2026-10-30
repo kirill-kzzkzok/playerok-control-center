@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 import uuid
 from datetime import UTC, datetime
@@ -16,6 +17,7 @@ from app.services.discounts import discount_plan
 from app.services.fulfillment import Fulfillment
 from app.services.item_receipts import edit_receipt_matches
 from app.services.order_management import deliverable
+from app.services.orders import Orders
 from app.services.products import (
     ValidationError,
     field_baseline,
@@ -57,6 +59,15 @@ class Executor:
             DeliveryChains(self.store, self.api).dispatchable(action)
         if action["payload"].get("auto_reply"):
             AutoReplies(self.store, self.api).dispatchable(action)
+        if action["kind"] in {"delivery", "fulfill"}:
+            orders = self.store.rows("SELECT payload,status FROM orders WHERE id=?", (action["target"],))
+            if not orders or orders[0]["status"] != "PAID":
+                raise ValidationError("Сохранённое состояние продажи запрещает выполнение")
+            deliverable(json.loads(orders[0]["payload"]), action["target"], self.api.account.id)
+            if self.store.rows(
+                "SELECT 1 FROM order_annotations WHERE order_id=? AND problem=1", (action["target"],)
+            ):
+                raise ValidationError("Локальная проблема блокирует выполнение")
         if action["kind"] == "delivery":
             reserved = self.store.rows(
                 "SELECT i.status FROM inventory i JOIN reservations r ON r.inventory_id=i.id WHERE r.order_id=?",
@@ -427,6 +438,7 @@ class Executor:
         if kind == "delivery":
             order = await self.api.call("get_deal", deal_id=target)
             deliverable(order, target, self.api.account.id)
+            Orders(self.store).ingest(order)
             chat = (order.get("chat") or {}).get("id")
             current_chat = await self.api.call("get_chat", chat_id=chat)
             if current_chat.get("id") != chat or current_chat.get("is_texting_allowed") is not True:

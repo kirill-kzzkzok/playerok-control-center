@@ -920,3 +920,25 @@ check/format159 files clean; pip check clean. Read-only backup рабочей DB
 не закрылся при cleanup Windows; corrected closing context прошёл, temporary files
 удалены. Production Store.backup не менялся, исходная DB не модифицировалась.
 Live API/Telegram owner/buyer sends0; новые live-критерии этой проверкой не закрыты.
+
+
+## Один функциональный аудит после UX checkpoint
+
+До исправлений:8 failed в functional_audit_before.xml — manual delivery late
+refund/local problem/server problem3, fulfill late refund1, stale root navigation4.
+Отдельно1 failed functional_reconcile_before.xml — confirmed final delivery оставляла
+chain BLOCKED. Native mutation через SafeAccount/httpx.MockTransport; Telegram через
+Dispatcher/BaseSession; DB временная. Никаких настоящих запросов к покупателям.
+После исправлений62 targeted passed in13.06s,106 interactions passed in19.26s,
+3 connected business flows passed in4.94s. Полный739 passed in101.08s,
+data/functional_audit_full_results.xml. Ruff160 files/pip/selfcheck clean.
+Production fixes: final manual delivery/fulfill guard; root input cancellation;
+terminal transition fully confirmed BLOCKED chain after owner resolution.
+Функциональная матрица/ограничения/P2 и сохранённые live facts:FUNCTIONAL_AUDIT.md.
+
+Окончательный audit suite после расширения того же navigation fix:741 passed
+in102.72s (data/functional_audit_final_full_results.xml). Дополнительные2 navigation
+red variants до расширения: functional_navigation_extended_before.xml (2 failed,
+4 passed); после исправления57 final targeted passed in13.53s. Code frozen после
+итогового full run. Ruff160 files/pip/selfcheck/secret scan clean. Открытые P1 по
+полноте исходного ТЗ (restore/auto SENT/paid executor) не заменены mock-заглушками.

@@ -194,3 +194,64 @@ async def test_incomplete_category_edit_cannot_skip_required_selection(rig):
     await click(ui, state, "preview_return")
     assert "Завершите выбор" in session.calls[-1].text
     assert store.get_draft(ident, 7)["payload"]["step"] == "category"
+
+
+async def test_audit_connected_create_stock_policy_publish_edit_and_discounts(rig):
+    from copy import deepcopy
+
+    from app.playerok.adapter import plain
+
+    store, api, session, bot, ui, state = rig
+    remote = {}
+    original_create, original_read = api.account.create_item, api.call
+
+    def create(**kwargs):
+        remote.update(plain(original_create(**kwargs)), raw_price=kwargs["price"])
+        return deepcopy(remote)
+
+    def update(**kwargs):
+        remote.update({key: value for key, value in kwargs.items() if key != "id"})
+        return deepcopy(remote)
+
+    def publish(**kwargs):
+        remote["status"] = "APPROVED"
+        return deepcopy(remote)
+
+    async def read(method, **kwargs):
+        if method == "get_item" and remote:
+            return deepcopy(remote)
+        return await original_read(method, **kwargs)
+
+    api.account.create_item, api.account.update_item, api.account.publish_item = create, update, publish
+    api.call = read
+    api.account.automation_enabled = True
+    worker = OutboxWorker(store, Executor(store, api, Products(store, api)))
+    await prepare(ui, state)
+    await click(ui, state, "submit")
+    await worker.once()
+    await ui.click("stock:view:remote1")
+    draft = store.rows("SELECT id FROM drafts")[0]["id"]
+    await ui.click("stock:transfer:" + draft)
+    ui.dp = dispatcher(store, api)
+    await ui.click("stock:commit:" + (await state.get_data())["stock_pending"]["nonce"])
+    await ui.click("auto:item:remote1")
+    for action in ("toggle:enabled", "toggle:auto_enroll", "save", "arm"):
+        await ui.click("ap:" + (await state.get_data())["automation"]["nonce"] + ":" + action)
+    assert len(store.rows("SELECT * FROM inventory")) == 2
+    await ui.click("publish:remote1")
+    token = (await state.get_data())["confirm_token"]
+    await ui.click("commit:" + token)
+    await ui.click("commit:" + token)
+    await worker.once()
+    assert remote["status"] == "APPROVED"
+    for action, value in (("editname", "Updated product name"), ("discount", "900"), ("discount", "749")):
+        await ui.click(action + ":remote1")
+        await ui.message(value)
+        ui.dp = dispatcher(store, api)
+        await ui.click("commit:" + (await state.get_data())["confirm_token"])
+        await worker.once()
+    await Notifications(store, bot).once()
+    assert remote["name"] == "Updated product name" and remote["price"] == 749 and remote["raw_price"] == 1000
+    assert store.rows("SELECT COUNT(*) AS n FROM outbox WHERE kind='publish'") == [{"n": 1}]
+    assert all(row["status"] == "SUCCEEDED" for row in store.rows("SELECT status FROM outbox"))
+    assert "749" in session.calls[-1].text and "1000" in session.calls[-1].text

@@ -2001,3 +2001,45 @@ Playerok/Telegram вызовы новых сценариев проверены 
 бот готов к контролируемой проверке после выбора действительного товара/покупателя
 и отдельного разрешения на send/runtime activation. Никаких новых supplier/paid/
 graph/UI-redesign работ не начинать. Остановиться после сохранения этого checkpoint.
+
+
+## Один функциональный аудит —2026-10-30
+
+Scope93 app modules/10 функциональных областей, матрица и границы в FUNCTIONAL_AUDIT.md.
+До фиксов новые тесты воспроизвели8 ошибок: manual delivery late refund/problem3,
+manual fulfillment late refund1, stale stock-input navigation4. P0 barrier добавлен
+на manual delivery/fulfill непосредственно перед HTTP; fresh order сохраняется без
+отката terminal state. Корневые переходы снимают прежний input/confirm context.
+Отдельный9-й red case: positive owner message resolution оставлял fully confirmed
+chain BLOCKED. Теперь только all-successful BLOCKED chain завершается в manual
+fulfillment state; никаких pending/unknown sends не возобновляет.
+62 targeted passed in13.06s;106 interaction checks passed in19.26s;3 business-flow
+checks passed in4.94s. Один новый связанный Dispatcher сценарий: create/photo/stock/
+policy/publish/edit/discounts; сохранены отдельные native mock-HTTP transport проверки.
+Полный pytest выполняется. P2 и исходные gaps только документируются, не реализуются.
+Новых live writes/buyer sends/payments0; после итогового checkpoint остановиться.
+
+
+Функциональный аудит завершён одним проходом. Итог739 passed in101.08s,
+data/functional_audit_full_results.xml; Ruff check/format160 files clean, pip clean;
+selfcheck schema1–20/backup reopen/PNG OK. Четыре воспроизведённые P0/P1 устранены,
+P2-01..09 и GAP-D1/D2/D3 только документированы в FUNCTIONAL_AUDIT.md. Матрица
+содержит реализовано/UI/tests/live границы для всех10 областей. Удобство7/10.
+Критические user flows проходят Dispatcher; реальные серверные записи/выдачи
+не проводились. Старый live lot cycle сохранён, новая stock delivery не принята.
+Никаких новых фаз после commit этого отчёта.
+
+В рамках того же navigation defect расширены stateless entry transitions (sp/settings,
+stock lists, operation/chain read cards). Дополнительные2 red случая сохранены в
+functional_navigation_extended_before.xml, затем57 targeted passed in13.53s.
+Это завершение того же прохода, не новый аудит. Последний full suite выполняется.
+
+Финал того же функционального прохода:741 passed in102.72s,
+data/functional_audit_final_full_results.xml;57 final targeted passed in13.53s.
+Ruff160 files, pip, offline migrations/backup/reopen, secret scan чистые.
+Четыре reproduced root defects исправлены (2 P0,2 P1). Незавершённые GAP-D1 restore,
+GAP-D2 auto SENT, GAP-D3 paid executor явно отнесены к отдельным P1 по полноте ТЗ,
+не объявлены реализованными и не добавляются в рамках запрета новых возможностей.
+P2-01..09 сохранены без реализации. Итоговая матрица46 функций:FUNCTIONAL_AUDIT.md.
+Рабочая БД/.env/global flags не менялись. Новых live-проверок и записей не было.
+Аудит закончен; после сохранения не запускать второй проход.

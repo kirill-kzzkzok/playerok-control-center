@@ -103,6 +103,26 @@ def create_router(store, api, products, synchronizer):
             )
         )
         try:
+            if action in {"profile", "diagnostics", "backup"} or action.startswith(
+                (
+                    "item:",
+                    "order:",
+                    "chat:",
+                    "result:",
+                    "delivered:",
+                    "stats:",
+                    "st:",
+                    "sd:",
+                    "sp:",
+                    "stock:list:",
+                    "ops:show:",
+                    "aq:list:",
+                    "aq:chain:",
+                    "aq:target:",
+                    "aq:evaluation:",
+                )
+            ):
+                await state.clear()
             if action == "home":
                 await state.clear()
                 return await display(
