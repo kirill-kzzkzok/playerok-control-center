@@ -409,6 +409,8 @@ def create_router(store, api, products, synchronizer):
                     + escaped(store.setting("promotions:health", {"status": "NOT_STARTED"}), 300)
                     + "\nАвтоматическая регистрация заказов: "
                     + escaped(store.setting("enrollment:health", {"status": "NOT_STARTED"}), 300)
+                    + "\nТранзакции: "
+                    + escaped(store.setting("transactions:health", {"status": "NOT_STARTED"}), 300)
                     + "\n\n"
                     + "\n".join(
                         escape(f"{a['kind']}: {a['status']} · {a['error_code'] or ''}") for a in actions

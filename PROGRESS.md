@@ -841,3 +841,47 @@ finished, outgoing/incoming deals и дату регистрации из parser
 
 Контрольная точка PHASE 6: **398 passed in 51.03s**; Ruff/pip/format/secret scan чистые.
 JUnit data/phase6_statistics_results.xml; дополнительная проверка интерполяции 4 passed.
+
+## PHASE 6 — account transaction journal checkpoint (2026-10-30)
+
+Добавлена миграция v14 account_transactions и независимый read-only TransactionWorker.
+Идентификатор аккаунта/транзакции уникален; payload сохраняется по allowlist полей,
+без платёжных счетов, URL и пользовательских реквизитов. Импорт не создаёт outbox/
+уведомлений и не меняет финансовые оценки или promotion ledger. Неизвестные enum строки
+транзакций в PlayerokAPI сохраняются, а не теряются в None.
+
+Оригинальный durable scan выделен в PageScanner и переиспользован для транзакций:
+2 страницы за цикл + head при resume, непрозрачные курсоры/циклический полный проход,
+checkpoint после commit записей. Проверяется аккаунт перед page commit, включая пустую
+страницу; смена аккаунта не сдвигает checkpoint. API ошибки сохраняют backoff/Retry-After
+между restart, общая пауза worker с jitter и stop event. Диагностика показывает health.
+
+Telegram: «Поступления и расходы по транзакциям» в статистике. Подтверждённые известные
+RUB движения сгруппированы по серверной completed_at. SELL credits, пополнения, все IN/
+OUT, withdrawal debit, PREMIUM и другие приоритеты разделены. Выплата использует только
+явное server amount_after_conversion_rub, не расчёт из текущего курса/тарифа. Отсутствие
+completed_at не заменяется created_at или временем импорта. Покрытие/неполные суммы/
+валюты/последний обход видны. Баланс/депозиты/выплаты не объявляются прибылью.
+
+Публичный wallet frontend успешно прочитан: 5 bundles HTTP 200, provenance SHA256 в
+ data/public_transaction_routes.json; семантика value/RUB и статусов, неоднозначное fee
+описаны в PLAYEROK_RESEARCH.md. Root fee не суммируется как рубли; реальные комиссии
+и историческая прибыль требуют дальнейшей сверки. ITEM_CUSTOM_PRIORITY не называется
+доказанным поднятием. Двойное сложение разных журналов расходов не выполняется.
+
+Проверено **409 passed in 52.22s**, JUnit data/phase6_transactions_results.xml. Новые
+11 тестов покрывают идемпотентность, привязку аккаунта, privacy, новый enum, завершение
+и границы периодов, unknown суммы/валюты/даты, раздельные категории, статус rollback,
+sparse dates, bounded restart/head/cursor, partial commit/replay, identity change на
+пустой странице, persistent 429 backoff и настоящий aiogram Dispatcher без API calls.
+
+Реальная БД: backup before-transactions-v14-20261030T003129.sqlite3 → миграции 1–14;
+217 orders и 1 owner сохранены, transactions=0. Свидетельство
+ data/transactions_migration_check.json: external_requests=0/mutations=0, writes и
+ automation false. Живую транзакционную загрузку не заявляем: предыдущая сессия вернула
+UNAUTHORIZED_OR_CHALLENGE. Новая успешная public загрузка JS не доказывает login.
+
+Следующее продолжение: недостающие расчёты исторической себестоимости/прибыли и комиссий
+только по доказанным полям, общая интеграционная/fault-injection приёмка и финальный
+аудит требований. Цель остаётся активной; PHASE 6 не принята целиком из-за финансовых
+и live-пробелов. Бот не запущен, внешних сообщений/выдач/платных действий не было.

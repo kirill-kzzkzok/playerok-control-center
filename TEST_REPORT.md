@@ -409,3 +409,21 @@ no external mutations. Evidence data/phase6_statistics_probe.json and
  data/phase6_date_backfill.json; SQLite backup before-statistics-date-backfill.sqlite3.
 Financial transaction reconciliation/actual receipts/commissions/historical profit and
 remaining final live acceptance are still open. Passing mocks do not prove live writes.
+
+## PHASE 6 — transaction journal (2026-10-30)
+
+409 passed in 52.22s; data/phase6_transactions_results.xml. Tests use temporary SQLite,
+actual native parser + normalization, mock page envelopes, genuine Dispatcher/middleware.
+They cover account composite uniqueness, credential omission, enum forward compatibility,
+CONFIRMED-only completed-time cohorts, exact timezone boundaries/future exclusion,
+unknown monetary/currency/direction/date omission, non-overlapping category labels,
+no cost/profit/commission fabrication, sparse dates and rollback, bounded resume/head
+refresh, partial ingest/replay, account change before empty-page checkpoint, durable
+429 backoff and UI access via existing middleware. Existing sync tests verify extracted
+PageScanner preserves original order/chat behavior. No production API mutation tested.
+
+Local v14 migration after SQLite backup retained 217 orders and 1 administrator, with
+zero transaction rows; data/transactions_migration_check.json. External requests=0,
+mutations=0; read-only/automation-off configuration unchanged. Five public official
+wallet bundles HTTP 200 support the journal data contract; authenticated live transaction
+loading is still unverified due to the prior UNAUTHORIZED_OR_CHALLENGE response.

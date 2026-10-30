@@ -5,6 +5,7 @@ from aiogram.types import BufferedInputFile
 from app.rendering.charts import revenue_chart
 from app.services.finance import checked_time
 from app.services.statistics import statistics
+from app.services.transactions import transaction_statistics
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 
@@ -37,6 +38,7 @@ class StatisticsPanel:
                 [("Подробности и покрытие", f"sd:{days}:details"), ("Лучшие товары", f"sd:{days}:items")]
             )
         rows.append([("Категории", f"sd:{days}:categories")])
+        rows.append([("Поступления и расходы по транзакциям", f"sd:{days}:transactions")])
         return keyboard(rows)
 
     async def handle(self, action, message):
@@ -45,7 +47,36 @@ class StatisticsPanel:
         stats = await asyncio.to_thread(statistics, self.store, days)
         view = parts[2] if len(parts) == 3 else "overview"
         if parts[0] == "sd":
-            if view == "details":
+            if view == "transactions":
+                ledger = await asyncio.to_thread(transaction_statistics, self.store, days)
+                text = (
+                    "💰 <b>Подтверждённые транзакции</b>\n"
+                    + (
+                        "Есть локальные данные; полнота не гарантирована."
+                        if ledger["has_data"]
+                        else "История транзакций ещё не загружена."
+                    )
+                    + f"\nПериод: {'всё время' if days == 0 else str(days * 24) + ' ч'} · по дате завершения"
+                    + f"\nЗаписей в кэше: {ledger['cached']} · подтверждённых за период: {ledger['confirmed']}"
+                    + f"\nЗачислено на баланс (все операции): {ledger['credits']} ₽"
+                    + f"\nИз них за продажи: {ledger['sales_credit']} ₽ · пополнения: {ledger['deposits']} ₽"
+                    + f"\nСписано с баланса (все операции): {ledger['debits']} ₽"
+                    + f"\nИз них выплаты: {ledger['withdraw_debit']} ₽ · PREMIUM: {ledger['premium_debit']} ₽"
+                    + f"\nДругие приоритеты: {ledger['other_priority_debit']} ₽"
+                    + f"\nК получению по явному полю API выплат: {ledger['withdraw_net_reported']} ₽"
+                    + f"\nВыплат без подтверждённой суммы к получению: {ledger['withdraw_net_unknown']}"
+                    + f"\n\nПропущено сумм: {ledger['unknown_amounts']} · других валют: {ledger['foreign_currency']}"
+                    + f"\nНеизвестных направлений: {ledger['unknown_directions']} · операций вне отдельных категорий: {ledger['unknown_operations']}"
+                    + f"\nПодтверждённых записей без даты завершения во всём кэше: {ledger['unknown_dates']}"
+                    + "\nПокрытие завершений: "
+                    + checked_time(ledger["coverage_start"])
+                    + " — "
+                    + checked_time(ledger["coverage_end"])
+                    + "\nПоследний полный обход: "
+                    + checked_time(ledger["last_sync"])
+                    + "\n\nТолько текущий CONFIRMED и известные суммы RUB. Заказы и транзакции используют разные даты. Пополнения не являются доходом от продаж. Выплата списания не доказывает доставку денег в банк. Поле fee не суммируется: единицы неоднозначны. Другие приоритеты не объявляются поднятиями. Эти суммы не складываются с другими журналами расходов без сверки пересечений. Прибыль требует исторической себестоимости."
+                )
+            elif view == "details":
                 text = (
                     "📊 <b>Состав статистики</b>\nПериод: "
                     + (checked_time(stats["period_start"]) if days else "всё время")

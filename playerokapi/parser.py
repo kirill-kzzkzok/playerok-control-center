@@ -166,13 +166,13 @@ def transaction(data: dict) -> "Transaction":
 
     return Transaction(
         id=data.get("id"),
-        operation=TransactionOperations.__members__.get(data.get("operation")),
-        direction=TransactionDirections.__members__.get(data.get("direction")),
+        operation=TransactionOperations.__members__.get(data.get("operation"), data.get("operation")),
+        direction=TransactionDirections.__members__.get(data.get("direction"), data.get("direction")),
         provider_id=TransactionProviderIds.__members__.get(data.get("providerId")),
         provider=transaction_provider(data.get("provider")),
         user=user_profile(data.get("user")),
         creator=user_profile(data.get("creator")),
-        status=TransactionStatuses.__members__.get(data.get("status")),
+        status=TransactionStatuses.__members__.get(data.get("status"), data.get("status")),
         status_description=data.get("statusDescription"),
         status_expiration_date=data.get("statusExpirationDate"),
         value=data.get("value"),

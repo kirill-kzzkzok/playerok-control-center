@@ -1,20 +1,20 @@
 import asyncio
-import json
 import logging
 import random
 import time
 
 from app.database.store import encode, now
-from app.playerok.adapter import APIError, validate_page
+from app.playerok.adapter import APIError
+from app.workers.pagination import PageScanner
 from playerokapi.enums import ItemDealDirections
 
 
-class Synchronizer:
+class Synchronizer(PageScanner):
     def __init__(self, store, api, orders, *, pages_per_stream=4, chats_per_cycle=12):
         if pages_per_stream < 1 or chats_per_cycle < 1:
             raise ValueError("Лимиты синхронизации должны быть положительными")
-        self.store, self.api, self.orders = store, api, orders
-        self.pages_per_stream, self.chats_per_cycle = pages_per_stream, chats_per_cycle
+        super().__init__(store, api, pages_per_stream=pages_per_stream)
+        self.orders, self.chats_per_cycle = orders, chats_per_cycle
         self.health = {"status": "NOT_STARTED"}
         self.lock = asyncio.Lock()
         self.wake = asyncio.Event()
@@ -97,58 +97,6 @@ class Synchronizer:
             )[0]["n"]
             self.store.set_setting("realtime:reconciliation", {"pending": pending, "at": now()})
             return len(requests)
-
-    async def scan(self, key, method, collection, ingest, **kwargs):
-        """Poll the head, then resume a bounded history pass. Never infer cursor ordering.
-
-        Entries commit before the checkpoint: interruption replays at most a page,
-        and durable inbox keys deduplicate it. Completed passes restart from the head
-        next cycle, reconciling changes behind opaque/offset cursors as well.
-        """
-        rows = self.store.rows("SELECT cursor FROM sync_cursors WHERE key=?", (key,))
-        checkpoint = json.loads(rows[0]["cursor"]) if rows and rows[0]["cursor"] else {}
-        cursor, seen = checkpoint.get("after"), checkpoint.get("seen", [])
-        count = 0
-
-        async def fetch(after, visited):
-            page = await self.api.call(method, after_cursor=after, **kwargs)
-            entries, following = validate_page(page, collection, visited)
-            for entry in entries:
-                ingest(entry)
-            return len(entries), following
-
-        try:
-            if cursor is not None:
-                head_count, _ = await fetch(None, ())
-                count += head_count
-            for _ in range(self.pages_per_stream):
-                size, following = await fetch(cursor, seen)
-                count += size
-                if following is not None:
-                    seen.append(following)
-                    if len(seen) > 10000:
-                        raise APIError("PAGINATION_PASS_LIMIT")
-                state = {"after": following, "seen": seen if following else []}
-                self.store.execute(
-                    "INSERT INTO sync_cursors VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET cursor=excluded.cursor,updated_at=excluded.updated_at",
-                    (key, encode(state), now()),
-                )
-                if following is None:
-                    self.store.set_setting(key + ":completed_at", now())
-                    return count, True
-                cursor = following
-        except APIError as error:
-            # A cursor may expire or change meaning. A new pass reconciles from head;
-            # already committed records remain durable and are deduplicated.
-            if error.code in {
-                "INVALID_PAGINATION_CURSOR",
-                "PAGINATION_PASS_LIMIT",
-                "GRAPHQL_ERROR_OR_INCOMPLETE",
-                "HTTP_400",
-            }:
-                self.store.execute("DELETE FROM sync_cursors WHERE key=?", (key,))
-            raise
-        return count, False
 
     def ingest_chat(self, chat):
         self.store.execute(

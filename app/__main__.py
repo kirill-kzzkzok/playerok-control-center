@@ -29,6 +29,7 @@ from app.workers.outbox import Executor, OutboxWorker
 from app.workers.promotions import PromotionWorker
 from app.workers.realtime import Realtime
 from app.workers.sync import Synchronizer
+from app.workers.transactions import TransactionWorker
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,9 @@ async def run(config):
         tasks.append(asyncio.create_task(UploadCleanup(store).run(stop), name="upload-cleanup"))
         tasks.append(asyncio.create_task(Notifications(store, bot).run(stop), name="notifications"))
         if account.id:
+            tasks.append(
+                asyncio.create_task(TransactionWorker(store, api).run(stop), name="account-transactions")
+            )
             tasks.append(asyncio.create_task(PromotionWorker(store, api).run(stop), name="promotion-dry-run"))
             tasks.append(asyncio.create_task(sync.run(stop), name="playerok-sync"))
             if config.realtime_enabled:

@@ -221,3 +221,30 @@ two-decimal string; the form offers USD/EUR/KZT (even though a shared enum also 
 GET journal-entry returns state/telegram/submittedAt; it does not echo all fields.
 Read-only live: none/absent, providers403. Evidence data/live_fulfillment_readonly.json.
 No status changes, reports, payments or requests to bypass provider permissions made.
+
+## Transaction journal contract — 2026-10-30 MSK
+
+Downloaded five public wallet-route bundles without authentication or execution;
+HTTP 200 for all. Manifest: data/public_transaction_routes.json (URLs/SHA256).
+[Wallet transaction components](https://playerok.com/_next/static/chunks/6476-589a32cc120d2139.js),
+SHA256 af96a5e8192b40f48e11c9dcd2cc89709fd28a2bd2559ea4c79cf23e74ad6977:
+module 26660 formats transaction.value using module 57832's default RUB formatter,
+with direction providing the sign. SELL/CONFIRMED description means funds credited
+to the available balance. PROCESSING is pending availability; do not count it as
+confirmed settlement. WITHDRAW/CONFIRMED describes dispatch to the chosen method,
+not independent proof of bank receipt. The withdrawal display prefers explicit
+amountAfterConversionRub/Usdt; absent values are calculated from provider terms.
+Our journal uses only explicit server net values, with no fallback calculation.
+Module 45114 also contains REFUND and newer priority operations absent from the old
+PlayerokAPI enum. Unknown enum strings are now preserved instead of silently None.
+
+[Wallet filters](https://playerok.com/_next/static/chunks/922-c71a7a1f5c8dbfee.js)
+show sales and status filters separately. The implementation groups confirmed journal
+amounts by completed_at and labels that basis independently of order-created cohorts.
+Ambiguous root fee is retained as reported data, never summed as RUB commission;
+props.fee is used as a percent by the website withdrawal calculation. No guessed
+settlement rates, current exchange rates or duplicate promotion journal sums are used.
+
+Authenticated live transaction fetching remains unverified: the previous read-only
+session check returned UNAUTHORIZED_OR_CHALLENGE. Public bundle access does not prove
+account API availability. Do not repeat paid operations or bypass that challenge.

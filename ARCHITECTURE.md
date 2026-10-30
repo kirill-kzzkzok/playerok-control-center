@@ -427,3 +427,27 @@ actual observation markers, real temporal spacing and explicit interpolation lab
 Smoothing cannot affect totals or produce extra extrema. Categorical comparisons use
 bars. Profile fields follow AccountProfile parser contract, with no zero-to-unknown
 coercion; public avatar download has a host/size/no-redirect/no-credentials boundary.
+
+## Account transaction journal (v14)
+
+account_transactions has composite account_id/id uniqueness, nullable unknown values
+and server dates, raw-safe enum tokens and a small allowlist of monetary/deal fields.
+Payment accounts/URLs/user data never enter this journal. No notification/outbox side
+effect is generated from importing financial history. Repeated pages replace current
+snapshots; terminal states reject stale PENDING/PROCESSING, same-state sparse responses
+retain known server dates. Rollback removes a transaction from CONFIRMED aggregates.
+
+PageScanner now contains the existing durable head-refresh/resume/opaque-cursor logic
+shared by Synchronizer and TransactionWorker. The transaction worker independently
+scans two pages/cycle, scopes cursors to API account identity, checks identity before
+any page/cursor commit, persists error backoff/Retry-After and exposes health. Read-only
+sync starts with other readers after account initialization; paid flags are irrelevant.
+
+StatisticsPanel has a separate transaction view. It sums confirmed RUB movements by
+server completed_at, discloses excluded undated/unknown/currency records and last full
+pass. SELL credits, deposits, withdrawal debits, PREMIUM and other priorities are
+distinct buckets. Unknown operations remain in direction totals without pretending to
+be sales. Explicit server withdrawal net values remain distinct from balance debits.
+Root fee is not treated as monetary commission; calculator quotes/generic expenses/
+promotion ledger are not merged. Historical cost/profit and full reconciliation across
+orders/withdrawals/promotion sources remain acceptance work.
