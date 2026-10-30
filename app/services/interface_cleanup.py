@@ -24,6 +24,7 @@ class InterfaceCleanup:
                 "SELECT message_id,touched_at FROM panel_messages p WHERE bot_id=? AND owner_id=? "
                 "AND status='ACTIVE' AND message_id<>? AND touched_at<=? AND created_at>=? "
                 "AND NOT EXISTS(SELECT 1 FROM notifications n WHERE n.owner_id=p.owner_id AND n.telegram_message_id=p.message_id) "
+                "AND NOT EXISTS(SELECT 1 FROM operation_receipts r WHERE r.owner_id=p.owner_id AND r.telegram_message_id=p.message_id) "
                 "ORDER BY touched_at,message_id LIMIT 20",
                 (bot_id, actor, current_id, at - 300, at - 47 * 3600),
             ).fetchall()
@@ -49,7 +50,8 @@ class InterfaceCleanup:
             rows = db.execute(
                 "SELECT message_id,touched_at FROM panel_messages p WHERE bot_id=? AND owner_id=? "
                 "AND status='ACTIVE' AND message_id<>? AND touched_at<=? AND created_at>=? "
-                "AND NOT EXISTS(SELECT 1 FROM notifications n WHERE n.owner_id=p.owner_id AND n.telegram_message_id=p.message_id)",
+                "AND NOT EXISTS(SELECT 1 FROM notifications n WHERE n.owner_id=p.owner_id AND n.telegram_message_id=p.message_id) "
+                "AND NOT EXISTS(SELECT 1 FROM operation_receipts r WHERE r.owner_id=p.owner_id AND r.telegram_message_id=p.message_id)",
                 (bot.id, actor, current_id, at - 300, at - 47 * 3600),
             ).fetchall()
             eligible = {row["message_id"]: row["touched_at"] for row in rows}

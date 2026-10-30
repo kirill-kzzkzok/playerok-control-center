@@ -401,3 +401,10 @@ manual Fulfillment без resend. Неподтверждённые шаги не
 Итоговый audit checkpoint:741 tests pass. Четыре дефекта исправлены; остаются
 отдельные P1 specification gaps (restore, fully automatic SENT, real paid promotion),
 P2 и live stock acceptance. Матрица46 функций/доказательства:FUNCTIONAL_AUDIT.md.
+
+
+Дополнительный audit checkpoint:749 tests pass. Known message receipt нельзя
+переиспользовать для другого owner resolution (включая concurrent и late evidence);
+выдача постоянного текста блокируется поздней локально сохранённой server problem;
+operation receipts защищены от menu edit и interface cleanup/stale snapshot.
+Новых live-критериев не закрывает. См.FUNCTIONAL_AUDIT.md FA2.

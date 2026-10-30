@@ -186,9 +186,10 @@ class DeliveryChains:
             raise ValidationError("Предыдущий шаг ещё не подтверждён")
         if self.store.rows("SELECT 1 FROM order_annotations WHERE order_id=? AND problem=1", (ident,)):
             raise ValidationError("Локальная проблема блокирует автоматическую отправку")
-        current = self.store.rows("SELECT status FROM orders WHERE id=?", (ident,))
+        current = self.store.rows("SELECT status,payload FROM orders WHERE id=?", (ident,))
         if not current or current[0]["status"] != "PAID":
             raise ValidationError("Сохранённая история запрещает автоматическую отправку")
+        deliverable(json.loads(current[0]["payload"]), ident, self.api.account.id)
         return step
 
     async def verify_step(self, action):

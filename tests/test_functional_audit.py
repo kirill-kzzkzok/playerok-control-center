@@ -15,6 +15,7 @@ from app.database.store import Store
 from app.playerok.adapter import SafeAccount
 from app.playerok.thread_calls import close_calls
 from app.services.automation import Automation, DeliveryPolicy
+from app.services.delivery_chains import DeliveryChains
 from app.services.fulfillment import Fulfillment
 from app.services.orders import Orders
 from app.telegram.storage import SQLiteStorage
@@ -147,6 +148,37 @@ async def test_fulfillment_late_refund_prevents_http(rig):
         api.lock.release()
     await task
     assert requests == []
+
+
+async def test_fixed_text_delivery_rechecks_server_problem_before_http(rig):
+    store, api, _ui, _state, checked, order, requests, _telegram = rig
+    api.account.automation_enabled = True
+    await Automation(store, api).save(
+        7, "item", 0, asdict(DeliveryPolicy(enabled=True, mode="text", text="unit"))
+    )
+    await DeliveryChains(store, api).create(7, "order")
+    ChainWorker(store, api).once()
+    checked.clear()
+    await api.lock.acquire()
+    task = asyncio.create_task(OutboxWorker(store, Executor(store, api, None)).once())
+    try:
+        await asyncio.wait_for(checked.wait(), 2)
+        Orders(store).ingest({**order, "has_problem": True})
+    finally:
+        api.lock.release()
+    await task
+    assert requests == []
+
+
+async def test_operation_result_notification_is_not_overwritten_by_navigation(rig):
+    store, _api, ui, _state, _checked, _order, _requests, telegram = rig
+    ident = store.enqueue("created", "create", "draft", {}, actor=7)
+    store.execute(
+        "UPDATE operation_receipts SET notice_status='SENT',telegram_message_id=1 WHERE operation_id=?",
+        (ident,),
+    )
+    await ui.click("item:item")
+    assert telegram.calls[-1].__api_method__ == "sendMessage"
 
 
 async def test_owner_confirmed_uncertain_last_delivery_can_finish_without_resend(tmp_path):

@@ -98,8 +98,9 @@ def create_router(store, api, products, synchronizer):
         message = query.message
         preserve = bool(
             store.rows(
-                "SELECT 1 FROM notifications WHERE owner_id=? AND telegram_message_id=? LIMIT 1",
-                (owner, message.message_id),
+                "SELECT 1 FROM notifications WHERE owner_id=? AND telegram_message_id=? "
+                "UNION ALL SELECT 1 FROM operation_receipts WHERE owner_id=? AND telegram_message_id=? LIMIT 1",
+                (owner, message.message_id, owner, message.message_id),
             )
         )
         try:

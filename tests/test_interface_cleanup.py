@@ -65,6 +65,22 @@ async def test_delete_only_confirmed_snapshot_and_preserve_unknown_historical_me
     assert not service.preview(7, 123, 1)
 
 
+async def test_operation_receipt_is_excluded_even_if_previously_tracked_as_panel(store):
+    record(store, 10)
+    service = InterfaceCleanup(store)
+    old_plan = service.preview(7, 123, 1)
+    ident = store.enqueue("receipt", "create", "draft", {}, actor=7)
+    store.execute(
+        "UPDATE operation_receipts SET notice_status='SENT',telegram_message_id=10 WHERE operation_id=?",
+        (ident,),
+    )
+    assert not service.preview(7, 123, 1)
+    bot = SimpleNamespace(id=123, delete_message=AsyncMock(return_value=True))
+    with pytest.raises(Conflict):
+        await service.execute(7, bot, 1, old_plan, "nonce")
+    bot.delete_message.assert_not_called()
+
+
 @pytest.mark.parametrize("change", ["edit", "notification", "unknown", "other_bot"])
 async def test_changed_or_forged_snapshot_cannot_delete(store, change):
     record(store, 10)

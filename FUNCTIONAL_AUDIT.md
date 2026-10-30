@@ -255,3 +255,72 @@ files clean; .env/spec/data/logs ignored, runtime writes/automation false. Schem
 отсутствия любых скрытых ошибок. GAP-D1/D2/D3 и live-критерии остаются открытыми.
 После записи итогов — остановиться. Второй общий проход, P2-реализации, новые
 поставщики/платные функции этим аудитом не запускаются.
+
+
+## Дополнительный проход по новому запросу пользователя —2026-10-30
+
+Основание: после завершения первого аудита пользователь прямо попросил проверить ещё
+и исправить новые найденные баги. Проверялись непокрытые взаимодействия, а не повторно
+вся матрица. Новых возможностей/поставщиков/платных действий не добавлено.
+
+### FA2-P0-01: повторное использование квитанции чужой операции
+
+Reconciliation проверяла ID/sender/text/time сообщения, но не проверяла, связан ли
+этот же message ID уже с другим outbox action. При одинаковом тексте в одном чате
+одна реальная отправка могла подтвердить две разные неизвестные операции. Возможны
+ложная отметка выдачи и неправильное освобождение карантина в DELIVERED.
+
+До исправления воспроизведено4 тестовых случая: известный успешный результат, поздний
+ответ другой операции, прежнее owner resolution и две параллельные owner resolution.
+Оба concurrent подтверждения принимались; результат другого action не отклонялся.
+Доказательство:data/audit_followup_before.xml (эти4 случая падают).
+
+Исправлено: проверка known message IDs в outbox.result и outbox_late_results до показа
+положительной evidence и повторно внутри BEGIN IMMEDIATE resolution transaction.
+Собственный action исключён, его late receipt можно подтвердить. При конфликте
+операция остаётся UNCERTAIN, stock остаётся QUARANTINED, никаких send/replay нет.
+Дополнительный stock regression доказывает, что квитанция другого ответа не снимает
+карантин выдачи. Это контроль уже известных связей, не обещание математического
+exactly-once или автоматической привязки ещё не сохранённого серверного ответа.
+Файл:app/services/reconciliation.py. Статус:FIXED_LOCAL.
+
+### FA2-P0-02: постоянный текст уходил после появления проблемы в заказе
+
+Предыдущий барьер ручной/stock delivery не покрывал delivery_text и chain_message.
+DeliveryChains.dispatchable проверяла только локальный status='PAID', поэтому поздний
+has_problem=true при том же PAID не останавливал текстовую выдачу. Native guarded
+SafeAccount/httpx.MockTransport regression зафиксировал createChatMessage вместо0.
+Доказательство:test_fixed_text_delivery_rechecks_server_problem_before_http до фикса
+в data/audit_followup_before.xml.
+
+Исправлено: все шаги цепочки перед отправкой дополнительно проходят deliverable по
+текущему локальному payload (seller/direction/PAID/problem/server automation). Эта
+проверка вызывается в dispatch guard, включая повтор после ожидания rate limit.
+Файл:app/services/delivery_chains.py. Статус:FIXED_LOCAL.
+
+### FA2-P1-01: owner result receipt считалась обычной панелью
+
+Router сохранял оригинал сообщений из notifications, но не operation_receipts.
+Callback из нового result notice заменял его на карточку/меню через editMessageText.
+Также InterfaceCleanup не исключала operation_receipts, если сообщение уже было
+зарегистрировано в panel_messages (например, предыдущей версией после его редактирования).
+
+Два red regression: navigation ожидал sendMessage, получал editMessageText;
+cleanup preview включал важный receipt. Доказательства:audit_followup_before.xml и
+ audit_followup_cleanup_before.xml (отдельный1 failed).
+Исправлено: preserve учитывает обе таблицы; cleanup исключает receipts как при preview,
+так и при повторной проверке snapshot перед удалением. Stale cleanup plan отклоняется,
+delete_message не вызывается. Файлы:router.py,services/interface_cleanup.py.
+Статус:FIXED_LOCAL.
+
+### Проверки и результат дополнительного прохода
+
+До исправлений:6 failed в audit_followup_before.xml и1 failed в
+ audit_followup_cleanup_before.xml; ошибки намеренно воспроизведены, не скрыты.
+После:82 passed in19.48s (audit_followup_targeted.xml); после добавления проверки
+stock quarantine47 passed in17.30s (audit_followup_final_targeted.xml).
+Последний full suite:749 passed in91.12s, data/audit_followup_full_results.xml.
+Ruff160 files чистые. Реальные Playerok/Telegram запросы, выдачи, платежи0;
+использовались временные DB и mock transports. Миграции и Fulfillment semantics
+не менялись. Ранее открытые GAP-D1/D2/D3 и live acceptance остаются открытыми.
+После сохранения проверенного checkpoint этот дополнительный проход завершается.

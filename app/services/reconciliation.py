@@ -21,6 +21,18 @@ class Reconciliation:
     def __init__(self, store, api):
         self.store, self.api = store, api
 
+    @staticmethod
+    def require_unclaimed_message(db, ident, message_id):
+        claimed = db.execute(
+            "SELECT 1 FROM outbox WHERE id<>? AND json_extract(result,'$.message_id')=? "
+            "UNION ALL SELECT 1 FROM outbox_late_results WHERE operation_id<>? AND json_extract(result,'$.message_id')=? LIMIT 1",
+            (ident, message_id, ident, message_id),
+        ).fetchone()
+        if claimed:
+            raise Conflict(
+                "Это сообщение уже связано с другой операцией; результат текущей остаётся неизвестным"
+            )
+
     def owner(self, actor):
         if not self.store.rows("SELECT 1 FROM administrators WHERE user_id=?", (actor,)):
             raise Conflict("Доступ закрыт")
@@ -108,6 +120,8 @@ class Reconciliation:
                 images = match.get("images") or []
                 if not isinstance(images, list) or len(images) != count:
                     raise Conflict("Количество вложений не совпадает")
+                with self.store.transaction() as db:
+                    self.require_unclaimed_message(db, ident, match["id"])
                 return {
                     "decision": "CONFIRM_MESSAGE",
                     "chat_id": chat_id,
@@ -147,6 +161,8 @@ class Reconciliation:
             current = db.execute("SELECT * FROM outbox WHERE id=?", (ident,)).fetchone()
             if not current or current["status"] != "UNCERTAIN" or signature(dict(current)) != expected:
                 raise Conflict("Операция уже разрешена другим действием")
+            if decision == "CONFIRM_MESSAGE":
+                self.require_unclaimed_message(db, ident, evidence["message_id"])
             if action["kind"] == "delivery" and status == "SUCCEEDED":
                 reservation = db.execute(
                     "SELECT i.id,i.status FROM inventory i JOIN reservations r ON r.inventory_id=i.id WHERE r.order_id=?",

@@ -104,6 +104,74 @@ async def test_owner_and_snapshot_checked_before_api(setup):
     api.call.assert_not_called()
 
 
+@pytest.mark.parametrize("source", ["success", "late", "resolution"])
+async def test_one_message_receipt_cannot_confirm_two_operations(setup, source):
+    store, api, service = setup
+    first = store.enqueue("first", "reply", "chat", {"text": "private code"})
+    second = store.enqueue("second", "reply", "chat", {"text": "private code"})
+    action = store.claim()
+    store.finish(
+        first,
+        action["lease_token"],
+        "SUCCEEDED" if source == "success" else "UNCERTAIN",
+        result={"message_id": "sent"} if source == "success" else None,
+    )
+    action = store.claim()
+    store.finish(second, action["lease_token"], "UNCERTAIN", error="NETWORK_ERROR")
+    api.call.return_value["messages"][0]["created_at"] = now()
+    if source == "late":
+        store.record_late_result(first, "old-lease", "SUCCEEDED", result={"message_id": "sent"})
+    if source == "resolution":
+        await service.resolve(
+            1,
+            first,
+            signature(store.rows("SELECT * FROM outbox WHERE id=?", (first,))[0]),
+            "CONFIRM_MESSAGE",
+            "Проверена первая отправка",
+            "sent",
+        )
+    expected = signature(store.rows("SELECT * FROM outbox WHERE id=?", (second,))[0])
+    with pytest.raises(Conflict):
+        await service.resolve(1, second, expected, "CONFIRM_MESSAGE", "Проверена вторая отправка", "sent")
+    assert store.rows("SELECT status FROM outbox WHERE id=?", (second,)) == [{"status": "UNCERTAIN"}]
+
+
+async def test_concurrent_message_resolution_cannot_share_one_receipt(setup):
+    store, api, service = setup
+    ids = [store.enqueue(key, "reply", "chat", {"text": "private code"}) for key in ("one", "two")]
+    for _ in ids:
+        action = store.claim()
+        store.finish(action["id"], action["lease_token"], "UNCERTAIN")
+    page, barrier, reads = api.call.return_value, asyncio.Event(), 0
+    page["messages"][0]["created_at"] = now()
+
+    async def read(*args, **kwargs):
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            barrier.set()
+        await asyncio.wait_for(barrier.wait(), 2)
+        return page
+
+    api.call.side_effect = read
+    results = await asyncio.gather(
+        *(
+            service.resolve(
+                1,
+                ident,
+                signature(store.rows("SELECT * FROM outbox WHERE id=?", (ident,))[0]),
+                "CONFIRM_MESSAGE",
+                "Проверен точный ID сообщения",
+                "sent",
+            )
+            for ident in ids
+        ),
+        return_exceptions=True,
+    )
+    assert sum(isinstance(result, dict) for result in results) == 1
+    assert sum(isinstance(result, Conflict) for result in results) == 1
+
+
 def delivery(store):
     orders = Orders(store)
     order = {
@@ -133,6 +201,21 @@ async def test_delivery_confirmation_updates_quarantine_atomically_but_does_not_
     assert [call.kwargs for call in api.call.call_args_list if call.args[0] == "get_deal"] == [
         {"deal_id": "order"}
     ]
+
+
+async def test_receipt_of_another_reply_cannot_release_stock_quarantine(setup):
+    store, api, service = setup
+    order, ident, expected = delivery(store)
+    known = store.enqueue("known-reply", "reply", "chat", {"text": "private code"})
+    action = store.claim()
+    store.finish(known, action["lease_token"], "SUCCEEDED", result={"message_id": "sent"})
+    messages = api.call.return_value
+    messages["messages"][0]["created_at"] = now()
+    api.call.side_effect = lambda method, **kwargs: order if method == "get_deal" else messages
+    with pytest.raises(Conflict):
+        await service.resolve(1, ident, expected, "CONFIRM_MESSAGE", "Проверка квитанции выдачи", "sent")
+    assert store.rows("SELECT status FROM inventory") == [{"status": "QUARANTINED"}]
+    assert store.rows("SELECT status FROM outbox WHERE id=?", (ident,)) == [{"status": "UNCERTAIN"}]
 
 
 async def test_resolution_transaction_rolls_back_with_quarantine_on_storage_failure(setup):

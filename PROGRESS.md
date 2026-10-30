@@ -2043,3 +2043,21 @@ GAP-D2 auto SENT, GAP-D3 paid executor явно отнесены к отдель
 P2-01..09 сохранены без реализации. Итоговая матрица46 функций:FUNCTIONAL_AUDIT.md.
 Рабочая БД/.env/global flags не менялись. Новых live-проверок и записей не было.
 Аудит закончен; после сохранения не запускать второй проход.
+
+
+## Дополнительная проверка по новому запросу пользователя
+
+Воспроизведены7 новых red случаев,3 причины: shared message receipt мог подтверждать
+разные unknown actions (включая concurrent/late), delivery_text не блокировался при
+поздней server problem, result notices не защищались от edit/cleanup. Исправлены
+только эти причины: transactional unclaimed-message guard; full local deliverable
+для chain steps; preserve/cleanup exclusion для operation_receipts.
+82 targeted passed in19.48s;47 final targeted passed in17.30s. Details/evidence в
+FUNCTIONAL_AUDIT.md, section FA2. Новый stock proof подтверждает сохранение карантина
+при попытке использовать квитанцию другого ответа. Full suite выполняется.
+Никаких live writes/buyer sends/paid actions; runtime flags не менялись.
+
+Дополнительный проход завершён:749 passed in91.12s, data/audit_followup_full_results.xml.
+Ruff160 files/pip/secret scan чистые, конфигурация/рабочая DB не менялись. Три новые
+причины исправлены (FA2-P0-01, FA2-P0-02, FA2-P1-01); реальных API writes/Telegram
+sends/выдач/платежей0. Старые spec gaps/live gates остаются. После commit остановиться.

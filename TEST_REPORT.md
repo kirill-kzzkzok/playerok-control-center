@@ -942,3 +942,16 @@ red variants до расширения: functional_navigation_extended_before.xm
 4 passed); после исправления57 final targeted passed in13.53s. Code frozen после
 итогового full run. Ruff160 files/pip/selfcheck/secret scan clean. Открытые P1 по
 полноте исходного ТЗ (restore/auto SENT/paid executor) не заменены mock-заглушками.
+
+
+## Дополнительный проход по просьбе пользователя
+
+Воспроизведение:6 failed в data/audit_followup_before.xml (reuse/conflicting receipt4,
+fixed-text late problem1, receipt overwrite1) и1 failed cleanup protection в
+audit_followup_cleanup_before.xml. До исправления квитанция одного сообщения
+подтверждала два action, а поздняя проблема не блокировала delivery_text HTTP.
+После исправлений82 targeted passed in19.48s;47 final targeted passed in17.30s
+включая сохранение stock quarantine при чужой квитанции. Full749 passed in91.12s,
+data/audit_followup_full_results.xml. Ruff160 files и pip check clean; реальные
+секреты/JWT в tracked/unignored files не обнаружены, runtime flagsfalse.
+Подробности FA2 в FUNCTIONAL_AUDIT.md. Все проверки локальные; новых live writes нет.
