@@ -623,3 +623,22 @@ unknown; root fee=0 is not evidence of no withdrawal commission. Read-only probe
 rows rewritten=0. No schema migration or live action performed; production flags false.
 This does not prove complete shop history/bank receipt/current fee schedules or replace
 missing historical costs. Sale fee display is a narrowly reconciled observed amount.
+
+
+## Worker supervision checkpoint — 2026-10-30
+
+Full suite: **542 passed in 87.02s**, data/worker_supervision_results.xml.
+Targeted: 13 passed in 10.10s (7 new supervision regressions and notification suite).
+Ruff check/format: clean, 133 files; pip check and git diff --check clean.
+Actual-secret/JWT scan: clean; .env/spec/data/logs/build ignored; writes/automation false.
+Offline selfcheck: OK, 82 imports, 17 migration files/schema 1–18, temporary backup
+reopened, profile/chart PNG generated, external requests zero. Report in
+ data/worker_supervision_selfcheck.json. Working bot/database not started or migrated.
+
+Fault boundaries: exceptions and unexpected normal return restart a fresh loop after
+backoff; persisted retry deadline survives cancellation/reconstruction; shutdown never
+restarts; coalesced incident emits one mandatory notification before baseline despite
+invalid category preferences. Persistence outage logs types only and leaves supervision
+active. Critical injected outbox finish failure after mock ACK leaves PROCESSING, then
+lease recovery yields UNCERTAIN with attempts=1/executor await_count=1, no resend.
+No live buyer send, paid action, API mutation, challenge bypass or watchdog claim.

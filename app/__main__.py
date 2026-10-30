@@ -31,6 +31,7 @@ from app.workers.notifications import Notifications
 from app.workers.outbox import Executor, OutboxWorker
 from app.workers.promotions import PromotionWorker
 from app.workers.realtime import Realtime
+from app.workers.supervisor import Supervisor
 from app.workers.sync import Synchronizer
 from app.workers.transactions import TransactionWorker
 
@@ -59,6 +60,7 @@ async def run(config):
     session.middleware(PanelTracking(store))
     tasks = []
     stop = asyncio.Event()
+    supervisor = Supervisor(store)
     try:
         for owner in config.owner_ids:
             store.execute("INSERT OR IGNORE INTO administrators VALUES(?)", (owner,))
@@ -89,29 +91,39 @@ async def run(config):
         dispatcher.message.outer_middleware(middleware)
         dispatcher.callback_query.outer_middleware(middleware)
         dispatcher.include_router(create_router(store, api, products, sync))
-        tasks.append(asyncio.create_task(UploadCleanup(store).run(stop), name="upload-cleanup"))
-        tasks.append(asyncio.create_task(Notifications(store, bot).run(stop), name="notifications"))
+        tasks.append(supervisor.start("upload-cleanup", lambda: UploadCleanup(store).run(stop), stop))
+        tasks.append(supervisor.start("notifications", lambda: Notifications(store, bot).run(stop), stop))
         if account.id:
             tasks.append(
-                asyncio.create_task(TransactionWorker(store, api).run(stop), name="account-transactions")
+                supervisor.start(
+                    "account-transactions", lambda: TransactionWorker(store, api).run(stop), stop
+                )
             )
-            tasks.append(asyncio.create_task(PromotionWorker(store, api).run(stop), name="promotion-dry-run"))
-            tasks.append(asyncio.create_task(sync.run(stop), name="playerok-sync"))
+            tasks.append(
+                supervisor.start("promotion-dry-run", lambda: PromotionWorker(store, api).run(stop), stop)
+            )
+            tasks.append(supervisor.start("playerok-sync", lambda: sync.run(stop), stop))
             if config.realtime_enabled:
                 tasks.append(
-                    asyncio.create_task(Realtime(store, account, sync).run(stop), name="playerok-realtime")
+                    supervisor.start(
+                        "playerok-realtime", lambda: Realtime(store, account, sync).run(stop), stop
+                    )
                 )
         if config.writes_enabled:
             if config.automation_enabled:
-                tasks.append(asyncio.create_task(AutoReplyWorker(store, api).run(stop), name="auto-replies"))
                 tasks.append(
-                    asyncio.create_task(
-                        EnrollmentWorker(store, api).run(stop), name="future-order-enrollment"
+                    supervisor.start("auto-replies", lambda: AutoReplyWorker(store, api).run(stop), stop)
+                )
+                tasks.append(
+                    supervisor.start(
+                        "future-order-enrollment", lambda: EnrollmentWorker(store, api).run(stop), stop
                     )
                 )
-                tasks.append(asyncio.create_task(ChainWorker(store, api).run(stop), name="delivery-chains"))
+                tasks.append(
+                    supervisor.start("delivery-chains", lambda: ChainWorker(store, api).run(stop), stop)
+                )
             worker = OutboxWorker(store, Executor(store, api, products))
-            tasks.append(asyncio.create_task(outbox_loop(worker, stop), name="outbox"))
+            tasks.append(supervisor.start("outbox", lambda: outbox_loop(worker, stop), stop))
         logger.info(
             "Telegram panel started; writes=%s; first_start_claim=%s",
             config.writes_enabled,

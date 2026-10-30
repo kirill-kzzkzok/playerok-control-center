@@ -40,7 +40,7 @@ class NotificationPreferences:
         return value["revision"], {key: value["enabled"].get(key, True) for key in LABELS}
 
     def enabled(self, owner, event_kind):
-        if event_kind == "operation_uncertain":
+        if event_kind in {"operation_uncertain", "worker_failed"}:
             return True
         key = KINDS.get(event_kind)
         return self.get(owner)[1][key] if key else True

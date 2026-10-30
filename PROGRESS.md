@@ -1245,3 +1245,39 @@ unattributed0, known withdrawal0/unknown10; data/settlement_reconciliation_check
 external_requests=0/mutations=0/database_rows_rewritten=0; миграции не нужны, схема v18.
 
 Контрольная точка settlements: **535 passed in 92.63s**, data/settlement_reconciliation_results.xml; Ruff/pip/format/secret scan чистые. Изменения отправляются в приватный origin после commit.
+
+
+## Контроль фоновых задач: неожиданный выход и безопасный перезапуск
+
+После этапа financial settlement выполнена следующая часть PHASE 7/9: обнаружен
+реальный пробел runtime — create_task не отслеживал завершение фоновых циклов;
+исключение SQLite после внешнего ACK могло остановить outbox при работающей панели.
+План и реализация: единый Supervisor для всех десяти зарегистрированных задач,
+экспоненциальная задержка 5–300 секунд с jitter, сохранение retry_at и счётчиков,
+сброс серии после >=60 секунд работы, отдельные RUNNING/BACKOFF/STOPPED.
+Неожиданный нормальный return тоже считается сбоем; stop/cancel не перезапускают цикл.
+
+Перезапускается цикл с новой coroutine, а не HTTP-операция. Outbox/notifications
+сохраняют прежние PROCESSING/lease/UNCERTAIN правила: неизвестные результаты никогда
+не становятся PENDING. Инъекция ошибки finish после mock внешнего ACK доказала один
+вызов executor и последующий LEASE_EXPIRED/UNCERTAIN после восстановления цикла.
+Изменений рабочей БД, миграций, live-запросов, сообщений или платных операций нет.
+
+Состояние worker и обязательный worker_failed inbox event сохраняются атомарно;
+повторные сбои с интервалом <=10 минут объединяются по incident. При ошибке самой БД
+контроль продолжает работать с задержкой в памяти и пишет только тип исключения;
+неудавшаяся запись alert повторяется при следующем сохранении состояния. Уведомления
+о сбоях обходят исторический baseline и пользовательские настройки категорий, но
+сохраняют однократную попытку Telegram. Диагностика показывает последние сохранённые
+состояния с временем и счётчиком; это не heartbeat, watchdog зависания или доказательство
+исправности API. Флаги writes/automation по-прежнему false.
+
+Targeted: 13 passed in 10.10s (7 новых тестов supervision + notifications). Проверены
+backoff после нового Supervisor, cancel/stop без повтора, неожиданный return, объединение
+инцидентов, отсутствие текста секретного исключения, недоступность БД, critical notice
+до baseline/при повреждённых preferences и потеря SQLite после ACK без resend.
+
+Контрольная точка worker supervision: **542 passed in 87.02s**,
+data/worker_supervision_results.xml; Ruff check/format (133 files), pip check и
+actual-secret/JWT scan чистые. Offline selfcheck OK: 82 imports, схема 1–18,
+backup reopen/profile PNG/chart PNG, external_requests=0. Рабочий bot не запускался.

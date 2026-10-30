@@ -1,4 +1,5 @@
 import asyncio
+import json
 import secrets
 from datetime import UTC
 from html import escape
@@ -411,6 +412,23 @@ def create_router(store, api, products, synchronizer):
                         escape(f"{a['kind']}: {a['status']} · {a['error_code'] or ''}") for a in actions
                     )
                 )
+                workers = store.rows(
+                    "SELECT key,value FROM settings WHERE key LIKE 'runtime:worker:%' ORDER BY key"
+                )
+                if workers:
+                    text += "\n\nФоновые задачи — последние сохранённые состояния (не проверка API):"
+                    for worker in workers:
+                        value = json.loads(worker["value"])
+                        text += "\n" + escaped(
+                            worker["key"].removeprefix("runtime:worker:")
+                            + ": "
+                            + str(value.get("state"))
+                            + " · "
+                            + str(value.get("updated_at"))
+                            + " · сбоев: "
+                            + str(value.get("failures_total", 0)),
+                            180,
+                        )
                 text += "\n\nUNCERTAIN не повторяется автоматически. Для разрешения сверяйте результат на Playerok."
                 markup = keyboard(
                     [

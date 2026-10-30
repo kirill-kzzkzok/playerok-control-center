@@ -152,3 +152,13 @@ probe reconciles181/181 sales; all10 withdrawals remain unknown for explicit net
 Root fee of other operations is not summed. Withdrawal retention/allocations share a
 positive-explicit-net helper; no zero-placeholder or current-rate fallback. This closes
 part of observed sale-fee analytics, not all financial/withdrawal/bank/live requirements.
+
+
+## Устойчивость фоновых циклов (§2/§16/§20)
+
+All registered runtime tasks now use Supervisor with persisted bounded backoff and
+sanitized critical incidents. Seven regression tests cover unexpected completion,
+restart/cancellation, durable delay, storage failure, baseline bypass and ACK-before-DB
+failure with exactly one executor call and expired lease UNCERTAIN. This proves local
+mock recovery boundaries; no real buyer sends or live mutation acceptance is implied.
+Last-saved worker lifecycle is distinct from API health; no hang detection is claimed.

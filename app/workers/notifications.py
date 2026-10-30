@@ -28,7 +28,7 @@ class Notifications:
         if not initialized and self.store.setting("sync:health", {}).get("status") == "OK":
             with self.store.transaction() as db:
                 db.execute(
-                    "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT i.key,a.user_id,'BASELINE' FROM inbox i CROSS JOIN administrators a WHERE i.kind NOT IN ('operation_uncertain','stock_empty','order_problem','promotion_guard','enrollment_blocked')"
+                    "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT i.key,a.user_id,'BASELINE' FROM inbox i CROSS JOIN administrators a WHERE i.kind NOT IN ('worker_failed','operation_uncertain','stock_empty','order_problem','promotion_guard','enrollment_blocked')"
                 )
                 db.execute(
                     "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -40,7 +40,7 @@ class Notifications:
             "AND EXISTS (SELECT 1 FROM administrators a WHERE NOT EXISTS "
             "(SELECT 1 FROM notifications n WHERE n.event_key=i.key AND n.owner_id=a.user_id)) "
             + (
-                "AND i.kind IN ('operation_uncertain','stock_empty','order_problem','promotion_guard','enrollment_blocked') "
+                "AND i.kind IN ('worker_failed','operation_uncertain','stock_empty','order_problem','promotion_guard','enrollment_blocked') "
                 if not initialized
                 else ""
             )
@@ -73,6 +73,16 @@ class Notifications:
                 item = payload.get("item") or {}
                 text = f"🛒 <b>Заказ</b>\n{escape(item.get('name') or payload['id'])}\nСтатус: {escape(payload['status'])}\nСумма: {item.get('price', '?')} ₽"
                 markup = keyboard([[("Открыть заказ", "order:" + payload["id"])]])
+            elif event["kind"] == "worker_failed":
+                text = (
+                    "⚠️ <b>Фоновая задача остановилась</b>\n"
+                    + escaped(payload["worker"], 80)
+                    + ": "
+                    + escaped(payload["error_type"], 80)
+                    + "\nПерезапуск выполняется с задержкой. Проверьте диагностику. "
+                    + "Неопределённые операции автоматически не повторяются."
+                )
+                markup = keyboard([[("Диагностика", "diagnostics")]])
             elif event["kind"] == "promotion_guard":
                 text = (
                     "⛔ <b>Политика продвижения выключена по лимиту</b>\n"

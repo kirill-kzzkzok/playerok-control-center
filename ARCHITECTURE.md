@@ -617,3 +617,20 @@ zero conversion fields are unknown, consistent with wallet UI truthy-field gatin
 Statistics and expense allocation share the same helper, preventing a zero placeholder
 from becoming a full-debit expense. Unknown withdrawal coverage is displayed; root fee
 zero/current provider fee are never used to invent historical bank receipts or fees.
+
+
+## Background loop supervision
+
+Every configured background loop is launched through Supervisor. Unexpected exception
+or normal return triggers persisted exponential backoff (5–300s, jitter); stable runs
+>=60s reset consecutive failures. Cancellation and shutdown never restart a loop.
+Factories create a fresh coroutine, retaining existing durable worker recovery rules.
+Supervisor cannot retry individual requests or turn PROCESSING/UNCERTAIN into pending.
+
+Health settings and coalesced worker_failed inbox incidents commit atomically. Database
+failure is logged by exception type only and leaves in-memory restart delay active;
+pending alerts are retried on the next health save. Critical notices bypass baseline
+and category suppression, with existing one-attempt Telegram semantics. Diagnostics
+show timestamps of last saved lifecycle state, not live API health or a hang watchdog.
+Unexpired outbox leases remain PROCESSING; expired leases recover to UNCERTAIN, never
+blind resend, even when external ACK preceded failure to save the local result.
