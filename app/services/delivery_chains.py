@@ -156,7 +156,7 @@ class DeliveryChains:
             db.execute("UPDATE delivery_chains SET status=? WHERE order_id=?", (status, ident))
             return True
 
-    async def verify_step(self, action):
+    def dispatchable(self, action):
         if not getattr(self.api.account, "automation_enabled", False):
             raise ValidationError("Исполнение цепочек выключено")
         ident, payload = action["target"], action["payload"]
@@ -184,6 +184,16 @@ class DeliveryChains:
         )
         if any(row["status"] != "SUCCEEDED" for row in earlier):
             raise ValidationError("Предыдущий шаг ещё не подтверждён")
+        if self.store.rows("SELECT 1 FROM order_annotations WHERE order_id=? AND problem=1", (ident,)):
+            raise ValidationError("Локальная проблема блокирует автоматическую отправку")
+        current = self.store.rows("SELECT status FROM orders WHERE id=?", (ident,))
+        if not current or current[0]["status"] != "PAID":
+            raise ValidationError("Сохранённая история запрещает автоматическую отправку")
+        return step
+
+    async def verify_step(self, action):
+        step = self.dispatchable(action)
+        ident = action["target"]
         order = await self.api.call("get_deal", deal_id=ident)
         deliverable(order, ident, self.api.account.id)
         if order["item"]["id"] != step["item_id"]:

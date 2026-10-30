@@ -1,3 +1,4 @@
+import asyncio
 import json
 from dataclasses import asdict
 from types import SimpleNamespace
@@ -61,6 +62,37 @@ async def test_saved_policy_version_owner_and_global_stop(setup):
     assert service.stop_all(1) == 1
     assert service.get("item")[0] == 2 and not service.get("item")[1].enabled
     assert "private data" not in str(store.rows("SELECT * FROM audit_log"))
+
+
+async def test_overlapping_policy_edit_scenarios_commit_one_revision(setup):
+    store, api, _, service = setup
+    original = api.call.side_effect
+    both = asyncio.Event()
+    reads = 0
+
+    async def call(method, **kwargs):
+        nonlocal reads
+        result = await original(method, **kwargs)
+        if method == "get_item":
+            reads += 1
+            if reads == 2:
+                both.set()
+            await asyncio.wait_for(both.wait(), 2)
+        return result
+
+    api.call.side_effect = call
+    results = await asyncio.gather(
+        *[
+            service.save(1, "item", 0, asdict(DeliveryPolicy(enabled=True, mode="text", text=text)))
+            for text in ["first scenario", "second scenario"]
+        ],
+        return_exceptions=True,
+    )
+    assert sum(isinstance(value, Conflict) for value in results) == 1
+    assert sum(value == 1 for value in results) == 1
+    revision, policy = service.get("item")
+    assert revision == 1 and policy.text in {"first scenario", "second scenario"}
+    assert not store.rows("SELECT * FROM outbox")
 
 
 @pytest.mark.parametrize(

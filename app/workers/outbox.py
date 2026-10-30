@@ -1,10 +1,12 @@
 import asyncio
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.playerok.adapter import APIError, plain
+from app.database.store import Conflict
+from app.playerok.adapter import APIError, SafeAccount, plain
 from app.services.agreements import Agreements, require_conditions
 from app.services.attachments import Attachments
 from app.services.delivery_chains import DeliveryChains
@@ -28,14 +30,45 @@ class Executor:
     def __init__(self, store, api, products):
         self.store, self.api, self.products = store, api, products
 
-    async def mutate(self, operation, method, **kwargs):
+    def dispatch_guard(self, action):
+        if not getattr(self.api.account, "writes_enabled", False):
+            raise ValidationError("Записи Playerok выключены")
+        rows = self.store.rows(
+            "SELECT status,lease_token,lease_until FROM outbox WHERE id=?", (action["id"],)
+        )
+        if (
+            not rows
+            or rows[0]["status"] != "PROCESSING"
+            or rows[0]["lease_token"] != action["lease_token"]
+            or (rows[0]["lease_until"] or 0) <= time.time()
+        ):
+            raise ValidationError("Lease операции истёк или потерян; отправка запрещена")
+        if action["payload"].get("chain_id"):
+            DeliveryChains(self.store, self.api).dispatchable(action)
+        if action["kind"] == "delivery":
+            reserved = self.store.rows(
+                "SELECT i.status FROM inventory i JOIN reservations r ON r.inventory_id=i.id WHERE r.order_id=?",
+                (action["target"],),
+            )
+            if not reserved or reserved[0]["status"] != "RESERVED":
+                raise ValidationError("Резерв выдачи больше не разрешает отправку")
+
+    async def mutate(self, action, operation, method, **kwargs):
         async with self.api.lock:
 
             def run():
-                with self.api.account.permit(operation):
+                scope = (
+                    self.api.account.permit(operation, dispatch_guard=lambda: self.dispatch_guard(action))
+                    if isinstance(self.api.account, SafeAccount)
+                    else self.api.account.permit(operation)
+                )
+                with scope:
+                    self.dispatch_guard(action)
                     try:
                         return plain(getattr(self.api.account, method)(**kwargs))
                     except APIError:
+                        raise
+                    except ValidationError:
                         raise
                     except Exception:  # noqa: BLE001 -- mutation may have succeeded; preserve uncertainty
                         # Parsing may fail after the mutation already reached the server.
@@ -60,7 +93,9 @@ class Executor:
             text = payload.get("text", "")
             if not text.strip() or len(text.encode("utf-16-le")) // 2 > 3500:
                 raise ValidationError("Пустое или слишком длинное сообщение")
-            result = await self.mutate("createChatMessage", "send_message", chat_id=chain_chat, text=text)
+            result = await self.mutate(
+                action, "createChatMessage", "send_message", chat_id=chain_chat, text=text
+            )
             if not result.get("id"):
                 raise APIError("CHAIN_MESSAGE_UNKNOWN", uncertain=True)
             return {"message_id": result["id"]}
@@ -75,11 +110,11 @@ class Executor:
                 raise ValidationError("Снимок отчёта не соответствует подтверждению")
             if prepared["mode"] == "legacy":
                 await self.mutate(
-                    "updateDeal", "update_deal", deal_id=target, new_status=ItemDealStatuses.SENT
+                    action, "updateDeal", "update_deal", deal_id=target, new_status=ItemDealStatuses.SENT
                 )
             else:
                 await self.mutate(
-                    "submitFulfillmentReport", "submit_fulfillment", deal_id=target, report=report
+                    action, "submitFulfillmentReport", "submit_fulfillment", deal_id=target, report=report
                 )
             try:
                 for attempt in range(10):
@@ -116,6 +151,7 @@ class Executor:
             }
             comment = next((value["fields"][f["key"]] for f in form if f.get("comment")), None)
             result = await self.mutate(
+                action,
                 "createItem",
                 "create_item",
                 game_category_id=value["category_id"],
@@ -139,7 +175,7 @@ class Executor:
             fresh = discount_plan(item, payload["price"], getattr(self.api.account, "role", None))
             if fresh != payload:
                 raise ValidationError("Условия скидки изменились. Требуется новое подтверждение.")
-            result = await self.mutate("updateItem", "update_item", id=target, price=fresh["price"])
+            result = await self.mutate(action, "updateItem", "update_item", id=target, price=fresh["price"])
             if (
                 result.get("id") != target
                 or result.get("price") != fresh["price"]
@@ -168,6 +204,7 @@ class Executor:
                 else:
                     attributes[field["key"]] = selected
             result = await self.mutate(
+                action,
                 "updateItem",
                 "update_item",
                 id=target,
@@ -189,7 +226,10 @@ class Executor:
             accepted = []
             for entry in current:
                 result = await self.mutate(
-                    "acceptGameCategoryAgreement", "accept_game_category_agreement", agreement_id=entry["id"]
+                    action,
+                    "acceptGameCategoryAgreement",
+                    "accept_game_category_agreement",
+                    agreement_id=entry["id"],
                 )
                 if not isinstance(result, dict) or result.get("id") != entry["id"]:
                     raise APIError("AGREEMENT_RESULT_UNKNOWN", uncertain=True)
@@ -210,7 +250,7 @@ class Executor:
             ):
                 raise ValidationError("Условия размещения изменились; требуется новое превью")
             result = await self.mutate(
-                "publishItem", "publish_item", item_id=target, priority_status_id=quote["id"]
+                action, "publishItem", "publish_item", item_id=target, priority_status_id=quote["id"]
             )
             if result.get("id") != target or result.get("status") == "DRAFT":
                 raise APIError("PUBLICATION_NOT_CONFIRMED", uncertain=True)
@@ -218,7 +258,7 @@ class Executor:
         if kind in {"edit", "delete"}:
             current = await self.owned_item(target)
             if kind == "delete":
-                result = await self.mutate("removeItem", "remove_item", id=target)
+                result = await self.mutate(action, "removeItem", "remove_item", id=target)
                 return {"removed": bool(result)}
             changes = {k: v for k, v in payload.items() if k in {"name", "description", "price"}}
             if set(payload) - {"name", "description", "price", "add_photos", "replace_attachment_ids"}:
@@ -243,13 +283,13 @@ class Executor:
                 changes["remove_attachments"] = current_ids
             if not changes:
                 raise ValidationError("Нет разрешённых изменений")
-            result = await self.mutate("updateItem", "update_item", id=target, **changes)
+            result = await self.mutate(action, "updateItem", "update_item", id=target, **changes)
             if result.get("id") != target:
                 raise APIError("EDIT_NOT_CONFIRMED", uncertain=True)
             return {"remote_id": target}
         if kind == "mark_read":
             await self.api.call("get_chat", chat_id=target)
-            result = await self.mutate("markChatAsRead", "mark_chat_as_read", chat_id=target)
+            result = await self.mutate(action, "markChatAsRead", "mark_chat_as_read", chat_id=target)
             if result.get("id") != target or result.get("unread_messages_counter") != 0:
                 raise APIError("READ_STATUS_NOT_CONFIRMED", uncertain=True)
             return {"chat_id": target, "unread_messages_counter": 0}
@@ -270,6 +310,7 @@ class Executor:
                     (action["id"], index, client_id),
                 )
                 uploaded = await self.mutate(
+                    action,
                     "uploadChatImageIntoTemporaryStore",
                     "upload_chat_image",
                     image=image,
@@ -303,6 +344,7 @@ class Executor:
                 ):
                     raise ValidationError("Срок временного вложения истёк до отправки")
                 result = await self.mutate(
+                    action,
                     "createChatMessage",
                     "send_message_with_images",
                     chat_id=target,
@@ -320,7 +362,7 @@ class Executor:
                     raise APIError("MESSAGE_ID_MISSING", uncertain=True)
                 return {"message_id": result["id"], "image_count": len(image_ids)}
             result = await self.mutate(
-                "createChatMessage", "send_message", chat_id=target, text=payload["text"]
+                action, "createChatMessage", "send_message", chat_id=target, text=payload["text"]
             )
             if not result.get("id"):
                 raise APIError("MESSAGE_ID_MISSING", uncertain=True)
@@ -344,7 +386,7 @@ class Executor:
             ):
                 raise ValidationError("Резерв не соответствует сделке")
             result = await self.mutate(
-                "createChatMessage", "send_message", chat_id=chat, text=stock[0]["secret"]
+                action, "createChatMessage", "send_message", chat_id=chat, text=stock[0]["secret"]
             )
             if not result.get("id"):
                 raise APIError("DELIVERY_RESULT_UNKNOWN", uncertain=True)
@@ -356,6 +398,12 @@ class OutboxWorker:
     def __init__(self, store, executor):
         self.store, self.executor = store, executor
 
+    def finish(self, ident, token, status, result=None, error=None):
+        try:
+            self.store.finish(ident, token, status, result=result, error=error)
+        except Conflict:
+            self.store.record_late_result(ident, token, status, result=result, error=error)
+
     async def once(self):
         self.store.recover()
         action = self.store.claim(lease_seconds=180)
@@ -364,23 +412,21 @@ class OutboxWorker:
         try:
             result = await self.executor(action)
         except ValidationError:
-            self.store.finish(
-                action["id"], action["lease_token"], "PERMANENT_FAILED", error="VALIDATION_FAILED"
-            )
+            self.finish(action["id"], action["lease_token"], "PERMANENT_FAILED", error="VALIDATION_FAILED")
         except APIError as error:
-            self.store.finish(
+            self.finish(
                 action["id"],
                 action["lease_token"],
                 "UNCERTAIN" if error.uncertain else "PERMANENT_FAILED",
                 error=error.code,
             )
         except asyncio.CancelledError:
-            self.store.finish(action["id"], action["lease_token"], "UNCERTAIN", error="PROCESS_CANCELLED")
+            self.finish(action["id"], action["lease_token"], "UNCERTAIN", error="PROCESS_CANCELLED")
             raise
         except Exception:  # noqa: BLE001 -- terminal safety boundary, records UNCERTAIN, never retries
-            self.store.finish(action["id"], action["lease_token"], "UNCERTAIN", error="UNEXPECTED_FAILURE")
+            self.finish(action["id"], action["lease_token"], "UNCERTAIN", error="UNEXPECTED_FAILURE")
         else:
-            self.store.finish(action["id"], action["lease_token"], "SUCCEEDED", result=result)
+            self.finish(action["id"], action["lease_token"], "SUCCEEDED", result=result)
         self.store.audit(
             None,
             action["kind"],

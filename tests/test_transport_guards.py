@@ -5,6 +5,7 @@ import pytest
 
 from app.live_test import mutate
 from app.playerok.adapter import APIError, SafeAccount
+from app.services.products import ValidationError
 
 
 def test_query_name_cannot_disguise_mutation():
@@ -71,5 +72,56 @@ def test_allowed_operation_label_cannot_hide_paid_mutation():
                 {},
                 {"operationName": "updateItem", "query": "mutation updateItem { requestWithdrawal { id } }"},
             )
+    finally:
+        account.close()
+
+
+def test_transport_rechecks_guard_after_rate_limit_wait_before_network(monkeypatch):
+    calls, changed = [], False
+
+    def wait(_):
+        nonlocal changed
+        changed = True
+
+    def guard():
+        if changed:
+            raise ValidationError("Stopped while preparing request")
+
+    monkeypatch.setattr("app.playerok.adapter.time.sleep", wait)
+    account = SafeAccount(
+        "token=private",
+        writes_enabled=True,
+        client=httpx.Client(transport=httpx.MockTransport(lambda req: calls.append(req))),
+    )
+    try:
+        with account.permit("removeItem", dispatch_guard=guard), pytest.raises(ValidationError):
+            account.remove_item(id="controlled")
+        assert not calls
+        assert account._dispatch_guard is None
+    finally:
+        account.close()
+
+
+def test_rest_fulfillment_guard_rechecked_before_network(monkeypatch):
+    calls, stopped = [], False
+
+    def wait(_):
+        nonlocal stopped
+        stopped = True
+
+    def guard():
+        if stopped:
+            raise ValidationError("Stopped while waiting")
+
+    monkeypatch.setattr("app.playerok.fulfillment_transport.time.sleep", wait)
+    account = SafeAccount(
+        "token=private",
+        writes_enabled=True,
+        client=httpx.Client(transport=httpx.MockTransport(lambda req: calls.append(req))),
+    )
+    try:
+        with account.permit("submitFulfillmentReport", dispatch_guard=guard), pytest.raises(ValidationError):
+            account.submit_fulfillment("deal", {"state": "draft"})
+        assert not calls and account._dispatch_guard is None
     finally:
         account.close()

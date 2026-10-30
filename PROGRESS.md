@@ -962,3 +962,35 @@ Live выявил отсутствие props.deal_id у большинства �
 это ограничение сохраняется и имеет приоритет над ранним общим live-test допуском spec.
 
 Контрольная точка auth/live-read: **427 passed in 86.15s**, data/auth_and_finance_live_results.xml.
+
+## PHASE 7 — dispatch fault injection and race fixes (2026-10-30)
+
+Прошлый turn и текущее продолжение дали реальное продвижение: новый failing regression
+доказал, что stop_all во время ожидания api.lock пропускал приветствие. Исправлено:
+Executor проверяет локальный guard по action/lease непосредственно в permit и ещё раз
+после transport throttling перед HTTP. Цепочки повторно проверяют revision/runtime/
+ACTIVE/PAID/local problem/предыдущие шаги; stock delivery — RESERVED. Native GraphQL и
+REST fulfillment используют один барьер. Новые варианты stop/runtime/problem/rollback/
+expired/recovered проходят без send. После HTTP dispatch отменить запрос уже нельзя.
+
+Истечение/recovery lease во время внешней отправки больше не теряет поздний ack из-за
+Conflict finish: v16 outbox_late_results хранит allowlisted receipt/status без приватного
+текста, не меняя UNCERTAIN/quarantine или ручное решение. Повтор не разрешается. В UI
+операции виден поздний ID. Still-owned conflict не маскируется; отдельный тест доказывает.
+
+Проверены реальные native mutation transport ответы 401/403/429/500 на mock HTTP — один
+вызов, UNCERTAIN, без слепых повторов/секретов. Настоящий Dispatcher с параллельными
+подтверждениями publish даёт один outbox/publishItem; overlapping policy scenarios дают
+один CAS commit. Отдельный процесс с os._exit до/после mock send подтверждает durability
+без graceful finally: RESERVED/PROCESSING → QUARANTINED/UNCERTAIN, resend запрещён.
+
+ACCEPTANCE.md сопоставляет все 16 fault-injection пунктов §16 с конкретными тестами и
+указывает оставшиеся live/финансовые/платные/soak ограничения. Это не финальная приёмка;
+следующий проход расширит карту до остальных требований §1–24.
+
+Перед v16 сделан backup before-late-results-v16-20261030T130006.sqlite3. Рабочая проверка
+сохранила 217 orders/462 transactions/1 owner, late_results=0; версии 1–16.
+data/dispatch_migration_check.json: external_requests=0/mutations=0, writes=false,
+automation=false. Новых live-записей/сообщений/платных действий не было, бот не запущен.
+
+Контрольная точка dispatch: **447 passed in 56.03s**; JUnit data/phase7_dispatch_results.xml.

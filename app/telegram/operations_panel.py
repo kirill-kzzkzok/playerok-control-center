@@ -1,3 +1,4 @@
+import json
 import secrets
 
 from app.database.store import Conflict
@@ -69,6 +70,16 @@ class OperationsPanel:
                 text += "\nВложения: " + ", ".join(
                     f"{upload['position'] + 1}: {upload['status']}" for upload in uploads
                 )
+            late = self.store.rows(
+                "SELECT observed_status,result,observed_at FROM outbox_late_results WHERE operation_id=? ORDER BY observed_at DESC LIMIT 3",
+                (ident,),
+            )
+            for observation in late:
+                evidence = json.loads(observation["result"] or "{}")
+                text += "\nПоздний ответ исполнителя: " + escaped(observation["observed_status"], 40)
+                if evidence.get("message_id"):
+                    text += " · ID сообщения: <code>" + escaped(evidence["message_id"], 100) + "</code>"
+                text += "\nОсновной статус не изменён. Проверьте результат перед ручным решением."
             if row["error_code"] == "MANUALLY_STOPPED_UNCERTAIN":
                 text += "\nПовтор остановлен владельцем; внешний результат остался неизвестен."
             if resolutions:

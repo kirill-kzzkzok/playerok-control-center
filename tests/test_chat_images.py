@@ -30,6 +30,8 @@ def image_bytes():
 
 
 class ImageAccount:
+    writes_enabled = True
+
     def __init__(self):
         self.calls = []
         self.send_error = self.upload_error = None

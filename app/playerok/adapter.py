@@ -68,21 +68,24 @@ class SafeAccount(Account):
         self._lock = threading.RLock()
         self._permitted = None
         self._permit_thread = None
+        self._dispatch_guard = None
         self._last_request = 0.0
         self.response_diagnostics = deque(maxlen=16)
 
     @contextmanager
-    def permit(self, operation):
+    def permit(self, operation, dispatch_guard=None):
         with self._lock:
             if not self.writes_enabled:
                 raise APIError("WRITES_DISABLED")
             self._permitted = operation
             self._permit_thread = threading.get_ident()
+            self._dispatch_guard = dispatch_guard
             try:
                 yield
             finally:
                 self._permitted = None
                 self._permit_thread = None
+                self._dispatch_guard = None
 
     def request(self, method, url, headers, payload=None, files=None, pass_304=False):
         if url != "https://playerok.com/graphql" or method not in {"get", "post"}:
@@ -136,6 +139,8 @@ class SafeAccount(Account):
             if not read and (self._permitted != operation or self._permit_thread != threading.get_ident()):
                 raise APIError("WRITE_NOT_AUTHORIZED")
             time.sleep(max(0, 0.3 - (time.monotonic() - self._last_request)))
+            if not read and self._dispatch_guard:
+                self._dispatch_guard()
             try:
                 if method == "get":
                     response = self.client.get(url, params=payload, headers=request_headers)

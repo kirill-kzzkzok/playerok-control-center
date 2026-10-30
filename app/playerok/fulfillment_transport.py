@@ -56,6 +56,8 @@ def fulfillment_request(account, method, path, body=None):
             "accept": "application/json",
         }
         time.sleep(max(0, 0.3 - (time.monotonic() - account._last_request)))
+        if not read and account._dispatch_guard:
+            account._dispatch_guard()
         try:
             response = account.client.request(
                 method, REST_BASE + path, headers=headers, json=body, follow_redirects=False

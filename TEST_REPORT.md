@@ -468,3 +468,27 @@ PNG also exposed overlapping time labels/curves across missing years; calendar l
 and explicit gaps fixed it, with a rendering regression test. No live mutation, listing
 change, buyer sending, fulfillment or payment performed. User now requires separate
 permission for any later live writes; no such permission requested or implied here.
+
+## PHASE 7 — dispatch boundary/recovery (2026-10-30)
+
+447 passed in 56.03s; data/phase7_dispatch_results.xml. Targeted regression first
+reproduced the policy stop/api-lock race (hello sent after stop); the final guard
+blocks policy/runtime/problem/rollback/expired/recovered lease before HTTP. GraphQL
+and REST transport tests simulate a stop during throttle wait and assert no network.
+Existing executor/photo/fulfillment tests passed after explicit write-enabled mock
+contract correction. No production writes were enabled for tests.
+
+Late-ack worker/thread test recovers the lease during send, then captures successful
+message ID without changing UNCERTAIN/quarantine or permitting another step. Tests
+prove deduplicated late evidence, preserved owner terminal decisions, still-owned
+finish conflicts propagate, and escaped evidence is visible via real Dispatcher.
+HTTP mutation 401/403/429/500 is tested through SafeAccount mock transport with one
+request/no retry. Concurrent genuine publish callbacks produce one publishItem;
+overlapping policy scenarios commit one revision. Actual subprocess os._exit before/
+after mock send demonstrates durable recovery without graceful close/finally.
+
+ACCEPTANCE.md maps all sixteen required fault-injection scenarios to inspected tests
+and distinguishes mock evidence from unaccepted live behavior. v16 migration after
+backup retained 217 orders, 462 transactions, one owner and zero late observations;
+data/dispatch_migration_check.json. External requests/mutations=0, writes/automation
+false. Full project/live/soak/remaining spec acceptance remains open.

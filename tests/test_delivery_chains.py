@@ -1,4 +1,6 @@
 import asyncio
+import threading
+import time
 from contextlib import contextmanager
 from dataclasses import asdict
 from types import SimpleNamespace
@@ -207,3 +209,73 @@ async def test_policy_changes_during_api_validation_prevent_send(setup):
     await OutboxWorker(store, Executor(store, api, None)).once()
     assert not api.account.sent
     assert store.rows("SELECT status FROM outbox")[0]["status"] == "PERMANENT_FAILED"
+
+
+@pytest.mark.parametrize("change", ["policy", "runtime", "problem", "rollback", "expired", "recovered"])
+async def test_stop_while_waiting_for_api_lock_prevents_dispatch(setup, change):
+    store, api, order, service = setup
+    await configure(store, api)
+    await service.create(1, "order")
+    service.advance("order")
+    checked = asyncio.Event()
+    original = api.call.side_effect
+
+    async def call(method, **kwargs):
+        result = await original(method, **kwargs)
+        if method == "get_chat":
+            checked.set()
+        return result
+
+    api.call.side_effect = call
+    await api.lock.acquire()
+    task = asyncio.create_task(OutboxWorker(store, Executor(store, api, None)).once())
+    try:
+        await asyncio.wait_for(checked.wait(), 2)
+        if change == "policy":
+            Automation(store, api).stop_all(1)
+        elif change == "runtime":
+            api.account.automation_enabled = False
+        elif change == "problem":
+            Orders(store).annotate("order", 1, 0, True, "Needs checking")
+        elif change == "rollback":
+            Orders(store).ingest({**order, "status": "ROLLED_BACK"})
+        else:
+            store.execute("UPDATE outbox SET lease_until=0 WHERE status='PROCESSING'")
+            if change == "recovered":
+                store.recover()
+    finally:
+        api.lock.release()
+    await task
+    assert not api.account.sent
+
+
+async def test_expired_lease_after_external_ack_keeps_late_receipt_without_retry(setup):
+    store, api, _, service = setup
+    await configure(store, api)
+    await service.create(1, "order")
+    service.advance("order")
+    accepted, release = threading.Event(), threading.Event()
+
+    def send(chat_id, text):
+        api.account.sent.append(text)
+        accepted.set()
+        assert release.wait(5)
+        return {"id": "external-ack"}
+
+    api.account.send_message = send
+    task = asyncio.create_task(OutboxWorker(store, Executor(store, api, None)).once())
+    try:
+        assert await asyncio.to_thread(accepted.wait, 3)
+        store.execute("UPDATE outbox SET lease_until=? WHERE status='PROCESSING'", (time.time() - 1,))
+        assert store.recover() == 1
+    finally:
+        release.set()
+    await task
+    service.advance("order")
+    assert store.rows("SELECT status FROM outbox") == [{"status": "UNCERTAIN"}]
+    observations = store.rows("SELECT observed_status,result FROM outbox_late_results")
+    assert observations == [{"observed_status": "SUCCEEDED", "result": '{"message_id":"external-ack"}'}]
+    assert not await OutboxWorker(store, Executor(store, api, None)).once()
+    assert api.account.sent == ["hello"]
+    assert store.rows("SELECT status FROM inventory") == [{"status": "QUARANTINED"}]
+    assert "unique secret" not in str(store.rows("SELECT * FROM outbox_late_results"))

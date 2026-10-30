@@ -264,6 +264,30 @@ class Store:
             (actor, action, target, outcome, now()),
         )
 
+    def record_late_result(self, ident, token, status, result=None, error=None):
+        """Retain evidence after recovery/resolution, without replacing authoritative state."""
+        if status not in {"SUCCEEDED", "RETRYABLE_FAILED", "UNCERTAIN", "PERMANENT_FAILED"}:
+            raise ValueError("Недопустимое наблюдение операции")
+        allowed = {"message_id", "remote_id", "chat_id", "status", "image_count", "confirmed", "removed"}
+        safe = {
+            key: value
+            for key, value in (result.items() if isinstance(result, dict) else ())
+            if key in allowed and isinstance(value, (str, int, bool))
+        }
+        with self.transaction() as db:
+            row = db.execute("SELECT status,lease_token FROM outbox WHERE id=?", (ident,)).fetchone()
+            if not row or (row["status"] == "PROCESSING" and row["lease_token"] == token):
+                raise Conflict("Не подтверждена потеря lease")
+            inserted = db.execute(
+                "INSERT OR IGNORE INTO outbox_late_results VALUES(?,?,?,?,?,?)",
+                (ident, token, status, encode(safe), error, now()),
+            ).rowcount
+            if inserted:
+                db.execute(
+                    "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(NULL,'LATE_OUTBOX_RESULT',?,?,?)",
+                    (ident, status, now()),
+                )
+
     def backup(self, destination):
         destination = Path(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)

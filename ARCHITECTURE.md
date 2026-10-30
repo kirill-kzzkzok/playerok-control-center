@@ -492,3 +492,21 @@ Temporal chart ticks now use a calendar locator rather than every Nth observatio
 large historical gaps remain breaks, with interpolation only between adjacent hourly/
 daily observations. Real 2024–2026 data exposed overlapping labels and gap interpolation
 that synthetic evenly-spaced fixtures did not, and was used for visual regression.
+
+## Dispatch boundary and late observations (v16)
+
+Executor passes the claimed action to each mutation call. A synchronous local guard
+checks writes_enabled, PROCESSING/token/unexpired lease and chain policy/runtime,
+current PAID/local problem, ordered steps and stock reservation. It runs after the
+shared API lock and again inside SafeAccount transport after rate throttling, before
+HTTP dispatch; the REST fulfillment path uses the same guard. Earlier fresh remote
+validation remains required. This closes stop-while-waiting without claiming remote
+requests already sent can be revoked. No DB transaction is held across network I/O.
+
+OutboxWorker.finish distinguishes a lost lease from a still-owned commit failure.
+Lost-lease outcomes are retained once per operation/token in outbox_late_results with
+allowlisted receipt fields, never message text/report payload. Authoritative recovered
+UNCERTAIN/quarantine or owner resolution remains untouched. The operation UI exposes
+late receipt IDs for read reconciliation; there is no automatic resend or success
+promotion. Failure while the lease is still owned propagates for recovery, rather than
+being concealed as a late outcome. An actually crashed process cannot save a late reply.
