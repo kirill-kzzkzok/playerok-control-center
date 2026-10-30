@@ -634,3 +634,20 @@ and category suppression, with existing one-attempt Telegram semantics. Diagnost
 show timestamps of last saved lifecycle state, not live API health or a hang watchdog.
 Unexpired outbox leases remain PROCESSING; expired leases recover to UNCERTAIN, never
 blind resend, even when external ACK preceded failure to save the local result.
+
+
+## One database, one verified account
+
+AccountBinding runs after successful get and before background tasks. It atomically
+compares canonical/legacy identity settings, transaction account IDs and known order
+seller IDs. A fresh database can bind once; repeated login is idempotent; conflicting
+identities, malformed settings and unattributed existing orders/outbox fail closed.
+BEGIN IMMEDIATE serializes competing first binds. No old queue/stock/finance is adopted
+by another account. A different shop requires a different DATABASE_PATH. This explicitly
+supports a single shop per database rather than claiming multi-account isolation.
+
+Writes-enabled startup requires successful verification in this startup, not merely a
+nonempty client ID or old saved connection status. On APIError read-only startup retains
+local access; write startup stops before workers. Credentials/IDs are omitted from binding
+errors, and conflict does not reset or reassign old data. No binding schema migration is
+needed; canonical identity is stored in existing settings only after successful checks.

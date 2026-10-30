@@ -162,3 +162,15 @@ restart/cancellation, durable delay, storage failure, baseline bypass and ACK-be
 failure with exactly one executor call and expired lease UNCERTAIN. This proves local
 mock recovery boundaries; no real buyer sends or live mutation acceptance is implied.
 Last-saved worker lifecycle is distinct from API health; no hang detection is claimed.
+
+
+## Изоляция магазина при смене credentials (§2/§5/§15/§16)
+
+Startup verifies a single database/account binding against legacy settings, cached
+transactions and known order sellers before launching workers. Conflicts/unknown old
+ownership fail closed; another shop needs its own database. Tests/test_account_binding.py
+covers idempotency, concurrent bind, malformed/legacy evidence and actual run startup
+with fake services stopping before backup/workers on mismatch or failed authentication.
+Read-only working cache check: 217 orders/462 transactions agree with saved identity;
+no real startup, database write or API request performed by this checkpoint. This is
+single-account enforcement, not a claim of multi-account support or live auth freshness.

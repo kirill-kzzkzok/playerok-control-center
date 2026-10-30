@@ -17,6 +17,7 @@ from app.playerok.adapter import APIError, Playerok, SafeAccount
 from app.security.access import OwnerMiddleware
 from app.security.instance import InstanceLock
 from app.security.logging import configure_logging
+from app.services.account_binding import AccountBindingError, bind_account
 from app.services.interface_cleanup import InterfaceCleanup
 from app.services.orders import Orders
 from app.services.products import Products
@@ -69,13 +70,22 @@ async def run(config):
         if recovered:
             logger.warning("Recovered %s operations as UNCERTAIN", recovered)
         await bot.get_me()
+        verified_account = False
         try:
             await api.call("get")
+            try:
+                bind_account(store, account.id)
+            except AccountBindingError as error:
+                raise ConfigurationError(str(error)) from None
             store.set_setting("playerok:connection", "OK")
-            store.set_setting("playerok:account_id", account.id)
+            verified_account = True
         except APIError as error:
             store.set_setting("playerok:connection", error.code)
             logger.warning("Playerok connection: %s; local data preserved", error.code)
+        if config.writes_enabled and not verified_account:
+            raise ConfigurationError(
+                "Очередь записей не запущена: сначала требуется успешная проверка аккаунта Playerok"
+            )
         store.backup(
             Path("data/backups") / (datetime.now(UTC).strftime("startup-%Y%m%dT%H%M%S") + ".sqlite3")
         )

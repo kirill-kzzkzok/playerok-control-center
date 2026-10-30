@@ -1281,3 +1281,43 @@ backoff после нового Supervisor, cancel/stop без повтора, �
 data/worker_supervision_results.xml; Ruff check/format (133 files), pip check и
 actual-secret/JWT scan чистые. Offline selfcheck OK: 82 imports, схема 1–18,
 backup reopen/profile PNG/chart PNG, external_requests=0. Рабочий bot не запускался.
+
+
+## Привязка рабочей базы к магазину до запуска очередей
+
+Следующая проверка PHASE 1/3/7/9 выявила риск: startup безусловно заменял
+playerok:account_id результатом новых cookies; существующие orders/outbox/stock не имеют
+полной multi-account изоляции. Смена аккаунта могла смешать финансовую историю и
+передать старые задания исполнителю другого магазина. План: одна БД — один аккаунт,
+атомарная проверка legacy evidence, запрет очереди записей без успешной проверки get.
+
+AccountBinding связывает playerok:bound_account_id и текущий ID в BEGIN IMMEDIATE.
+Сверяются legacy settings, account_transactions account IDs и известные seller IDs
+заказов. Любое противоречие/повреждённая привязка останавливает startup с нейтральным
+сообщением без ID/cookies. Исторические orders/outbox без какой-либо принадлежности
+не присваиваются новому аккаунту автоматически. Новая пустая БД привязывается при
+первом успешном get; повтор того же аккаунта идемпотентен. Смена магазина требует
+отдельный DATABASE_PATH, не сброс binding или перенос старой очереди.
+
+Проверка выполняется до backup/workers. При writes=true ошибка авторизации
+останавливает запуск до workers даже при случайно оставшемся id в объекте клиента.
+Read-only режим сохраняет прежний локальный доступ при APIError. Внешних мутаций,
+автоматической очистки/переназначения данных, новой миграции или изменения .env нет.
+
+Targeted до concurrency regression: 19 passed in 11.87s. Тесты: fresh/idempotent bind,
+legacy setting/canonical/transaction/seller conflicts, unattributed queue, invalid ID,
+corrupt setting, фактический run startup с fake bot/account: get один раз, backup и
+workers не запущены, sessions закрыты, исходная очередь/ID сохранены. Дополнительно
+проверено конкурентное первое связывание через две SQLite connections: один победитель.
+
+Рабочий read-only SQLite probe: 217 orders/462 transactions; current ID известен,
+legacy settings/transaction accounts/known order sellers согласованы. Отчёт
+ data/account_binding_readonly_check.json не содержит ID, secrets или денежных сумм.
+external_requests=0/database_writes=0; writes=false/automation=false. Каноническая
+привязка рабочей БД появится только при следующем штатном успешном запуске; сейчас
+бот не запускался и рабочая БД не переписывалась.
+
+Контрольная точка account binding: **562 passed in 92.21s**,
+data/account_binding_results.xml; 20 новых regression cases, Ruff check/format
+(135 files), pip check, git diff --check и actual-secret/JWT scan чистые.
+Рабочий read-only probe не записывал БД и не обращался к сети.

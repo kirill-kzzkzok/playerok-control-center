@@ -642,3 +642,22 @@ invalid category preferences. Persistence outage logs types only and leaves supe
 active. Critical injected outbox finish failure after mock ACK leaves PROCESSING, then
 lease recovery yields UNCERTAIN with attempts=1/executor await_count=1, no resend.
 No live buyer send, paid action, API mutation, challenge bypass or watchdog claim.
+
+
+## Account binding checkpoint — 2026-10-30
+
+Full suite: **562 passed in 92.21s**, data/account_binding_results.xml.
+Twenty new regression cases: first/repeated bind, concurrent SQLite connections,
+legacy/canonical/transaction/seller conflict, unattributed queue, invalid identity and
+corrupt settings; actual run startup with fake account/bot stops before backup/workers
+on different account or failed authorization (even with a stale nonempty client ID).
+Existing saved account and pending operations are not reassigned, resources are closed.
+Ruff check/format clean (135 files), pip check and git diff --check clean. Actual-secret/
+JWT scan clean; .env/spec/data/logs/build ignored; runtime writes/automation false.
+
+Read-only working cache probe: known current identity and consistent saved IDs,
+transaction accounts and known order sellers; 217 orders/462 transactions. Ignored
+ data/account_binding_readonly_check.json contains booleans/counts only. Requests=0,
+database writes=0; no real startup, binding update, migration or buyer message. The next
+normal authenticated startup will persist canonical binding after verification. This
+proves a single-account safety barrier, not support for switching shops within one DB.
