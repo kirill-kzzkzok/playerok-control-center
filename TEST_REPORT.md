@@ -813,3 +813,26 @@ Primary upstream source inspected online confirms discarded removeItem response;
 source/inference documented in PLAYEROK_RESEARCH. No Playerok live request/mutation,
 buyer send, payment, working database write or migration. No claim of live publication,
 active-listing state after moderation or independent full deletion scan.
+
+
+## First-sale MVP checkpoint — 2026-10-30
+
+Full692 passed in59.41s, data/mvp_checkpoint_results.xml. Targeted69 passed in8.59s.
+Previous ordinary-edit predicate tests19 were completed before assessment interruption
+(689 passed); all retained in this final full. Added three connected MVP cases using
+real local services/workers with mock remote: photo create/free publish/future order/
+atomic unique reserve/restart/delivery/explicit owner fulfillment/readback; lost ACK
+keeps quarantine/no resend/no SENT; bad create receipt no binding/publication. Create
+success now requires DRAFT/current owner/category/text/price/photo-ID evidence, not
+just returned ID. Ruff check/format152 files, pip/diff clean.
+
+Fresh real read-only auth/profile/items/item/games/category/deals/chats15:16UTC all
+HTTP200 and shape checked, no challenge encountered. Report data/mvp_readonly_probe.json.
+Stars schema read15:19UTC statusOK, amounts/obtaining/buyer data/seller rules obtained.
+Unicode console print failed after report save (cp1251); saved report inspected without
+repeating API. No mutations/acceptAgreement/paid operations/buyer sends or working DB
+writes. Existing global writes/automation false. User authorized a Stars1000r test
+creation/white TEST image, not publication or funds/delivery. Local image visually
+verified; proposal local only: no real Stars inventory/provider established, earlier
+technical listing scenario rejected and must not repeat. LIVE_MVP_PLAN.md records these
+limits and exact future stages. No claim of live create/photo/publish/delivery success.

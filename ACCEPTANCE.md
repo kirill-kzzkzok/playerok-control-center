@@ -270,3 +270,24 @@ aware deletedAt, bool/null/false/malformed rejection and strict executor True. A
 MockTransport proves one request and no repeat/raw-body persistence; current native
 query is reused. This fixes false success in upstream remove_item and executor publish;
 no real delete/publish or independent current server scan accepted by these tests.
+
+
+## §6/§16 ordinary edit receipt follow-up
+
+Nineteen cases test requested text/finite exact price/target evidence, complete unique
+new image IDs/no removed-ID overlap, missing/mismatched receipt unknown/no resend and
+local photo protection from cleanup. Combined positive receipt accepted; operation
+fixtures now echo actual fields/new image ID. No native image content hash or live
+edit verified. Schema edit_fields response acceptance remains separate/incomplete.
+
+
+## MVP priority checkpoint
+
+Fresh read-only stage A completed2026-10-30: actual auth/profile/item/category/orders/
+chats shape checked with HTTP200; bounded samples, not complete history. Local connected
+stock cycle + restart/lost ACK/bad create receipt in test_mvp_sale_cycle passes. Previous
+ordinary edit evidence strengthened. No live mutation acceptance closed: chosen Stars
+requires actual Stars transfer source, which is absent from stock MVP. User's draft
+creation request does not authorize publication/payment/delivery/config enablement.
+Local white TEST asset/proposal prepared; server technical listing not retried. See
+LIVE_MVP_PLAN.md for exact external preconditions and authorized-stage boundaries.

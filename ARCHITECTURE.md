@@ -775,3 +775,25 @@ fallback. Publication requires exact ID and one of APPROVED/PENDING_APPROVAL/
 PENDING_MODERATION; missing or other states are not successful publication receipts.
 Unknown outcomes keep normal UNCERTAIN/no-resend semantics. Moderation acceptance is
 not active listing proof, deletion receipt is not a complete independent-history scan.
+
+
+## Ordinary edit result evidence
+
+item_receipts.edit_receipt_matches requires exact requested name/description echo,
+finite exact Decimal price and exact target ID. Replacement images require exact count,
+unique nonempty new IDs and no overlap with removed IDs. The predicate does not demand
+unrequested fields or claim content-hash verification. Executor records unknown when
+evidence is missing/inconsistent and never resends. Existing local upload cleanup keeps
+files referenced by UNCERTAIN edits. Schema edit_fields is a distinct path, not accepted
+by the ordinary-edit predicate. Positive mock fixtures now reflect requested fields.
+
+
+## First-sale MVP boundary
+
+Creation now validates DRAFT/current owner/category/requested fields and structural
+photo IDs before binding/REMOTE_DRAFT. Bad/incomplete response remains UNKNOWN without
+recreate. Existing stock policy is armed explicitly for the new remote ID before future
+order cutoff; wizard delivery preferences do not silently enable automation. Connected
+MVP test covers native service/worker handoffs, duplicate ingest, restart, quarantine
+and existing explicit owner fulfillment. Stars/gift/provider transfers are outside this
+stock-code engine and cannot be attested from a chat message receipt.

@@ -26,13 +26,22 @@ class FakeAccount:
         yield
 
     def create_item(self, **kwargs):
-        return SimpleNamespace(id="remote1", status="DRAFT")
+        return SimpleNamespace(
+            id="remote1",
+            status="DRAFT",
+            user={"id": self.id},
+            category={"id": kwargs["game_category_id"]},
+            name=kwargs["name"],
+            description=kwargs["description"],
+            price=kwargs["price"],
+            attachments=[{"id": f"image-{index}"} for index, _ in enumerate(kwargs.get("attachments", []))],
+        )
 
     def publish_item(self, **kwargs):
         return SimpleNamespace(id=kwargs["item_id"], status="PENDING_APPROVAL")
 
     def update_item(self, **kwargs):
-        return SimpleNamespace(id=kwargs["id"])
+        return SimpleNamespace(**kwargs)
 
     def remove_item(self, **kwargs):
         return True
@@ -190,7 +199,7 @@ async def test_replace_images_checks_fresh_attachment_ids_and_passes_bytes(setup
 
     def update(**kwargs):
         changes.append(kwargs)
-        return SimpleNamespace(id=kwargs["id"])
+        return SimpleNamespace(id=kwargs["id"], attachments=[{"id": "new-photo"}])
 
     api.account.update_item = update
     store.enqueue(

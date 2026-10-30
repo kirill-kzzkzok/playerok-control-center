@@ -3,6 +3,23 @@
 Обновлено: 2026-10-30. Репозиторий изначально пустой, кроме приватного PROJECT_SPEC.md.
 Спецификация прочитана целиком (1323 строки); .env и спецификация исключены из Git.
 
+
+## Текущий приоритет MVP после возобновления (2026-10-30)
+
+Новая цель из локального goal-objective.md возобновила работу после оценки: первый
+безопасный реальный цикл, без P2/новых поставщиков. Read-only live выполнен немедленно;
+новые mutations требуют конкретного разрешения. Пользователь затем разрешил создание
+тестового Stars лота за1000р с белой TEST картинкой, без дополнительных вопросов.
+Это разрешение на создание не включает publication/payment/реальную выдачу или изменение
+глобальной конфигурации. Поставщик/реальный запас Stars не подтверждены. Новый запрос
+не отменяет запрет повтора отклонённого технического/non-sale сценария.
+
+Последний checkpoint надо завершить commit/push после полного набора. Проверить
+ data/mvp_readonly_probe.json, data/stars_live_schema.json, data/live_proposal/
+telegram_stars_proposal.json и LIVE_MVP_PLAN.md. Не продолжать косметику/фильтры.
+Рабочие writes/automation false. Stars не эквивалентны выдаче текста/кода; отсутствие
+поставщика — внешнее условие, не повод строить новую интеграцию в складском MVP.
+
 ## Последовательность
 
 - [x] PHASE 0: аудит Universal/API, базовые тесты, исследование, архитектура.
@@ -1690,3 +1707,78 @@ no raw private response persistence. Native contract fixture removeItem boolean 
 data/item_mutation_receipts_results.xml; targeted55 passed in7.23s. Ruff check/format
 149 files/pip/diff/actual-secret scan чистые.30 новых cases. Ни одной live mutation,
 платной операции, buyer send, рабочей DB write или migration в этом этапе.
+
+
+## Обычное редактирование: подтверждение полей, цены и замены фото
+
+Следующий audit PHASE2/7/9 выявил ID-only success у Executor edit: совпадение id не
+доказывало сохранение name/description/price/attachments. Добавлен pure predicate
+edit_receipt_matches. Для запрошенных name/description требуется точный echo текста,
+для цены finite Decimal exact equality (без округления100.001 к100.00). Неизвестные,
+missing, mismatch, NaN/bool и wrong ID дают EDIT_NOT_CONFIRMED/UNCERTAIN после одного
+mutation, без повторной отправки. Поля, которые не запрашивались, не обязательны.
+
+Для replace-all photo path response attachments должны быть list точного размера,
+с непустыми уникальными строковыми IDs, не пересекающимися с удаляемыми old IDs.
+ID-only/partial/old/duplicate/invalid receipt не становится success. Это структурное
+подтверждение набора вложений; отсутствие upstream content hash не позволяет объявить
+побайтовую идентичность изображения доказанной. Current-attachment baseline до mutation
+и existing target/lease/permit guard сохранены. Никаких дополнительных HTTP retries.
+
+Обновлены честные положительные fixtures tests/test_operations: update возвращает
+requested fields, photo update возвращает новое attachment ID. Добавлено19 cases в
+tests/test_edit_receipts:9 invalid text/price/ID/missing combos через OutboxWorker,
+8 photo receipt shapes, combined positive receipt, unknown photo upload protected from
+cleanup. Проверены1 send, durable uncertain alert, no retry и сохранение local photo
+при grace0. Targeted39 passed in3.99s; полный набор запущен. Это ordinary edit path;
+отдельный schema edit_fields response predicate требует дальнейшего аудита, не объявлен
+закрытым этим этапом. Working DB/бот/API/объявления/платежи/миграции не затронуты.
+
+
+## MVP: live-read evidence и локальная сквозная цепочка
+
+Fresh live-read2026-10-30T15:16:07UTC: viewer/user/items/item/games/GamePage/
+GamePageCategory/deals/userChats HTTP200 at pinned https://playerok.com/graphql.
+Auth/profile shape/item ownership/raw price/images/category options/order/chat page
+contracts valid. publishing_allowed=true, account_blocked=false. Bounded one page each,
+не полнота истории. data/mvp_readonly_probe.json содержит booleans/counts/HTTP facts,
+без credentials/account IDs/личных сообщений. Mutations0, рабочая DB не использовалась.
+
+Stars schema read15:19UTC: Telegram game, Stars category, amount selector, two obtaining
+methods and buyer username data fields plus seller comment. Category requires actual
+transfer of stars/gift to buyer and prohibits premature seller completion. Public
+schema snapshot in ignored data/stars_live_schema.json. Printing full Unicode schema
+в cp1251 завершился UnicodeEncodeError после успешного сохранения: это ошибка вывода,
+не live API; сохранённый statusOK проверен без повторных сетевых запросов.
+
+Запрошенная белая800x600 TEST картинка создана и визуально проверена в ignored
+ data/live_proposal/telegram_stars_test.jpg. Candidate50Stars/1000р только local proposal,
+availability=false. Название/количество не подтверждают реальный запас; не отправлять
+их как допустимый продаваемый товар и не считать текстовую выдачу передачей Stars.
+Ни одного create/publish/upload/acceptAgreement/delete/send запроса не выполнено,
+глобальные флаги не менялись. Вопросов после «я ухожу» не задавалось.
+
+Незакоммиченное ordinary edit исправление ранее прошло689 tests; оно сохранено для
+общего checkpoint. P1 create ID-only acceptance исправлен: result должен подтвердить
+DRAFT, current owner, category, exact name/description/price и attachment count/uniqueIDs
+при photos. Missing result ID ->CREATE_ID_MISSING; missing other evidence ->
+CREATE_NOT_CONFIRMED/UNCERTAIN, без bindings/ложного REMOTE_DRAFT и без повтора.
+
+Один связанный тест существующих services/workers добавлен в3 вариантах: mock create
+с фото→free publish→policy future arm→duplicate PAID ingest→enrollment→atomic reserve→
+restart before dispatch→unique stock delivery→explicit owner fulfillment/readback SENT.
+Lost delivery ACK case yields QUARANTINED/BLOCKED/PAID, exactly one send, no fulfillment.
+Bad create receipt case stops before binding/publication. No new subsystem, provider or
+live-test retry command introduced. Targeted69 passed in8.59s; full running.
+
+Открытые непосредственно MVP условия: допустимый реальный товар/источник передачи,
+согласованные live mutation stages и controlled buyer/payment/recipient. Stock engine
+не доставляет Telegram Stars. Automatic SENT без attestation не реализован и не заявлен;
+существующий owner-confirmation шаг проверен локально. Не начинать новый большой аудит
+после этого checkpoint, сохранить конкретный live plan и внешние зависимости.
+
+MVP checkpoint: **692 passed in59.41s**, data/mvp_checkpoint_results.xml;
+targeted69 passed in8.59s. Ruff check/format152 files/pip/diff чистые. Предыдущие
+19 ordinary-edit regression cases включены и незакоммиченное исправление завершается
+в этом checkpoint. API mutations0, global writes/automation false. LIVE_MVP_PLAN.md
+фиксирует точный порядок и внешнее препятствие Stars, без нового P2 цикла.

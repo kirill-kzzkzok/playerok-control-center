@@ -14,6 +14,7 @@ from app.services.auto_replies import AutoReplies
 from app.services.delivery_chains import DeliveryChains
 from app.services.discounts import discount_plan
 from app.services.fulfillment import Fulfillment
+from app.services.item_receipts import edit_receipt_matches
 from app.services.order_management import deliverable
 from app.services.products import (
     ValidationError,
@@ -189,8 +190,18 @@ class Executor:
                 attachments=attachments,
                 comment=comment,
             )
-            if not result.get("id"):
+            if not isinstance(result, dict) or not result.get("id"):
                 raise APIError("CREATE_ID_MISSING", uncertain=True)
+            expected = {"name": value["name"], "description": value["description"], "price": value["price"]}
+            if attachments:
+                expected["add_attachments"] = attachments
+            if (
+                result.get("status") != "DRAFT"
+                or (result.get("user") or {}).get("id") != self.api.account.id
+                or (result.get("category") or {}).get("id") != value["category_id"]
+                or not edit_receipt_matches(result["id"], expected, result)
+            ):
+                raise APIError("CREATE_NOT_CONFIRMED", uncertain=True)
             with self.store.transaction() as db:
                 db.execute("INSERT INTO bindings(draft_id,remote_id) VALUES(?,?)", (target, result["id"]))
                 db.execute("UPDATE drafts SET state='REMOTE_DRAFT' WHERE id=?", (target,))
@@ -320,7 +331,7 @@ class Executor:
             if not changes:
                 raise ValidationError("Нет разрешённых изменений")
             result = await self.mutate(action, "updateItem", "update_item", id=target, **changes)
-            if result.get("id") != target:
+            if not edit_receipt_matches(target, changes, result):
                 raise APIError("EDIT_NOT_CONFIRMED", uncertain=True)
             return {"remote_id": target}
         if kind == "mark_read":
