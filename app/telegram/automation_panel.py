@@ -55,6 +55,9 @@ class AutomationPanel:
             )
         for field, label in FIELDS.items():
             text += f"\n{label}: {'задано' if values[field] else 'пусто'}"
+        text += "\n\nСохранённое состояние (правки выше ещё не применены):\n" + escaped(
+            self.service.status_text(data["id"]), 1600
+        )
         text += "\nАвтоматически включать будущие продажи: " + ("да" if values.get("auto_enroll") else "нет")
         text += "\nПри отдельном включении будущих продаж и двух разрешающих флагах новые заказы могут отправляться без подтверждения каждого. Старые заказы не включаются; смена версии политики начинает новый временной отсчёт."
         rows = [
@@ -73,7 +76,8 @@ class AutomationPanel:
         )
         rows.extend(
             [
-                [("Переключить запрос отметки SENT", f"ap:{nonce}:toggle:mark_sent")],
+                [("Ожидать подтверждения владельца после выдачи", f"ap:{nonce}:toggle:mark_sent")],
+                [("📚 Склад", "stock:view:" + data["id"])],
                 [("Будущие заказы автоматически", f"ap:{nonce}:toggle:auto_enroll")],
                 [("💾 Сохранить политику", f"ap:{nonce}:save")],
                 [("🔎 Dry-run оплаченных заказов", f"ap:{nonce}:orders")],

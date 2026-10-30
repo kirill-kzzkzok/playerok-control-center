@@ -6,6 +6,7 @@ from aiogram.types import InlineKeyboardButton
 
 from app.database.store import Conflict
 from app.playerok.adapter import APIError
+from app.services.automation import Automation
 from app.services.catalog import ORDER_FILTERS, order_page
 from app.services.finance import checked_time
 from app.services.order_management import OrderManagement, order_snapshot
@@ -82,7 +83,7 @@ class OrdersPanel:
             f"Статус Playerok: {escaped(order['status'], 50)}\nСоздан: {checked_time(order.get('created_at'))}\n"
             f"Проблема Playerok: {'да' if order.get('has_problem') else 'нет' if order.get('has_problem') is False else 'не подтверждено'}\n"
             f"Локальная отметка: {'проблема' if annotation['problem'] else 'нет'}\n"
-            f"Режим в локальном черновике: {self.service.mode(item['id'])}\nАвтодействия: выключены\n"
+            f"{Automation(self.store, self.service.api).status_text(item['id'])}\n"
             f"Запас: {stock.get('AVAILABLE', 0)} доступно · {stock.get('RESERVED', 0)} в резерве · {stock.get('QUARANTINED', 0)} в карантине\n"
             f"Локальных событий: {history_count} · Событий Playerok: {len(order.get('logs') or [])}"
         )

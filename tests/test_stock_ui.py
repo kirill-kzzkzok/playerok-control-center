@@ -6,7 +6,7 @@ from aiogram import Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 
-from app.database.store import Store
+from app.database.store import Store, now
 from app.services.automation import DeliveryPolicy
 from app.services.inventory import Inventory
 from app.services.orders import Orders
@@ -20,6 +20,8 @@ class StockAPI:
         self.status, self.owner = "APPROVED", "seller"
 
     async def call(self, method, **kwargs):
+        if method == "get_deal":
+            return self.order
         assert method == "get_item"
         return {
             "id": kwargs["id"],
@@ -138,3 +140,74 @@ async def test_explicit_stock_resume_requires_confirmation_and_preserves_runtime
     await ui.click("stock:resumeok:" + nonce)
     assert store.setting("delivery:item:enabled") is True
     assert api.account.writes_enabled is False and api.account.automation_enabled is False
+
+
+@pytest.mark.parametrize(
+    "condition,expected",
+    [
+        ("ready", "Работает"),
+        ("runtime", "Не готово"),
+        ("baseline", "Не готово"),
+        ("empty", "Не готово"),
+        ("guard", "Остановлено"),
+        ("disabled", "Остановлено"),
+    ],
+)
+async def test_item_order_and_policy_share_actual_readiness(rig, condition, expected):
+    store, api, session, _bot, ui, _state = rig
+    automation = Inventory(store, api).automation
+    api.account.writes_enabled = api.account.automation_enabled = True
+    store.set_setting("orders:last_complete_sync", now())
+    await automation.save(
+        7,
+        "item",
+        0,
+        asdict(DeliveryPolicy(enabled=condition != "disabled", mode="stock", auto_enroll=True)),
+        future_confirmed=True,
+    )
+    if condition != "empty":
+        Orders(store).add_stock("item", ["private-unit"])
+    if condition == "runtime":
+        api.account.automation_enabled = False
+    if condition == "baseline":
+        store.set_setting("orders:last_complete_sync", None)
+    if condition == "guard":
+        store.set_setting("delivery:item:enabled", False)
+    api.order = {
+        "id": "order",
+        "status": "PAID",
+        "direction": "OUT",
+        "item": {"id": "item", "user": {"id": "seller"}},
+        "chat": {"id": "chat"},
+    }
+    for action in ("item:item", "order:order", "auto:item:item"):
+        await ui.click(action)
+        assert "Автоматизация: " + expected in session.calls[-1].text
+        assert "Автодействия: выключены" not in session.calls[-1].text
+        assert "Действующий режим: Уникальный запас" in session.calls[-1].text
+
+
+async def test_stock_resume_does_not_reenable_after_last_unit_reserved_during_api_check(rig):
+    store, api, session, _bot, ui, state = rig
+    await Inventory(store, api).automation.save(
+        7,
+        "item",
+        0,
+        asdict(DeliveryPolicy(enabled=True, mode="stock", auto_enroll=True)),
+        future_confirmed=True,
+    )
+    store.set_setting("delivery:item:enabled", False)
+    Orders(store).add_stock("item", ["private-unit"])
+    await ui.click("stock:resume:item")
+    nonce = (await state.get_data())["stock_resume"]["nonce"]
+    original = api.call
+
+    async def reserve_during_check(method, **kwargs):
+        result = await original(method, **kwargs)
+        store.execute("UPDATE inventory SET status='RESERVED'")
+        return result
+
+    api.call = reserve_during_check
+    await ui.click("stock:resumeok:" + nonce)
+    assert store.setting("delivery:item:enabled") is False
+    assert "❗" in session.calls[-1].text

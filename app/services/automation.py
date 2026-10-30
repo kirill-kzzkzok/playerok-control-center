@@ -74,7 +74,69 @@ class Automation:
             return rows[0]["revision"], DeliveryPolicy(**json.loads(rows[0]["payload"]))
         return 0, DeliveryPolicy()
 
-    async def save(self, actor, ident, expected, payload, *, future_confirmed=False):
+    def readiness(self, ident):
+        """Shared local snapshot; this screen never enables execution."""
+        with self.store.transaction():
+            revision, policy = self.get(ident)
+            rows = self.store.rows(
+                "SELECT status,COUNT(*) AS n FROM inventory WHERE item_id=? GROUP BY status", (ident,)
+            )
+            counts = {
+                s: next((r["n"] for r in rows if r["status"] == s), 0)
+                for s in ("AVAILABLE", "RESERVED", "DELIVERED", "QUARANTINED")
+            }
+            guard = self.store.setting(f"delivery:{ident}:enabled")
+            baseline = bool(self.store.setting("orders:last_complete_sync"))
+            sync = self.store.setting("sync:health", {}).get("status", "NOT_STARTED")
+        writes = bool(getattr(self.api.account, "writes_enabled", False))
+        runtime = bool(getattr(self.api.account, "automation_enabled", False))
+        reasons = []
+        if not revision:
+            reasons.append("политика ещё не настроена")
+        elif not policy.enabled:
+            reasons.append("политика отключена владельцем")
+        if guard is False:
+            reasons.append("защитная остановка; требуется явное возобновление")
+        if policy.mode == "manual":
+            reasons.append("ручной режим")
+        if not policy.auto_enroll:
+            reasons.append("будущие заказы автоматически не включаются")
+        if not writes:
+            reasons.append("глобальные записи выключены")
+        if not runtime:
+            reasons.append("глобальная автоматика выключена")
+        if not baseline:
+            reasons.append("первоначальная сверка заказов не завершена")
+        if policy.mode == "stock" and not counts["AVAILABLE"]:
+            reasons.append("нет доступного запаса")
+        stopped = (revision and not policy.enabled) or guard is False
+        return {
+            "status": "Остановлено" if stopped else "Не готово" if reasons else "Работает",
+            "mode": policy.mode,
+            "revision": revision,
+            "counts": counts,
+            "reasons": reasons,
+            "writes": writes,
+            "runtime": runtime,
+            "sync": sync,
+            "baseline": baseline,
+        }
+
+    def status_text(self, ident):
+        v = self.readiness(ident)
+        mode = {"manual": "Ручной", "text": "Постоянный текст", "stock": "Уникальный запас"}[v["mode"]]
+        text = f"⚡ Автоматизация: {v['status']}\nДействующий режим: {mode} · политика v{v['revision']}"
+        text += f"\nЗапас: {v['counts']['AVAILABLE']} доступно · {v['counts']['RESERVED']} в резерве · {v['counts']['DELIVERED']} выдано · {v['counts']['QUARANTINED']} в карантине"
+        text += f"\nГлобальные разрешения: записи {'да' if v['writes'] else 'нет'}, автоматика {'да' if v['runtime'] else 'нет'}"
+        text += f"\nСверка: {v['sync']} · первоначальная {'завершена' if v['baseline'] else 'не завершена'}"
+        text += "\nПричины: " + (
+            "; ".join(v["reasons"]) or "нет; готово к подходящим будущим оплачиваемым заказам"
+        )
+        if v["sync"] == "ERROR":
+            text += "\n⚠️ Последняя сверка с ошибкой; проверьте актуальность данных."
+        return text + "\nSENT — только после отдельного подтверждения владельца."
+
+    async def save(self, actor, ident, expected, payload, *, future_confirmed=False, stock_resume=False):
         policy = DeliveryPolicy(**payload)
         if policy.enabled and policy.auto_enroll and future_confirmed is not True:
             raise ValidationError("Нужно отдельно подтвердить автоматическую выдачу будущим заказам")
@@ -84,6 +146,15 @@ class Automation:
             revision = row[0] if row else 0
             if revision != expected:
                 raise Conflict("Настройки изменились в другом сценарии. Откройте их заново")
+            if stock_resume and (
+                not policy.enabled
+                or policy.mode != "stock"
+                or self.store.setting(f"delivery:{ident}:enabled") is not False
+                or not db.execute(
+                    "SELECT 1 FROM inventory WHERE item_id=? AND status='AVAILABLE' LIMIT 1", (ident,)
+                ).fetchone()
+            ):
+                raise Conflict("Возобновление больше недоступно: проверьте остановку и остаток")
             db.execute(
                 "INSERT INTO delivery_policies VALUES(?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET revision=excluded.revision,actor=excluded.actor,payload=excluded.payload,updated_at=excluded.updated_at",
                 (ident, revision + 1, actor, encode(asdict(policy)), now()),

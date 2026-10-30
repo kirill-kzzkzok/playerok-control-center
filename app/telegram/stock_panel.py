@@ -157,7 +157,12 @@ class StockPanel:
             if not self.service.counts(pending["id"])["AVAILABLE"]:
                 raise Conflict("Доступный запас закончился")
             await self.service.automation.save(
-                owner, pending["id"], pending["revision"], pending["values"], future_confirmed=True
+                owner,
+                pending["id"],
+                pending["revision"],
+                pending["values"],
+                future_confirmed=True,
+                stock_resume=True,
             )
             await state.clear()
             return await self.card(owner, pending["id"])

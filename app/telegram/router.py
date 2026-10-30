@@ -12,6 +12,7 @@ from aiogram.types import BufferedInputFile
 
 from app.database.store import Conflict
 from app.playerok.adapter import APIError
+from app.services.automation import Automation
 from app.services.discounts import discount_plan
 from app.services.products import ValidationError, listing_price, listing_text, priority_price_basis
 from app.telegram.auto_replies_panel import AutoRepliesPanel
@@ -214,6 +215,7 @@ def create_router(store, api, products, synchronizer):
             elif action.startswith("item:"):
                 ident = action.split(":", 1)[1]
                 item, text, photo_rows = await item_panel.card(ident, state)
+                text += "\n\n" + escaped(Automation(store, api).status_text(ident), 1600)
                 rows = [
                     [("📚 Склад", "stock:view:" + ident)],
                     [("💰 Цена / Скидка", "discount:" + ident), ("📋 Описание", "editdesc:" + ident)],
