@@ -12,6 +12,11 @@ from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 
 LISTS = {
+    "enrollment": (
+        "Будущие заказы · регистрация",
+        "SELECT order_id AS ident,status||' · v'||policy_revision||' · '||COALESCE(error_code,'') AS label FROM auto_enrollment ORDER BY updated_at DESC,order_id",
+        "order:",
+    ),
     "policies": (
         "Политики выдачи",
         "SELECT item_id AS ident,CAST(revision AS TEXT) AS label FROM delivery_policies ORDER BY updated_at DESC,item_id",

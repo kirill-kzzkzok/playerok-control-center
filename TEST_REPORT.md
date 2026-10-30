@@ -365,3 +365,20 @@ migration was needed. No Playerok/Telegram live requests, buyer messages, listin
 changes or paid actions performed. Automatic unknown-chain resume is deliberately
 absent; resolving a step does not authorize new sends. Remaining original goal
 requirements and final acceptance are still pending.
+
+
+## PHASE 5 — future-order enrollment checkpoint (2026-10-30)
+
+374 passed in 38.26s; data/phase5_enrollment_results.xml; Ruff/dependencies/format and
+actual-secret scan clean. Tests cover old/missing/naive/future server dates, timezone
+comparison, duplicate registration, global disabled/baseline gates, explicit opt-in,
+persistent read backoff/Retry-After, crash after chain commit, policy revision change,
+positive API date revalidation, leases and last unique stock exclusion. Real Dispatcher
+exercise proves opt-in requires a separate confirmation restored after restart, with
+one policy save and no chain/outbox merely from configuring it.
+
+Local backup + migration v13 probe: data/enrollment_migration_check.json; 217 orders,
+1 owner retained, 0 chains/enrollments, DISABLED, external_requests=0/mutations=0. No
+live sending or modification of shop settings performed. Automatic SENT remains a
+separate explicit Fulfillment workflow; mock acceptance is not live buyer delivery
+evidence. Remaining original project scope and final acceptance remain open.

@@ -30,15 +30,17 @@ class AutomationPanel:
                 [("📦 Выбрать товар", "items")],
                 [("🚀 Продвижение · dry-run", "promotions")],
                 [("Все политики выдачи", "aq:list:policies:0"), ("Цепочки выдачи", "aq:list:chains:0")],
+                [("Регистрация будущих заказов", "aq:list:enrollment:0")],
                 [("⛔ Выключить все политики выдачи", "auto:stop")],
             ]
         )
         return (
-            "⚡ <b>Автоматизация</b>\nЗдесь сохраняются политики и выполняются dry-run проверки. Запуск цепочки отдельного заказа требует отдельного подтверждения и разрешения в локальной конфигурации.\nАвтоподнятие: только расчёт, платные операции запрещены. Автовывод запрещён.\nВыберите товар в списке или откройте его карточку.",
+            "⚡ <b>Автоматизация</b>\nЗдесь сохраняются политики и выполняются dry-run проверки. Можно подтвердить запуск отдельного заказа либо отдельно включить будущие продажи; для исполнения нужны разрешающие флаги в локальной конфигурации.\nАвтоподнятие: только расчёт, платные операции запрещены. Автовывод запрещён.\nВыберите товар в списке или откройте его карточку.",
             keyboard(buttons),
         )
 
     async def show(self, data, state):
+        data.pop("arm_pending", None)
         nonce = secrets.token_hex(6)
         data["nonce"] = nonce
         await state.set_state(None)
@@ -46,8 +48,15 @@ class AutomationPanel:
         values = data["values"]
         modes = {"manual": "Ручной", "text": "Постоянный текст", "stock": "Уникальный запас"}
         text = f"⚡ <b>Политика выдачи · v{data['revision']}</b>\nТовар: {escaped(data['id'], 100)}\nРежим: {modes[values['mode']]}\nЖелаемое включение: {'да' if values['enabled'] else 'нет'}\nОтметка SENT после выдачи: {'запрошена' if values['mark_sent'] else 'нет'}\n\nСохранение политики не запускает отправки. Запуск выбранного заказа подтверждается отдельно. Изменения применяются только после «Сохранить»."
+        if values.get("auto_enroll") and values["enabled"]:
+            text = text.replace(
+                "Сохранение политики не запускает отправки. Запуск выбранного заказа подтверждается отдельно.",
+                "После отдельного подтверждения будущие продажи могут запускаться автоматически при разрешённых глобальных флагах.",
+            )
         for field, label in FIELDS.items():
             text += f"\n{label}: {'задано' if values[field] else 'пусто'}"
+        text += "\nАвтоматически включать будущие продажи: " + ("да" if values.get("auto_enroll") else "нет")
+        text += "\nПри отдельном включении будущих продаж и двух разрешающих флагах новые заказы могут отправляться без подтверждения каждого. Старые заказы не включаются; смена версии политики начинает новый временной отсчёт."
         rows = [
             [
                 ("Ручной", f"ap:{nonce}:mode:manual"),
@@ -65,6 +74,7 @@ class AutomationPanel:
         rows.extend(
             [
                 [("Переключить запрос отметки SENT", f"ap:{nonce}:toggle:mark_sent")],
+                [("Будущие заказы автоматически", f"ap:{nonce}:toggle:auto_enroll")],
                 [("💾 Сохранить политику", f"ap:{nonce}:save")],
                 [("🔎 Dry-run оплаченных заказов", f"ap:{nonce}:orders")],
             ]
@@ -95,7 +105,7 @@ class AutomationPanel:
             values["mode"] = parts[3]
             if parts[3] == "manual":
                 values["enabled"] = False
-        elif command == "toggle" and len(parts) == 4 and parts[3] in {"enabled", "mark_sent"}:
+        elif command == "toggle" and len(parts) == 4 and parts[3] in {"enabled", "mark_sent", "auto_enroll"}:
             values[parts[3]] = not values[parts[3]]
         elif command in {"edit", "clear"} and len(parts) == 4 and parts[3] in FIELDS:
             if command == "clear":
@@ -111,7 +121,20 @@ class AutomationPanel:
                 )
         elif command == "save":
             DeliveryPolicy(**values)
+            if values["enabled"] and values.get("auto_enroll"):
+                data["nonce"] = secrets.token_hex(6)
+                data["arm_pending"] = True
+                await state.update_data(automation=data)
+                return (
+                    "Включить выдачу для будущих продаж этого товара? При PLAYEROK_WRITES_ENABLED и PLAYEROK_AUTOMATION_ENABLED новые оплаченные заказы будут обрабатываться без отдельного подтверждения. Заказы, созданные до сохранения этой версии, не включаются. Новая версия отменяет ранее активные цепочки по прежним правилам. Данные будут отправляться покупателю; проверьте их до включения.",
+                    keyboard([[("✅ Сохранить и включить будущие продажи", f"ap:{data['nonce']}:arm")]]),
+                )
             data["revision"] = await self.service.save(owner, data["id"], data["revision"], values)
+        elif command == "arm" and data.get("arm_pending"):
+            data["revision"] = await self.service.save(
+                owner, data["id"], data["revision"], values, future_confirmed=True
+            )
+            data.pop("arm_pending", None)
         elif command == "orders":
             revision, policy = self.service.get(data["id"])
             if revision != data["revision"] or asdict(policy) != values:

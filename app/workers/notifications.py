@@ -26,7 +26,7 @@ class Notifications:
         if not initialized and self.store.setting("sync:health", {}).get("status") == "OK":
             with self.store.transaction() as db:
                 db.execute(
-                    "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT i.key,a.user_id,'BASELINE' FROM inbox i CROSS JOIN administrators a WHERE i.kind NOT IN ('operation_uncertain','stock_empty','order_problem','promotion_guard')"
+                    "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT i.key,a.user_id,'BASELINE' FROM inbox i CROSS JOIN administrators a WHERE i.kind NOT IN ('operation_uncertain','stock_empty','order_problem','promotion_guard','enrollment_blocked')"
                 )
                 db.execute(
                     "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -38,7 +38,7 @@ class Notifications:
             "AND EXISTS (SELECT 1 FROM administrators a WHERE NOT EXISTS "
             "(SELECT 1 FROM notifications n WHERE n.event_key=i.key AND n.owner_id=a.user_id)) "
             + (
-                "AND i.kind IN ('operation_uncertain','stock_empty','order_problem','promotion_guard') "
+                "AND i.kind IN ('operation_uncertain','stock_empty','order_problem','promotion_guard','enrollment_blocked') "
                 if not initialized
                 else ""
             )
@@ -78,6 +78,13 @@ class Notifications:
                     + "\nПроверка была dry-run; списаний не было."
                 )
                 markup = keyboard([[("Настройки продвижения", "promotions")]])
+            elif event["kind"] == "enrollment_blocked":
+                text = (
+                    "⚠️ <b>Автоматическая выдача не запущена</b>\nЗаказ: "
+                    + escaped(payload["order_id"], 100)
+                    + "\nТребуется проверка владельца. Сбой условий не запускает слепой повтор."
+                )
+                markup = keyboard([[("Заказ", "order:" + payload["order_id"])]])
             elif event["kind"] == "stock_empty":
                 if self.store.rows(
                     "SELECT 1 FROM inventory WHERE item_id=? AND status='AVAILABLE' LIMIT 1",

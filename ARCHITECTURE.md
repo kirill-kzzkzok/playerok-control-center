@@ -381,3 +381,27 @@ Local reschedule проверяет actor/актуального seller, не с
 цикла. Unknown write нельзя повторить через эту кнопку. Списки ledger/evaluations
 раздельны; historical evaluation не показан как актуальный quote. Telegram отображает
 человеческие поля и МСК-время, не raw JSON. UI не добавляет auto-resume цепочек.
+
+
+## Future-only EnrollmentWorker (v13)
+
+auto_enroll — отдельный desired flag default false с явной аттестацией включения.
+Policy updated_at является activation cutoff каждой новой версии. До orders baseline
+worker не создаёт jobs; после него bounded discovery сохраняет PENDING/SKIPPED в
+versioned auto_enrollment. Наличие local PAID недостаточно: серверный created_at должен
+быть aware/после cutoff/не дальше пяти минут вперёд. Неизвестное время не подменяется
+ingest timestamp. Fresh API response и revision повторно проверяются непосредственно
+в транзакции DeliveryChains.create(automatic=True).
+
+Leased jobs переживают restart/read errors. API retries безопасны, поскольку enrollment
+не отправляет сообщения. Chain unique order key делает сбой после chain commit перед
+completion идемпотентным локально; существующая chain не создаётся повторно. BLOCKED
+требует owner review; durable notice записывается вместе с результатом job. Global
+write/automation flags false выключают worker, policy opt-in сам их не включает.
+
+Empty stock устанавливает per-item guard, учитываемый только при новом automatic
+registration. Он не отменяет текущую зарезервированную последнюю единицу. Explicit
+policy save восстанавливает desired guard; stock refill не включает его скрыто.
+Смена revision отменяет активные chains по прежним правилам и меняет future cutoff.
+SENT не выставляется без отдельного Fulfillment workflow; auto_enroll не является
+buyer CONFIRMED и не вызывает денежные API операции.

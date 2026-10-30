@@ -23,6 +23,7 @@ from app.telegram.router import create_router
 from app.telegram.storage import SQLiteStorage
 from app.workers.cleanup import UploadCleanup
 from app.workers.delivery_chains import ChainWorker
+from app.workers.enrollment import EnrollmentWorker
 from app.workers.notifications import Notifications
 from app.workers.outbox import Executor, OutboxWorker
 from app.workers.promotions import PromotionWorker
@@ -93,6 +94,11 @@ async def run(config):
                 )
         if config.writes_enabled:
             if config.automation_enabled:
+                tasks.append(
+                    asyncio.create_task(
+                        EnrollmentWorker(store, api).run(stop), name="future-order-enrollment"
+                    )
+                )
                 tasks.append(asyncio.create_task(ChainWorker(store, api).run(stop), name="delivery-chains"))
             worker = OutboxWorker(store, Executor(store, api, products))
             tasks.append(asyncio.create_task(outbox_loop(worker, stop), name="outbox"))

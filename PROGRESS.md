@@ -749,3 +749,51 @@ Promotion target card показывает выбор, ошибки, lease и ne
 аналитика/интеграционная и live-приёмка остаются открытыми.
 
 Контрольная точка очереди: **359 passed in 40.65s**, JUnit data/phase5_queue_ui_results.xml; Ruff/pip/format/secret scan чистые. Новых live-вызовов и изменений рабочей БД нет.
+
+
+## PHASE 5 — автоматическое включение только будущих продаж (2026-10-30)
+
+DeliveryPolicy получила auto_enroll=false по умолчанию. Существующие сохранённые
+политики без поля не opt-in. Включение enabled+auto_enroll требует отдельного
+подтверждения после preview; service.save проверяет future_confirmed=True. Сохранение
+через старую кнопку само по себе не включает будущее исполнение. Выключенные глобальные
+PLAYEROK_WRITES_ENABLED/PLAYEROK_AUTOMATION_ENABLED по-прежнему блокируют worker.
+В штатной .env оба false, никто их на этом этапе не включал.
+
+EnrollmentWorker включён в lifecycle рядом с ChainWorker только при разрешённых флагах.
+До первого полного обхода orders он ждёт baseline. Из локального inbox/orders выбираются
+PAID с актуальной enabled/auto_enroll policy. За цикл discover максимум 20, к обработке
+максимум 4. В auto_enrollment (v13) сохраняются order/revision/status/lease/attempts/
+due/error без данных выдачи. Duplicate polling/restart не создаёт новую цепочку.
+Сбой после chain commit, но до enrollment result, восстанавливается по существующему
+unique chain ID без нового создания или отправки.
+
+Исторические записи не выдаются: используется только сырой серверный created_at из
+payload, с часовым поясом, не раньше updated_at текущей версии политики и не дальше
+5 минут в будущее относительно часов процесса. Локальное receive/ingest время не
+подставляется. Сравнение времён aware datetime, а не SQL-строки. Те же условия и
+current revision/opt-in проверяются внутри chain-registration transaction после
+fresh API get_deal/get_chat. Изменение версии политики начинает новый cutoff; заказы,
+созданные до новой версии, доступны для явного ручного сценария, не автоматического.
+
+Ошибка read API оставляет PENDING с persistent backoff/Retry-After; несоответствие
+условий даёт BLOCKED/уведомление владельцу, без повтора отправки. SKIPPED старые даты
+не создают тревогу на каждый исторический заказ. Empty-stock guard из Orders запрещает
+новые automatic registrations, не отменяя уже зарезервированный последний код.
+Пополнение не возвращает guard молча: сохраните проверенную enabled policy заново.
+Последний код двум заказам не выдаётся; резерв и chain атомарны. Выдача/послесловия
+идут через ранее проверенную durable sequence, не из EnrollmentWorker.
+
+Запрос mark_sent по-прежнему не подделывает личное подтверждение: NEEDS_FULFILLMENT
+требует отдельный workflow. Это ограничение автоматического SENT остаётся видимым.
+Регистрации/пропуски/блокировки доступны постранично в Telegram; health в диагностике.
+Ввод/подтверждение opt-in переживает restart; stale/двойной callback отвергается.
+Audit SAVE_POLICY различает FUTURE_ORDERS_ARMED и обычное локальное сохранение.
+
+v13 применена после backup before-enrollment-v13. Рабочая проверка: 217 orders,
+1 owner, 0 chains/enrollments, DISABLED, external_requests=0/mutations=0;
+data/enrollment_migration_check.json. Живые сообщения/выдачи/платные операции и изменение
+объявлений не выполнялись. Тесты используют временные БД и mock API. Остальная цель,
+в том числе финальная интеграционная/live-приёмка и аналитика, остаётся в полном объёме.
+
+Контрольная точка enrollment: **374 passed in 38.26s**, JUnit data/phase5_enrollment_results.xml; Ruff/pip/format/secret scan чистые.

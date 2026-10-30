@@ -1,5 +1,6 @@
 import json
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime, timedelta
 
 from app.database.store import Conflict, encode, now
 from app.services.order_management import OrderManagement, deliverable
@@ -16,6 +17,18 @@ def message_text(value, *, required=False):
     return value.strip()
 
 
+def future_order(created_at, armed_at):
+    try:
+        created, armed = datetime.fromisoformat(created_at), datetime.fromisoformat(armed_at)
+        return (
+            created.tzinfo is not None
+            and armed.tzinfo is not None
+            and armed <= created <= datetime.now(UTC) + timedelta(minutes=5)
+        )
+    except (ValueError, TypeError):
+        return False
+
+
 @dataclass(frozen=True)
 class DeliveryPolicy:
     enabled: bool = False
@@ -24,11 +37,13 @@ class DeliveryPolicy:
     greeting: str = ""
     after: str = ""
     mark_sent: bool = False
+    auto_enroll: bool = False
 
     def __post_init__(self):
         if (
             type(self.enabled) is not bool
             or type(self.mark_sent) is not bool
+            or type(self.auto_enroll) is not bool
             or self.mode not in {"manual", "text", "stock"}
         ):
             raise ValidationError("Некорректная политика выдачи")
@@ -59,8 +74,10 @@ class Automation:
             return rows[0]["revision"], DeliveryPolicy(**json.loads(rows[0]["payload"]))
         return 0, DeliveryPolicy()
 
-    async def save(self, actor, ident, expected, payload):
+    async def save(self, actor, ident, expected, payload, *, future_confirmed=False):
         policy = DeliveryPolicy(**payload)
+        if policy.enabled and policy.auto_enroll and future_confirmed is not True:
+            raise ValidationError("Нужно отдельно подтвердить автоматическую выдачу будущим заказам")
         await self.item(actor, ident)
         with self.store.transaction() as db:
             row = db.execute("SELECT revision FROM delivery_policies WHERE item_id=?", (ident,)).fetchone()
@@ -73,7 +90,16 @@ class Automation:
             )
             db.execute(
                 "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'SAVE_DELIVERY_POLICY',?,?,?)",
-                (actor, ident, "DRY_RUN_ONLY", now()),
+                (
+                    actor,
+                    ident,
+                    "FUTURE_ORDERS_ARMED" if policy.enabled and policy.auto_enroll else "LOCAL_POLICY_SAVED",
+                    now(),
+                ),
+            )
+            db.execute(
+                "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (f"delivery:{ident}:enabled", encode(policy.enabled)),
             )
         return revision + 1
 

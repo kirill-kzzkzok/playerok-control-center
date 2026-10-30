@@ -2,7 +2,7 @@ import json
 from dataclasses import asdict
 
 from app.database.store import Conflict, encode, now
-from app.services.automation import Automation
+from app.services.automation import Automation, future_order
 from app.services.order_management import deliverable
 from app.services.orders import Orders
 from app.services.products import ValidationError
@@ -14,7 +14,7 @@ class DeliveryChains:
     def __init__(self, store, api):
         self.store, self.api, self.policies = store, api, Automation(store, api)
 
-    async def create(self, actor, ident, expected_revision=None):
+    async def create(self, actor, ident, expected_revision=None, *, automatic=False):
         self.policies.orders.owner(actor)
         if not self.api.account.writes_enabled or not getattr(self.api.account, "automation_enabled", False):
             raise ValidationError("Исполнение цепочек выключено в локальной конфигурации")
@@ -32,10 +32,20 @@ class DeliveryChains:
             if existing:
                 return existing[0]
             current = db.execute(
-                "SELECT revision FROM delivery_policies WHERE item_id=?", (item_id,)
+                "SELECT revision,updated_at FROM delivery_policies WHERE item_id=?", (item_id,)
             ).fetchone()
             if not current or current[0] != revision:
                 raise Conflict("Политика изменилась во время проверки")
+            if automatic:
+                guard = db.execute(
+                    "SELECT value FROM settings WHERE key=?", (f"delivery:{item_id}:enabled",)
+                ).fetchone()
+                if (
+                    not policy.auto_enroll
+                    or not future_order(order.get("created_at"), current["updated_at"])
+                    or (guard and json.loads(guard[0]) is False)
+                ):
+                    raise Conflict("Автоматическое включение заказа не разрешено")
             if db.execute(
                 "SELECT 1 FROM order_annotations WHERE order_id=? AND problem=1", (ident,)
             ).fetchone():

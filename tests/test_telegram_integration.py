@@ -605,3 +605,42 @@ async def test_queue_router_preserves_confirmation_and_blocks_foreign_access(tmp
     finally:
         await bot.session.close()
         store.close()
+
+
+async def test_future_order_policy_requires_separate_persisted_confirmation(tmp_path):
+    class PolicyAPI(CatalogAPI):
+        async def call(self, method, **kwargs):
+            assert method == "get_item"
+            return {"id": "item", "user": {"id": "seller"}}
+
+    store = Store(tmp_path / "future-policy-ui.sqlite")
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    api = PolicyAPI()
+    ui = Interaction(bot, dispatcher(store, api))
+    state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
+
+    async def press(command):
+        nonce = (await state.get_data())["automation"]["nonce"]
+        await ui.click("ap:" + nonce + ":" + command)
+
+    try:
+        await ui.message("/start")
+        await ui.click("auto:item:item")
+        await press("mode:stock")
+        await press("toggle:enabled")
+        await press("toggle:auto_enroll")
+        await press("save")
+        assert "будущих продаж" in session.calls[-1].text
+        assert not store.rows("SELECT * FROM delivery_policies")
+        nonce = (await state.get_data())["automation"]["nonce"]
+        ui.dp = dispatcher(store, api)
+        await ui.click("ap:" + nonce + ":arm")
+        await ui.click("ap:" + nonce + ":arm")
+        assert store.rows("SELECT revision FROM delivery_policies") == [{"revision": 1}]
+        assert not store.rows("SELECT * FROM delivery_chains")
+        assert not store.rows("SELECT * FROM outbox")
+        assert not api.account.writes_enabled
+    finally:
+        await bot.session.close()
+        store.close()
