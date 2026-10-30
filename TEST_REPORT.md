@@ -605,3 +605,21 @@ verified history succeeded; local/remote master matched 9980c4050a069125be7b2003
 Before that push, 449 historical blobs scanned: known secrets=0/JWT candidates=0/private
 paths=0; data/git_history_secret_audit.json. Current changes are scanned before push too.
 Remaining project acceptance/live gaps are still open, mapped against all 26 §20 criteria.
+
+## Observed sale/withdrawal settlement reconciliation (2026-10-30)
+
+535 passed in 92.63s; data/settlement_reconciliation_results.xml. Targeted settlements/
+order_finance/transactions: 39 passed in 13.58s. Ruff/format (131 files), pip check and
+actual-secret/JWT/ignored-path scan clean. New tests cover exact gross-fee=credit vs
+percentage-like root values, zero sale fee, invalid/missing/foreign/nonconfirmed/date
+sources, ambiguous/refunded receipts, period/owner/unknown-cost independence, fee changes
+revoking reviewed profit without double deduction, explicit positive withdrawal net,
+zero/missing/impossible net exclusion and actual Dispatcher/no external API/outbox.
+
+Working cached API snapshots: 181 confirmed sale orders reconcile exactly, zero mismatches
+or unattributed receipts. All 10 confirmed withdrawals lack explicit net RUB, so remain
+unknown; root fee=0 is not evidence of no withdrawal commission. Read-only probe saved
+ data/settlement_reconciliation_check.json; external requests=0, mutations=0, business
+rows rewritten=0. No schema migration or live action performed; production flags false.
+This does not prove complete shop history/bank receipt/current fee schedules or replace
+missing historical costs. Sale fee display is a narrowly reconciled observed amount.

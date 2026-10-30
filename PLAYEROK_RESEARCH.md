@@ -271,3 +271,21 @@ sales to known completion dates, despite absent transaction props.deal_id for mo
 462 records cover the visible completed pagination pass, not independently proven total
 historical completeness. No owner costs/allocations fabricated; all 181 confirmed order
 profit records remain incomplete until owner cost input and review.
+
+## Root sale fee reconciliation — 2026-10-30
+
+[Native Transaction field reference](https://playerokapi.readthedocs.io/ru/latest/types.html)
+labels value and fee but does not prove monetary vs percentage interpretation per operation.
+Existing authenticated account snapshots provide direct corroboration for this account:
+181/181 linked confirmed sales satisfy item.price - transaction.fee == transaction.value.
+The implementation therefore reports a reconciled sale fee only when that exact equation,
+confirmed status, RUB, source dates and unique same-account order linkage all hold. This
+is not a general assumption that every operation's fee has the same units. Ten confirmed
+withdrawals have root fee=0 and no explicit net RUB: their actual fee remains unknown.
+
+Official wallet module 80344 (6476-589a32cc120d2139.js, recorded SHA in transaction manifest)
+selects explicit conversion data through props.amountAfterConversionUsdt &&
+props.amountAfterConversionRub, treating zero as absent. Our positive-debit zero net is
+now likewise unknown and cannot be allocated as an entire withdrawal's expense. No
+inference of old withdrawal fees from current provider settings is performed.
+Cached source verification only; no extra authenticated requests/mutations in this step.

@@ -1207,3 +1207,41 @@ Dependencies reused from verified venv; this is not all-platform/fresh-OS certif
 push в приватный origin после тестов/secret scan. Не загружать private .env/PROJECT_SPEC,
 DB/data/logs/build artifacts; не менять visibility/не создавать public releases. Цель
 остаётся активной: §20 live mutation/photo/automation/long soak/financial gaps не закрыты.
+
+## Financial reconciliation — observed sale fees and withdrawal coverage (2026-10-30)
+
+Read-only аудит 181 confirmed orders с exact receipt linkage выявил сильное фактическое
+доказательство: в каждом sale gross > credit и root transaction.fee == gross − credit;
+процентному отношению root fee совпадал лишь в части цен. При этом у всех 10 confirmed
+WITHDRAW root fee=0, explicit amount_after_conversion_rub отсутствует. Не переносим
+семантику SELL на выплаты и не рассчитываем историю из нынешнего тарифа.
+
+Добавлен settlements.sale_settlement: только CONFIRMED SELL IN RUB с completion date,
+известные finite/nonnegative gross/credit/fee, credit<=gross и точное равенство. Неизвестное/
+несовпадающее fee не становится удержанием. OrderFinance использует прежние strict
+account/seller/ID/ambiguous receipt guards; стоимость и reported_fee включены в review
+fingerprint. Изменение исходников требует повторной owner проверки; repeated polling
+не сбрасывает результат. Себестоимость не нужна для показа уже сверенной комиссии.
+
+Отдельный экран «Сверенные комиссии продажи» суммирует только согласованные заказы по
+дате завершения зачисления, с counts excluded/unattributed/foreign. Карточка заказа
+показывает fee и равенство. Profit остаётся credit − исторические расходы: комиссия,
+уже удержанная в credit, не вычитается ещё раз. Общие transaction totals/generic ledger/
+promotion sources автоматически не смешиваются.
+
+withdrawal_settlement используется совместно статистикой и expense allocation: только
+явная known RUB сумма к получению<=debit; нулевой conversion net при положительном debit
+считается unknown (public wallet formatter трактует zero как отсутствие conversion data),
+а не 100% fee. Статистика отдельно показывает retained known/count/unknown. Root fee=0
+или текущая ставка не используются как доказательство отсутствия комиссии. Банковское
+поступление не подтверждается этой арифметикой.
+
+Targeted settlements/order_finance/transactions: 39 passed in 13.58s. Новые тесты: exact
+RUB equation vs percent-like value, zero fee, missing/invalid/negative/foreign/status/date,
+ambiguous/refunded receipts, period/owner/unknown-cost independence, no double deduction,
+review revoked on reported_fee change, positive explicit withdraw net/zero/missing/impossible
+and genuine Dispatcher coverage/no API/outbox. Кэш-проверка: reconciled181, unmatched0,
+unattributed0, known withdrawal0/unknown10; data/settlement_reconciliation_check.json.
+external_requests=0/mutations=0/database_rows_rewritten=0; миграции не нужны, схема v18.
+
+Контрольная точка settlements: **535 passed in 92.63s**, data/settlement_reconciliation_results.xml; Ruff/pip/format/secret scan чистые. Изменения отправляются в приватный origin после commit.

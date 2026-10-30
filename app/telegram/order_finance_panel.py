@@ -38,6 +38,14 @@ class OrderFinancePanel:
             + "\nПрибыль по учёту владельца: "
             + shown(value["profit"])
         )
+        settlement = value["settlement"]
+        if settlement and settlement["reconciled"]:
+            text += (
+                f"\nЦена заказа: {settlement['gross']} ₽ · сверенная комиссия продажи: {settlement['fee']} ₽"
+            )
+            text += "\nПроверено равенство: цена − fee = зачисление. Комиссия уже удержана, повторно не вычитается."
+        elif settlement:
+            text += "\nКомиссия продажи не сверена: " + escaped(settlement["reason"], 250)
         if value["errors"]:
             text += "\n\nНе хватает данных:\n" + "\n".join(escaped(error, 300) for error in value["errors"])
         elif not value["reviewed"]:

@@ -141,3 +141,14 @@ rules, no actual buyer sends. This is mock acceptance; live delivery remains unv
 пользователя; Git не содержит .env/PROJECT_SPEC/data/logs. Перед первым push проверены
 все 449 исторических blobs, actual secrets/JWT/private paths отсутствуют. Будущие изменения
 также проверяются перед commit/push; рабочие secret/state files остаются только локально.
+
+## Уточнение §5/§13/§24: сверенные комиссии продажи
+
+Exact linked confirmed SELL IN RUB + completion date + gross-fee=credit gives a narrowly
+verified sale fee, independent of unknown owner costs. Tests/test_settlements.py covers
+incomplete/ambiguous/refunded/foreign/mismatched sources, percentage-vs-money confusion,
+period/owner, no double deduction, review changes and actual Dispatcher. Local cached
+probe reconciles181/181 sales; all10 withdrawals remain unknown for explicit net coverage.
+Root fee of other operations is not summed. Withdrawal retention/allocations share a
+positive-explicit-net helper; no zero-placeholder or current-rate fallback. This closes
+part of observed sale-fee analytics, not all financial/withdrawal/bank/live requirements.

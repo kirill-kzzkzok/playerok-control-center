@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from app.database.store import now
 from app.playerok.adapter import APIError
+from app.services.settlements import withdrawal_settlement
 from app.services.statistics import amount_or_none, parsed_time
 
 
@@ -110,6 +111,8 @@ def transaction_statistics(store, days=7, at=None):
         "deposits": Decimal(0),
         "withdraw_net_reported": Decimal(0),
         "withdraw_net_unknown": 0,
+        "withdraw_retained_known": Decimal(0),
+        "withdraw_known_count": 0,
         "coverage_start": None,
         "coverage_end": None,
         "last_sync": None,
@@ -135,6 +138,14 @@ def transaction_statistics(store, days=7, at=None):
         if not start <= when <= at:
             continue
         result["confirmed"] += 1
+        if row["operation"] == "WITHDRAW" and row["direction"] == "OUT":
+            settlement = withdrawal_settlement(row)
+            if settlement is None:
+                result["withdraw_net_unknown"] += 1
+            else:
+                result["withdraw_net_reported"] += settlement["net"]
+                result["withdraw_retained_known"] += settlement["retained"]
+                result["withdraw_known_count"] += 1
         value = amount_or_none(row["value"])
         if row["currency"] != "RUB":
             result["foreign_currency"] += 1
@@ -160,12 +171,6 @@ def transaction_statistics(store, days=7, at=None):
             result[key] += value
         else:
             result["unknown_operations"] += 1
-        if operation == "WITHDRAW" and direction == "OUT":
-            net = amount_or_none(row["withdrawal_net_rub"])
-            if net is None or net > value:
-                result["withdraw_net_unknown"] += 1
-            else:
-                result["withdraw_net_reported"] += net
     if coverage:
         result.update(coverage_start=min(coverage).isoformat(), coverage_end=max(coverage).isoformat())
     return result

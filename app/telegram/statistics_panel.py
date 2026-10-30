@@ -4,7 +4,7 @@ from aiogram.types import BufferedInputFile
 
 from app.rendering.charts import revenue_chart
 from app.services.finance import checked_time
-from app.services.order_finance import profit_statistics
+from app.services.order_finance import profit_statistics, settlement_statistics
 from app.services.statistics import statistics
 from app.services.transactions import transaction_statistics
 from app.telegram.formatting import escaped
@@ -41,6 +41,7 @@ class StatisticsPanel:
         rows.append([("Категории", f"sd:{days}:categories")])
         rows.append([("Поступления и расходы по транзакциям", f"sd:{days}:transactions")])
         rows.append([("Прибыль по учтённым заказам", f"sd:{days}:profit")])
+        rows.append([("Сверенные комиссии продажи", f"sd:{days}:settlements")])
         return keyboard(rows)
 
     async def handle(self, action, message, *, owner=None):
@@ -49,7 +50,21 @@ class StatisticsPanel:
         stats = await asyncio.to_thread(statistics, self.store, days)
         view = parts[2] if len(parts) == 3 else "overview"
         if parts[0] == "sd":
-            if view == "profit":
+            if view == "settlements":
+                account = self.store.setting("playerok:account_id") or self.store.setting(
+                    "transactions:account_id"
+                )
+                report = await asyncio.to_thread(settlement_statistics, self.store, owner, account, days)
+                text = (
+                    "🧾 <b>Сверенные комиссии продаж</b>"
+                    + f"\nПериод: {'всё время' if days == 0 else str(days * 24) + ' ч'} · по дате завершения зачисления"
+                    + f"\nОднозначно сверено заказов: {report['orders']}"
+                    + f"\nЦена этих заказов: {report['gross']} ₽\nЗачислено по ним: {report['credit']} ₽\nСверенная комиссия продажи: {report['fees']} ₽"
+                    + f"\nНе сверено за период: {report['unreconciled']}"
+                    + f"\nБез однозначной даты/связи во всём кэше: {report['unattributed']} · без подтверждённого владения: {report['foreign']}"
+                    + "\n\nТолько CONFIRMED заказы и SELL IN RUB с точным ID-сопоставлением и равенством цена − transaction.fee = зачисление. Несовпадения исключаются; поле fee других операций не считается комиссией продажи. Это часть локальной истории, не гарантированно вся история магазина. Комиссия уже учтена в зачислении и повторно не вычитается из прибыли."
+                )
+            elif view == "profit":
                 account = self.store.setting("playerok:account_id") or self.store.setting(
                     "transactions:account_id"
                 )
@@ -81,6 +96,7 @@ class StatisticsPanel:
                     + f"\nИз них выплаты: {ledger['withdraw_debit']} ₽ · PREMIUM: {ledger['premium_debit']} ₽"
                     + f"\nДругие приоритеты: {ledger['other_priority_debit']} ₽"
                     + f"\nК получению по явному полю API выплат: {ledger['withdraw_net_reported']} ₽"
+                    + f"\nРазница списания и явной суммы к получению: {ledger['withdraw_retained_known']} ₽ · сверено выплат: {ledger['withdraw_known_count']}"
                     + f"\nВыплат без подтверждённой суммы к получению: {ledger['withdraw_net_unknown']}"
                     + f"\n\nПропущено сумм: {ledger['unknown_amounts']} · других валют: {ledger['foreign_currency']}"
                     + f"\nНеизвестных направлений: {ledger['unknown_directions']} · операций вне отдельных категорий: {ledger['unknown_operations']}"

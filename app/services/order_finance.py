@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from app.database.store import Conflict, encode, now
 from app.services.finance import money
+from app.services.settlements import sale_settlement, withdrawal_settlement
 from app.services.statistics import CONFIRMED, amount_or_none, parsed_time
 
 PRIORITIES = {"ITEM_PREMIUM_PRIORITY", "ITEM_CUSTOM_PRIORITY", "ITEM_VIP_PRIORITY", "ITEM_DEFAULT_PRIORITY"}
@@ -21,8 +22,8 @@ def expense_capacity(row):
     if row["operation"] in PRIORITIES:
         return value
     if row["operation"] == "WITHDRAW":
-        net = amount_or_none(row["withdrawal_net_rub"])
-        return value - net if net is not None and net <= value else None
+        settlement = withdrawal_settlement(row)
+        return settlement["retained"] if settlement else None
     return None
 
 
@@ -48,6 +49,7 @@ def economic_fields(row):
             "completed_at",
             "deal_id",
             "withdrawal_net_rub",
+            "reported_fee",
         )
     }
 
@@ -114,6 +116,7 @@ class OrderFinance:
             credit = None
         if receipt and parsed_time(receipt["completed_at"]) is None:
             errors.append("Нет серверной даты завершения зачисления")
+        settlement = sale_settlement(order["amount"], receipt) if not errors else None
         cost, other = amount_or_none(basis["cost"]), amount_or_none(basis["other_expenses"])
         if cost is None:
             errors.append("Не задана историческая себестоимость всего заказа")
@@ -152,6 +155,7 @@ class OrderFinance:
                     "account": self.account_id,
                     "order": order_id,
                     "status": order["status"],
+                    "gross": order["amount"],
                     "cost": basis["cost"],
                     "other": basis["other_expenses"],
                     "receipt": economic_fields(receipt),
@@ -177,6 +181,7 @@ class OrderFinance:
             "reviewed": reviewed,
             "profit": profit,
             "candidate_profit": candidate,
+            "settlement": settlement,
         }
 
     def view(self, actor, order_id):
@@ -320,4 +325,46 @@ def profit_statistics(store, actor, account_id, days=7, at=None):
         else:
             result["profit"] += value["profit"]
             result["reviewed_orders"] += 1
+    return result
+
+
+def settlement_statistics(store, actor, account_id, days=7, at=None):
+    if not store.rows("SELECT 1 FROM administrators WHERE user_id=?", (actor,)):
+        raise Conflict("Доступ закрыт")
+    if days not in {0, 1, 2, 7, 30}:
+        raise ValueError("Недопустимый период")
+    at = at or datetime.now(UTC)
+    if at.tzinfo is None:
+        raise ValueError("Требуется часовой пояс")
+    start = at - timedelta(days=days) if days else datetime.min.replace(tzinfo=UTC)
+    result = {
+        "orders": 0,
+        "gross": Decimal(0),
+        "credit": Decimal(0),
+        "fees": Decimal(0),
+        "unreconciled": 0,
+        "unattributed": 0,
+        "foreign": 0,
+    }
+    service = OrderFinance(store, account_id)
+    for row in store.rows("SELECT id FROM orders WHERE status IN ('CONFIRMED','CONFIRMED_AUTOMATICALLY')"):
+        try:
+            value = service.view(actor, row["id"])
+        except Conflict:
+            result["foreign"] += 1
+            continue
+        receipt, settlement = value["receipt"], value["settlement"]
+        when = parsed_time(receipt["completed_at"]) if receipt else None
+        if when is None:
+            result["unattributed"] += 1
+            continue
+        if not start <= when <= at:
+            continue
+        if not settlement or not settlement["reconciled"]:
+            result["unreconciled"] += 1
+            continue
+        result["orders"] += 1
+        result["gross"] += settlement["gross"]
+        result["credit"] += settlement["credit"]
+        result["fees"] += settlement["fee"]
     return result

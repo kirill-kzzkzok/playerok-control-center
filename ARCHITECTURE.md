@@ -601,3 +601,19 @@ created/received dates not before cutoff and recent age. This prevents historica
 messages on the same clock tick from being armed retroactively. Duplicate imports do
 not replace the original inbox row; missing boundary fails closed. The deterministic
 regression fixes all three event timestamps equal and proves old skipped/new eligible.
+
+## Observed settlement amounts
+
+settlements.py contains pure sale/withdrawal reconciliation, independent of current
+provider quotes. Sale fee is accepted only for confirmed RUB SELL IN with known date
+and exact gross - root_fee == credit; no percent multiplication/fallback. OrderFinance
+supplies seller/account/unique receipt evidence and captures gross/reported_fee in the
+review fingerprint. Settlement aggregation uses receipt completion time and excludes
+ambiguous/unknown evidence, with coverage counters. Owner cost completeness is unrelated
+to whether a fee itself can be reconciled; net profit never subtracts that fee twice.
+
+Withdrawal retention requires explicit positive server net RUB for a positive debit;
+zero conversion fields are unknown, consistent with wallet UI truthy-field gating.
+Statistics and expense allocation share the same helper, preventing a zero placeholder
+from becoming a full-debit expense. Unknown withdrawal coverage is displayed; root fee
+zero/current provider fee are never used to invent historical bank receipts or fees.
