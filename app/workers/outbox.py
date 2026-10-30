@@ -9,6 +9,7 @@ from app.database.store import Conflict
 from app.playerok.adapter import APIError, SafeAccount, plain
 from app.services.agreements import Agreements, require_conditions
 from app.services.attachments import Attachments
+from app.services.auto_replies import AutoReplies
 from app.services.delivery_chains import DeliveryChains
 from app.services.discounts import discount_plan
 from app.services.fulfillment import Fulfillment
@@ -45,6 +46,8 @@ class Executor:
             raise ValidationError("Lease операции истёк или потерян; отправка запрещена")
         if action["payload"].get("chain_id"):
             DeliveryChains(self.store, self.api).dispatchable(action)
+        if action["payload"].get("auto_reply"):
+            AutoReplies(self.store, self.api).dispatchable(action)
         if action["kind"] == "delivery":
             reserved = self.store.rows(
                 "SELECT i.status FROM inventory i JOIN reservations r ON r.inventory_id=i.id WHERE r.order_id=?",
@@ -294,7 +297,10 @@ class Executor:
                 raise APIError("READ_STATUS_NOT_CONFIRMED", uncertain=True)
             return {"chat_id": target, "unread_messages_counter": 0}
         if kind == "reply":
-            await self.api.call("get_chat", chat_id=target)
+            if payload.get("auto_reply"):
+                await AutoReplies(self.store, self.api).verify(action)
+            else:
+                await self.api.call("get_chat", chat_id=target)
             try:
                 payload = reply_payload(payload)
             except ValueError as error:

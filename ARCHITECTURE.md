@@ -556,3 +556,24 @@ transactions, with each result saved; timeout/429 stops the batch, cancellation/
 leaves conservative UNCERTAIN. No automatic deletion/retry is scheduled. Panel exposes
 aggregate statuses, explicit irreversible-delete confirmation and stale token rejection.
 No Playerok/outbox/stock/customer message or historical data deletion path is connected.
+
+## Rule-based auto replies (v18)
+
+auto_reply_rules are owner/account scoped with CAS revision and arm cutoff;
+auto_reply_events provides unique account/message registration and durable decisions.
+Exact normalized trigger matching has no regex/external AI calls. Enabled rules require
+explicit future-message attestation; runtime additionally requires writes+automation and
+completed sync baseline. Both source server date and first inbox receipt must pass cutoff.
+
+Worker considers 20 events/cycle, performs fresh PM chat/participants/message checks,
+then transactionally registers an existing reply-kind outbox operation and limit claim.
+Shared-chat cooldown, Moscow-day per-rule attempt limits, pending/uncertain reply and
+order delivery/fulfillment guards prevent overlapping work. Attempts remain counted
+across revisions and uncertain outcomes. Read errors block the event and persist a batch
+backoff; no silent replay of old traffic. Outbox dispatch repeats source/rule/account
+validation at the transport boundary. All real sending is inherited from the guarded
+reply executor and its read reconciliation; registration alone never sends a message.
+
+UI exposes create/edit disabled, separate arm confirmation, full paginated response
+preview, stop, disabled delete and bounded journal. No secrets/content enter audits.
+No runtime permission flag is changed by rule configuration; production stays disabled.

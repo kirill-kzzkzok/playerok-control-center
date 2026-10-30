@@ -63,7 +63,7 @@ NotificationPreferences: шесть категорий на владельца, 
 revision CAS, persistent suppression/no replay, обязательный uncertain. Доказательства:
 `tests/test_notification_preferences.py` (включая real Dispatcher/restart/stale/foreign),
 `tests/test_notifications.py` (baseline/failure/critical), existing replies status updates.
-Очистка интерфейса реализована ниже; остаются полноценный rule-based autoresponder,
+Очистка интерфейса реализована ниже; остаются live-приёмка rule-based autoresponder (реализация v18 ниже),
 полностью автоматическое подтверждение продавцом с доказанной корректной attestation
 семантикой. Наличие кнопки с описанием ограничения не считается реализацией этих функций.
 
@@ -92,3 +92,12 @@ no content storage, persistent per-message results and crash recovery/no retry.
 service error/recovery cases. Startup tracking applies only to newly successful UI
 responses. No live deletion performed; mock acceptance only. Data/cache/stock cleanup
 is not part of this command. Telegram source: https://core.telegram.org/bots/api#deletemessage.
+
+## Уточнение §14: автоответы
+
+Rule-based auto replies реализованы отдельно от manual quick replies: future-only exact
+phrase rules, explicit arm/CAS/account, shared-chat cooldown/Moscow-day attempts, duplicate
+message registration, bounded worker/backoff, fresh chat/message validation, transport
+stop guards and existing reply outbox/reconciliation. `tests/test_auto_replies.py` covers
+these paths including Dispatcher/restart/arming. Production runtime flags false, zero
+rules, no actual buyer sends. This is mock acceptance; live delivery remains unverified.

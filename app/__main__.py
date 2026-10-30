@@ -23,6 +23,7 @@ from app.services.products import Products
 from app.telegram.panel_tracking import PanelTracking
 from app.telegram.router import create_router
 from app.telegram.storage import SQLiteStorage
+from app.workers.auto_replies import AutoReplyWorker
 from app.workers.cleanup import UploadCleanup
 from app.workers.delivery_chains import ChainWorker
 from app.workers.enrollment import EnrollmentWorker
@@ -102,6 +103,7 @@ async def run(config):
                 )
         if config.writes_enabled:
             if config.automation_enabled:
+                tasks.append(asyncio.create_task(AutoReplyWorker(store, api).run(stop), name="auto-replies"))
                 tasks.append(
                     asyncio.create_task(
                         EnrollmentWorker(store, api).run(stop), name="future-order-enrollment"

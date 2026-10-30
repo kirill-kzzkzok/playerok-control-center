@@ -556,3 +556,22 @@ Production v17 after SQLite backup retains 217 orders, 462 transactions, one own
 zero tracked messages: data/interface_cleanup_migration_check.json. External requests,
 Telegram deletions and Playerok mutations all zero; writes/automation remain false.
 This proves mock implementation and local migration, not live deletion acceptance.
+
+## Rule-based automatic replies (v18, 2026-10-30)
+
+514 passed in 68.54s; data/auto_replies_results.xml. Ruff/format (127 files) and pip clean.
+Tests exercise exact normalized phrase, explicit arming/default disabled/cutoffs, recent
+aware server and first-inbox dates, self/admin/system/automatic/deleted/image/nonmatching
+rejection, fresh PM participants/texting/message/continuation checks, dedup/parallel
+workers/restart, policy/runtime/cache edit/human response while awaiting API lock,
+Moscow-day limits across revisions/shared-chat cooldown, pending stock delivery exclusion,
+read429 persistent backoff, unknown mutation no resend, owner/CAS/duplicate phrase/delete,
+and real Dispatcher disabled creation/separate enable/restart/stale confirmation/escaping.
+The initial journal insert placeholder bug was exposed by failing tests and fixed using
+explicit column names; no failures concealed or security gates bypassed.
+
+Production v18 migration after backup: 217 orders, 462 transactions, one owner retained;
+zero rules/events, worker once DISABLED, no external requests or mutations.
+data/auto_replies_migration_check.json. No live auto-reply/customer sending performed;
+mock acceptance does not prove live sending. Production flags remain disabled. Existing
+reply reconciliation/uncertain alerts and stock-chain tests still pass with added guards.

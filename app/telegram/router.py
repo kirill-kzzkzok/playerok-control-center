@@ -13,6 +13,7 @@ from app.database.store import Conflict
 from app.playerok.adapter import APIError
 from app.services.discounts import discount_plan
 from app.services.products import ValidationError, listing_price, listing_text, priority_price_basis
+from app.telegram.auto_replies_panel import AutoRepliesPanel
 from app.telegram.automation_panel import AutomationPanel
 from app.telegram.automation_queue import AutomationQueue
 from app.telegram.chat_panel import ChatPanel
@@ -59,6 +60,7 @@ def create_router(store, api, products, synchronizer):
     orders_panel = OrdersPanel(store, api)
     fulfillment_panel = FulfillmentPanel(store, api)
     automation_panel = AutomationPanel(store, api)
+    auto_replies_panel = AutoRepliesPanel(store, api)
     promotions_panel = PromotionsPanel(store, api)
     automation_queue = AutomationQueue(store, api)
     statistics_panel = StatisticsPanel(store)
@@ -151,6 +153,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await operations.callback(action, owner, state)
             elif action.startswith("aq:"):
                 text, markup = await automation_queue.callback(action, owner, state)
+            elif action.startswith("ar:"):
+                text, markup = await auto_replies_panel.callback(action, owner, state, message)
             elif action == "promotions" or action.startswith(("promo:", "pp:", "pi:")):
                 text, markup = await promotions_panel.callback(action, owner, state)
             elif action == "automation" or action.startswith(("auto:", "ap:")):
@@ -398,6 +402,8 @@ def create_router(store, api, products, synchronizer):
                     + escaped(store.setting("enrollment:health", {"status": "NOT_STARTED"}), 300)
                     + "\nТранзакции: "
                     + escaped(store.setting("transactions:health", {"status": "NOT_STARTED"}), 300)
+                    + "\nАвтоответы: "
+                    + escaped(store.setting("auto_replies:health", {"status": "NOT_STARTED"}), 200)
                     + "\nНастройки уведомлений: "
                     + escaped(store.setting(f"notifications:{owner}:preferences_error", "OK"), 100)
                     + "\n\n"
@@ -438,6 +444,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await order_finance_panel.message(message, state)
             elif current and current.startswith("automation:"):
                 text, markup = await automation_panel.message(message, state)
+            elif current and current.startswith("autoreply:"):
+                text, markup = await auto_replies_panel.message(message, state)
             elif current and current.startswith("promotion:"):
                 text, markup = await promotions_panel.message(message, state)
             elif current and current.startswith("fulfill:"):

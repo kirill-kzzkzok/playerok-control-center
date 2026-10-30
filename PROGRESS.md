@@ -1108,3 +1108,50 @@ telegram_deletions=0/playerok_mutations=0, writes=false/automation=false. Бот
 полный requirement audit/soak и live criteria с отдельным разрешением на новые записи.
 
 Контрольная точка interface cleanup: **483 passed in 88.55s**; data/interface_cleanup_results.xml; Ruff/pip/format/secret scan чистые.
+
+## Rule-based automatic replies — v18 (2026-10-30)
+
+Вместо подмены автоответов ручными templates добавлены AutoReplies, AutoRepliesPanel и
+отдельный bounded AutoReplyWorker. До 10 правил/аккаунт: точная нормализованная фраза
+(casefold/пробелы), текст ответа, пауза 60–86400с и лимит 1–100 попыток/сутки по Москве.
+Новые/отредактированные правила сохраняются выключенными; включение с отдельным owner
+confirmation для будущих сообщений. Перед сохранением/включением полный текст показан
+страницами HTML без потерь. Правило/редакция/аккаунт/owner проверяются CAS; duplicate
+phrase запрещена, disabled rule можно удалить, журнал остаётся. Есть stop-all и journal.
+
+В рабочем .env writes/automation false, правил не создано. Runtime запускается только
+при обоих разрешённых flags и sync baseline OK. Обрабатываются до 20 новых событий/цикл:
+server created_at и inbox received_at не раньше armed cutoff, возраст <=5 минут,
+known USER author !=self, is_auto_response=False, нет system event/deletion/photos.
+Старые/naive/unknown/self/support/вложения/неточные фразы не создают отправки. Historical
+backfill и сообщения до enable не replay. GET chat PM/participants/textingAllowed и
+свежая page get_chat_messages подтверждают ID/signature/отсутствие продолжения диалога.
+
+Регистрация unique account/message + стабильный outbox key атомарны с дневными/chat
+лимитами. Лимиты считают все QUEUED попытки даже при failed/uncertain и смене версии.
+Pending/unknown/manual-stopped replies или выдача/fulfillment в чате блокируют автоответ.
+Executor использует существующий reply transport/reconciliation/uncertain alerts, но
+добавляет fresh verify и local guard после API-lock/transport wait: rule/runtime/account/
+message signature/age/newer cached messages/busy chat перепроверяются перед HTTP.
+Генерации ответов, regex и передачи данных запаса нет; response текст задан владельцем.
+
+Read API ошибка блокирует конкретное событие (нет бесконечного восстановления старого
+автоответа), останавливает batch и сохраняет backoff/Retry-After; остальные новые сообщения
+рассматриваются после deadline. Runtime ошибки не логируют текст/сырой payload. Журнал
+виден в Telegram с переходами к outbox для QUEUED. Отмена уже переданного HTTP запроса
+не гарантируется; неизвестные отправки никогда не повторяются автоматически.
+
+Tests/test_auto_replies.py: native Executor mock, future-only/old/self/system/photo/
+naive/unknown, duplicate/concurrent workers и restart, stop/runtime/edit/manual reply во
+время api-lock wait, fresh remote continuation/type/participants/closed/missing checks,
+Moscow day boundary/old revision accounting, pending stock delivery, read429 backoff,
+owner/CAS/validation/unique trigger/delete, actual Dispatcher separate enable confirmation
+после restart и stale callback. Первые тесты выявили несоответствие числа SQL placeholders
+journal таблице; исправлено явным списком полей, ошибки не скрывались.
+Live autoответы не выполнялись; работоспособность реальной отправки ещё не принята.
+
+Контрольная точка autoreplies: **514 passed in 68.54s**; data/auto_replies_results.xml;
+Ruff/format 127 files, pip clean. v18 после backup before-auto-replies-v18-20261030T132935:
+217 orders/462 transactions/1 owner сохранены, rules=events=processed=0, DISABLED,
+external_requests=0/mutations=0; data/auto_replies_migration_check.json. Writes и automation
+в .env остаются false. Бот не запущен, live buyer messages/выдачи/платные операции не делались.
