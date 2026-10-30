@@ -684,3 +684,19 @@ Main closes admission synchronously after stop.set and before worker cancellatio
 then gathers worker journals and drains calls/observers. Read diagnostics close
 admission in finally. Late Telegram handlers therefore cannot revive a transport after
 resource closure. This does not revoke in-flight HTTP or impose a wall-clock deadline.
+
+
+## Retired technical-listing scenario
+
+app.live_test is an offline historical journal inspector, not a write executor. The
+previous create/edit/automatic-cleanup technical-listing scenario was rejected and
+removed. Missing/invalid/finished history cannot rearm it; no credentials or transport
+are constructed. Output contains bounded allowlisted recorded state/booleans only;
+remote IDs, names, cookies and raw errors are not reflected. The original journal is
+never modified. Inspection cannot establish current remote state or authorize cleanup.
+
+Native permit contract helper now lives only in tests/transport_helpers, with guards
+requiring MockTransport both as default and for nonempty mounts. Tests are not included
+in installable app/playerokapi packages. Production mutations remain in durable
+Executor/Products/Wizard paths. Future live acceptance needs a separately authorized
+real-goods scenario; the retired technical listing is never retried.

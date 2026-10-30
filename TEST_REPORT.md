@@ -704,3 +704,24 @@ hard total deadline or acceptance of non-API UI/cleanup threads/legacy live_test
 
 GitHub sync resumed at checkpoint start: normal push advanced private origin from
 2b5542e to99f7f60, resolving the prior three server500 failures without force push.
+
+
+## Retired technical live-write scenario — 2026-10-30
+
+Full suite: **594 passed in88.59s**, data/retired_live_test_results.xml.
+Eighteen new cases; initial targeted57 passed in18.96s before final type/style and
+mounted-transport check, all included in final full. Ruff check/format139 files,
+pip check and diff clean. Technical listing create/edit/finally-delete was removed;
+app.live_test only inspects a bounded local journal with allowlisted recorded facts.
+Missing/invalid/old terminal/uncertain histories never rearm writes; original bytes
+are untouched. CLI subprocess and no Config/client construction verified. Actual
+historical journal SHA256 unchanged, recorded rejection=true/remote ID absent; sanitized
+report in data/retired_live_test_readonly_check.json. These are recorded historical
+facts, not fresh remote absence proof. No remote request, buyer send, write, paid action,
+working database access or migration in this checkpoint.
+
+Four native contract suites now import a tests-only permit helper guarded against real
+default/mounted transport. Existing multipart/create/edit/fields/agreements contracts
+remain tested; normal durable product execution code unchanged. No restored technical
+listing or claim of live acceptance. A future authorized real-goods acceptance scenario
+is still required; PHASE8 and the overall project remain open.

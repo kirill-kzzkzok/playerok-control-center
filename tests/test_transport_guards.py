@@ -3,9 +3,9 @@ import asyncio
 import httpx
 import pytest
 
-from app.live_test import mutate
 from app.playerok.adapter import APIError, SafeAccount
 from app.services.products import ValidationError
+from tests.transport_helpers import mutate
 
 
 def test_query_name_cannot_disguise_mutation():

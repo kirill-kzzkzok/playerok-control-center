@@ -1426,3 +1426,50 @@ test. Следующая безопасная задача: ревью legacy li
 Рабочие данные/бот/Playerok не затронуты. Новые вызовы после начала shutdown закрыты;
 абсолютный request deadline и отдельные не-API to_thread cleanup/UI jobs ещё не приняты
 этими тестами. Общая цель остаётся активной, live-критерии не объявляются закрытыми.
+
+
+## Удаление отклонённого технического live-write сценария
+
+Проверка PHASE7/8/9 подтвердила legacy риск: app.live_test создавал SafeAccount с
+writes_enabled=True независимо от конфигурации, мог заново создать техническое
+объявление при отсутствующем/некоторых завершённых журналах и выполнял cleanup-delete
+в finally. Его to_thread mutation helper не имел нового runtime ownership. Playerok
+уже отклонил именно этот технический listing; повтор запрещён, новые live-записи по
+последнему указанию пользователя требуют отдельного разрешения. План: убрать этот
+устаревший write workflow и оставить исторический офлайн-инспектор, сохранив настоящие
+native contract tests и обычные безопасные продуктовые workflows приложения.
+
+app.live_test теперь содержит только inspect_journal и CLI: максимум64KiB, dict-only,
+allowlisted recorded states/booleans, без credentials, Config.load, сетевого клиента,
+create/edit/delete, автоматического cleanup или изменения журнала. Missing/invalid/
+CLEANED/FAILED/UNCERTAIN история не открывает запись: legacy_write_scenario=RETIRED,
+live_writes_available=false/retry_allowed=false всегда. Неизвестное состояние скрыто,
+текст errors/name/header/token и remote IDs не отражаются. Код0 означает успешную
+офлайн-инспекцию (включая отсутствие файла),2 — invalid/oversize/read error. Это не
+доказательство текущего remote existence/absence и не новая live-приёмка.
+
+Четыре contract test modules импортировали прежний app.live_test.mutate. Helper перенесён
+в tests/transport_helpers, исключён из устанавливаемых app/playerokapi packages и
+требует httpx.MockTransport как default transport и для каждого непустого mount.
+Реальные default/mounted transport блокируются до permit/method. Native operation,
+query, fields/multipart/agreements tests сохранены; runtime Executor/Products/Wizard
+создания/редактирования/удаления товаров не изменены.
+
+Первый targeted:57 passed in18.96s; после type/import/style fixes и дополнительного
+mounted-transport case запущен новый full. Новые cases: missing history/no directory,
+пять legacy states/byte-for-byte preservation, malformed/non-dict/non-UTF8/deep JSON/
+oversize, typed output whitelist, read error secrecy, запрет загрузки credentials/client,
+настоящий CLI subprocess missing/invalid и реальные transport blocked без запроса.
+
+Рабочий historical journal прочитан только локально: recorded FAILED, rejection=true,
+remote_id_recorded=false; SHA256 before/after совпал. Отчёт без секретов/ID/имён сохранён
+в data/retired_live_test_readonly_check.json. external_requests=0/live writes=0;
+рабочая БД не открывалась, старый create не повторялся. Будущая live-приёмка возможна
+только по отдельно разрешённому сценарию с реальным допустимым товаром; текущий
+технический сценарий не восстанавливается и фаза8 не объявляется завершённой.
+
+Контрольная точка retired live test: **594 passed in88.59s**,
+data/retired_live_test_results.xml.18 новых regression cases, Ruff check/format139 files,
+pip check/diff чистые. Actual-secret/JWT scan выполняется перед commit. Записи/API/
+сообщения/платежи/миграции не выполнялись; historical journal сохранён без изменений.
+Перед commit actual-secret/JWT scan прошёл; private paths ignored, writes=false/automation=false.

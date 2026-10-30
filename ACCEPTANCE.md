@@ -195,3 +195,16 @@ at transport throttle. Added tests in test_thread_calls.py verify these paths pl
 actual run late-handler rejection and closed mutation with zero HTTP. No forced-death,
 absolute deadline or live-write acceptance is implied. Previously failed GitHub push
 was retried successfully at the start of this checkpoint; normal private sync resumed.
+
+
+## Legacy live-write audit (§2/§17/PHASE8)
+
+The rejected technical listing's standalone create/edit/finally-delete code was removed.
+app.live_test now performs bounded read-only local journal inspection, without Config,
+credentials, HTTP or writes; all history states/missing/invalid files remain retired.
+Original journal bytes preserved in tests and working historical SHA256 comparison.
+Tests/test_legacy_live_test.py covers privacy, malformed/oversized/deep files, CLI,
+missing directory, state handling and no credential/client construction. Native permit
+contract helper moved to non-packaged tests with default/mounted MockTransport checks;
+existing create/edit/agreements/fields contracts retained. No live operation occurred;
+future real-goods live acceptance still requires separate authorization and evidence.

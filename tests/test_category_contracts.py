@@ -4,7 +4,6 @@ from decimal import Decimal
 import httpx
 import pytest
 
-from app.live_test import mutate
 from app.playerok.adapter import SafeAccount
 from app.services.finance import calculate, sale_rule_from_api, selected_fee_multiplier
 from app.services.products import (
@@ -15,6 +14,7 @@ from app.services.products import (
     validate_draft,
     validate_field,
 )
+from tests.transport_helpers import mutate
 
 
 def test_unstructured_data_requires_private_comment_without_fabricated_attribute():

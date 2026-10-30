@@ -10,12 +10,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 
 from app.database.store import Conflict, Store
-from app.live_test import mutate
 from app.playerok.adapter import SafeAccount
 from app.services.products import Products, ValidationError
 from app.telegram.storage import SQLiteStorage
 from app.telegram.wizard import Wizard
 from app.workers.outbox import Executor, OutboxWorker
+from tests.transport_helpers import mutate
 
 
 class FieldsAccount:

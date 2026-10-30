@@ -10,7 +10,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 
 from app.database.store import Conflict, Store
-from app.live_test import mutate
 from app.playerok.adapter import APIError, SafeAccount
 from app.services.agreements import Agreements
 from app.services.products import Products, ValidationError
@@ -18,6 +17,7 @@ from app.telegram.formatting import html_pages
 from app.telegram.storage import SQLiteStorage
 from app.telegram.wizard import Wizard
 from app.workers.outbox import Executor, OutboxWorker
+from tests.transport_helpers import mutate
 
 
 def agreement(ident="a", description="Условия продажи <товара>"):
