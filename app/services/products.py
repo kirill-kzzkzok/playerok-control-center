@@ -236,6 +236,8 @@ class Products:
         conditions = await Agreements(self.api).snapshot(category, selected)
         return {
             "conditions": conditions,
+            "category_name": category.get("name"),
+            "obtaining_name": selected.get("name"),
             "form": category_form(category, fields),
             "category_fee_multiplier": category.get("fee_multiplier"),
             "obtaining_fee_multiplier": selected.get("fee_multiplier"),

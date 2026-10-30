@@ -43,7 +43,7 @@
 
 | Область | Подтверждено | Остаётся |
 |---|---|---|
-| Создание/публикация/edit/delete | Native signatures, mock executor, schema/conditions/photo checks, durable queue и Dispatcher | Успешная live-приёмка тестового лота не доказана; прежний create отклонён правилами, повтор запрещён |
+| Создание/публикация/edit/delete | Native contracts/guards + live create/photo/price1000→749/DEFAULT0/APPROVED/delete confirmed, evidence LIVE_ACCEPTANCE_20261030.json | Другие категории, произвольные изменения текста/атрибутов и замена фото отдельно live не приняты; новый UX локально проверен ниже |
 | Заказы/цепочки | Уникальный запас, ordered greeting/delivery/after, restart/reconciliation, проблемные статусы | Реальная отправка/выдача не проверялась; SENT требует отдельного attestation workflow |
 | Финансы | Decimal quotes с provenance; 462 live transaction rows, 217 заказов с серверными датами; owner cost/review/allocations | Не все неоднозначные комиссии имеют доказанную денежную семантику; прибыль всего магазина неизвестна без исторических расходов |
 | Продвижение | Настройки/позиции/night/budgets, persistent read scheduling, отдельный dry-run ledger | Платный исполнитель не реализован/не принят в рамках запрета платных операций; не выдавать dry-run за поднятие |
@@ -362,3 +362,28 @@ seller fulfillment; требуется реальный складской то�
 Plan:STOCK_LIVE_PLAN.md. Автоматический SENT отсутствует; DELIVERED по receipt
 не означает прочтение/применение кода; auto enrollment не имеет buyer/order allowlist.
 Live lot-management acceptance8d03e8c остаётся подтверждённой отдельно.
+
+
+## Четыре UX-блока перед первой выдачей — local acceptance
+
+1. StockPanel/Inventory и migration019: stock с карточки лота, masked state lists,
+   batch preview/confirm, state/owner recheck, same-transaction one-time wizard import
+   и disabled default policy. Известные единицы не реактивируются; empty guard остаётся.
+2. Automation.readiness: единый snapshot для item/order/policy; runtime flags,
+   effective policy, baseline/sync, stock, guard; explicit resume с CAS/available check.
+3. Migration020 owner receipts, terminal notifications через существующий loop,
+   no blind Telegram resend, results button; create/publication/discount fields из
+   verified server response. Отдельно delivered-waiting view; Fulfillment не изменён.
+4. Complete paginated escaped preview: game/category/obtaining/options/private field
+   presence, name/description, price/finance, photos, prepared stock count; edit/return
+   сохраняет остальные поля и FSM. Результат удалённого API в тестах simulated.
+
+Ранее подтверждённый live lot cycle8d03e8c не отменён. Эти UX changes НЕ являются
+новой live-приёмкой: pending real stock delivery, owner/buyer сообщения, real SENT
+остаются открытыми. Global flags не менялись. Итоговые pytest/Ruff см. TEST_REPORT.md.
+
+
+Итог четырёх UX-блоков:729 passed in94.31s; Ruff159 files/pip/selfcheck чистые.
+Existing DB migration18→20 проверена только на временной копии без изменения
+рабочей DB. Новые live writes/выдачи не выполнялись; описание локальной готовности
+не означает подтверждённую первую реальную автовыдачу.

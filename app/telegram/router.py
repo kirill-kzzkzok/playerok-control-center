@@ -1,6 +1,7 @@
 import asyncio
 import json
 import secrets
+import sqlite3
 from datetime import UTC
 from html import escape
 from pathlib import Path
@@ -452,6 +453,11 @@ def create_router(store, api, products, synchronizer):
         except (APIError, ValidationError, Conflict, ValueError) as error:
             code = error.code if isinstance(error, APIError) else str(error)
             await message.answer("❗ " + escaped(code, 800), reply_markup=keyboard([]))
+        except sqlite3.Error:
+            await message.answer(
+                "❗ Не удалось сохранить локальные данные. Изменения транзакции отменены. Проверьте свободное место и откройте раздел заново.",
+                reply_markup=keyboard([]),
+            )
 
     @router.message(F.text | F.photo | F.document)
     async def input_message(message, state):
@@ -557,6 +563,11 @@ def create_router(store, api, products, synchronizer):
         except (APIError, ValidationError, Conflict, ValueError) as error:
             await message.answer(
                 "❗ " + escaped(error.code if isinstance(error, APIError) else str(error), 800)
+            )
+        except sqlite3.Error:
+            await message.answer(
+                "❗ Не удалось сохранить локальные данные. Изменения транзакции отменены. Проверьте свободное место и откройте раздел заново.",
+                reply_markup=keyboard([]),
             )
 
     return router

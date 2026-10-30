@@ -107,6 +107,10 @@ class Automation:
             reasons.append("глобальная автоматика выключена")
         if not baseline:
             reasons.append("первоначальная сверка заказов не завершена")
+        if sync == "ERROR":
+            reasons.append("последняя сверка завершилась ошибкой")
+        if not getattr(self.api.account, "id", None):
+            reasons.append("сессия Playerok не подтверждена")
         if policy.mode == "stock" and not counts["AVAILABLE"]:
             reasons.append("нет доступного запаса")
         stopped = (revision and not policy.enabled) or guard is False
@@ -140,7 +144,12 @@ class Automation:
         policy = DeliveryPolicy(**payload)
         if policy.enabled and policy.auto_enroll and future_confirmed is not True:
             raise ValidationError("Нужно отдельно подтвердить автоматическую выдачу будущим заказам")
-        await self.item(actor, ident)
+        item = await self.item(actor, ident)
+        if stock_resume and (
+            item.get("deleted_at")
+            or item.get("status") not in {"DRAFT", "APPROVED", "PENDING_APPROVAL", "PENDING_MODERATION"}
+        ):
+            raise Conflict("Состояние лота больше не разрешает возобновление")
         with self.store.transaction() as db:
             row = db.execute("SELECT revision FROM delivery_policies WHERE item_id=?", (ident,)).fetchone()
             revision = row[0] if row else 0

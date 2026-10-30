@@ -5,11 +5,12 @@ from html import escape
 
 from aiogram.types import BufferedInputFile
 
-from app.services.agreements import fingerprint
+from app.services.agreements import fingerprint, require_conditions
 from app.services.attachments import Attachments
 from app.services.finance import format_calculation, money
 from app.services.financial_quotes import save_quote
-from app.services.products import ValidationError, listing_price, listing_text, validate_field
+from app.services.inventory import stock_values
+from app.services.products import ValidationError, listing_price, listing_text, validate_draft, validate_field
 from app.services.withdrawals import draft_calculation, withdrawal_methods, withdrawal_snapshot
 from app.telegram.formatting import escaped, html_pages
 from app.telegram.keyboards import keyboard
@@ -53,6 +54,8 @@ class Wizard:
     async def load_form(self, payload, obtaining_type_id):
         snapshot = await self.products.schema_details(payload["category_id"], obtaining_type_id)
         payload["form"] = snapshot["form"]
+        payload["category_name"] = snapshot.get("category_name") or payload.get("category_name")
+        payload["obtaining_name"] = snapshot.get("obtaining_name") or payload.get("obtaining_name")
         payload["fee_multiplier"] = snapshot["fee_multiplier"]
         payload["category_fee_multiplier"] = snapshot["category_fee_multiplier"]
         payload["obtaining_fee_multiplier"] = snapshot["obtaining_fee_multiplier"]
@@ -70,6 +73,76 @@ class Wizard:
             for document in documents
             for page in html_pages(document["title"] + "\n\n" + document["text"])
         ] or ["Условия не предоставлены Playerok."]
+
+    def preview_pages(self, payload, calculation):
+        lines = [
+            "Игра: " + str(payload.get("game_name") or payload.get("game_id") or "не выбрана"),
+            "Категория: " + str(payload.get("category_name") or payload.get("category_id") or "не выбрана"),
+            "Способ передачи: "
+            + str(
+                payload.get("obtaining_name")
+                or (
+                    "не требуется"
+                    if payload.get("obtaining_not_required")
+                    else payload.get("obtaining_type_id") or "не выбран"
+                )
+            ),
+            "",
+            "Название: " + payload.get("name", ""),
+            "Описание:\n" + payload.get("description", ""),
+            "",
+            "Характеристики:",
+        ]
+        for field in payload.get("form", []):
+            value = payload.get("fields", {}).get(field["key"], "")
+            if field.get("data_field") or field.get("comment"):
+                shown = "задано (содержимое скрыто)" if value else "не задано"
+            else:
+                labels = {
+                    str(option["value"]): str(option.get("label") or option["value"])
+                    for option in field.get("options", [])
+                }
+                shown = (
+                    ", ".join(labels.get(str(v), str(v)) for v in value)
+                    if isinstance(value, list)
+                    else labels.get(str(value), str(value))
+                )
+                if not shown:
+                    shown = "не задано"
+            lines.append(str(field["label"]) + (" *" if field["required"] else "") + ": " + shown)
+        lines += [
+            "",
+            f"Базовая цена: {payload.get('price')} ₽",
+            "Скидка: устанавливается отдельным действием после создания серверного черновика.",
+            f"Фотографий: {len(payload.get('photos', []))}",
+        ]
+        mode = payload.get("delivery", "manual")
+        lines.append(
+            "Режим выдачи: "
+            + {"manual": "Ручной", "text": "Постоянный текст", "stock": "Уникальный запас"}[mode]
+        )
+        if mode == "stock":
+            if payload.get("delivery_data"):
+                values, empty, duplicates = stock_values(payload["delivery_data"])
+                lines.append(
+                    f"Подготовленный запас: {len(values)} уникальных единиц; пустых строк {empty}, повторов {duplicates}. Содержимое скрыто."
+                )
+            else:
+                lines.append("Подготовленный запас пуст.")
+            lines.append(
+                "После создания предложим однократный перенос в склад этого лота. Автовыдача потребует отдельного включения."
+            )
+        elif mode == "text":
+            lines.append(
+                "Текст выдачи: " + ("подготовлен (скрыт)" if payload.get("delivery_data") else "не задан")
+            )
+        lines += [
+            "",
+            calculation,
+            "Стоимость PREMIUM доступна после создания серверного черновика. Покупка запрещена.",
+            "Первое действие создаёт серверный черновик. Публикация отдельная, только при подтверждённой нулевой стоимости.",
+        ]
+        return html_pages("\n".join(lines), 2800)
 
     async def screen(self, owner, state):
         data = await state.get_data()
@@ -132,14 +205,16 @@ class Wizard:
             form = payload["form"]
             index = payload.get("field_index", 0)
             if index >= len(form):
-                payload["step"] = "preview" if payload.get("edit_target") else "name"
+                payload["step"] = (
+                    "preview" if payload.get("edit_target") or payload.get("return_preview") else "name"
+                )
                 await self.save(owner, state, payload)
                 return await self.screen(owner, state)
             field = form[index]
             text = f"🧩 <b>{escape(field['label'])}</b>\n" + (
                 "Обязательное поле" if field["required"] else "Необязательное: введите − для пропуска"
             )
-            if payload.get("edit_target"):
+            if payload.get("edit_target") or payload.get("return_preview"):
                 try:
                     validate_field(field, payload["fields"].get(field["key"], ""))
                 except ValidationError:
@@ -237,22 +312,37 @@ class Wizard:
                 result = draft_calculation(payload)
                 save_quote(self.store, owner, "draft:" + draft["id"], payload, result)
                 calculation = format_calculation(result)
-                text = (
-                    f"📦 <b>{escape(payload.get('name', ''))}</b>\n\n{escaped(payload.get('description', ''), 2200)}\n\n"
-                    f"💰 Цена: {payload.get('price')} ₽\n🖼 Фото: {len(payload['photos'])}\n"
-                    f"⚡ Выдача: {escape(payload['delivery'])} (автоматика выключена)\n\n"
-                    f"{escape(calculation)}\n"
-                    "Стоимость PREMIUM доступна только после создания серверного черновика. Покупка запрещена.\n"
-                    "Первое действие создаёт черновик на Playerok. Публикация отдельная, только при подтверждённой нулевой стоимости."
-                )
+                pages = self.preview_pages(payload, calculation)
+                current = min(max(payload.get("preview_page", 0), 0), len(pages) - 1)
+                text = f"📦 <b>Полное превью · {current + 1}/{len(pages)}</b>\n\n" + pages[current]
                 rows = [
                     [("Создать серверный черновик", f"w:{nonce}:submit")],
                     [("📝 Название", f"w:{nonce}:edit:name"), ("📋 Описание", f"w:{nonce}:edit:description")],
                     [("🖼 Фото", f"w:{nonce}:edit:photos"), ("💰 Цена", f"w:{nonce}:edit:price")],
                     [("⚡ Выдача", f"w:{nonce}:edit:delivery")],
+                    [("🎮 Игра", f"w:{nonce}:edit:game"), ("📂 Категория", f"w:{nonce}:edit:category")],
+                    [
+                        ("📬 Способ передачи", f"w:{nonce}:edit:obtaining"),
+                        ("🧩 Характеристики", f"w:{nonce}:edit:fields"),
+                    ],
                     [("📄 Условия категории", f"w:{nonce}:conditions_refresh")],
                     [("💰 Вывод и себестоимость", f"w:{nonce}:finance_open")],
                 ]
+                nav = []
+                if current:
+                    nav.append(("← Превью", f"w:{nonce}:preview_page:{current - 1}"))
+                if current + 1 < len(pages):
+                    nav.append(("Превью →", f"w:{nonce}:preview_page:{current + 1}"))
+                if nav:
+                    rows.insert(0, nav)
+                for start in range(0, len(payload["photos"]), 3):
+                    rows.insert(
+                        1 + start // 3,
+                        [
+                            (f"🖼 Фото {i + 1}", f"w:{nonce}:photo_preview:{i}")
+                            for i in range(start, min(start + 3, len(payload["photos"])))
+                        ],
+                    )
         choice_view = f"{step}:{payload.get('category_id', '')}:{payload.get('field_index', 0)}"
         if choices:
             page_info = payload.get("choice_page") or {}
@@ -281,6 +371,8 @@ class Wizard:
         await state.update_data(choices=choices)
         if step not in {"game", "preview"}:
             rows.append([("⬅️ Назад", f"w:{nonce}:back")])
+        if payload.get("return_preview") and step != "preview":
+            rows.append([("Вернуться к превью", f"w:{nonce}:preview_return")])
         rows.append([("💾 Сохранить и выйти", "home"), ("❌ Отмена", "cancel_wizard")])
         return text, keyboard(rows)
 
@@ -293,7 +385,24 @@ class Wizard:
         payload, action = draft["payload"], parts[2]
         step = payload["step"]
         removed_photo = None
-        if action == "finance_open" and step == "preview" and not payload.get("edit_target"):
+        if action == "preview_page" and step == "preview":
+            number = int(parts[3])
+            pages = self.preview_pages(payload, format_calculation(draft_calculation(payload)))
+            if not 0 <= number < len(pages):
+                raise ValidationError("Страница превью недоступна")
+            payload["preview_page"] = number
+        elif action == "preview_return" and payload.get("return_preview"):
+            if not payload.get("category_id") or (
+                not payload.get("obtaining_type_id") and not payload.get("obtaining_not_required")
+            ):
+                raise ValidationError("Завершите выбор категории и способа передачи")
+            snapshot = await self.products.schema_details(
+                payload["category_id"], payload.get("obtaining_type_id")
+            )
+            validate_draft(payload, snapshot["form"], getattr(self.api.account, "role", None))
+            require_conditions(payload, snapshot["conditions"])
+            payload["step"] = "preview"
+        elif action == "finance_open" and step == "preview" and not payload.get("edit_target"):
             payload["step"] = "finance"
         elif (
             action
@@ -443,12 +552,18 @@ class Wizard:
                         "field_index",
                         "fee_multiplier",
                         "fee_checked_at",
+                        "obtaining_name",
+                        "conditions_ack",
                     ):
                         payload.pop(dependent, None)
                     payload["fields"] = {}
                     if step == "game":
                         payload.pop("category_id", None)
+                        payload.pop("category_name", None)
                 payload[key], payload["step"] = choice["id"], next_step
+                payload[
+                    {"game": "game_name", "category": "category_name", "obtaining": "obtaining_name"}[step]
+                ] = choice.get("name") or choice["id"]
                 if step == "obtaining":
                     payload["obtaining_not_required"] = False
                     await self.load_form(payload, choice["id"])
@@ -466,13 +581,21 @@ class Wizard:
                     payload["field_index"] += 1
             elif step == "delivery":
                 payload["delivery"] = choice["value"]
-                payload["step"] = "confirm" if choice["value"] == "manual" else "delivery_data"
+                payload["step"] = (
+                    ("preview" if payload.get("return_preview") else "confirm")
+                    if choice["value"] == "manual"
+                    else "delivery_data"
+                )
             elif step == "finance_method":
                 payload["withdrawal"] = await withdrawal_snapshot(self.api, choice["id"])
                 payload["step"] = "finance"
             else:
                 raise ValidationError("Выбор не соответствует шагу")
-        elif action == "field_keep" and step == "fields" and payload.get("edit_target"):
+        elif (
+            action == "field_keep"
+            and step == "fields"
+            and (payload.get("edit_target") or payload.get("return_preview"))
+        ):
             field = payload["form"][payload["field_index"]]
             validate_field(field, payload["fields"].get(field["key"], ""))
             payload["field_index"] += 1
@@ -484,8 +607,10 @@ class Wizard:
             payload["field_index"] += 1
         elif action == "photos_done" and step == "photos":
             payload.pop("replace_photo_index", None)
-            payload["step"] = "price"
-        elif action in {"photo_remove", "photo_replace", "photo_preview"} and step == "photos":
+            payload["step"] = "preview" if payload.get("return_preview") else "price"
+        elif action in {"photo_remove", "photo_replace", "photo_preview"} and (
+            step == "photos" or (step == "preview" and action == "photo_preview")
+        ):
             try:
                 index = int(parts[3])
                 if not 0 <= index < len(payload["photos"]):
@@ -497,7 +622,8 @@ class Wizard:
                     raise ValidationError("Предпросмотр доступен из сообщения бота")
                 image = await self.attachments.read(payload["photos"][index])
                 await message.answer_photo(
-                    BufferedInputFile(image, filename="preview.jpg"), caption=f"Фото {index + 1}"
+                    BufferedInputFile(image, filename="preview.jpg"),
+                    caption=f"Фото {index + 1}",
                 )
                 return await self.screen(owner, state)
             if action == "photo_replace":
@@ -514,11 +640,23 @@ class Wizard:
             allowed = (
                 {"fields"}
                 if payload.get("edit_target")
-                else {"name", "description", "photos", "price", "delivery"}
+                else {
+                    "name",
+                    "description",
+                    "photos",
+                    "price",
+                    "delivery",
+                    "game",
+                    "category",
+                    "obtaining",
+                    "fields",
+                }
             )
             if target not in allowed:
                 raise ValidationError("Неизвестное поле редактирования")
             payload["step"] = target
+            payload["return_preview"] = True
+            payload["preview_page"] = 0
             if target == "fields":
                 payload["field_index"] = 0
         elif action == "submit" and step == "preview":
@@ -556,7 +694,9 @@ class Wizard:
             payload["field_index"] += 1
         elif step in {"name", "description"}:
             payload[step] = listing_text(text, step)
-            payload["step"] = "description" if step == "name" else "photos"
+            payload["step"] = (
+                "preview" if payload.get("return_preview") else "description" if step == "name" else "photos"
+            )
         elif step == "photos":
             file = message.photo[-1] if message.photo else message.document
             replacement = payload.get("replace_photo_index")
@@ -578,15 +718,19 @@ class Wizard:
                 payload["photos"].append(new_photo)
         elif step == "price":
             payload["price"] = listing_price(text, getattr(self.api.account, "role", None))
-            payload["step"] = "delivery"
+            payload["step"] = "preview" if payload.get("return_preview") else "delivery"
         elif step == "finance_cost":
             payload["cost"] = str(money(text.replace(",", ".")))
             payload["step"] = "finance"
         elif step == "delivery_data":
             if not text.strip() or len(text) > 10000:
                 raise ValidationError("Введите непустые данные до 10000 символов")
+            if payload["delivery"] == "stock":
+                stock_values(text)
+            elif len(text.encode("utf-16-le")) // 2 > 3500:
+                raise ValidationError("Текст выдачи: до 3500 символов")
             payload["delivery_data"] = text
-            payload["step"] = "confirm"
+            payload["step"] = "preview" if payload.get("return_preview") else "confirm"
         else:
             raise ValidationError("На этом шаге используйте кнопки")
         try:

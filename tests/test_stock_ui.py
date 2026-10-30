@@ -211,3 +211,39 @@ async def test_stock_resume_does_not_reenable_after_last_unit_reserved_during_ap
     await ui.click("stock:resumeok:" + nonce)
     assert store.setting("delivery:item:enabled") is False
     assert "❗" in session.calls[-1].text
+
+
+async def test_failed_draft_transfer_rolls_back_inventory_and_marker(rig):
+    store, api, session, _bot, ui, state = rig
+    ident = store.draft(7, {"delivery": "stock", "delivery_data": "private-unit"})
+    store.execute("INSERT INTO bindings(draft_id,remote_id) VALUES(?,?)", (ident, "item"))
+    await ui.click("stock:transfer:" + ident)
+    nonce = (await state.get_data())["stock_pending"]["nonce"]
+    store.execute(
+        "CREATE TRIGGER fail_transfer BEFORE INSERT ON draft_stock_imports BEGIN SELECT RAISE(ABORT,'fixture interruption'); END"
+    )
+    await ui.click("stock:commit:" + nonce)
+    assert "Изменения транзакции отменены" in session.calls[-1].text
+    assert not store.rows("SELECT * FROM inventory")
+    assert not store.rows("SELECT * FROM draft_stock_imports")
+    assert not store.rows("SELECT * FROM delivery_policies")
+    store.execute("DROP TRIGGER fail_transfer")
+    await ui.click("stock:commit:" + nonce)
+    assert Inventory(store, api).counts("item")["AVAILABLE"] == 1
+
+
+async def test_sync_error_blocks_ready_label(rig):
+    store, api, _session, _bot, _ui, _state = rig
+    api.account.writes_enabled = api.account.automation_enabled = True
+    store.set_setting("orders:last_complete_sync", now())
+    store.set_setting("sync:health", {"status": "ERROR"})
+    service = Inventory(store, api).automation
+    await service.save(
+        7,
+        "item",
+        0,
+        asdict(DeliveryPolicy(enabled=True, mode="stock", auto_enroll=True)),
+        future_confirmed=True,
+    )
+    Orders(store).add_stock("item", ["private-unit"])
+    assert service.readiness("item")["status"] == "Не готово"

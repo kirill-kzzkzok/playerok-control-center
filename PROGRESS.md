@@ -1951,3 +1951,53 @@ discount показывает реальные price/raw_price; unknown не п�
 Автоматический SENT не добавлен. Целевые28 passed in7.77s, data/ux_operation_results.xml;
 регрессии125 passed in14.57s, data/ux_results_baseline.xml. Нет live writes/сообщений.
 Остался блок4: полное превью/переходы, затем общий checkpoint pytest/Ruff.
+
+
+## UX перед первой выдачей — блок4: полное превью
+
+Мастер сохраняет названия game/category/obtaining, показывает все характеристики
+(приватные seller fields/comment только задано/не задано), name/description полностью
+на безопасных HTML страницах, базовую цену/отдельную скидку/финансовую оценку, фото
+с кнопками просмотра и подготовленный уникальный запас без содержимого.
+Из превью можно изменить game/category/obtaining/fields/text/price/photos/delivery;
+сохраняются независимые введённые данные, зависимая схема проверяется заново.
+Одиночное редактирование возвращает в превью; incomplete category selection нельзя
+пропустить кнопкой возврата. Existing field values можно оставить явно; FSM durable.
+Полный пользовательский путь real Dispatcher: выбор «Подарок»→preview→create через
+mock remote→terminal owner receipt→одноразовый stock transfer, policy disabled.
+Целевые29 passed in9.32s, data/ux_full_preview_results.xml; существующие68 preview/
+wizard/agreement/product regressions passed in9.98s. Первоначальный long-text test
+был слишком коротким для двух страниц; fixture увеличен в пределах лимита, затем
+подтверждена полная передача150 экранированных фрагментов без потерь.
+Общий pytest в процессе; новых фаз/аудитов не начинать. Live writes0.
+
+
+## Четыре UX-блока — итоговая контрольная точка
+
+Все четыре согласованных сценария реализованы. Итоговый полный pytest на финальном
+коде:729 passed in94.31s (data/ux_four_blocks_final_results.xml); предшествующий полный
+прогон729 passed in122.20s был до финализации storage-error UI. Последние targeted
+stock/preview23 passed in10.84s. Ruff check/format159 files, pip check чистые.
+Офлайн selfcheck OK:92 imports,19 migration files, schema1–20, backup/reopen и PNG.
+Отдельная копия реальной SQLite успешно обновлена18→20; count основных восьми таблиц
+сохранён, новые stock-import/receipt таблицы пусты, integrity_check=ok. Исходная БД
+открывалась только mode=ro, её версия18 и данные не менялись. Временная копия закрыта.
+Проверка сбоев подтверждает rollback stock+marker+policy; SQLite error обрабатывается
+понятным сообщением без raw error/секретов. Actual-secret/JWT scan tracked/unignored
+files чист; .env/PROJECT_SPEC.md/data/logs ignored. Runtime writes/automation false.
+
+Как пользоваться: лот→Склад (batch preview→confirm); после wizard create открыть
+result→склад→одноразовый перенос→отдельно policy arm. Общий статус одинаков в лоте,
+заказе, policy. Результаты терминальных действий приходят владельцу и доступны в
+главном меню. «Выдано — подтвердить» ведёт к старому manual Fulfillment, не auto SENT.
+Полное превью позволяет просмотреть фото и изменить отдельные параметры без потери
+остальных. Миграции применятся штатно при запуске обновлённого приложения.
+
+Новых live writes/owner notifications/buyer sends/платежей в этом этапе0: сетевые
+Playerok/Telegram вызовы новых сценариев проверены только на mock. Подтверждённый
+ранее live lot cycle не повторялся и сохраняется. Реальная stock delivery, актуальные
+новые UI+Telegram result notices и seller fulfillment остаются live-непринятыми.
+В четырёх проверенных сценариях известных блокирующих P0/P1 не осталось. Локально
+бот готов к контролируемой проверке после выбора действительного товара/покупателя
+и отдельного разрешения на send/runtime activation. Никаких новых supplier/paid/
+graph/UI-redesign работ не начинать. Остановиться после сохранения этого checkpoint.

@@ -889,3 +889,34 @@ lost ACK/missing ID, crash before HTTP/after send before commit. Only remote API
 is simulated. Message-history verification is a test assertion, not a new production
 automatic readback gate. SENT requires explicit owner attestation. None of these
 checks accepts live stock delivery; see STOCK_LIVE_PLAN.md for exact remaining gates.
+
+
+## Четыре UX-блока —2026-10-30
+
+- Stock:48 passed in11.76s, data/ux_stock_results.xml.
+- Shared readiness:78 passed in10.11s, data/ux_automation_status_results.xml.
+- Operation results:28 passed in7.77s, data/ux_operation_results.xml;125 regressions
+  passed in14.57s, data/ux_results_baseline.xml.
+- Full preview:29 passed in9.32s, data/ux_full_preview_results.xml;68 existing
+  preview/product/agreement checks passed in9.98s, data/ux_preview_baseline.xml.
+- Offline selfcheck OK:92 modules, migrations1–20, temporary backup/reopen, profile/
+  chart PNG; external requests0. Рабочая БД не используется selfcheck.
+
+Сценарии используют настоящий Dispatcher/SQLite FSM с mock remote API: restart before
+confirm, stale/foreign callbacks, competing import/state change, one-time stock
+transfer, disabled policy, prepared-secret non-disclosure, queued vs terminal result,
+Telegram lost ACK no resend, delivered→manual fulfillment navigation, preview
+edit/category/obtaining/photos/pagination. Дополнительно fault rollback склада/
+import marker проверяется с SQLite trigger; ошибку хранилища UI сообщает без raw details.
+Промежуточная ошибка нового теста (неверное имя fixture variable) исправлена, итог
+проверяется повторно. Полный suite финализируется после всех code changes.
+
+
+Финал UX checkpoint:729 passed in94.31s, data/ux_four_blocks_final_results.xml;
+последние stock/preview23 passed in10.84s (ux_final_targeted_results.xml). Ruff
+check/format159 files clean; pip check clean. Read-only backup рабочей DB во временную
+копию: migration18→20, восемь основных таблиц counts preserved, integrity_check=ok,
+новые таблицы пусты. В первом вспомогательном backup script временный sqlite connection
+не закрылся при cleanup Windows; corrected closing context прошёл, temporary files
+удалены. Production Store.backup не менялся, исходная DB не модифицировалась.
+Live API/Telegram owner/buyer sends0; новые live-критерии этой проверкой не закрыты.
