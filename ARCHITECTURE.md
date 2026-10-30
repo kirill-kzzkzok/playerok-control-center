@@ -530,3 +530,13 @@ wildcards and clamps out-of-range pages after collection changes. Stable date/id
 makes tied timestamps deterministic. Filters distinguish local workflow states from
 remote listing statuses; unknown future states remain reachable. Existing draft opener
 still handles wizard restore/binding links; reading the list creates no external work.
+
+## Server chronology vs local ingest time
+
+orders.created_at remains the historical local persistence field; no bulk rewrite is
+needed to correct display order. Store registers deterministic SQL server_time(value):
+aware ISO → UTC fixed-microsecond string, invalid/naive/overflow → NULL. Order listing
+sorts the normalized payload server date descending, with local receive/ID only for
+ties and unknown-date order. NULL dates remain last and are not attributed to sales
+periods. The returned listing DTO includes the normalized server date. Ingest preserves
+a previously verified date when newer sparse/malformed responses lack a usable date.

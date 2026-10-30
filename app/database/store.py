@@ -16,6 +16,17 @@ def encode(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
+def server_time(value):
+    """Canonical aware time for SQL sorting; a receive timestamp is not a server date."""
+    try:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            return None
+        return parsed.astimezone(UTC).isoformat(timespec="microseconds")
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
 class Conflict(ValueError):
     pass
 
@@ -26,6 +37,7 @@ class Store:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
         self.db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None, timeout=10)
+        self.db.create_function("server_time", 1, server_time, deterministic=True)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA foreign_keys=ON")

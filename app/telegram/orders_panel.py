@@ -24,6 +24,7 @@ class OrdersPanel:
         await state.set_state(None)
         await state.set_data({"order_filter": selected, "order_search": data.get("order_search", "")})
         text = f"🛒 <b>Заказы · {ORDER_FILTERS[selected][0]}</b>\nСтраница {page + 1} · Всего {result['total']}\nПоследний полный обход: {checked_time(self.store.setting('orders:last_complete_sync'))}"
+        text += "\nСначала новые по серверной дате создания; неизвестные даты — в конце."
         if data.get("order_search"):
             text += "\nПоиск: " + escaped(data["order_search"], 200)
         rows = [

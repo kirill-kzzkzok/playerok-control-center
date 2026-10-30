@@ -73,9 +73,10 @@ def order_page(store, page=0, filter_name="ALL", search="", page_size=12):
         args += ("%" + value + "%",) * 3
     total = store.rows("SELECT count(*) AS n FROM orders WHERE " + where, args)[0]["n"]
     rows = store.rows(
-        "SELECT id,status,amount,json_extract(payload,'$.item.name') AS name FROM orders WHERE "
+        "SELECT id,status,amount,json_extract(payload,'$.item.name') AS name,"
+        "server_time(json_extract(payload,'$.created_at')) AS server_created_at FROM orders WHERE "
         + where
-        + " ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?",
+        + " ORDER BY server_created_at DESC,created_at DESC,id DESC LIMIT ? OFFSET ?",
         (*args, page_size, page * page_size),
     )
     return {

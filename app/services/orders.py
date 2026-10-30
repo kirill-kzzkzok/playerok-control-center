@@ -1,7 +1,7 @@
 import hashlib
 import json
 
-from app.database.store import Conflict, encode, now
+from app.database.store import Conflict, encode, now, server_time
 
 
 class Orders:
@@ -32,7 +32,10 @@ class Orders:
             old_payload = json.loads(previous["payload"]) if previous else {}
             # List responses can omit the immutable upstream date supplied by get_deal.
             # Preserve that date in the payload; the SQL ingest fallback is not evidence.
-            if not order.get("created_at") and old_payload.get("created_at"):
+            if (
+                server_time(order.get("created_at")) is None
+                and server_time(old_payload.get("created_at")) is not None
+            ):
                 order = {**order, "created_at": old_payload["created_at"]}
             db.execute(
                 "INSERT INTO orders(id,item_id,status,chat_id,amount,created_at,payload) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,chat_id=excluded.chat_id,amount=excluded.amount,payload=excluded.payload",

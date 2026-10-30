@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.database.store import Store
+from app.database.store import Store, server_time
 from app.services.catalog import order_page
 from app.services.orders import Orders
 from app.services.products import ValidationError, validate_field
@@ -36,6 +36,55 @@ def test_order_pagination_filters_and_safe_search(tmp_path):
             order_page(store, -1)
     finally:
         store.close()
+
+
+def test_order_list_uses_backfilled_aware_server_time_instead_of_ingest_time(tmp_path):
+    store = Store(tmp_path / "chronology.sqlite")
+    try:
+        orders = Orders(store)
+
+        def ingest(ident, created):
+            orders.ingest(
+                {
+                    "id": ident,
+                    "direction": "OUT",
+                    "status": "PAID",
+                    "created_at": created,
+                    "item": {"id": "p", "price": 100},
+                }
+            )
+
+        ingest("newer", None)
+        ingest("older", None)
+        ingest("newer", "2026-10-29T10:00:00Z")
+        ingest("older", "2024-01-01T10:00:00+00:00")
+        ingest("offset", "2026-10-29T12:30:00+03:00")
+        ingest("unknown", None)
+        ingest("naive", "2099-01-01T00:00:00")
+        assert [row["id"] for row in order_page(store, page_size=2)["rows"]] == ["newer", "offset"]
+        assert order_page(store, 1, page_size=2)["rows"][0]["id"] == "older"
+        for malformed in ["invalid", "2026-10-29T10:00:00", None]:
+            ingest("newer", malformed)
+            result = order_page(store, page_size=2)
+            assert result["rows"][0]["id"] == "newer"
+            assert result["rows"][0]["server_created_at"] == "2026-10-29T10:00:00.000000+00:00"
+        # Two equivalent instants tie by stable local receive/id ordering.
+        ingest("same", "2026-10-29T13:00:00+03:00")
+        assert {row["id"] for row in order_page(store, page_size=2)["rows"]} == {"same", "newer"}
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(
+    "value", [None, 123, "", "bad", "2026-10-30", "2026-10-30T10:00:00", "0001-01-01T00:00:00+01:00"]
+)
+def test_server_time_rejects_unknown_naive_or_overflow(value):
+    assert server_time(value) is None
+
+
+def test_server_time_canonical_precision_matches_equal_offsets():
+    assert server_time("2026-10-30T10:00:00Z") == server_time("2026-10-30T13:00:00.000000+03:00")
+    assert server_time("2026-10-30T10:00:00.1Z") > server_time("2026-10-30T10:00:00Z")
 
 
 def test_html_limit_never_cuts_entities_or_emoji():

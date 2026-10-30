@@ -1048,3 +1048,26 @@ input, открытие старого CANCELLED и callback-size bound. Targete
 Никаких рабочих настроек/объявлений/платежей не менялось; схема БД остаётся v16.
 
 Контрольная точка drafts: **462 passed in 64.51s**; data/drafts_pagination_results.xml; Ruff/pip/format/secret scan чистые.
+
+## Order list chronology after server date backfill (2026-10-30)
+
+Аудит показал рассогласование: stats использовала payload.created_at, а order_page
+сортировала orders.created_at (первое receive/import время, не обновлявшееся на upsert).
+Failing regression воспроизвёл появление naive 2099/unknown перед реальными новыми
+заказами. Исправлено read-side сортировкой server_time(payload.created_at), затем
+receive/id только как tie-breaker/порядок неизвестных. server_time — deterministic SQLite
+функция Store: принимает только aware ISO, нормализует UTC с фиксированными microseconds,
+invalid/naive/overflow → NULL. Неизвестные серверные даты в конце, это описано в списке.
+
+Рабочие timestamps/payload/history не переписаны, миграция не нужна. Реальный read-only
+кэш: 217 orders, первые 30 корректно UTC descending, все 30 позиций отличаются от старого
+receive sort; data/order_chronology_readonly_check.json, external_requests=0/mutations=0,
+database_rows_rewritten=0. Сортировка не превращает локальный receive в дату продажи.
+
+Orders.ingest теперь сохраняет известную aware серверную дату, если последующий ответ
+не содержит даты или даёт malformed/naive дату. Прежний guard сохранял только при пустом
+значении. Тесты покрывают догрузку, разные offset, равные моменты/precision, invalid/naive/
+missing dates, overflow и tie-breaker; повторный poll не ломает chronological listing.
+Это не отменяет ограничений полноты API-истории и прочих открытых критериев ACCEPTANCE.md.
+
+Контрольная точка chronology: **471 passed in 62.00s**, data/order_chronology_results.xml; Ruff/pip/format/secret scan чистые.

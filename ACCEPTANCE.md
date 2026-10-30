@@ -74,3 +74,11 @@ public name/ID, фильтром локальных состояний и уст
 `tests/test_drafts_panel.py` — 57 записей/6 страниц, одинаковое время, owner isolation,
 private fields не ищутся, unknown state, clamp после удаления, Dispatcher/restored search,
 старый draft доступен, SQL/HTML escaping. Серверные статусы при этом не симулируются.
+
+## Уточнение §10/§13: хронология заказов
+
+`order_page` сортирует aware server creation time в UTC, не первое локальное receive.
+`tests/test_catalog.py::test_order_list_uses_backfilled_aware_server_time_instead_of_ingest_time`
+сначала воспроизвёл неверный порядок, затем проверяет backfill/offset/unknown/naive/equal
+instants и сохранение известной даты при malformed ответах. Working-cache read-only probe:
+30/30 позиций исправлены без перезаписи данных, data/order_chronology_readonly_check.json.

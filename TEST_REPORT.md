@@ -525,3 +525,17 @@ Ruff check/format (119 files), pip check and actual-secret scan clean. No schema
 migration or production settings change required. Full suite result recorded below.
 
 Контрольная точка drafts: **462 passed in 64.51s**; data/drafts_pagination_results.xml; Ruff/pip/format/secret scan чистые.
+
+## Order server chronology (2026-10-30)
+
+471 passed in 62.00s; data/order_chronology_results.xml. Ruff/format (119 files), pip
+and actual-secret/ignored-file checks clean. Regression first failed: naive/receive-time
+rows appeared before newer actual server dates. Final tests cover backfilled older vs
+newer orders, UTC offset ordering, equivalent instants, fixed fractional precision,
+unknown/naive/malformed dates, UTC overflow and preservation of known date on bad poll.
+Targeted catalog/durability 25 passed; existing order-management/statistics checks pass.
+
+Working-cache readonly check: first 30 orders have known descending UTC server dates;
+30 positions differ from the former receive-time ordering, 217 orders retained.
+Evidence data/order_chronology_readonly_check.json; database_rows_rewritten=0,
+external_requests=0/mutations=0. No migration or working listing operation performed.
