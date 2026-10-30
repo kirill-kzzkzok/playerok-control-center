@@ -107,6 +107,7 @@ class OrdersPanel:
             [
                 [("📝 История", f"od:history:{ident}:0"), ("Заметка", "od:note:" + ident)],
                 [("❗ Локальная проблема", "od:problem:" + ident)],
+                [("🧾 Себестоимость и прибыль", "pf:card:" + ident)],
             ]
         )
         if annotation["problem"]:

@@ -4,6 +4,7 @@ from aiogram.types import BufferedInputFile
 
 from app.rendering.charts import revenue_chart
 from app.services.finance import checked_time
+from app.services.order_finance import profit_statistics
 from app.services.statistics import statistics
 from app.services.transactions import transaction_statistics
 from app.telegram.formatting import escaped
@@ -39,15 +40,31 @@ class StatisticsPanel:
             )
         rows.append([("Категории", f"sd:{days}:categories")])
         rows.append([("Поступления и расходы по транзакциям", f"sd:{days}:transactions")])
+        rows.append([("Прибыль по учтённым заказам", f"sd:{days}:profit")])
         return keyboard(rows)
 
-    async def handle(self, action, message):
+    async def handle(self, action, message, *, owner=None):
         parts = action.split(":")
         days = int(parts[1])
         stats = await asyncio.to_thread(statistics, self.store, days)
         view = parts[2] if len(parts) == 3 else "overview"
         if parts[0] == "sd":
-            if view == "transactions":
+            if view == "profit":
+                account = self.store.setting("playerok:account_id") or self.store.setting(
+                    "transactions:account_id"
+                )
+                report = await asyncio.to_thread(profit_statistics, self.store, owner, account, days)
+                text = (
+                    "🧾 <b>Прибыль по учёту владельца</b>"
+                    + f"\nПериод: {'всё время' if days == 0 else str(days * 24) + ' ч'} · по завершению SELL-зачисления"
+                    + f"\nЗаказов с проверенными расходами: {report['reviewed_orders']}"
+                    + f"\nИтог только по ним: {report['profit']} ₽"
+                    + f"\nЗаказов за период с неполным/непроверенным учётом: {report['incomplete_orders']}"
+                    + f"\nПодтверждённых заказов без однозначной даты зачисления во всём кэше: {report['unattributed_orders']}"
+                    + f"\nНе подтверждено владение сохранённой продажей: {report['foreign_orders']}"
+                    + "\n\nОткройте заказ → «Себестоимость и прибыль». Текущая себестоимость товара не подставляется задним числом. Себестоимость и прочие расходы указывает владелец; распределённые PREMIUM/удержания проверяются по источникам. Итог не включает заказы с неизвестными данными и не означает прибыль всего магазина. Изменение исходных сумм сбрасывает результат до повторной проверки."
+                )
+            elif view == "transactions":
                 ledger = await asyncio.to_thread(transaction_statistics, self.store, days)
                 text = (
                     "💰 <b>Подтверждённые транзакции</b>\n"

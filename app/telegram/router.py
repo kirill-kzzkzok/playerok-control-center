@@ -22,6 +22,7 @@ from app.telegram.formatting import escaped
 from app.telegram.fulfillment_panel import FulfillmentPanel
 from app.telegram.keyboards import keyboard, main_menu
 from app.telegram.operations_panel import OperationsPanel
+from app.telegram.order_finance_panel import OrderFinancePanel
 from app.telegram.orders_panel import OrdersPanel
 from app.telegram.profile_panel import ProfilePanel
 from app.telegram.promotions_panel import PromotionsPanel
@@ -59,6 +60,7 @@ def create_router(store, api, products, synchronizer):
     promotions_panel = PromotionsPanel(store, api)
     automation_queue = AutomationQueue(store, api)
     statistics_panel = StatisticsPanel(store)
+    order_finance_panel = OrderFinancePanel(store, api)
     profile_panel = ProfilePanel(api)
 
     @router.message(CommandStart())
@@ -132,6 +134,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await wizard.start(owner, state)
             elif finance.handles(action):
                 text, markup = await finance.callback(action, owner, state)
+            elif action.startswith("pf:"):
+                text, markup = await order_finance_panel.callback(action, owner, state)
             elif action == "quickreplies":
                 text, markup = await replies.menu(owner, state)
             elif action.startswith("quick:"):
@@ -366,7 +370,7 @@ def create_router(store, api, products, synchronizer):
             elif action == "profile":
                 return await profile_panel.handle(message)
             elif action.startswith(("stats:", "st:", "sd:")):
-                return await statistics_panel.handle(action, message)
+                return await statistics_panel.handle(action, message, owner=owner)
             elif action == "settings":
                 text = (
                     "⚙️ <b>Настройки</b>\nЗаписи API: "
@@ -443,6 +447,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await replies.message(message, state)
             elif current and current.startswith("order:"):
                 text, markup = await orders_panel.message(message, state)
+            elif current and current.startswith("profit:"):
+                text, markup = await order_finance_panel.message(message, state)
             elif current and current.startswith("automation:"):
                 text, markup = await automation_panel.message(message, state)
             elif current and current.startswith("promotion:"):

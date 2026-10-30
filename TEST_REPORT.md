@@ -427,3 +427,17 @@ zero transaction rows; data/transactions_migration_check.json. External requests
 mutations=0; read-only/automation-off configuration unchanged. Five public official
 wallet bundles HTTP 200 support the journal data contract; authenticated live transaction
 loading is still unverified due to the prior UNAUTHORIZED_OR_CHALLENGE response.
+
+## PHASE 6 — historical order finance (2026-10-30)
+
+418 passed in 37.46s; data/phase6_order_finance_results.xml. Nine new tests exercise explicit
+unknown vs zero costs, owner review/CAS, negative results, matching receipt ambiguity/currency/
+status, linked priority/withdrawal retention capacity, allocation replacement/removal, concurrent
+SQLite connections, invariant against duplicate shared expenses, review surviving repeated
+observed_at polls but invalidated by economic updates, owner/period isolation, real Dispatcher
+with SQLite FSM restart, duplicate commits and no external API/outbox/ledger mutations.
+
+Working v15 migration after backup retained 217 orders, one owner and no historical costs
+or allocations fabricated; data/order_costs_migration_check.json. Actual authenticated financial
+loading still needs the priority diagnosis requested by the user. Local owner-declared profit
+is not an audited claim about every shop transaction.

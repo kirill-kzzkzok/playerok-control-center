@@ -451,3 +451,24 @@ be sales. Explicit server withdrawal net values remain distinct from balance deb
 Root fee is not treated as monetary commission; calculator quotes/generic expenses/
 promotion ledger are not merged. Historical cost/profit and full reconciliation across
 orders/withdrawals/promotion sources remain acceptance work.
+
+## Historical order finance (v15)
+
+order_costs stores owner-declared total order cost/other expenses with explicit unknown,
+revision, actor and review fingerprint; product forecast cost is not retroactively copied.
+order_expense_allocations links orders to existing account_transactions using a composite
+foreign key. Eligible expense capacity is confirmed RUB priority OUT value or withdrawal
+value minus explicit server net RUB. No current rate or ambiguous fee calculation.
+
+Cost/allocations/review changes commit with owner + seller checks, per-order revision CAS
+and source capacity constraints under BEGIN IMMEDIATE. Allocation sums across all orders
+cannot exceed source capacity; zero removes a claim, even if the source later rolled back.
+UI confirmation also checks source fingerprint in the same allocation transaction. Economic
+fingerprint excludes local observed_at, includes receipt/source facts and current order status.
+Any changed dependency revokes displayed reviewed profit without rewriting historical inputs.
+
+Profit requires confirmed order, one linked confirmed RUB SELL receipt, known completion date,
+explicit cost/other expenses and owner completeness attestation. No fabricated zero defaults.
+Statistics aggregate only eligible reviewed orders by receipt completion date; incomplete and
+unattributed coverage remains visible. All features are local reads/writes, with durable FSM,
+preview, audit and no outbound payment, stock delivery or buyer-message side effects.
