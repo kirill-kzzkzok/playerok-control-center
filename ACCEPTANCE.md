@@ -185,3 +185,13 @@ SafeAccount+MockTransport, OutboxWorker and actual run shutdown with fake servic
 ACK/error paths issue exactly one HTTP request; throttle cancellation issues zero.
 This covers cooperative runtime/read-diagnostics shutdown; forced death, legacy live_test
 and an absolute wall-clock HTTP/shutdown deadline are not accepted by these tests.
+
+
+## Приём новых запросов после начала shutdown (§15/§16)
+
+ThreadCalls closing/marker rejects new handlers even if no registry existed, queued
+lock/thread-pool entries fail before method and closing signals block pre-HTTP mutation
+at transport throttle. Added tests in test_thread_calls.py verify these paths plus
+actual run late-handler rejection and closed mutation with zero HTTP. No forced-death,
+absolute deadline or live-write acceptance is implied. Previously failed GitHub push
+was retried successfully at the start of this checkpoint; normal private sync resumed.

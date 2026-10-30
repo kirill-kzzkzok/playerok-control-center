@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from app.database.store import Conflict
 from app.playerok.adapter import APIError, SafeAccount, plain
-from app.playerok.thread_calls import calls_for
+from app.playerok.thread_calls import CallsClosedError, calls_for
 from app.services.agreements import Agreements, require_conditions
 from app.services.attachments import Attachments
 from app.services.auto_replies import AutoReplies
@@ -96,7 +96,10 @@ class Executor:
                 error="CANCELLED_CALL_FAILED" if error else "CANCELLED_CALL_COMPLETED",
             )
 
-        return await calls_for(self.api).call(run, on_abandoned=abandoned)
+        try:
+            return await calls_for(self.api).call(run, on_abandoned=abandoned)
+        except CallsClosedError:
+            raise ValidationError("API завершает работу; отправка не начата") from None
 
     async def owned_item(self, item_id):
         item = await self.api.call("get_item", id=item_id)

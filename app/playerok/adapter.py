@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from app.playerok.response_diagnostics import response_facts
-from app.playerok.thread_calls import calls_for
+from app.playerok.thread_calls import CallsClosedError, calls_for
 from playerokapi.account import Account
 from playerokapi.misc import PERSISTED_QUERIES, QUERIES
 
@@ -354,7 +354,10 @@ class Playerok:
             except (KeyError, TypeError, AttributeError, ValueError):
                 raise APIError("UPSTREAM_SCHEMA_ERROR") from None
 
-        return await calls_for(self).call(run)
+        try:
+            return await calls_for(self).call(run)
+        except CallsClosedError:
+            raise APIError("API_CLOSING") from None
 
     async def pages(self, method, collection, **kwargs):
         cursor, seen = None, set()

@@ -687,3 +687,20 @@ start. Work does not claim a hard shutdown/request deadline: HTTPX20s is inactiv
 chunk timeout. Forced exit or unavailable persistence can lose late evidence; unknown
 operations still do not retry. Legacy live_test helper remains outside this runtime
 change and must be reviewed before any authorized future use; rejected create not retried.
+
+
+## API shutdown admission — 2026-10-30
+
+Full suite: **576 passed in110.24s**, data/api_shutdown_admission_results.xml.
+Targeted before last closed-mutation test:43 passed in17.02s. Five new cases plus
+actual run shutdown strengthened with late handler. Close before registry creation,
+repeated close, queued lock/thread-pool entry, new mutation on closed API and close
+at transport throttle all block method/HTTP; actual late handler sees API_CLOSING.
+The in-flight call still drains before account/session/DB close. Cancellation/late ACK
+regressions remain green. Ruff check/format137 files, pip check, git diff --check and
+actual-secret/JWT scan clean; runtime writes/automation false. No live API request,
+mutation, message, working database change or migration. This does not establish a
+hard total deadline or acceptance of non-API UI/cleanup threads/legacy live_test.
+
+GitHub sync resumed at checkpoint start: normal push advanced private origin from
+2b5542e to99f7f60, resolving the prior three server500 failures without force push.

@@ -5,25 +5,43 @@ import threading
 logger = logging.getLogger(__name__)
 
 
+class CallsClosedError(RuntimeError):
+    pass
+
+
 class ThreadCalls:
     """Keep serialization and ownership until synchronous work really finishes."""
 
     def __init__(self, lock):
         self.lock = lock
         self.pending = set()
+        self.signals = set()
+        self.closing = False
+
+    def begin_close(self):
+        self.closing = True
+        for signal in self.signals:
+            signal.set()
 
     async def call(self, function, on_abandoned=None):
+        if self.closing:
+            raise CallsClosedError
         cancelled = threading.Event()
+        self.signals.add(cancelled)
         abandoned = False
         reported = False
 
         async def execute():
             async with self.lock:
+                if self.closing:
+                    raise CallsClosedError
                 if cancelled.is_set():
                     return None
 
                 def invoke():
                     # The executor queue may delay actual entry after the async lock.
+                    if self.closing:
+                        raise CallsClosedError
                     if cancelled.is_set():
                         return None
                     return function(cancelled)
@@ -33,6 +51,7 @@ class ThreadCalls:
         def complete(task):
             nonlocal reported
             self.pending.discard(task)
+            self.signals.discard(cancelled)
             error = None if task.cancelled() else task.exception()
             if abandoned and not reported and on_abandoned:
                 reported = True
@@ -75,6 +94,8 @@ class ThreadCalls:
 def calls_for(api):
     if not hasattr(api, "_thread_calls"):
         api._thread_calls = ThreadCalls(api.lock)
+        if getattr(api, "_calls_closed", False):
+            api._thread_calls.begin_close()
     return api._thread_calls
 
 
@@ -82,3 +103,16 @@ async def drain_calls(api):
     calls = getattr(api, "_thread_calls", None)
     if calls is not None:
         await calls.drain()
+
+
+def begin_close_calls(api):
+    # Also remember closure before the first call creates a registry.
+    api._calls_closed = True
+    calls = getattr(api, "_thread_calls", None)
+    if calls is not None:
+        calls.begin_close()
+
+
+async def close_calls(api):
+    begin_close_calls(api)
+    await drain_calls(api)

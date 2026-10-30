@@ -669,3 +669,18 @@ fast path); the registry includes evidence observers. Forced process death or st
 failure may prevent late evidence persistence. Existing HTTPX20s inactivity limits do
 not establish an absolute total-request or shutdown deadline. Legacy controlled
 live_test helper is separate and must be reviewed before any new authorized use.
+
+
+## Terminal API admission during shutdown
+
+begin_close_calls marks an API closed even before its first ThreadCalls registry is
+created. Closing is terminal for this client instance: new calls reject immediately;
+queued lock/thread-pool entries recheck before method invocation. Registry closing
+sets all active cancellation signals so mutation transport guard blocks at the last
+pre-HTTP check. Requests already dispatched still finish under retained serialization.
+Playerok read callers receive API_CLOSING; mutations not entered fail validation.
+
+Main closes admission synchronously after stop.set and before worker cancellation,
+then gathers worker journals and drains calls/observers. Read diagnostics close
+admission in finally. Late Telegram handlers therefore cannot revive a transport after
+resource closure. This does not revoke in-flight HTTP or impose a wall-clock deadline.

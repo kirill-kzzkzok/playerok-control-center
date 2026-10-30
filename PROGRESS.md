@@ -1386,3 +1386,43 @@ push/admin permissions=true; общий GitHub Status operational не объя�
 не загружать его или data в remote. При продолжении сначала проверить remote head и
 повторить обычный push; не force push и не переписывать проверенные коммиты. Этот сбой
 не означает блокировку всей разработки; безопасные локальные задачи остаются доступны.
+
+
+## Закрытие приёма новых API-вызовов при shutdown
+
+Предыдущий этап был прогрессом: код и evidence сохранены. При продолжении обычный
+push успешно передал 45944f9 и 99f7f60 в приватный origin; прежний transient server500
+больше не блокирует синхронизацию. Новая проверка PHASE7/9 подтвердила следующий пробел:
+drain ожидал текущие потоки, но поздний Telegram handler мог создать новый API call
+после начала shutdown или даже после закрытия client/DB.
+
+План/реализация: терминальное состояние closing у ThreadCalls и marker у API до первого
+создания registry. Main выставляет stop и begin_close_calls до отмены workers;
+read-only diagnostics используют close_calls в finally. Новые calls отвергаются до
+создания задачи; уже ожидающие lock/thread-pool entry проверяют closing перед method.
+Активные cancellation signals выставляются при closing, поэтому mutation guard
+повторно запрещает HTTP после transport throttle. Запрос уже в HTTP не отзывается;
+прежний drain/UNCERTAIN/late evidence остаётся. Переоткрытия API в этом процессе нет.
+
+Playerok.call переводит отказ в API_CLOSING; Executor.mutate — в ValidationError до
+отправки. Точно не начавшаяся mutation не помечается успехом; на уровне worker это
+PERMANENT_FAILED/VALIDATION_FAILED. Отменённый worker с запросом в полёте по-прежнему
+UNCERTAIN и не повторяется. Main дожидается worker journals и активных calls/observers
+перед закрытием общих ресурсов. Это не добавляет жёсткий общий HTTP/shutdown deadline.
+
+Targeted до последнего closed-mutation regression: 43 passed in17.02s.
+Новые тесты: close до первого registry + повтор/idempotency; queued read на lock;
+thread-pool entry после close; новый mutation при closed API; close при throttle без
+отмены waiter (HTTP0/permanent validation failure). Actual run shutdown test дополнен
+поздним handler, получающим API_CLOSING, пока первый thread ещё выполняется. Это mock/
+offline доказательства, без реального bot startup, live Playerok/Telegram request,
+рабочей DB migration или записи. Новый full запущен после добавления всех случаев.
+
+Контрольная точка API shutdown admission: **576 passed in110.24s**,
+data/api_shutdown_admission_results.xml; Ruff check/format137 files, pip check,
+diff и actual-secret/JWT scan чистые. Пять новых cases плюс усиленный actual shutdown
+test. Следующая безопасная задача: ревью legacy live_test с hardcoded writes=true
+и отдельным to_thread mutation helper. Не запускать его и не повторять rejected create.
+Рабочие данные/бот/Playerok не затронуты. Новые вызовы после начала shutdown закрыты;
+абсолютный request deadline и отдельные не-API to_thread cleanup/UI jobs ещё не приняты
+этими тестами. Общая цель остаётся активной, live-критерии не объявляются закрытыми.
