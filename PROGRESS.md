@@ -1372,3 +1372,17 @@ git diff --check и actual-secret/JWT scan чистые. 9 новых thread/shu
 Следующее ревью: legacy app.live_test helper/gating перед любым разрешённым запуском;
 не повторять rejected create, проверить shutdown admission новых handler calls и
 разделение inactivity timeout от общего deadline. Общая приёмка остаётся открытой.
+
+
+### Состояние синхронизации GitHub после cancellation checkpoint
+
+Код/доказательства сохранены локальным коммитом 45944f9. Три обычных fast-forward push
+(третий HTTP/1.1) отклонены сервером GitHub: remote Internal Server Error. Удалённый
+master проверен и остаётся 2b5542e. gh API подтверждает private=true, archived=false,
+push/admin permissions=true; общий GitHub Status operational не объясняет конкретный
+отказ, причина не установлена. git fsck не нашёл повреждений reachable history
+(есть dangling служебные trees). Прогресс не потерян: локальная история сохранена,
+ data/backups/source-45944f9.bundle создан и git bundle verify прошёл. Bundle приватный,
+не загружать его или data в remote. При продолжении сначала проверить remote head и
+повторить обычный push; не force push и не переписывать проверенные коммиты. Этот сбой
+не означает блокировку всей разработки; безопасные локальные задачи остаются доступны.
