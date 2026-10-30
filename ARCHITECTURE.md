@@ -739,3 +739,15 @@ constrained predicate. UI labels per-page loaded/matched coverage and keeps cont
 on empty match pages. No unsupported server query fields or full-history search claim.
 SQLite FSM persists settings; changes reset cursor and preserve other filter dimensions.
 Category input currently uses native ID; a convenient category-name picker remains open.
+
+
+## Named category filter picker
+
+ItemCategoryPicker replaces manual-ID-only UX with get_games name/cursor pagination,
+get_game categories and local10-row category pages. Durable FSM holds bounded public
+ID/name snapshots and nonce/index callbacks. Fresh get_game identity/membership check
+precedes application; changed/disappeared category fails without changing item filters.
+Existing filter dimensions survive selection; item page cursor is reset. Names need
+not be unique. Cancellation closes state; stale callbacks reject before API. Game pages
+use validate_page/cursor cycle detection; category list bounded1000 entries, searches
+1000 pages. Manual category-ID entry remains optional, not the only navigation path.

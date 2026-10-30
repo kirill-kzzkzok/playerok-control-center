@@ -4,6 +4,7 @@ from app.playerok.adapter import validate_page
 from app.services.item_filters import checked_filters, matches_item
 from app.services.products import ValidationError
 from app.telegram.formatting import escaped
+from app.telegram.item_category_picker import ItemCategoryPicker
 from app.telegram.keyboards import keyboard
 from playerokapi.enums import ItemStatuses
 
@@ -11,6 +12,7 @@ from playerokapi.enums import ItemStatuses
 class ListingsPanel:
     def __init__(self, api):
         self.api = api
+        self.category_picker = ItemCategoryPicker(api)
 
     async def show(self, kind, state, *, nonce=None):
         if kind not in {"items", "chats"}:
@@ -93,6 +95,8 @@ class ListingsPanel:
         ) + note, keyboard(rows)
 
     async def filter_action(self, action, state):
+        if action == "il:pickcategory":
+            return await self.category_picker.start(state)
         data = await state.get_data()
         filters = checked_filters(data.get("item_filters", {}))
         if action == "il:reset":
@@ -118,6 +122,8 @@ class ListingsPanel:
         current = await state.get_state()
         filters = checked_filters((await state.get_data()).get("item_filters", {}))
         text = (message.text or "").strip()
+        if current == "itemlist:category_search":
+            return await self.category_picker.search(text, state)
         if current == "itemlist:search":
             if not text or len(text) > 200:
                 raise ValidationError("Название: от 1 до 200 символов")

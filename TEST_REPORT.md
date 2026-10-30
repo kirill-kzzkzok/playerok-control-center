@@ -771,3 +771,17 @@ final affected tests19 passed in13.36s, data/item_filters_final_targeted.xml. Ru
 format144 files, pip/diff/secret scan clean. No working database access, network request,
 mutation, message, paid action or migration. Per-page filtering is explicitly labelled;
 category-name picker and global name/price/priority search remain unaccepted.
+
+
+## Named item category picker — 2026-10-30
+
+Full suite632 passed in281.47s; data/item_category_picker_results.xml confirms632 tests,
+errors0/failures0/skipped0. Targeted29 passed in11.13s. Ten new cases: game cursor and
+category pagination/restart/filter preservation, duplicate category names and fresh
+membership disappearance, malformed/cyclic game envelope, wrong game/incomplete
+categories, invalid/empty search, cancel and actual Dispatcher flow/foreign owner/stale
+callback. Output observation was delayed; existing process/session and full JUnit were
+checked rather than restarting. Ruff check/format146 files, pip check/diff/actual-secret
+scan clean. No working DB access, API request, buyer send, mutation, payment or migration.
+Previous manual-ID-only category UX limitation resolved in mock acceptance; no full
+upstream history or live-write acceptance claim. Native ID entry stays optional.

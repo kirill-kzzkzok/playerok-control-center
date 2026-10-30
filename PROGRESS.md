@@ -1584,3 +1584,38 @@ status rejection/state-clear изменения router; окончательны
 files/pip/diff/actual-secret scan чистые. Новых live actions/DBwrites/migrations нет.
 Открыты category-name picker и полноценный глобальный name/price/priority query;
 текущий per-page scope явно показан. Общая приёмка проекта не закрыта.
+
+
+## §6: выбор категории по названию игры, без ввода ID
+
+Закрывается явный UX gap предыдущего checkpoint: категория в item filters требовала
+ручной ID. ItemCategoryPicker реализует поиск get_games(name,count10,cursor), validated
+opaque pagination/cycle rejection, затем get_game(id) и локальные страницы категорий10.
+Выбор хранит только public ID/name snapshot, nonce и navigation в SQLite FSM, сохраняя
+остальные фильтры. Callback содержит nonce/index, не cursor/name/ID, поэтому длинные
+названия/IDs не ломают Telegram64byte callback. Лимиты:1000 страниц игр,1000 categories,
+name length100/query and200/stored public label. Неизвестная/неполная схема fail closed.
+
+Перед применением выбранной категории снова get_game и проверка game identity и
+membership selected ID: устаревший snapshot не переопределяет принадлежность.
+Отсутствующая после обновления категория не применяется. Equal names не сливаются.
+После выбора filters сохраняются, item pagination сбрасывается и get_my_items получает
+category_id с прежними status/price/priority/search. Отмена закрывает FSM state;
+старый nonce после navigation/restart-choice/apply/cancel не запускает новый API call.
+ID-input/clear остаётся дополнительной кнопкой; основной «Категория» теперь picker.
+
+Tests/test_item_category_picker.py:10 parametrized cases; targeted с item filters/
+listings29 passed in11.13s. Доказательства: opaque game cursor, category fixture23/переход на вторую страницу,
+SQLite restart, filter preservation, old callback no extra network, duplicate names,
+fresh membership disappearance, malformed/cyclic game page preserves checkpoint,
+wrong game/missing categories/invalid choice, empty results/invalid search/cancel,
+genuine Dispatcher search→game→category→apply, owner isolation and restart. No outbox.
+Full suite running. Только mocks/tempDB: рабочие cookies/бот/API/БД не использовались,
+мутаций/платежей нет. Category-name picker gap из прошлых записей теперь закрыт локально;
+глобальный name/price/priority поиск и live acceptance по-прежнему не объявляются готовыми.
+
+Контрольная точка category picker: **632 passed in281.47s**,
+data/item_category_picker_results.xml (JUnit tests632/errors0/failures0/skipped0,
+time281.264s). При задержке получения вывода проверен тот же session91477 и полный
+JUnit; тесты не перезапускались. Ruff check/format146 files, pip/diff/secret scan чистые.
+No live request/write/payment/working DB access. Результаты и код сохраняются в origin.

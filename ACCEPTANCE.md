@@ -240,3 +240,12 @@ restart/composition/reset/owner and SafeAccount native category wire with user s
 Name/price/priority are explicitly per-server-page, not claimed global query support;
 empty matching page still permits continuation. Category-name picker remains incomplete.
 No live listing/API write performed; mock acceptance only.
+
+
+## §6 named category picker follow-up
+
+Previous manual-category-ID-only limitation is resolved locally: game name search,
+validated opaque game pages, category pages and membership refresh before apply.
+Test_item_category_picker covers restart/filter preservation, stale/cancel/foreign,
+duplicate names, changed membership, malformed/cyclic pages and real Dispatcher flow.
+No live API, write or full-history query acceptance is implied. ID entry remains optional.

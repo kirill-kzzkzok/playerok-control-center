@@ -173,7 +173,8 @@ def create_router(store, api, products, synchronizer):
                 rows.append([("Все статусы", "itemfilter:ALL")])
                 rows.extend(
                     [
-                        [("Название", "il:search"), ("Цена", "il:price"), ("Категория · ID", "il:category")],
+                        [("Название", "il:search"), ("Цена", "il:price"), ("Категория", "il:pickcategory")],
+                        [("Категория · ввод ID / снять", "il:category")],
                         [("PREMIUM", "il:PREMIUM"), ("Обычные", "il:DEFAULT"), ("Любой приоритет", "il:ALL")],
                         [("Сбросить фильтры", "il:reset"), ("К списку", "il:back")],
                     ]
@@ -196,6 +197,9 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await listings_panel.show("items", state)
             elif action.startswith("il:"):
                 text, markup = await listings_panel.filter_action(action, state)
+            elif action.startswith("icp:"):
+                selected = await listings_panel.category_picker.action(action, state)
+                text, markup = selected if selected is not None else await listings_panel.show("items", state)
             elif action.startswith("listnext:"):
                 parts = action.split(":")
                 if len(parts) != 3:
