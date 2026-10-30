@@ -1782,3 +1782,19 @@ targeted69 passed in8.59s. Ruff check/format152 files/pip/diff чистые. П�
 19 ordinary-edit regression cases включены и незакоммиченное исправление завершается
 в этом checkpoint. API mutations0, global writes/automation false. LIVE_MVP_PLAN.md
 фиксирует точный порядок и внешнее препятствие Stars, без нового P2 цикла.
+
+
+## Stars creation gate revalidation —2026-10-30T15:25UTC
+
+Повтор условия блокировки после MVP checkpoint (вторая последовательная проверка,
+считая исходное обнаружение в предыдущем goal turn): код/config clean at e9334eb;
+read-only pending agreements выбранной Stars категории вернул0. Auth/read requests
+успешны, mutations0. Report data/stars_creation_gates.json. Не следует заявлять, что
+создание сейчас блокируется непринятым соглашением или API/session error: это не так.
+Остаётся неустановленный реальный товар/способ передачи Stars и запрет повторять
+rejected technical/non-sale listing. Local image/proposal и explicit create request
+сохранены; permission не потеряно и повторно не запрашивается. Поход в acceptAgreement
+не нужен и не выполнялся. Publication/payment/buyer sends/config writes не разрешены.
+Новых P2, поставщиков или дополнительного большого аудита не начинать. Дальнейшая
+существенная live-проверка зависит от фактической возможности разрешённого сценария,
+а не от увеличения числа unit tests. Общая цель не завершена.

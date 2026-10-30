@@ -69,3 +69,19 @@ SENT/readback. Дублирование, lostACK и bad create receipt не да
 Пока не установлен фактически допустимый товар/способ передачи, серверные записи не
 выполняются. Без новых решений пользователя не развивать поставщиков Stars/Steam/
 подарков, не переключать .env, не начинать P2 или новый масштабный аудит.
+
+
+## Stars creation gate revalidation —2026-10-30T15:25UTC
+
+Повтор условия блокировки после MVP checkpoint (вторая последовательная проверка,
+считая исходное обнаружение в предыдущем goal turn): код/config clean at e9334eb;
+read-only pending agreements выбранной Stars категории вернул0. Auth/read requests
+успешны, mutations0. Report data/stars_creation_gates.json. Не следует заявлять, что
+создание сейчас блокируется непринятым соглашением или API/session error: это не так.
+Остаётся неустановленный реальный товар/способ передачи Stars и запрет повторять
+rejected technical/non-sale listing. Local image/proposal и explicit create request
+сохранены; permission не потеряно и повторно не запрашивается. Поход в acceptAgreement
+не нужен и не выполнялся. Publication/payment/buyer sends/config writes не разрешены.
+Новых P2, поставщиков или дополнительного большого аудита не начинать. Дальнейшая
+существенная live-проверка зависит от фактической возможности разрешённого сценария,
+а не от увеличения числа unit tests. Общая цель не завершена.
