@@ -54,3 +54,15 @@
 Следующий проход: расширить эту карту до всех требований §1–24, проверить отсутствующие
 сценарии и ограничения реализации, исправить конкретные пробелы. Не отмечать PHASE 8/9
 или всю цель выполненными по одному зелёному набору тестов.
+
+## Уточнение §14: настройки
+
+SettingsPanel: подключения (сохранённые состояния), безопасность, переходы к finance,
+statistics, fulfillment/manual boundary, automation/promotion, templates, backup/diagnostics.
+NotificationPreferences: шесть категорий на владельца, defaults true, bool validation,
+revision CAS, persistent suppression/no replay, обязательный uncertain. Доказательства:
+`tests/test_notification_preferences.py` (включая real Dispatcher/restart/stale/foreign),
+`tests/test_notifications.py` (baseline/failure/critical), existing replies status updates.
+Остаются: отдельное управление очисткой интерфейса, полноценный rule-based autoresponder,
+полностью автоматическое подтверждение продавцом с доказанной корректной attestation
+семантикой. Наличие кнопки с описанием ограничения не считается реализацией этих функций.

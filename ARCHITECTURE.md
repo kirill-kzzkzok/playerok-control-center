@@ -510,3 +510,14 @@ UNCERTAIN/quarantine or owner resolution remains untouched. The operation UI exp
 late receipt IDs for read reconciliation; there is no automatic resend or success
 promotion. Failure while the lease is still owned propagates for recovery, rather than
 being concealed as a late outcome. An actually crashed process cannot save a late reply.
+
+## Per-owner notification preferences
+
+NotificationPreferences uses the existing settings table with an explicit boolean map
+and revision. Owner/CAS/audit writes are transactional. Notification suppression and the
+notification deduplication key commit together; SUPPRESSED events are not replayed after
+a later enable. Preferences apply at processing time. Mandatory operation_uncertain
+bypasses preferences; invalid preference shape suppresses noncritical events with a
+separate status and diagnostic marker rather than killing the worker or enabling sends.
+Existing delivered notification action updates remain independent of preference toggles.
+SettingsPanel owns local configuration navigation; it exposes no secret or payment toggle.

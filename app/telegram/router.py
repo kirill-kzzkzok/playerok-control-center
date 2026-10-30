@@ -27,6 +27,7 @@ from app.telegram.orders_panel import OrdersPanel
 from app.telegram.profile_panel import ProfilePanel
 from app.telegram.promotions_panel import PromotionsPanel
 from app.telegram.replies_panel import RepliesPanel
+from app.telegram.settings_panel import SettingsPanel
 from app.telegram.statistics_panel import StatisticsPanel
 from app.telegram.wizard import Wizard
 from playerokapi.enums import ItemStatuses
@@ -60,6 +61,7 @@ def create_router(store, api, products, synchronizer):
     promotions_panel = PromotionsPanel(store, api)
     automation_queue = AutomationQueue(store, api)
     statistics_panel = StatisticsPanel(store)
+    settings_panel = SettingsPanel(store, api)
     order_finance_panel = OrderFinancePanel(store, api)
     profile_panel = ProfilePanel(api)
 
@@ -371,21 +373,8 @@ def create_router(store, api, products, synchronizer):
                 return await profile_panel.handle(message)
             elif action.startswith(("stats:", "st:", "sd:")):
                 return await statistics_panel.handle(action, message, owner=owner)
-            elif action == "settings":
-                text = (
-                    "⚙️ <b>Настройки</b>\nЗаписи API: "
-                    + ("включены" if api.account.writes_enabled else "выключены")
-                    + "\nПлатежи и автовывод запрещены.\nВладелец закреплён локально."
-                )
-                markup = keyboard(
-                    [
-                        [("🔐 Подключения", "diagnostics")],
-                        [("💰 Условия вывода · просмотр", "providers")],
-                        [("⚡ Быстрые ответы", "quickreplies")],
-                        [("💾 Резервная копия БД", "backup")],
-                        [("⚡ Автоматизация", "automation")],
-                    ]
-                )
+            elif action == "settings" or action.startswith("sp:"):
+                text, markup = settings_panel.handle(action, owner)
             elif action == "backup":
                 from datetime import datetime
 
@@ -415,6 +404,8 @@ def create_router(store, api, products, synchronizer):
                     + escaped(store.setting("enrollment:health", {"status": "NOT_STARTED"}), 300)
                     + "\nТранзакции: "
                     + escaped(store.setting("transactions:health", {"status": "NOT_STARTED"}), 300)
+                    + "\nНастройки уведомлений: "
+                    + escaped(store.setting(f"notifications:{owner}:preferences_error", "OK"), 100)
                     + "\n\n"
                     + "\n".join(
                         escape(f"{a['kind']}: {a['status']} · {a['error_code'] or ''}") for a in actions

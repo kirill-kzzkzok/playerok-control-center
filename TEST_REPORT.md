@@ -492,3 +492,23 @@ and distinguishes mock evidence from unaccepted live behavior. v16 migration aft
 backup retained 217 orders, 462 transactions, one owner and zero late observations;
 data/dispatch_migration_check.json. External requests/mutations=0, writes/automation
 false. Full project/live/soak/remaining spec acceptance remains open.
+
+## Settings and notification preferences (2026-10-30)
+
+458 passed in 53.44s; data/settings_notifications_results.xml. Ruff check/format
+(117 files), pip check, actual-secret scan and ignored-secret-file checks clean.
+New tests cover explicit boolean defaults/invalid values, per-owner isolation, revision
+CAS/foreign owner denial, suppression of 201 messages without starving later orders,
+no historical replay after enable, all urgent configurable categories before baseline,
+mandatory operation_uncertain despite mute/corrupt settings, concurrent notification
+workers, actual Dispatcher restart/stale callback/security/connections navigation.
+
+Corrupt preferences produce SUPPRESSED_INVALID and a diagnostic marker for noncritical
+events; critical uncertainty alerts remain deliverable. Existing sent notification
+updates remain independent of category preferences. No working preferences were changed:
+data/notification_preferences_local_check.json shows schema16/one owner/zero preference
+rows, external requests=0/mutations=0, writes=false/automation=false. No live Telegram
+send or Playerok operation executed. No new schema migration was needed.
+
+Settings completeness remains partial: cleanup UI controls, autonomous rule-based
+responses and fully automatic seller confirmation remain explicitly open in ACCEPTANCE.md.

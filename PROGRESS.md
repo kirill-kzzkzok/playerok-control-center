@@ -994,3 +994,34 @@ data/dispatch_migration_check.json: external_requests=0/mutations=0, writes=fals
 automation=false. Новых live-записей/сообщений/платных действий не было, бот не запущен.
 
 Контрольная точка dispatch: **447 passed in 56.03s**; JUnit data/phase7_dispatch_results.xml.
+
+## PHASE 7/9 — persistent notification preferences and settings navigation (2026-10-30)
+
+Сверка §14 показала отсутствующий экран уведомлений. Добавлены NotificationPreferences
+и SettingsPanel: шесть категорий (buyer messages, orders, problems, empty stock, promotion
+guard, blocked enrollment), отдельно по Telegram owner. Настройки JSON в existing settings,
+без миграции и изменения рабочих значений; explicit bool, revision CAS и owner check под
+transaction, audit без текста событий. Defaults все включены, совместимы с прежней работой.
+
+Notifications учитывает предпочтение атомарно с регистрацией отправки. Отключённые события
+получают SUPPRESSED; не отправляются и не replay после включения. Пакет из 201 отключённого
+сообщения не блокирует следующий заказ после bounded drain. Два worker не дублируют запись.
+operation_uncertain обязательно вне preference и initial baseline; повреждённая preference
+не включается молча: SUPPRESSED_INVALID для обычных событий, диагностический marker,
+критическое предупреждение сохраняется. Ранее отправленные notification_actions обновляются
+как прежде, выбор prefs не меняет delivery/promotion policy или runtime writes.
+
+Настройки содержат кнопки подключений, безопасности, выдачи, promotion settings, fulfillment
+с честным описанием ручной границы, reply templates, notifications, finance, stats, backup и
+диагностики. Подключения показывают сохранённое состояние, не имитируют network probe.
+Секреты не показываются/не редактируются Telegram-экраном; payment flags не переключаются.
+Полный автоматический SENT и автоответы по правилам по-прежнему не приняты; шаблоны не
+выдаются за полностью автономный responder. Очистка интерфейса остаётся отдельным пробелом.
+
+Тесты временных БД/реального Dispatcher проверяют default/CAS/owner/invalid input, restart,
+stale callback, категории до baseline, разные владельцы, обязательный uncertain, corrupted
+preferences, suppression/no replay и concurrent workers. Рабочие настройки не менялись,
+новых внешних сообщений/запросов/объявлений/платных действий не было, бот не запущен.
+
+Контрольная точка notifications/settings: **458 passed in 53.44s**; Ruff/pip/format/secret scan чистые.
+JUnit data/settings_notifications_results.xml; local probe schema16/1 owner/0 preference rows, external_requests=0.

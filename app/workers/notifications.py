@@ -6,6 +6,7 @@ from html import escape
 from aiogram.exceptions import TelegramBadRequest
 
 from app.database.store import encode
+from app.services.notification_preferences import NotificationPreferences
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 from app.telegram.message_notice import message_notice
@@ -16,6 +17,7 @@ class Notifications:
 
     def __init__(self, store, bot):
         self.store, self.bot = store, bot
+        self.preferences = NotificationPreferences(store)
 
     async def once(self):
         if not self.store.rows("SELECT user_id FROM administrators LIMIT 1"):
@@ -137,6 +139,21 @@ class Notifications:
             for owner in owners:
                 user = owner["user_id"]
                 with self.store.transaction() as db:
+                    invalid = False
+                    try:
+                        enabled = self.preferences.enabled(user, event["kind"])
+                    except ValueError:
+                        enabled, invalid = False, True
+                        db.execute(
+                            "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                            (f"notifications:{user}:preferences_error", encode("INVALID_PREFERENCES")),
+                        )
+                    if not enabled:
+                        db.execute(
+                            "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) VALUES(?,?,?)",
+                            (event["key"], user, "SUPPRESSED_INVALID" if invalid else "SUPPRESSED"),
+                        )
+                        continue
                     inserted = db.execute(
                         "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) VALUES(?,?,'PROCESSING')",
                         (event["key"], user),
