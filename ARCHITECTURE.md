@@ -715,3 +715,15 @@ items/categories remain known-revenue views. Unknown-only groups show no known s
 true zero remains zero. Native IDs prevent merging same-named listings, but are not an
 automatically inferred logical SKU. Current category grouping is by saved name and is
 labelled accordingly. Count data does not change charts, quotes, transactions or profit.
+
+
+## User-facing server list checkpoints
+
+ListingsPanel owns item/chat page rendering and durable FSM cursor/seen/nonce/number.
+Existing validate_page verifies envelope and detects continuation cycles before state
+commit. Next buttons carry a per-page nonce; stale/legacy/wrong-kind callbacks fail
+before network. Terminal pages clear cursor/nonce; failed responses preserve previous
+checkpoint for read retry. Empty continuation is distinct from EOF; traversal capped
+at1000 pages. Callback UTF8 size is checked before state writes. Owner middleware and
+per-user callback isolation provide serialization; SQLite FSM preserves continuation
+across dispatcher reconstruction. Filters restart traversal with upstream status enum.

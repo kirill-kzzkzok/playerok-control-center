@@ -219,3 +219,13 @@ five periods/owner/escaping/length/stable cutoff. Read-only cache probe reconcil
 orders/183 paid with183 distinct native item IDs; all actual counts1 are disclosed,
 not grouped into invented SKU families. Categories remain name-grouped and labelled.
 No API, outbox, working data rewrite or financial interpretation change occurred.
+
+
+## User list pagination (§3/§10/§15)
+
+ListingsPanel validates server pages/cursor cycles, persists nonce-scoped continuation,
+clears terminal cursor and preserves checkpoint on malformed response. Test_listings_panel
+covers items/chats restart+EOF, cycle/schema errors, empty continuation, stale callback,
+limit/long ID and actual Dispatcher double-click/filter reset/foreign owner. All read
+mock only: no live API/mutation/working database write. UI pagination does not prove
+complete upstream history beyond locally inspected pages.

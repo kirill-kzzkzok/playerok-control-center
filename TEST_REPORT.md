@@ -741,3 +741,19 @@ counts and unknown coverage reconcile. data/bestsellers_readonly_check.json cont
 counts/booleans only. No database writes, API request, migration, buyer send or payment.
 Counts represent paid orders by native listing ID, not inferred logical SKU/units;
 category names are not a verified cross-game taxonomy. Existing revenue top remains.
+
+
+## User list pagination checkpoint — 2026-10-30
+
+Full suite: **610 passed in98.20s**, data/listings_pagination_results.xml.
+Targeted listings/Telegram integration19 passed in13.06s. Seven new parametrized
+cases validate items/chats restart/EOF, cursor cycle and malformed envelope checkpoint
+preservation, empty continuation, stale nonce/wrong kind, callback byte limit/traversal
+limit, genuine Dispatcher concurrent double click/filter reset/legacy/foreign access.
+Only one next-page API mock call on concurrent click; no outbox mutation.
+Ruff check/format142 files, pip check/diff and actual-secret/JWT scan clean.
+Offline selfcheck OK:85 imports,17 migration files/schema1–18, temporary SQLite backup
+reopen, profile/chart PNG; data/listings_selfcheck.json. External requests0, working
+bot/database not started, no migration/live writes/payment. Page validation and durable
+continuation do not prove complete upstream history. Old next-page callbacks are
+intentionally rejected and require opening the list again.

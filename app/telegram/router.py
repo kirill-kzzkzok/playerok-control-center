@@ -24,6 +24,7 @@ from app.telegram.formatting import escaped
 from app.telegram.fulfillment_panel import FulfillmentPanel
 from app.telegram.interface_cleanup_panel import InterfaceCleanupPanel
 from app.telegram.keyboards import keyboard, main_menu
+from app.telegram.listings_panel import ListingsPanel
 from app.telegram.operations_panel import OperationsPanel
 from app.telegram.order_finance_panel import OrderFinancePanel
 from app.telegram.orders_panel import OrdersPanel
@@ -70,6 +71,7 @@ def create_router(store, api, products, synchronizer):
     interface_cleanup = InterfaceCleanupPanel(store)
     order_finance_panel = OrderFinancePanel(store, api)
     profile_panel = ProfilePanel(api)
+    listings_panel = ListingsPanel(api)
 
     @router.message(CommandStart())
     async def start(message, state):
@@ -79,43 +81,6 @@ def create_router(store, api, products, synchronizer):
             "Черновики и история сохраняются локально.",
             reply_markup=main_menu(),
         )
-
-    async def listing(kind, state, cursor=None):
-        if kind == "items":
-            filters = (await state.get_data()).get("item_filters", {})
-            status = filters.get("status")
-            if status and status not in ItemStatuses.__members__:
-                raise ValidationError("Неизвестный статус товара")
-            page = await api.call(
-                "get_my_items",
-                count=10,
-                after_cursor=cursor,
-                statuses=[ItemStatuses[status]] if status else None,
-            )
-            values, prefix = page.get("items") or [], "item"
-            title = "📦 Мои товары"
-        elif kind == "chats":
-            page = await api.call("get_chats", count=10, after_cursor=cursor)
-            values, prefix = page.get("chats") or [], "chat"
-            title = "💬 Диалоги"
-        else:
-            raise ValidationError("Неизвестный список")
-        rows = []
-        for value in values:
-            user = value.get("user") or {}
-            label = value.get("name") or user.get("username") or value.get("id")
-            if kind == "items":
-                label = f"{value.get('price', '?')} ₽ · {label}"
-            elif value.get("unread_messages_counter"):
-                label = f"🔵 {value['unread_messages_counter']} · {label}"
-            rows.append([(str(label)[:60], f"{prefix}:{value['id']}")])
-        info = page.get("page_info") or {}
-        if info.get("has_next_page"):
-            await state.update_data(list_kind=kind, list_next=info["end_cursor"])
-            rows.append([("Далее →", f"listnext:{kind}")])
-        if kind == "items":
-            rows.append([("🔎 Статусы", "itemfilters")])
-        return f"<b>{title}</b>\n" + ("Выберите запись." if values else "Записей нет."), keyboard(rows)
 
     @router.callback_query()
     async def callback(query, state):
@@ -190,7 +155,7 @@ def create_router(store, api, products, synchronizer):
                     text, markup = "Состояние: " + escape(draft["state"]), keyboard(rows)
             elif action in {"items", "chats"}:
                 await state.clear()
-                text, markup = await listing(action, state)
+                text, markup = await listings_panel.show(action, state)
             elif action == "itemfilters":
                 names = {
                     "APPROVED": "Активные",
@@ -209,13 +174,12 @@ def create_router(store, api, products, synchronizer):
             elif action.startswith("itemfilter:"):
                 value = action.split(":", 1)[1]
                 await state.set_data({"item_filters": {"status": None if value == "ALL" else value}})
-                text, markup = await listing("items", state)
+                text, markup = await listings_panel.show("items", state)
             elif action.startswith("listnext:"):
-                kind = action.split(":", 1)[1]
-                data = await state.get_data()
-                if data.get("list_kind") != kind or not data.get("list_next"):
-                    raise ValidationError("Список устарел")
-                text, markup = await listing(kind, state, data["list_next"])
+                parts = action.split(":")
+                if len(parts) != 3:
+                    raise ValidationError("Список устарел. Откройте его заново")
+                text, markup = await listings_panel.show(parts[1], state, nonce=parts[2])
             elif action.startswith("item:"):
                 ident = action.split(":", 1)[1]
                 item = await api.call("get_item", id=ident)

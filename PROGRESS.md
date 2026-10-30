@@ -1516,3 +1516,37 @@ native item counts поэтому равны1: это не фиктивное о
 после продолжения отсутствовал; завершение подтверждено полным XML, повторный запуск
 не требовался. Ruff check/format140 files, pip check, diff и actual-secret/JWT scan
 чистые. Working-cache read-only probe counts reconcile; external_requests=0/DBwrites=0.
+
+
+## Защита пользовательской пагинации товаров и диалогов
+
+После volume ranking полного603-test checkpoint и commit00dc850 продолжена сверка
+PHASE2/4/7. В router listing обнаружен дефект: last page не очищал list_next, старые
+кнопки listnext:{kind} могли повторять страницу или продвигать уже другой текущий список.
+Сами server pages принимались без validate_page и повторный cursor не блокировался.
+План: выделить ListingsPanel, проверка envelope и cursor cycles, одноразовый nonce
+страницы в durable FSM, обновление checkpoint только после полной валидации.
+
+Lists now validate collection/entries/page_info via existing validate_page; continuation
+cursor cannot repeat any previous cursor in this traversal. Next callback includes
+12hex nonce; old/legacy/foreign-kind buttons reject before API. Last page atomically
+clears next/nonce/seen via SQLiteStorage.update_data. Invalid page or failed API leaves
+previous checkpoint unchanged/retryable. Empty continuation explicitly offers Next,
+not false EOF. Traversal limit1000 pages bounds stored seen list. Item callbacks
+validate Telegram64UTF8-byte size before state change. Existing status filters reset
+cursor, current filter persists in state; ItemStatuses remains upstream enum contract.
+
+ListingsPanel removes old listing closure from router; existing owner middleware and
+per-user event isolation serialize callbacks. Native queries/read-only semantics remain.
+Tests/test_listings_panel.py:7 parametrized cases cover items/chats restart+EOF,
+cycle/malformed response checkpoint preservation, empty continuation+old nonce,
+long callback/limit, genuine Dispatcher concurrent double click (one next API call),
+filter reset, legacy callback and foreign owner. Targeted with Telegram integration:
+19 passed in13.06s. Full suite running, schema unchanged. No working bot, live API,
+buyer messages, working database access, mutations or payments in this checkpoint.
+
+Контрольная точка listings: **610 passed in98.20s**,
+data/listings_pagination_results.xml; Ruff check/format142 files, pip check, diff и
+actual-secret/JWT scan чистые. Offline selfcheck OK:85 modules, schema1–18,
+backup reopen/profile+chart PNG, external_requests0; data/listings_selfcheck.json.
+Рабочий бот/БД не запускались; live-записи и платежи не выполнялись.
