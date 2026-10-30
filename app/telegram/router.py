@@ -18,6 +18,7 @@ from app.services.discounts import discount_plan
 from app.services.products import ValidationError, listing_price, listing_text, priority_price_basis
 from app.services.statistics import statistics
 from app.telegram.automation_panel import AutomationPanel
+from app.telegram.automation_queue import AutomationQueue
 from app.telegram.chat_panel import ChatPanel
 from app.telegram.finance_panel import FinancePanel
 from app.telegram.formatting import escaped
@@ -57,6 +58,7 @@ def create_router(store, api, products, synchronizer):
     fulfillment_panel = FulfillmentPanel(store, api)
     automation_panel = AutomationPanel(store, api)
     promotions_panel = PromotionsPanel(store, api)
+    automation_queue = AutomationQueue(store, api)
 
     @router.message(CommandStart())
     async def start(message, state):
@@ -135,6 +137,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await replies.callback(action, owner, state)
             elif action.startswith("ops:"):
                 text, markup = await operations.callback(action, owner, state)
+            elif action.startswith("aq:"):
+                text, markup = await automation_queue.callback(action, owner, state)
             elif action == "promotions" or action.startswith(("promo:", "pp:", "pi:")):
                 text, markup = await promotions_panel.callback(action, owner, state)
             elif action == "automation" or action.startswith(("auto:", "ap:")):

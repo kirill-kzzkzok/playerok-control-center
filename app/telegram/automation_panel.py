@@ -29,6 +29,7 @@ class AutomationPanel:
             [
                 [("📦 Выбрать товар", "items")],
                 [("🚀 Продвижение · dry-run", "promotions")],
+                [("Все политики выдачи", "aq:list:policies:0"), ("Цепочки выдачи", "aq:list:chains:0")],
                 [("⛔ Выключить все политики выдачи", "auto:stop")],
             ]
         )

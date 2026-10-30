@@ -347,3 +347,21 @@ v12 backup/migration probe data/promotion_worker_migration_check.json: 217 order
 was invoked once locally against disabled policy, not left running. It does not charge
 or record dry-run as a real promotion. Further full target queue UI and broader goal
 acceptance remain pending.
+
+
+## PHASE 5 — automation queue UI checkpoint (2026-10-30)
+
+359 passed in 40.65s, JUnit data/phase5_queue_ui_results.xml; Ruff/dependencies/format
+and actual-secret scan clean. Tests cover 27-record policy/target pagination without
+missing/duplicate entries, escaped human-readable evaluation, full owner restrictions,
+FSM stop confirmation after restart, stale status snapshot rejection, active lease
+reschedule refusal and no implicit policy enable/outbox. Inflight stop regression
+proves an accepted external result can still finish SUCCEEDED/DELIVERED after local
+CANCELLED; it is not falsified or returned to available stock. Real aiogram Dispatcher
+exercise covers chain inspection, restart, double stop and foreign callback denial.
+
+All chain/queue changes occurred in temporary test databases. No working database
+migration was needed. No Playerok/Telegram live requests, buyer messages, listing
+changes or paid actions performed. Automatic unknown-chain resume is deliberately
+absent; resolving a step does not authorize new sends. Remaining original goal
+requirements and final acceptance are still pending.

@@ -570,3 +570,38 @@ async def test_promotions_settings_router_has_no_paid_execution(tmp_path):
     finally:
         await bot.session.close()
         store.close()
+
+
+async def test_queue_router_preserves_confirmation_and_blocks_foreign_access(tmp_path):
+    from app.database.store import now
+    from app.services.orders import Orders
+
+    store = Store(tmp_path / "queue-ui.sqlite")
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    api = CatalogAPI()
+    ui = Interaction(bot, dispatcher(store, api))
+    state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
+    try:
+        await ui.message("/start")
+        Orders(store).ingest({"id": "order", "status": "PAID", "direction": "OUT", "item": {"id": "item"}})
+        store.execute("INSERT INTO delivery_chains VALUES('order','item',7,1,'{}','ACTIVE',?)", (now(),))
+        store.execute(
+            "INSERT INTO delivery_chain_steps(order_id,position,kind,text) VALUES('order',0,'delivery_text','private code')"
+        )
+        await ui.click("aq:list:chains:0")
+        await ui.click("aq:chain:order")
+        assert "private code" not in session.calls[-1].text
+        await ui.click("aq:stop:order")
+        nonce = (await state.get_data())["chain_stop"]["nonce"]
+        ui.dp = dispatcher(store, api)
+        await ui.click("aq:apply:" + nonce)
+        await ui.click("aq:apply:" + nonce)
+        assert store.rows("SELECT status FROM delivery_chains") == [{"status": "CANCELLED"}]
+        assert len(store.rows("SELECT * FROM order_history WHERE source='CHAIN_STOPPED'")) == 1
+        await ui.click("aq:chain:order", owner=8)
+        assert not api.calls
+        assert not store.rows("SELECT * FROM outbox")
+    finally:
+        await bot.session.close()
+        store.close()

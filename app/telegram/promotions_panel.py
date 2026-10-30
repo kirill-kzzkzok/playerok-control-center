@@ -45,7 +45,11 @@ class PromotionsPanel:
                 [("💾 Сохранить", f"pp:{nonce}:save")],
                 [("⛔ Выключить", "promo:stop")],
                 [("Выбрать товар и проверить", "items")],
-                [("История расходов", "promo:expenses")],
+                [("История расходов", "aq:list:expenses:0"), ("История dry-run", "aq:list:evaluations:0")],
+                [
+                    ("Выбранные / исключённые", "aq:list:targets:0"),
+                    ("Очередь проверок", "aq:list:schedule:0"),
+                ],
             ]
         )
         return text, keyboard(rows)

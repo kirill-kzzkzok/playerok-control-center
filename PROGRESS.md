@@ -710,3 +710,42 @@ external_requests=0/mutations=0; data/promotion_worker_migration_check.json.
 автоматизации/аналитики/финальной приёмки остаются; вся цель не объявляется завершённой.
 
 Контрольная точка планировщика: **351 passed in 34.34s**, JUnit data/phase5_promotion_worker_results.xml; Ruff/pip/format/secret scan чистые.
+
+
+## PHASE 5 — доступная очередь и безопасная остановка (2026-10-30)
+
+AutomationQueue подключена к Telegram: постраничные списки всех delivery policies,
+цепочек, include/exclude целей продвижения, расписания, expense ledger и dry-run history.
+Последние 20 записей в прежней сводке больше не являются единственным способом доступа:
+списки по 10 записей позволяют пройти всю историю. Все запросы параметризованы,
+тип списка выбирается из фиксированного whitelist; owner проверяется до чтения.
+Стоимость/результат historical dry-run показываются обычными полями, без сырого JSON;
+явно обозначено, что запись не доказывает нынешние условия или списание. Время в МСК.
+
+Карточка цепочки показывает только тип/статус шага, error code и operation link,
+без text/policy/stock values. Можно открыть UNCERTAIN resolution или отдельный
+fulfillment из NEEDS_FULFILLMENT. Resume неизвестных цепочек не добавлен: ручное
+решение одного внешнего шага не означает разрешение на повтор или автоматическое
+продолжение остальных. Состояния/ошибки доступны владельцу для сверки.
+
+Stop chain имеет отдельное подтверждение и fingerprint текущих chain+steps/outbox
+statuses. Если шаг изменился после preview, старое подтверждение отвергается.
+SQLite-транзакция меняет только ACTIVE→CANCELLED, RESERVED→QUARANTINED и history.
+Не переписывает PROCESSING/SUCCEEDED/UNCERTAIN операции. Уже отправленное не отзывается;
+запрос в полёте может подтвердиться после stop, и его настоящий результат сохраняется.
+DELIVERED код не возвращается в stock; следующие шаги блокирует прежний executor guard.
+FSM stop confirmation переживает restart, двойной callback не создаёт второе решение.
+
+Promotion target card показывает выбор, ошибки, lease и next due. Повторная проверка
+планируется только локально, с fresh ownership check; активный lease не сбрасывается.
+Выключенная policy остаётся выключенной, expense/outbox не создаются. Сброс due не
+равен запросу платного поднятия. Изменения цепочек в tests только tmp DB; рабочая БД
+и объявления не менялись, live API/Telegram не вызывались, migrations не нужны.
+
+Проверены 27 policies/targets без пропусков и дублей, stale snapshot/nonce, restart,
+чужой actor, active lease protection, secret omission, читаемый escaped result,
+остановка inflight операции с последующим сохранением её настоящего SUCCEEDED и
+настоящий aiogram Router/FSM callback flow. Общая цель и остальная автоматизация/
+аналитика/интеграционная и live-приёмка остаются открытыми.
+
+Контрольная точка очереди: **359 passed in 40.65s**, JUnit data/phase5_queue_ui_results.xml; Ruff/pip/format/secret scan чистые. Новых live-вызовов и изменений рабочей БД нет.

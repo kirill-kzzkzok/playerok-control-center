@@ -365,3 +365,19 @@ Budget guard фиксирует inbox promotion_guard вместе с CAS-disabl
 обходит historical baseline для этой локальной тревоги и сообщает отсутствие списания.
 Уведомление дедуплицируется устойчивым policy revision key. Shutdown worker ждёт stop
 и оставляет leases/cursors в БД для восстановления следующего процесса.
+
+
+## AutomationQueue UI
+
+Фиксированный whitelist списков даёт полную пагинацию без API side effects. Сводки
+не читают secret-bearing policy/text/stock columns; chain snapshot содержит только
+метаданные и статусы шагов. Сохранённый hash snapshot + nonce разрешает stop только
+для того же ACTIVE состояния. Под RLock/SQLite transaction повторяется snapshot check,
+CANCELLED/quarantine/history фиксируются вместе. Внешний outbox outcome не подменяется;
+finish по действующему lease остаётся возможным для запроса в полёте.
+
+Local reschedule проверяет actor/актуального seller, не снимает active lease и не
+включает disabled policy. Due/error сбрасываются только для следующего read-only worker
+цикла. Unknown write нельзя повторить через эту кнопку. Списки ledger/evaluations
+раздельны; historical evaluation не показан как актуальный quote. Telegram отображает
+человеческие поля и МСК-время, не raw JSON. UI не добавляет auto-resume цепочек.
