@@ -1654,3 +1654,39 @@ Full suite running. Всё tempDB/mock media/API; реальный бот, buyer
 data/item_card_gallery_results.xml. Ruff check/format148 files/pip/diff/secret scan
 чистые.8 новых regression cases. Рабочая БД/бот/сеть не использовались; live writes,
 платежи и migrations не выполнялись. Общая приёмка и live-доказательства остаются открыты.
+
+
+## Проверяемые результаты publish/delete вместо ложного успеха
+
+Аудит PHASE2/7/9 выявил два дефекта acceptance predicates. Executor publish принимал
+result с правильным id и отсутствующим status (None != DRAFT); delete принимал любой
+bool(result), а upstream Account.remove_item вообще игнорировал data.removeItem и
+безусловно возвращал True после HTTP. Native QUERIES.removeItem запрашивает объект
+RegularItem/MyItem с id/deletedAt, не boolean. Upstream main проверен также по интернету,
+источник записан в PLAYEROK_RESEARCH. План: узкие положительные predicates, missing/
+unknown response -> UNCERTAIN после одного вызова, regression across real adapter mock.
+
+SafeAccount.remove_item теперь использует тот же pinned native query/permit/endpoint/
+transport; принимает только dict data.removeItem с exact target ID и aware ISO deletedAt.
+Null/false/boolean/empty/wrong id/missing/malformed/naive date дают DELETE_RESULT_UNKNOWN,
+uncertain=true. Сырой объект/description не сохраняются; return True означает проверенное
+receipt. Executor delete требует именно True, не truthy string/int/{}; результат outbox
+только removed=true. Это свидетельство ответа, не гарантированная полнота независимого
+дальнейшего listing scan. HTTP retry не добавлен, восстановление не повторяет mutation.
+
+Publish принимает exact id + APPROVED/PENDING_APPROVAL/PENDING_MODERATION. DRAFT/
+unknown/missing/declined/blocked/expired/sold не превращаются в SUCCEEDED; outcome
+PUBLICATION_NOT_CONFIRMED/UNCERTAIN. Явный moderation status сохраняется как есть,
+не объявляется активным объявлением. Старые free quote/base-price guards остаются.
+
+Tests/test_item_mutation_receipts.py добавляет30 cases:11 invalid publish receipts,
+3 positive status,9 invalid native delete receipt,2 aware positive delete,5 false/truthy
+stub responses. Assertions: один mutation call, terminal unknown alert, no second send,
+no raw private response persistence. Native contract fixture removeItem boolean заменён
+правильным object/deletedAt. Targeted55 passed in7.23s; full запущен. Всё mock/tempDB,
+реальных API writes/удалений/объявлений/покупателей/платежей/рабочей БД не касались.
+
+Контрольная точка item mutation receipts: **670 passed in95.23s**,
+data/item_mutation_receipts_results.xml; targeted55 passed in7.23s. Ruff check/format
+149 files/pip/diff/actual-secret scan чистые.30 новых cases. Ни одной live mutation,
+платной операции, buyer send, рабочей DB write или migration в этом этапе.

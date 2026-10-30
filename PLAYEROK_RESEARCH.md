@@ -305,3 +305,18 @@ Inference applied to our adapter: shielding and retaining the inner thread task/
 explicit cancellation guard before dispatch, and draining before closing shared
 resources are needed. Verified with local thread barriers and MockTransport, not live
 Playerok writes. No challenge handling or external mutation was performed in this audit.
+
+
+## 2026-10-30: native mutation result audit
+
+Primary upstream source re-read online:
+https://github.com/alleexxeeyy/PlayerokAPI/blob/main/playerokapi/account.py
+(raw https://raw.githubusercontent.com/alleexxeeyy/PlayerokAPI/main/playerokapi/account.py).
+Upstream remove_item sends removeItem then returns True without checking its result.
+Pinned local playerokapi.misc.QUERIES.removeItem requests an Item fragment including
+id and deletedAt, not a boolean. Inference applied: only exact ID + aware deletion time
+constitutes our positive deletion receipt; absent/inconsistent evidence remains unknown.
+This narrow predicate is verified with MockTransport only, not new live delete. Pinned
+ItemStatuses distinguishes APPROVED and two moderation statuses from DRAFT/DECLINED/
+BLOCKED/EXPIRED/SOLD. Publication confirmation now requires explicit acceptable status;
+moderation is retained as moderation, not active sale proof. No challenge/retry bypass.

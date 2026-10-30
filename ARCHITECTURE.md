@@ -763,3 +763,15 @@ limits and temporary-file cleanup. Text card remains with a separate photo navig
 button; existing edit/delete/preview workflows are retained. Counters require nonnegative
 int, with unknown distinct from0; deals_counter is labelled API deals, not settled sales.
 Position is explicitly within priority scope. Link path segment is URL-encoded.
+
+
+## Explicit publication/deletion receipts
+
+SafeAccount overrides upstream remove_item because native upstream discards data and
+returns True regardless of deletion evidence. Existing pinned mutation query returns
+an Item object: exact ID and aware deletedAt required, otherwise uncertain APIError.
+No raw item body retained. Executor delete accepts literal True only; no truthiness
+fallback. Publication requires exact ID and one of APPROVED/PENDING_APPROVAL/
+PENDING_MODERATION; missing or other states are not successful publication receipts.
+Unknown outcomes keep normal UNCERTAIN/no-resend semantics. Moderation acceptance is
+not active listing proof, deletion receipt is not a complete independent-history scan.

@@ -260,3 +260,13 @@ stale/index validation and actual Dispatcher sendPhoto/owner/no outbox. Photos a
 opened by button, not automatically included in the text card; counters are not claimed
 settled-sale totals. Media download uses existing bounded Attachments path. Mock only;
 no live screenshot/photo-send/listing mutation or server acceptance implied.
+
+
+## §6/§16: publication/deletion receipt predicates
+
+Thirty cases in test_item_mutation_receipts cover missing/wrong/non-success publication
+statuses, explicit three placement/moderation states, native removeItem object/id/
+aware deletedAt, bool/null/false/malformed rejection and strict executor True. Adapter
+MockTransport proves one request and no repeat/raw-body persistence; current native
+query is reused. This fixes false success in upstream remove_item and executor publish;
+no real delete/publish or independent current server scan accepted by these tests.

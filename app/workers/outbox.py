@@ -277,14 +277,25 @@ class Executor:
             result = await self.mutate(
                 action, "publishItem", "publish_item", item_id=target, priority_status_id=quote["id"]
             )
-            if result.get("id") != target or result.get("status") == "DRAFT":
+            if (
+                not isinstance(result, dict)
+                or result.get("id") != target
+                or result.get("status")
+                not in {
+                    "APPROVED",
+                    "PENDING_APPROVAL",
+                    "PENDING_MODERATION",
+                }
+            ):
                 raise APIError("PUBLICATION_NOT_CONFIRMED", uncertain=True)
             return {"remote_id": target, "status": result.get("status")}
         if kind in {"edit", "delete"}:
             current = await self.owned_item(target)
             if kind == "delete":
                 result = await self.mutate(action, "removeItem", "remove_item", id=target)
-                return {"removed": bool(result)}
+                if result is not True:
+                    raise APIError("DELETE_RESULT_UNKNOWN", uncertain=True)
+                return {"removed": True}
             changes = {k: v for k, v in payload.items() if k in {"name", "description", "price"}}
             if set(payload) - {"name", "description", "price", "add_photos", "replace_attachment_ids"}:
                 raise ValidationError("Изменение содержит неподдерживаемые поля")

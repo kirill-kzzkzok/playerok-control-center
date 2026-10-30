@@ -27,7 +27,9 @@ async def test_permit_must_be_acquired_in_request_thread():
 
     def handle(request):
         calls.append(request)
-        return httpx.Response(200, json={"data": {"removeItem": True}})
+        return httpx.Response(
+            200, json={"data": {"removeItem": {"id": "controlled-id", "deletedAt": "2026-10-30T12:00:00Z"}}}
+        )
 
     account = SafeAccount(
         "token=private", writes_enabled=True, client=httpx.Client(transport=httpx.MockTransport(handle))

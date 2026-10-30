@@ -798,3 +798,18 @@ real API/Telegram request, mutation, payment or migration. Existing Attachments.
 security/cleanup reused; photo viewing uses a separate button. API deals counter is
 not settled sales, and priority position is not global marketplace ranking. No live
 photo-send or listing acceptance claim; general project acceptance remains open.
+
+
+## Explicit item mutation receipts — 2026-10-30
+
+Full670 passed in95.23s, data/item_mutation_receipts_results.xml. Targeted55 passed
+in7.23s. Thirty new cases cover incomplete/nonpublished/positive publish statuses,
+null/bool/false/malformed/wrong-ID deletion data, missing/naive/valid aware deletedAt,
+and strict executor delete literal True. SafeAccount real pinned query on MockTransport
+proves one request and no resend; invalid response produces UNCERTAIN + durable alert,
+positive delete receipt persists only removed=true. Contract fixture now uses native
+object/deletedAt shape. Ruff check/format149 files, pip/diff/secret scan clean.
+Primary upstream source inspected online confirms discarded removeItem response;
+source/inference documented in PLAYEROK_RESEARCH. No Playerok live request/mutation,
+buyer send, payment, working database write or migration. No claim of live publication,
+active-listing state after moderation or independent full deletion scan.

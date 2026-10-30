@@ -7,6 +7,7 @@ import threading
 import time
 from collections import deque
 from contextlib import contextmanager
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from urllib.parse import urlsplit
@@ -255,6 +256,26 @@ class SafeAccount(Account):
 
     def close(self):
         self.client.close()
+
+    def remove_item(self, id):
+        response = self.request(
+            "post",
+            self.base_url + "/graphql",
+            {},
+            {"operationName": "removeItem", "query": QUERIES["removeItem"], "variables": {"id": id}},
+        )
+        # The native query returns an Item, not a boolean. Upstream discards this
+        # object and returns True even if the response has no deletion evidence.
+        removed = response.json()["data"].get("removeItem")
+        if not isinstance(removed, dict) or removed.get("id") != id:
+            raise APIError("DELETE_RESULT_UNKNOWN", uncertain=True)
+        try:
+            deleted = datetime.fromisoformat(removed.get("deletedAt"))
+            if deleted.tzinfo is None:
+                raise ValueError
+        except (ValueError, TypeError):
+            raise APIError("DELETE_RESULT_UNKNOWN", uncertain=True) from None
+        return True
 
     def get_fulfillment_requirement(self, deal_id):
         from app.playerok.fulfillment_transport import fulfillment_request
