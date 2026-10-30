@@ -98,7 +98,7 @@ class Replies:
                 ).fetchone()
             ):
                 raise Conflict("Связь с уведомлением не подтверждена")
-            ident = self.store.enqueue(key, kind, target, payload, db=db)
+            ident = self.store.enqueue(key, kind, target, payload, db=db, actor=owner)
             if origin:
                 db.execute(
                     "INSERT OR IGNORE INTO notification_actions(operation_id,event_key,owner_id) VALUES(?,?,?)",

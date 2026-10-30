@@ -19,6 +19,34 @@ class OrdersPanel:
     def __init__(self, store, api):
         self.store, self.service = store, OrderManagement(store, api)
 
+    def delivered(self, owner, page=0):
+        self.service.owner(owner)
+        if not 0 <= page <= 100000:
+            raise Conflict("Страница недоступна")
+        rows = self.store.rows(
+            "SELECT o.id,o.payload FROM orders o WHERE o.status='PAID' AND EXISTS("
+            "SELECT 1 FROM outbox b WHERE b.target=o.id AND b.status='SUCCEEDED' AND (b.kind='delivery_text' OR "
+            "(b.kind='delivery' AND EXISTS(SELECT 1 FROM reservations r JOIN inventory i ON i.id=r.inventory_id WHERE r.order_id=o.id AND i.status='DELIVERED')))) ORDER BY o.created_at DESC,o.id DESC LIMIT 11 OFFSET ?",
+            (page * 10,),
+        )
+        buttons = []
+        for row in rows[:10]:
+            name = (json.loads(row["payload"]).get("item") or {}).get("name") or row["id"]
+            buttons.append([(str(name)[:45] + " · проверить выдачу", "order:" + row["id"])])
+            buttons.append([("Подтверждение выполнения", "ff:start:" + row["id"])])
+        nav = []
+        if page:
+            nav.append(("← Назад", f"delivered:{page - 1}"))
+        if len(rows) > 10:
+            nav.append(("Далее →", f"delivered:{page + 1}"))
+        if nav:
+            buttons.append(nav)
+        return "📦 <b>Выдано — ожидает подтверждения</b>\n" + (
+            "Отправка подтверждена, но серверный статус заказа ещё PAID. Проверьте результат перед личным подтверждением выполнения. Автоматический SENT выключен."
+            if rows
+            else "Таких заказов нет."
+        ), keyboard(buttons)
+
     async def listing(self, state, page=0, selected="ALL"):
         data = await state.get_data()
         result = order_page(self.store, page, selected, data.get("order_search", ""))

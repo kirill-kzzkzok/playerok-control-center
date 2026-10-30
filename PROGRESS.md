@@ -1934,3 +1934,20 @@ Resume последнего остатка повторно проверяетс
 включая резервирование во время read API. Пополнение само по себе не включает guard.
 Целевые78 passed in10.11s, data/ux_automation_status_results.xml. Нет live writes.
 Следующие блоки: результаты операций/экран ожидающих подтверждения и полное превью.
+
+
+## UX перед первой выдачей — блок3: результаты операций
+
+Migration020: durable owner receipts в той же transaction, что outbox enqueue.
+Existing Notifications доставляет terminal receipts в Telegram владельцу, не покупателю;
+PROCESSING до send, unknown Telegram ACK не повторяется. После restart admitted
+notice остаётся UNCERTAIN; результат всегда доступен через главное меню/кнопку.
+Create/publish/edit executor сохраняет allowlisted публичный server receipt, не секреты.
+QUEUED/PENDING, SUCCEEDED, UNCERTAIN и permanent failure имеют разные тексты/действия.
+Создание показывает имя/ID/server status и лот/склад; публикация moderation не активна;
+discount показывает реальные price/raw_price; unknown не предлагает replay.
+Экран «Выдано — ожидает подтверждения» выбирает PAID + успешную отправку + DELIVERED
+для stock (либо успешную text delivery), ведёт к прежнему owner-attested Fulfillment.
+Автоматический SENT не добавлен. Целевые28 passed in7.77s, data/ux_operation_results.xml;
+регрессии125 passed in14.57s, data/ux_results_baseline.xml. Нет live writes/сообщений.
+Остался блок4: полное превью/переходы, затем общий checkpoint pytest/Ruff.

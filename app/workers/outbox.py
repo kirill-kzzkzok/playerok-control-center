@@ -33,6 +33,13 @@ class Executor:
     def __init__(self, store, api, products):
         self.store, self.api, self.products = store, api, products
 
+    @staticmethod
+    def item_result(result):
+        return {
+            "remote_id": result["id"],
+            **{k: result[k] for k in ("name", "slug", "status", "price", "raw_price") if k in result},
+        }
+
     def dispatch_guard(self, action):
         if not getattr(self.api.account, "writes_enabled", False):
             raise ValidationError("Записи Playerok выключены")
@@ -205,7 +212,7 @@ class Executor:
             with self.store.transaction() as db:
                 db.execute("INSERT INTO bindings(draft_id,remote_id) VALUES(?,?)", (target, result["id"]))
                 db.execute("UPDATE drafts SET state='REMOTE_DRAFT' WHERE id=?", (target,))
-            return {"remote_id": result["id"]}
+            return self.item_result(result)
         if kind == "discount":
             item = await self.products.owned_item(target)
             fresh = discount_plan(item, payload["price"], getattr(self.api.account, "role", None))
@@ -299,7 +306,7 @@ class Executor:
                 }
             ):
                 raise APIError("PUBLICATION_NOT_CONFIRMED", uncertain=True)
-            return {"remote_id": target, "status": result.get("status")}
+            return self.item_result(result)
         if kind in {"edit", "delete"}:
             current = await self.owned_item(target)
             if kind == "delete":
@@ -333,7 +340,7 @@ class Executor:
             result = await self.mutate(action, "updateItem", "update_item", id=target, **changes)
             if not edit_receipt_matches(target, changes, result):
                 raise APIError("EDIT_NOT_CONFIRMED", uncertain=True)
-            return {"remote_id": target}
+            return self.item_result(result)
         if kind == "mark_read":
             await self.api.call("get_chat", chat_id=target)
             result = await self.mutate(action, "markChatAsRead", "mark_chat_as_read", chat_id=target)

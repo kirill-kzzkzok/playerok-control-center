@@ -10,6 +10,7 @@ from app.services.notification_preferences import NotificationPreferences
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 from app.telegram.message_notice import message_notice
+from app.telegram.operation_results import OperationResults
 
 
 class Notifications:
@@ -23,6 +24,7 @@ class Notifications:
         if not self.store.rows("SELECT user_id FROM administrators LIMIT 1"):
             return
         await self.refresh_actions()
+        await OperationResults(self.store).notify(self.bot)
         # First completed sync establishes baseline: do not flood with historical orders.
         initialized = self.store.setting("notifications:initialized", False)
         if not initialized and self.store.setting("sync:health", {}).get("status") == "OK":
@@ -276,6 +278,9 @@ class Notifications:
 
     async def run(self, stop):
         self.store.execute("UPDATE notifications SET status='UNCERTAIN' WHERE status='PROCESSING'")
+        self.store.execute(
+            "UPDATE operation_receipts SET notice_status='UNCERTAIN' WHERE notice_status='PROCESSING'"
+        )
         while not stop.is_set():
             await self.once()
             try:

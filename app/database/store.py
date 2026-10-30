@@ -130,10 +130,10 @@ class Store:
         if result.rowcount != 1:
             raise Conflict("Черновик изменён в другом сценарии; откройте его заново")
 
-    def enqueue(self, key, kind, target, payload, db=None):
+    def enqueue(self, key, kind, target, payload, db=None, actor=None):
         if db is None:
             with self.transaction() as connection:
-                return self.enqueue(key, kind, target, payload, db=connection)
+                return self.enqueue(key, kind, target, payload, db=connection, actor=actor)
         connection = db
         ident = uuid.uuid4().hex
         with self.lock:
@@ -183,6 +183,26 @@ class Store:
                 "INSERT OR IGNORE INTO outbox(id,operation_key,kind,target,payload,created_at) VALUES(?,?,?,?,?,?)",
                 (ident, key, kind, target, encode(payload), now()),
             )
+            if actor is None and payload.get("chain_id"):
+                chain = connection.execute(
+                    "SELECT actor FROM delivery_chains WHERE order_id=?", (target,)
+                ).fetchone()
+                actor = chain[0] if chain else None
+            if actor is not None and kind in {
+                "create",
+                "publish",
+                "edit",
+                "edit_fields",
+                "discount",
+                "delete",
+                "delivery",
+                "delivery_text",
+                "fulfill",
+            }:
+                connection.execute(
+                    "INSERT OR IGNORE INTO operation_receipts(operation_id,owner_id) SELECT id,? FROM outbox WHERE operation_key=? AND EXISTS(SELECT 1 FROM administrators WHERE user_id=?)",
+                    (actor, key, actor),
+                )
             return connection.execute("SELECT id FROM outbox WHERE operation_key=?", (key,)).fetchone()[0]
 
     def claim(self, lease_seconds=60):

@@ -27,6 +27,7 @@ from app.telegram.interface_cleanup_panel import InterfaceCleanupPanel
 from app.telegram.item_panel import ItemPanel
 from app.telegram.keyboards import keyboard, main_menu
 from app.telegram.listings_panel import ListingsPanel
+from app.telegram.operation_results import OperationResults
 from app.telegram.operations_panel import OperationsPanel
 from app.telegram.order_finance_panel import OrderFinancePanel
 from app.telegram.orders_panel import OrdersPanel
@@ -77,6 +78,7 @@ def create_router(store, api, products, synchronizer):
     item_panel = ItemPanel(api)
     listings_panel = ListingsPanel(api)
     stock_panel = StockPanel(store, api)
+    operation_results = OperationResults(store)
 
     @router.message(CommandStart())
     async def start(message, state):
@@ -116,6 +118,15 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await order_finance_panel.callback(action, owner, state)
             elif action.startswith("stock:"):
                 text, markup = await stock_panel.callback(action, owner, state)
+            elif action.startswith("result:"):
+                parts = action.split(":")
+                text, markup = (
+                    operation_results.listing(owner, int(parts[2]))
+                    if parts[1] == "list"
+                    else operation_results.show(owner, parts[2])
+                )
+            elif action.startswith("delivered:"):
+                text, markup = orders_panel.delivered(owner, int(action.split(":")[1]))
             elif action.startswith("ic:"):
                 text, markup = await interface_cleanup.callback(action, owner, state, message)
             elif action == "quickreplies":
@@ -318,8 +329,8 @@ def create_router(store, api, products, synchronizer):
                 store.audit(owner, "QUEUE_" + pending["kind"], pending["target"], "PENDING")
                 await state.clear()
                 text, markup = (
-                    f"Операция сохранена: <code>{ident}</code>. Статус доступен в диагностике.",
-                    keyboard([]),
+                    f"Операция в очереди (QUEUED): <code>{ident}</code>. Это ещё не результат; он придёт отдельным сообщением.",
+                    keyboard([[("Открыть результат", "result:show:" + ident)]]),
                 )
             elif action in {"orders", "orderfilters"} or action.startswith(("orderpage:", "order:", "od:")):
                 text, markup = await orders_panel.callback(action, owner, state)

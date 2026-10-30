@@ -162,6 +162,7 @@ class Fulfillment:
                 "attested": True,
                 "actor": owner,
             },
+            actor=owner,
         )
 
     async def result(self, action):

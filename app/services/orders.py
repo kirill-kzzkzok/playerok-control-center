@@ -151,7 +151,9 @@ class Orders:
                 "UPDATE inventory SET status='RESERVED' WHERE id=? AND status='AVAILABLE'", (stock[0],)
             )
             db.execute("INSERT INTO reservations VALUES(?,?)", (order_id, stock[0]))
-            self.store.enqueue(f"delivery:{order_id}", "delivery", order_id, {"inventory_id": stock[0]}, db)
+            self.store.enqueue(
+                f"delivery:{order_id}", "delivery", order_id, {"inventory_id": stock[0]}, db, actor=actor
+            )
             db.execute(
                 "INSERT INTO order_history(order_id,source,new_status,actor,note,created_at) VALUES(?,'DELIVERY_RESERVED',?,?,?,?)",
                 (

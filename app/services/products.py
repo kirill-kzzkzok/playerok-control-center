@@ -261,7 +261,9 @@ class Products:
             )
             if r.rowcount != 1:
                 raise Conflict("Черновик уже отправлен или изменён")
-            operation = self.store.enqueue(f"create:{ident}", "create", ident, {"owner": owner}, db)
+            operation = self.store.enqueue(
+                f"create:{ident}", "create", ident, {"owner": owner}, db, actor=owner
+            )
             db.execute(
                 "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,?,?,?,?)",
                 (owner, "CREATE_QUEUED", ident, "PENDING", now()),
@@ -344,7 +346,7 @@ class Products:
             if updated.rowcount != 1:
                 raise Conflict("Редактирование уже отправлено или изменено")
             operation = self.store.enqueue(
-                "fields:" + ident, "edit_fields", target, {"draft_id": ident, "owner": owner}, db
+                "fields:" + ident, "edit_fields", target, {"draft_id": ident, "owner": owner}, db, actor=owner
             )
             db.execute(
                 "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,?,?,?,?)",
