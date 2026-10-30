@@ -17,8 +17,10 @@ from app.playerok.adapter import APIError, Playerok, SafeAccount
 from app.security.access import OwnerMiddleware
 from app.security.instance import InstanceLock
 from app.security.logging import configure_logging
+from app.services.interface_cleanup import InterfaceCleanup
 from app.services.orders import Orders
 from app.services.products import Products
+from app.telegram.panel_tracking import PanelTracking
 from app.telegram.router import create_router
 from app.telegram.storage import SQLiteStorage
 from app.workers.cleanup import UploadCleanup
@@ -53,12 +55,14 @@ async def run(config):
     if config.use_proxy:
         session.api = TelegramAPIServer.from_base(config.telegram_proxy)
     bot = Bot(config.telegram_token, session=session, default=DefaultBotProperties(parse_mode="HTML"))
+    session.middleware(PanelTracking(store))
     tasks = []
     stop = asyncio.Event()
     try:
         for owner in config.owner_ids:
             store.execute("INSERT OR IGNORE INTO administrators VALUES(?)", (owner,))
         recovered = store.recover()
+        InterfaceCleanup(store).recover()
         if recovered:
             logger.warning("Recovered %s operations as UNCERTAIN", recovered)
         await bot.get_me()

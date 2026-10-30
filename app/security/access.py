@@ -1,6 +1,8 @@
 from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery
 
+from app.telegram.panel_tracking import panel_owner
+
 
 class OwnerMiddleware(BaseMiddleware):
     def __init__(self, owners, store=None, first_start_claim=False):
@@ -30,4 +32,8 @@ class OwnerMiddleware(BaseMiddleware):
             if isinstance(event, CallbackQuery):
                 await event.answer("Доступ закрыт", show_alert=True)
             return None
-        return await handler(event, data)
+        token = panel_owner.set(user.id)
+        try:
+            return await handler(event, data)
+        finally:
+            panel_owner.reset(token)

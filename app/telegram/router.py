@@ -20,6 +20,7 @@ from app.telegram.drafts_panel import DraftsPanel
 from app.telegram.finance_panel import FinancePanel
 from app.telegram.formatting import escaped
 from app.telegram.fulfillment_panel import FulfillmentPanel
+from app.telegram.interface_cleanup_panel import InterfaceCleanupPanel
 from app.telegram.keyboards import keyboard, main_menu
 from app.telegram.operations_panel import OperationsPanel
 from app.telegram.order_finance_panel import OrderFinancePanel
@@ -63,6 +64,7 @@ def create_router(store, api, products, synchronizer):
     statistics_panel = StatisticsPanel(store)
     settings_panel = SettingsPanel(store, api)
     drafts_panel = DraftsPanel(store)
+    interface_cleanup = InterfaceCleanupPanel(store)
     order_finance_panel = OrderFinancePanel(store, api)
     profile_panel = ProfilePanel(api)
 
@@ -139,6 +141,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await finance.callback(action, owner, state)
             elif action.startswith("pf:"):
                 text, markup = await order_finance_panel.callback(action, owner, state)
+            elif action.startswith("ic:"):
+                text, markup = await interface_cleanup.callback(action, owner, state, message)
             elif action == "quickreplies":
                 text, markup = await replies.menu(owner, state)
             elif action.startswith("quick:"):
@@ -362,6 +366,8 @@ def create_router(store, api, products, synchronizer):
             elif action.startswith(("stats:", "st:", "sd:")):
                 return await statistics_panel.handle(action, message, owner=owner)
             elif action == "settings" or action.startswith("sp:"):
+                if action == "settings":
+                    await state.clear()
                 text, markup = settings_panel.handle(action, owner)
             elif action == "backup":
                 from datetime import datetime

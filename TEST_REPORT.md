@@ -539,3 +539,20 @@ Working-cache readonly check: first 30 orders have known descending UTC server d
 30 positions differ from the former receive-time ordering, 217 orders retained.
 Evidence data/order_chronology_readonly_check.json; database_rows_rewritten=0,
 external_requests=0/mutations=0. No migration or working listing operation performed.
+
+## Explicit interface cleanup (v17, 2026-10-30)
+
+483 passed in 88.55s; data/interface_cleanup_results.xml. Ruff/format (123 files), pip
+and actual-secret/ignored-file checks clean. Targeted cleanup + existing UI/rendering:
+18 passed in 13.52s. New tests cover age/batch bounds/current message/notifications/
+other bot/foreign owner exclusion, exact snapshot/revalidation, forged IDs, persisted
+per-message results, no retry after unknown/rejection/rate limit, cancellation/recovery,
+ContextVar scope and metadata-only tracking through genuine session middleware, real
+Dispatcher confirm/restart/cancel/stale/double commit without Playerok calls/outbox.
+
+Official Telegram deleteMessage limit checked against https://core.telegram.org/bots/api#deletemessage;
+local threshold 47h leaves a margin below 48h. No Telegram messages actually deleted.
+Production v17 after SQLite backup retains 217 orders, 462 transactions, one owner and
+zero tracked messages: data/interface_cleanup_migration_check.json. External requests,
+Telegram deletions and Playerok mutations all zero; writes/automation remain false.
+This proves mock implementation and local migration, not live deletion acceptance.

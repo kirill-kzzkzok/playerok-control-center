@@ -540,3 +540,19 @@ sorts the normalized payload server date descending, with local receive/ID only 
 ties and unknown-date order. NULL dates remain last and are not attributed to sales
 periods. The returned listing DTO includes the normalized server date. Ingest preserves
 a previously verified date when newer sparse/malformed responses lack a usable date.
+
+## Explicit Telegram interface cleanup (v17)
+
+OwnerMiddleware sets/reset panel_owner ContextVar around authorized private handlers.
+PanelTracking request middleware records only successful Message responses produced in
+that context, scoped by bot/owner/message and without content. Background notification
+sends have no context and remain untracked; notification mappings also exclude any later
+UI-edited notification from cleanup. Untracked historical IDs are never enumerated.
+
+InterfaceCleanup previews at most 20 ACTIVE records aged <=47h and untouched >=5min,
+excluding current message. Exact snapshots and all eligibility conditions are rechecked
+in BEGIN IMMEDIATE before the batch is marked DELETING. Telegram calls occur outside
+transactions, with each result saved; timeout/429 stops the batch, cancellation/restart
+leaves conservative UNCERTAIN. No automatic deletion/retry is scheduled. Panel exposes
+aggregate statuses, explicit irreversible-delete confirmation and stale token rejection.
+No Playerok/outbox/stock/customer message or historical data deletion path is connected.

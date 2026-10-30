@@ -63,7 +63,7 @@ NotificationPreferences: шесть категорий на владельца, 
 revision CAS, persistent suppression/no replay, обязательный uncertain. Доказательства:
 `tests/test_notification_preferences.py` (включая real Dispatcher/restart/stale/foreign),
 `tests/test_notifications.py` (baseline/failure/critical), existing replies status updates.
-Остаются: отдельное управление очисткой интерфейса, полноценный rule-based autoresponder,
+Очистка интерфейса реализована ниже; остаются полноценный rule-based autoresponder,
 полностью автоматическое подтверждение продавцом с доказанной корректной attestation
 семантикой. Наличие кнопки с описанием ограничения не считается реализацией этих функций.
 
@@ -82,3 +82,13 @@ private fields не ищутся, unknown state, clamp после удалени
 сначала воспроизвёл неверный порядок, затем проверяет backfill/offset/unknown/naive/equal
 instants и сохранение известной даты при malformed ответах. Working-cache read-only probe:
 30/30 позиций исправлены без перезаписи данных, data/order_chronology_readonly_check.json.
+
+## Уточнение §14: очистка интерфейса
+
+PanelTracking/InterfaceCleanup/InterfaceCleanupPanel: bounded explicit preview+confirm,
+owner/bot scoping, touched snapshot, exclude current/notifications/untracked historical,
+no content storage, persistent per-message results and crash recovery/no retry.
+`tests/test_interface_cleanup.py` covers actual Dispatcher/FSM/session middleware plus
+service error/recovery cases. Startup tracking applies only to newly successful UI
+responses. No live deletion performed; mock acceptance only. Data/cache/stock cleanup
+is not part of this command. Telegram source: https://core.telegram.org/bots/api#deletemessage.

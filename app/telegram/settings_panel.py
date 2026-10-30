@@ -51,6 +51,7 @@ class SettingsPanel:
                         [("💬 Ответы и шаблоны", "quickreplies"), ("🔔 Уведомления", "sp:notifications")],
                         [("💰 Финансовые параметры", "providers"), ("📊 Статистика", "stats:7")],
                         [("💾 Резервная копия БД", "backup"), ("🩺 Диагностика", "diagnostics")],
+                        [("🧹 Очистка интерфейса", "ic:preview")],
                     ]
                 ),
             )

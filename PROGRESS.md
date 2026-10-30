@@ -1071,3 +1071,40 @@ missing dates, overflow и tie-breaker; повторный poll не ломае�
 Это не отменяет ограничений полноты API-истории и прочих открытых критериев ACCEPTANCE.md.
 
 Контрольная точка chronology: **471 passed in 62.00s**, data/order_chronology_results.xml; Ruff/pip/format/secret scan чистые.
+
+## Settings/UX — explicit interface cleanup (v17, 2026-10-30)
+
+§14 «Очистка интерфейса» реализована через отдельный preview/confirm workflow. Успешные
+ответы sendMessage/sendPhoto/sendDocument/edit отслеживаются request middleware только
+в ContextVar авторизованного private UI handler; вне этого scope фоновые notifications
+не записываются. Таблица panel_messages хранит bot_id/owner/message_id/dates/status,
+без текста/фото/реквизитов. ID старых неучтённых сообщений не угадываются. Явная SQL-защита
+notifications сохраняется даже для сообщения, позже открытого/изменённого через UI.
+
+Preview выбирает до 20 ACTIVE сообщений, без изменений 5 минут, не старше 47 часов,
+исключает текущую карточку и notification mappings. Telegram official deleteMessage
+документирует ограничение 48h; локально оставлен запас, без обхода лимита. Перед удалением
+в transaction перепроверяются owner/bot/current/age/notification и точные touched timestamps;
+все выбранные ID помечаются DELETING до первого вызова. Нельзя подменить ID или повторить
+старый snapshot. Confirmation token+FSM переживает restart, «Отмена → Настройки» очищает
+pending confirmation. Ни одного deleteMessage без явной кнопки подтверждения.
+
+Каждый результат сохраняется DELETED/FAILED/UNCERTAIN. Timeout/429 останавливают batch,
+cancel/жёсткий restart не дают автоматического повтора. Startup переводит DELETING в
+UNCERTAIN, новые previews не включают неизвестные/ошибочные записи. Итог/общие счётчики
+видны в панели после перезапуска. Отклонённый Telegram delete не объявляется успешным.
+Операция очищает только Telegram-карточки бота, не историю Playerok/заказы/drafts/stock.
+
+Tests/test_interface_cleanup.py использует mock Telegram session и настоящий Dispatcher:
+лимиты/age/current/notifications/bot/owner, mutated/forged snapshot, no-repeat/error/429/
+cancellation/recovery, owner-context tracking с исключением фонового send, metadata-only,
+restart confirmation/cancel/stale/double submit/no Playerok calls. Targeted 18 passed
+с existing UI/rendering tests. Live deletion не выполнялась и не заявляется проверенной.
+
+v17 после backup before-panel-cleanup-v17: 217 orders/462 transactions/1 owner сохранены,
+panel_messages=0. data/interface_cleanup_migration_check.json: external_requests=0,
+telegram_deletions=0/playerok_mutations=0, writes=false/automation=false. Бот не запускался.
+Следующие открытые требования: rule-based автоответы, точная полнота финансовых удержаний,
+полный requirement audit/soak и live criteria с отдельным разрешением на новые записи.
+
+Контрольная точка interface cleanup: **483 passed in 88.55s**; data/interface_cleanup_results.xml; Ruff/pip/format/secret scan чистые.
