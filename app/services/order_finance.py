@@ -82,11 +82,17 @@ class OrderFinance:
 
     def snapshot(self, db, actor, order_id):
         order, basis = self.context(db, actor, order_id)
+        payload = json.loads(order["payload"])
+        linked_id = (payload.get("transaction") or {}).get("id")
+        if not isinstance(linked_id, str):
+            linked_id = None
         receipts = [
             dict(row)
             for row in db.execute(
-                "SELECT * FROM account_transactions WHERE account_id=? AND deal_id=? AND operation='SELL' AND direction='IN' AND status='CONFIRMED'",
-                (self.account_id, order_id),
+                "SELECT * FROM account_transactions WHERE account_id=? AND "
+                "(deal_id=? OR (id=? AND (deal_id IS NULL OR deal_id=?))) "
+                "AND operation='SELL' AND direction='IN' AND status='CONFIRMED'",
+                (self.account_id, order_id, linked_id, order_id),
             ).fetchall()
         ]
         errors, receipt = [], receipts[0] if len(receipts) == 1 else None
@@ -94,6 +100,14 @@ class OrderFinance:
             errors.append("Сделка ещё не подтверждена или возвращена")
         if len(receipts) != 1:
             errors.append("Нужно одно однозначное подтверждённое SELL-зачисление с ID этого заказа")
+        if (
+            receipt
+            and db.execute(
+                "SELECT 1 FROM orders WHERE id<>? AND json_extract(payload,'$.transaction.id')=? LIMIT 1",
+                (order_id, receipt["id"]),
+            ).fetchone()
+        ):
+            errors.append("То же зачисление связано с другой сохранённой сделкой; нужна сверка")
         credit = amount_or_none(receipt["value"]) if receipt else None
         if receipt and (receipt["currency"] != "RUB" or credit is None):
             errors.append("Рублёвая сумма зачисления неизвестна")

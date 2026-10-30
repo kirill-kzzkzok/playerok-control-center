@@ -248,3 +248,26 @@ settlement rates, current exchange rates or duplicate promotion journal sums are
 Authenticated live transaction fetching remains unverified: the previous read-only
 session check returned UNAUTHORIZED_OR_CHALLENGE. Public bundle access does not prove
 account API availability. Do not repeat paid operations or bypass that challenge.
+
+## Priority auth diagnosis and authenticated read loading — 2026-10-30 MSK
+
+After the user supplied an updated header, standard requests to https://playerok.com/graphql
+succeeded: POST viewer, GET user and GET transactions all HTTP 200 application/json, server
+ddos-guard. No challenge bypass, fingerprint/TLS impersonation, redirects or external
+mutations. Evidence data/playerok_auth_diagnostics.json / live_auth_priority_diagnostic.json.
+The previous UNAUTHORIZED_OR_CHALLENGE merged HTTP 401/403 and had no response trace;
+its precise historical status/body/cause cannot be inferred from the new success.
+
+Official [_app source](https://playerok.com/_next/static/chunks/pages/_app-81aa885e88a4fc68.js),
+SHA256 f0f6277b94003778e49aa08f6d5fccaa0fde9b2eece35991ceb6e90d58e701ea,
+uses the same Main GraphQL endpoint, browser cookie credentials and GET for hashed reads.
+The service uses an explicit transparent User-Agent/cookie header; its direct POST viewer
+query is also accepted. Bearer auth found in the BFF client targets another service and
+is not proof of a missing GraphQL header. Comparison persisted in the diagnostic report.
+
+Authenticated bounded backfill completed: 462 transactions (402 CONFIRMED), 217 order
+dates known (previously 216 unknown). Native deal.transaction.id linked all 181 confirmed
+sales to known completion dates, despite absent transaction props.deal_id for most rows.
+462 records cover the visible completed pagination pass, not independently proven total
+historical completeness. No owner costs/allocations fabricated; all 181 confirmed order
+profit records remain incomplete until owner cost input and review.

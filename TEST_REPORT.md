@@ -441,3 +441,30 @@ Working v15 migration after backup retained 217 orders, one owner and no histori
 or allocations fabricated; data/order_costs_migration_check.json. Actual authenticated financial
 loading still needs the priority diagnosis requested by the user. Local owner-declared profit
 is not an audited claim about every shop transaction.
+
+## Priority auth diagnosis / authenticated financial loading (2026-10-30)
+
+427 passed in 86.15s; data/auth_and_finance_live_results.xml. Auth-specific tests retain
+exact 401/403 status and fixed endpoint without query values; redact credentials and JWT;
+strip challenge scripts without execution; omit successful profile bodies and mutation
+error messages; execute native viewer/user/transactions through mock HTTP; stop after
+challenge with one request and no bypass. Existing transport guards still pass.
+
+Real new-header checks: POST viewer, GET user and GET transactions to
+https://playerok.com/graphql all HTTP 200 JSON (server ddos-guard). Evidence
+ data/playerok_auth_diagnostics.json, including comparison with official _app source.
+Old failure had no trace beyond merged 401/403 code; precise historical cause unproven.
+
+Read-only backfill after backup completed 462 transactions / 217 dated orders; 402
+confirmed transactions, 181 confirmed orders, no unknown dates/amounts/currencies in
+confirmed transaction aggregates. data/live_finance_backfill.json and
+ data/live_finance_acceptance.json. Visible completed pagination is not proof of all
+historical completeness. Costs/allocations remain 0; no profit fabricated.
+
+Live missing props.deal_id exposed a journal/order join gap: exact deal.transaction.id
+is now accepted with strict account/type/direction/status/conflicting-link checks. Tests
+cover absent props, contradictory deal ID and duplicate reuse of a receipt. Real history
+PNG also exposed overlapping time labels/curves across missing years; calendar locators
+and explicit gaps fixed it, with a rendering regression test. No live mutation, listing
+change, buyer sending, fulfillment or payment performed. User now requires separate
+permission for any later live writes; no such permission requested or implied here.

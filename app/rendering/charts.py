@@ -6,6 +6,7 @@ from itertools import pairwise
 import matplotlib
 
 matplotlib.use("Agg")
+from matplotlib import dates as mdates
 from matplotlib import pyplot as plt
 
 _lock = threading.Lock()
@@ -58,18 +59,32 @@ def temporal_curve(axis, values, color="#ac83f3"):
         axis.set_yticks([])
         return
     times = [datetime.fromisoformat(key) for key, _ in rows]
-    x = [value.toordinal() + value.hour / 24 + value.minute / 1440 for value in times]
+    x = [float(mdates.date2num(value)) for value in times]
     y = [float(value) for _, value in rows]
-    curve_x, curve_y = smooth_points(x, y)
-    axis.plot(curve_x, curve_y, color=color, linewidth=2.4)
-    axis.fill_between(curve_x, curve_y, 0, color=color, alpha=0.16)
+    hourly = len(rows[0][0]) > 10
+    max_gap = 1.5 / 24 if hourly else 1.5
+    starts = [0] + [index for index in range(1, len(x)) if x[index] - x[index - 1] > max_gap] + [len(x)]
+    for start, end in pairwise(starts):
+        curve_x, curve_y = smooth_points(x[start:end], y[start:end])
+        axis.plot(curve_x, curve_y, color=color, linewidth=2.4)
+        axis.fill_between(curve_x, curve_y, 0, color=color, alpha=0.16)
     axis.scatter(x, y, color=color, s=16, zorder=3)
-    stride = max(1, (len(rows) + 7) // 8)
-    axis.set_xticks(x[::stride], [key for key, _ in rows][::stride], rotation=35, ha="right", fontsize=8)
+    if len(x) == 1:
+        axis.set_xlim(x[0] - max_gap / 2, x[0] + max_gap / 2)
+        axis.set_xticks(x)
+    else:
+        axis.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=3, maxticks=6))
+    axis.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m %H:%M" if hourly else "%d.%m.%Y"))
+    plt.setp(axis.get_xticklabels(), rotation=35, ha="right", fontsize=8)
     axis.set_ylim(bottom=0)
     axis.grid(axis="y", alpha=0.12)
     axis.text(
-        0, -0.36, "Точки — факты; линия — сглаживание", transform=axis.transAxes, fontsize=8, color="#bcb0d4"
+        0,
+        -0.36,
+        "Точки — факты; линия — сглаживание.\nПропуски данных — разрывы.",
+        transform=axis.transAxes,
+        fontsize=8,
+        color="#bcb0d4",
     )
 
 

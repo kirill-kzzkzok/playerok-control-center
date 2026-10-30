@@ -472,3 +472,23 @@ explicit cost/other expenses and owner completeness attestation. No fabricated z
 Statistics aggregate only eligible reviewed orders by receipt completion date; incomplete and
 unattributed coverage remains visible. All features are local reads/writes, with durable FSM,
 preview, audit and no outbound payment, stock delivery or buyer-message side effects.
+
+## HTTP auth diagnostics and exact receipt links
+
+APIError retains the compatible public code and optionally structured sanitized HTTP
+facts. SafeAccount keeps at most 16 response facts: fixed endpoint without query values,
+method/operation/status/type/server/body size/hash and bounded credential-redacted errors.
+Successful account bodies are omitted. Mutation error messages/excerpts are omitted to
+protect delivery data. app.auth_diagnostics performs only get + one get_transactions page,
+stops on errors without bypass/retry and saves a local ignored report. Existing main
+logging remains code-only. Old merged 401/403 errors cannot reconstruct a historical cause.
+
+Real transaction history often omits props.deal_id. OrderFinance also accepts exact
+native deal.transaction.id, constrained to the same account/SELL/IN/CONFIRMED and a null
+or matching transaction deal_id. Contradictory links or the same receipt referenced by
+another saved order block reviewed profit; there is no amount/time similarity matching.
+
+Temporal chart ticks now use a calendar locator rather than every Nth observation;
+large historical gaps remain breaks, with interpolation only between adjacent hourly/
+daily observations. Real 2024–2026 data exposed overlapping labels and gap interpolation
+that synthetic evenly-spaced fixtures did not, and was used for visual regression.

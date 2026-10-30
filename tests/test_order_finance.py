@@ -214,6 +214,38 @@ def test_invalid_sources_and_actor_revision_source_change_rejected_atomically(st
     assert not store.rows("SELECT * FROM order_expense_allocations")
 
 
+def test_native_deal_transaction_id_links_receipt_without_props_deal_id(store):
+    sale(store)
+    receipt(store, order_id=None)
+    with store.transaction() as db:
+        db.execute(
+            "UPDATE orders SET payload=json_set(payload,'$.transaction',json(?)) WHERE id='order'",
+            ('{"id":"receipt"}',),
+        )
+    service = costs(store)
+    assert review(service)["profit"] == 40
+    sale(store, "different")
+    with store.transaction() as db:
+        db.execute(
+            "UPDATE orders SET payload=json_set(payload,'$.transaction',json(?)) WHERE id='different'",
+            ('{"id":"receipt"}',),
+        )
+    assert service.view(7, "order")["profit"] is None
+    assert service.view(7, "order")["errors"]
+
+
+def test_conflicting_transaction_deal_id_cannot_use_native_link_fallback(store):
+    sale(store)
+    receipt(store, order_id="different")
+    with store.transaction() as db:
+        db.execute(
+            "UPDATE orders SET payload=json_set(payload,'$.transaction',json(?)) WHERE id='order'",
+            ('{"id":"receipt"}',),
+        )
+    service = costs(store)
+    assert service.view(7, "order")["receipt"] is None
+
+
 def test_profit_period_uses_confirmed_receipt_and_excludes_incomplete_and_foreign_orders(store):
     sale(store)
     receipt(store)

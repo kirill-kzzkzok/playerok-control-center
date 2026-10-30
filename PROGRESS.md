@@ -921,3 +921,44 @@ data/order_costs_migration_check.json. Внешних запросов/запи�
 не выводились; writes/automation остаются false. По его следующему указанию после этой
 контрольной точки приоритет — диагностика UNAUTHORIZED_OR_CHALLENGE (HTTP/endpoint/ответ/
 сравнение official request), без обхода challenge и повторных live-записей.
+
+## Приоритетная диагностика авторизации и read-only backfill (2026-10-30)
+
+По новому указанию пользователя текущий финансовый этап завершён первым (478f929), затем
+выполнена приоритетная диагностика UNAUTHORIZED_OR_CHALLENGE. Новый header сохранён только
+в .env; markdown escaping имён cookie нормализован, значения не выводились. Штатные POST
+viewer, GET user и GET transactions получили HTTP 200 JSON через https://playerok.com/graphql,
+server ddos-guard. AUTH сейчас доступна без изменения метода/endpoint и без обхода защиты.
+Исторический 401 vs 403 и точный прежний ответ восстановить нельзя: старый код объединял
+их в один код без trace. Не выдаём это за доказанную причину истечения токена/challenge.
+
+Добавлены bounded response facts/APIError.diagnostics и app.auth_diagnostics. Сохраняются
+точные HTTP/status/endpoint/operation/type/server/size/hash и обезличенные ошибки; успешные
+профильные тела не сохраняются, ошибки mutation не включают текст тела. CLI читает лишь
+viewer/user/одну страницу transactions и останавливается на ошибке, не выполняя обходов/
+повторов. Сравнение с официальным Apollo: Main endpoint совпадает, GET APQ поддерживается,
+cookie credentials есть; explicit service UA vs browser UA и прямой POST viewer не мешают
+нынешним 200. BFF Bearer — другой сервис, не причина для добавления его в GraphQL вслепую.
+
+После backup безопасная live-догрузка завершена: 462 transaction rows, 217 orders со всеми
+серверными датами; unknown_dates 216 → 0. Data/live_finance_backfill.json, live_finance_acceptance.json,
+playerok_auth_diagnostics.json. 181 confirmed orders, 34 refunds, 183 paid/SENT/confirmed;
+402 confirmed transactions. 0 costs/allocations; прибыль не придумана, все 181 confirmed
+заказов честно incomplete. Никаких внешних записей/объявлений/выдач/платежей/отправок не было.
+Бот не запущен. Writes/automation false. Долговременная полнота всей API-истории не доказана.
+
+Live выявил отсутствие props.deal_id у большинства транзакций. Исправлено сопоставление
+финансов заказа по точному deal.transaction.id с same-account/SELL/IN/CONFIRMED, при null/
+совпадающем deal_id. Противоречия/повторное использование receipt разными заказами блокируют
+итог. Тесты прямой native link и противоречий добавлены. Визуальная проверка реальной
+истории 2024–2026 выявила слипшиеся ticks/неуместное сглаживание через большой пробел:
+календарные ticks и разрывы между несоседними наблюдениями исправляют это. Плавные линии
+по соседним реальным точкам сохранены, синтетических сумм нет.
+
+После диагностики снова прочитаны PROJECT_SPEC.md (финансы/интеграции/fault injection/live)
+и верхний план PROGRESS.md. Следующая работа — сверка требований PHASE 7/9 с фактическими
+сквозными тестами, исправление незакрытых критериев, а не повтор авторизации без причины.
+Новое указание пользователя запрещает повторные live-записи без отдельного разрешения;
+это ограничение сохраняется и имеет приоритет над ранним общим live-test допуском spec.
+
+Контрольная точка auth/live-read: **427 passed in 86.15s**, data/auth_and_finance_live_results.xml.

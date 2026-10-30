@@ -5,6 +5,7 @@ import json
 import re
 import threading
 import time
+from collections import deque
 from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 from enum import Enum
@@ -12,6 +13,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from app.playerok.response_diagnostics import response_facts
 from playerokapi.account import Account
 from playerokapi.misc import PERSISTED_QUERIES, QUERIES
 
@@ -19,8 +21,9 @@ ACCEPT_AGREEMENT_QUERY = "mutation acceptGameCategoryAgreement($input: AcceptGam
 
 
 class APIError(RuntimeError):
-    def __init__(self, code, uncertain=False, retry_after=None):
+    def __init__(self, code, uncertain=False, retry_after=None, diagnostics=None):
         self.code, self.uncertain, self.retry_after = code, uncertain, retry_after
+        self.diagnostics = diagnostics
         super().__init__(code)  # Never include upstream body/URL/cookies.
 
 
@@ -66,6 +69,7 @@ class SafeAccount(Account):
         self._permitted = None
         self._permit_thread = None
         self._last_request = 0.0
+        self.response_diagnostics = deque(maxlen=16)
 
     @contextmanager
     def permit(self, operation):
@@ -148,20 +152,25 @@ class SafeAccount(Account):
                 for attachment in (files or {}).values():
                     if hasattr(attachment[1], "close"):
                         attachment[1].close()
+        diagnostics = response_facts(response, operation, list(self.cookies.values()), include_messages=read)
+        self.response_diagnostics.append(diagnostics)
         if response.status_code in (401, 403):
-            raise APIError("UNAUTHORIZED_OR_CHALLENGE", uncertain=not read)
+            raise APIError("UNAUTHORIZED_OR_CHALLENGE", uncertain=not read, diagnostics=diagnostics)
         if response.status_code == 429:
             raise APIError(
-                "RATE_LIMITED", uncertain=not read, retry_after=response.headers.get("retry-after")
+                "RATE_LIMITED",
+                uncertain=not read,
+                retry_after=response.headers.get("retry-after"),
+                diagnostics=diagnostics,
             )
         if response.status_code != 200:
-            raise APIError(f"HTTP_{response.status_code}", uncertain=not read)
+            raise APIError(f"HTTP_{response.status_code}", uncertain=not read, diagnostics=diagnostics)
         try:
             body = response.json()
         except ValueError:
-            raise APIError("NON_JSON_RESPONSE", uncertain=not read) from None
+            raise APIError("NON_JSON_RESPONSE", uncertain=not read, diagnostics=diagnostics) from None
         if not isinstance(body, dict) or body.get("errors") or not isinstance(body.get("data"), dict):
-            raise APIError("GRAPHQL_ERROR_OR_INCOMPLETE", uncertain=not read)
+            raise APIError("GRAPHQL_ERROR_OR_INCOMPLETE", uncertain=not read, diagnostics=diagnostics)
         if operation == "transactionProviders":
             providers = body["data"].get("transactionProviders")
             required = {"id", "fee", "minFeeAmount", "limits"}

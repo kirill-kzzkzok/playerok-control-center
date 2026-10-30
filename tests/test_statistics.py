@@ -6,11 +6,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 from aiogram import Bot
+from matplotlib import pyplot as plt
 from PIL import Image
 
 from app.database.store import Store
 from app.playerok.adapter import APIError
-from app.rendering.charts import revenue_chart, smooth_points
+from app.rendering.charts import revenue_chart, smooth_points, temporal_curve
 from app.services.orders import Orders
 from app.services.statistics import statistics
 from app.workers.sync import Synchronizer
@@ -141,6 +142,18 @@ def test_invalid_period_or_naive_clock_rejected(store):
         statistics(store, 3, AT)
     with pytest.raises(ValueError):
         statistics(store, 1, AT.replace(tzinfo=None))
+
+
+def test_irregular_history_has_temporal_ticks_and_does_not_bridge_missing_days():
+    figure, axis = plt.subplots()
+    try:
+        temporal_curve(axis, {"2024-01-01": 10, "2024-01-02": 20, "2026-10-29": 5})
+        figure.canvas.draw()
+        assert len(axis.lines) == 2
+        assert max(axis.lines[0].get_xdata()) - min(axis.lines[0].get_xdata()) == 1
+        assert len(axis.get_xticks()) <= 8
+    finally:
+        plt.close(figure)
 
 
 @pytest.mark.parametrize("values", [[0, 10, 0, 20, 5], [0, 0, 20, 20, 0], [0, 1, 2, 3, 4], [100, 0, 0, 0, 1]])
