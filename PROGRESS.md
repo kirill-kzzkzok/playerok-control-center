@@ -1025,3 +1025,26 @@ preferences, suppression/no replay и concurrent workers. Рабочие нас�
 
 Контрольная точка notifications/settings: **458 passed in 53.44s**; Ruff/pip/format/secret scan чистые.
 JUnit data/settings_notifications_results.xml; local probe schema16/1 owner/0 preference rows, external_requests=0.
+
+## UX completeness — полный список локальных черновиков (2026-10-30)
+
+Проверка §3/§4 выявила, что router показывал только последние 30 локальных drafts,
+без пути к более старым записям. Выделены DraftsPanel и draft_page: 10 записей/страница,
+все страницы достижимы; стабильный created_at/id tie-breaker, clamp страницы после
+изменения состава. Фильтры ALL/DRAFT/QUEUED/REMOTE_DRAFT/UPDATED/CANCELLED/OTHER; будущие
+статусы доступны через OTHER. Это состояния локальных записей, не актуальный статус
+серверного объявления. Открытие/редактирование старого draft сохраняет прежний workflow.
+
+Поиск названия/ID экранирует SQL wildcard %, _, backslash. Секретные поля, descriptions
+и данные выдачи не ищутся и не загружаются в listing DTO. Длина 1–200; filter/page bounds
+валидируются. Owner scoped SQL + explicit panel guard. Search/filter сохраняются в SQLite
+FSM, переживают restart; возврат «Черновики» сбрасывает фильтры/поиск. Новая навигация не
+создаёт API calls/outbox, не меняет draft payload/state и не отправляет сообщения покупателям.
+
+Новые tests/test_drafts_panel.py проверяют 57 записей со совпадающими timestamps, шесть
+страниц без дубликатов/потерь, owner isolation, unknown state, deletion/clamp, literal search
+и injection, private-field exclusion, реальный Dispatcher/restart/filter/search/escaped
+input, открытие старого CANCELLED и callback-size bound. Targeted 7 passed включая catalog.
+Никаких рабочих настроек/объявлений/платежей не менялось; схема БД остаётся v16.
+
+Контрольная точка drafts: **462 passed in 64.51s**; data/drafts_pagination_results.xml; Ruff/pip/format/secret scan чистые.

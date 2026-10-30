@@ -512,3 +512,16 @@ send or Playerok operation executed. No new schema migration was needed.
 
 Settings completeness remains partial: cleanup UI controls, autonomous rule-based
 responses and fully automatic seller confirmation remain explicitly open in ACCEPTANCE.md.
+
+## Draft history navigation (2026-10-30)
+
+Targeted tests/test_drafts_panel.py + test_catalog.py: 7 passed in 4.58s. Tests cover
+57 owner drafts across six pages, timestamp tie ordering, no duplicate/missing IDs,
+unknown states, clamp after removal, owner-scoped SQL and direct panel access guard,
+literal wildcard/injection handling, private field exclusion, actual Dispatcher
+search/filter/restart/escaped input, old cancelled record access and callback limits.
+No remote calls/outbox/mutations. Existing creation/wizard opener behavior retained.
+Ruff check/format (119 files), pip check and actual-secret scan clean. No schema
+migration or production settings change required. Full suite result recorded below.
+
+Контрольная точка drafts: **462 passed in 64.51s**; data/drafts_pagination_results.xml; Ruff/pip/format/secret scan чистые.

@@ -66,3 +66,11 @@ revision CAS, persistent suppression/no replay, обязательный uncerta
 Остаются: отдельное управление очисткой интерфейса, полноценный rule-based autoresponder,
 полностью автоматическое подтверждение продавцом с доказанной корректной attestation
 семантикой. Наличие кнопки с описанием ограничения не считается реализацией этих функций.
+
+## Уточнение §3/§4: длинный список черновиков
+
+Убран недоступный хвост после 30 записей: DraftsPanel/draft_page со страницами, поиском
+public name/ID, фильтром локальных состояний и устойчивым sort tie-breaker. Доказательство:
+`tests/test_drafts_panel.py` — 57 записей/6 страниц, одинаковое время, owner isolation,
+private fields не ищутся, unknown state, clamp после удаления, Dispatcher/restored search,
+старый draft доступен, SQL/HTML escaping. Серверные статусы при этом не симулируются.

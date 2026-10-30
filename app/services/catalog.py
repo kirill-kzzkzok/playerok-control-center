@@ -15,6 +15,52 @@ ORDER_FILTERS = {
     ),
 }
 
+DRAFT_FILTERS = {
+    "ALL": ("Все", "1=1"),
+    "DRAFT": ("Локальные черновики", "state='DRAFT'"),
+    "QUEUED": ("В очереди", "state='QUEUED'"),
+    "REMOTE_DRAFT": ("Созданные на сервере", "state='REMOTE_DRAFT'"),
+    "UPDATED": ("Изменённые", "state='UPDATED'"),
+    "CANCELLED": ("Отменённые", "state='CANCELLED'"),
+    "OTHER": ("Другие состояния", "state NOT IN ('DRAFT','QUEUED','REMOTE_DRAFT','UPDATED','CANCELLED')"),
+}
+
+
+def draft_page(store, owner, page=0, filter_name="ALL", search="", page_size=10):
+    if (
+        filter_name not in DRAFT_FILTERS
+        or type(page) is not int
+        or not 0 <= page <= 1_000_000
+        or type(page_size) is not int
+        or not 1 <= page_size <= 30
+        or not isinstance(search, str)
+        or len(search) > 200
+    ):
+        raise ValidationError("Некорректный поиск, фильтр или страница черновиков")
+    where = "owner_id=? AND " + DRAFT_FILTERS[filter_name][1]
+    args = (owner,)
+    if search:
+        value = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        # Search public name/ID only, never seller data, description or inventory secrets.
+        where += " AND (id LIKE ? ESCAPE '\\' OR json_extract(payload,'$.name') LIKE ? ESCAPE '\\')"
+        args += ("%" + value + "%",) * 2
+    total = store.rows("SELECT count(*) AS n FROM drafts WHERE " + where, args)[0]["n"]
+    page = min(page, max(0, (total - 1) // page_size))
+    rows = store.rows(
+        "SELECT id,state,created_at,json_extract(payload,'$.name') AS name FROM drafts WHERE "
+        + where
+        + " ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?",
+        (*args, page_size, page * page_size),
+    )
+    return {
+        "rows": rows,
+        "total": total,
+        "page": page,
+        "pages": max(1, (total + page_size - 1) // page_size),
+        "has_previous": page > 0,
+        "has_next": (page + 1) * page_size < total,
+    }
+
 
 def order_page(store, page=0, filter_name="ALL", search="", page_size=12):
     if filter_name not in ORDER_FILTERS or not 0 <= page <= 1_000_000 or not 1 <= page_size <= 30:

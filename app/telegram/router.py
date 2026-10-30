@@ -1,5 +1,4 @@
 import asyncio
-import json
 import secrets
 from datetime import UTC
 from html import escape
@@ -17,6 +16,7 @@ from app.services.products import ValidationError, listing_price, listing_text, 
 from app.telegram.automation_panel import AutomationPanel
 from app.telegram.automation_queue import AutomationQueue
 from app.telegram.chat_panel import ChatPanel
+from app.telegram.drafts_panel import DraftsPanel
 from app.telegram.finance_panel import FinancePanel
 from app.telegram.formatting import escaped
 from app.telegram.fulfillment_panel import FulfillmentPanel
@@ -62,6 +62,7 @@ def create_router(store, api, products, synchronizer):
     automation_queue = AutomationQueue(store, api)
     statistics_panel = StatisticsPanel(store)
     settings_panel = SettingsPanel(store, api)
+    drafts_panel = DraftsPanel(store)
     order_finance_panel = OrderFinancePanel(store, api)
     profile_panel = ProfilePanel(api)
 
@@ -163,21 +164,8 @@ def create_router(store, api, products, synchronizer):
                     )
                 await state.clear()
                 text, markup = "Сценарий отменён. Запись оставлена в локальной истории.", main_menu()
-            elif action == "drafts":
-                drafts = store.rows(
-                    "SELECT id,payload,state FROM drafts WHERE owner_id=? ORDER BY created_at DESC LIMIT 30",
-                    (owner,),
-                )
-                rows = [
-                    [
-                        (
-                            (json.loads(d["payload"]).get("name") or "Новый товар")[:42] + " · " + d["state"],
-                            "draft:" + d["id"],
-                        )
-                    ]
-                    for d in drafts
-                ]
-                text, markup = "💾 <b>Черновики</b>\nПоследние 30 записей.", keyboard(rows)
+            elif action == "drafts" or action.startswith("dl:"):
+                text, markup = await drafts_panel.callback(action, owner, state)
             elif action.startswith("draft:"):
                 ident = action.split(":", 1)[1]
                 draft = store.get_draft(ident, owner)
@@ -436,6 +424,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await finance.message(message, state)
             elif current and current.startswith("quick:"):
                 text, markup = await replies.message(message, state)
+            elif current == "draftlist:search":
+                text, markup = await drafts_panel.message(message, state)
             elif current and current.startswith("order:"):
                 text, markup = await orders_panel.message(message, state)
             elif current and current.startswith("profit:"):

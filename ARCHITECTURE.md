@@ -521,3 +521,12 @@ bypasses preferences; invalid preference shape suppresses noncritical events wit
 separate status and diagnostic marker rather than killing the worker or enabling sends.
 Existing delivered notification action updates remain independent of preference toggles.
 SettingsPanel owns local configuration navigation; it exposes no secret or payment toggle.
+
+## Local draft navigation
+
+DraftsPanel owns read-only pagination/search/filter state. draft_page scopes SQL to
+owner_id, returns public name/ID/state/time fields, never the full payload, escapes
+wildcards and clamps out-of-range pages after collection changes. Stable date/id sort
+makes tied timestamps deterministic. Filters distinguish local workflow states from
+remote listing statuses; unknown future states remain reachable. Existing draft opener
+still handles wizard restore/binding links; reading the list creates no external work.
