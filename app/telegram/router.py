@@ -157,6 +157,7 @@ def create_router(store, api, products, synchronizer):
                 await state.clear()
                 text, markup = await listings_panel.show(action, state)
             elif action == "itemfilters":
+                await state.set_state(None)
                 names = {
                     "APPROVED": "Активные",
                     "DRAFT": "Черновики",
@@ -170,11 +171,31 @@ def create_router(store, api, products, synchronizer):
                     if value in ItemStatuses.__members__
                 ]
                 rows.append([("Все статусы", "itemfilter:ALL")])
-                text, markup = "📦 Фильтр товаров по реальным статусам API", keyboard(rows)
+                rows.extend(
+                    [
+                        [("Название", "il:search"), ("Цена", "il:price"), ("Категория · ID", "il:category")],
+                        [("PREMIUM", "il:PREMIUM"), ("Обычные", "il:DEFAULT"), ("Любой приоритет", "il:ALL")],
+                        [("Сбросить фильтры", "il:reset"), ("К списку", "il:back")],
+                    ]
+                )
+                text, markup = (
+                    "📦 Фильтры товаров\nСтатус и категория применяются сервером; название, цена и приоритет — на каждой загруженной странице.",
+                    keyboard(rows),
+                )
             elif action.startswith("itemfilter:"):
                 value = action.split(":", 1)[1]
-                await state.set_data({"item_filters": {"status": None if value == "ALL" else value}})
+                if value != "ALL" and value not in ItemStatuses.__members__:
+                    raise ValidationError("Неизвестный статус товара")
+                filters = (await state.get_data()).get("item_filters", {})
+                filters["status"] = None if value == "ALL" else value
+                await state.set_data({"item_filters": filters})
+                await state.set_state(None)
                 text, markup = await listings_panel.show("items", state)
+            elif action == "il:back":
+                await state.set_state(None)
+                text, markup = await listings_panel.show("items", state)
+            elif action.startswith("il:"):
+                text, markup = await listings_panel.filter_action(action, state)
             elif action.startswith("listnext:"):
                 parts = action.split(":")
                 if len(parts) != 3:
@@ -418,6 +439,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await finance.message(message, state)
             elif current and current.startswith("quick:"):
                 text, markup = await replies.message(message, state)
+            elif current and current.startswith("itemlist:"):
+                text, markup = await listings_panel.filter_message(message, state)
             elif current == "draftlist:search":
                 text, markup = await drafts_panel.message(message, state)
             elif current and current.startswith("order:"):

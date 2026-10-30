@@ -229,3 +229,14 @@ covers items/chats restart+EOF, cycle/schema errors, empty continuation, stale c
 limit/long ID and actual Dispatcher double-click/filter reset/foreign owner. All read
 mock only: no live API/mutation/working database write. UI pagination does not prove
 complete upstream history beyond locally inspected pages.
+
+
+## §6: composed item filters
+
+Status/name/price/native category ID/exact priority filters implemented in persistent
+FSM; filters compose, validate and reset page nonce. Tests/test_item_filters.py covers
+invalid input, unknown-vs-zero, literal Unicode matching, boundaries, actual Dispatcher
+restart/composition/reset/owner and SafeAccount native category wire with user scope.
+Name/price/priority are explicitly per-server-page, not claimed global query support;
+empty matching page still permits continuation. Category-name picker remains incomplete.
+No live listing/API write performed; mock acceptance only.

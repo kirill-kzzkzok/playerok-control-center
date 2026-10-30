@@ -727,3 +727,15 @@ checkpoint for read retry. Empty continuation is distinct from EOF; traversal ca
 at1000 pages. Callback UTF8 size is checked before state writes. Owner middleware and
 per-user callback isolation provide serialization; SQLite FSM preserves continuation
 across dispatcher reconstruction. Filters restart traversal with upstream status enum.
+
+
+## Item filter contract
+
+item_filters.py validates composed status/name/price/category/priority settings. Native
+get_my_items(category_id) handles category within current user's scope; exact status
+uses native enum. Literal name, inclusive Decimal price and exact PREMIUM/DEFAULT are
+local predicates per validated server page. Unknown price/priority never passes a
+constrained predicate. UI labels per-page loaded/matched coverage and keeps continuation
+on empty match pages. No unsupported server query fields or full-history search claim.
+SQLite FSM persists settings; changes reset cursor and preserve other filter dimensions.
+Category input currently uses native ID; a convenient category-name picker remains open.

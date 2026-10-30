@@ -757,3 +757,17 @@ reopen, profile/chart PNG; data/listings_selfcheck.json. External requests0, wor
 bot/database not started, no migration/live writes/payment. Page validation and durable
 continuation do not prove complete upstream history. Old next-page callbacks are
 intentionally rejected and require opening the list again.
+
+
+## Item filters — 2026-10-30
+
+Full suite622 passed in101.96s, data/item_filters_results.xml. Twelve new parametrized
+cases validate name/price/category/priority settings, literal Unicode name, exact price
+bounds, unknown vs zero/default, actual Dispatcher composition/restart/reset/owner and
+invalid input preservation. SafeAccount+MockTransport checks category native request:
+userId/status/category retained, no invented price/priority API parameters. After full
+start, router UI caption and pre-save invalid-status/state-clear handling changed;
+final affected tests19 passed in13.36s, data/item_filters_final_targeted.xml. Ruff check/
+format144 files, pip/diff/secret scan clean. No working database access, network request,
+mutation, message, paid action or migration. Per-page filtering is explicitly labelled;
+category-name picker and global name/price/priority search remain unaccepted.

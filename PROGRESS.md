@@ -1550,3 +1550,37 @@ data/listings_pagination_results.xml; Ruff check/format142 files, pip check, dif
 actual-secret/JWT scan чистые. Offline selfcheck OK:85 modules, schema1–18,
 backup reopen/profile+chart PNG, external_requests0; data/listings_selfcheck.json.
 Рабочий бот/БД не запускались; live-записи и платежи не выполнялись.
+
+
+## §6: фильтры реальных лотов — цена, название, категория, приоритет
+
+После listings checkpoint сверка §6 обнаружила отсутствие всех фильтров кроме статуса.
+Реализованы составные persistent filters: literal Unicode casefold substring названия,
+Decimal inclusive min/max price (открытые границы допустимы), exact PREMIUM/DEFAULT,
+category ID. checked_filters validates allowed keys/types/lengths/ranges; invalid input
+keeps active prompt/settings. Unknown price/priority fail applicable predicate, never
+become zero/default. Clearing/reset is explicit, status changes retain other filters.
+
+Категория передаётся native get_my_items(category_id=...) with userId scope; actual
+wire regression uses SafeAccount+MockTransport and asserts exact user/status/category
+filter. Price/priority/name are local predicates for each validated server page; they
+are not invented API query parameters. UI shows loaded/matched counts, current filters
+and explicitly page-only scope; empty filtered page retains Next and does not claim
+absence across unvisited pages. Category currently accepts ID, not a user-friendly
+name picker; this limitation remains. All filters stored in SQLite FSM survive restart;
+changing filter invalidates old pagination checkpoint/nonce. Native paid writes untouched.
+
+Tests/test_item_filters.py adds12 parametrized cases: invalid ranges/nonfinite/negative/
+keys/category/priority/search, exact boundaries and Unicode literal wildcard text,
+unknown vs0, genuine Dispatcher composition/status/restart/reset/foreign owner,
+invalid-input preservation and native category wire. Initial targeted filters/listings:
+18 passed in10.17s before final native-wire case. Full suite launched after that case.
+No real API/Telegram request, working DB access/migration or listing mutation; flags false.
+
+Контрольная точка item filters: **622 passed in101.96s**,
+data/item_filters_results.xml. После запуска full внесены UI-caption и pre-save unknown
+status rejection/state-clear изменения router; окончательный affected набор прошёл
+**19 passed in13.36s**, data/item_filters_final_targeted.xml. Ruff check/format144
+files/pip/diff/actual-secret scan чистые. Новых live actions/DBwrites/migrations нет.
+Открыты category-name picker и полноценный глобальный name/price/priority query;
+текущий per-page scope явно показан. Общая приёмка проекта не закрыта.
