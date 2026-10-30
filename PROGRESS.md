@@ -1798,3 +1798,37 @@ rejected technical/non-sale listing. Local image/proposal и explicit create req
 Новых P2, поставщиков или дополнительного большого аудита не начинать. Дальнейшая
 существенная live-проверка зависит от фактической возможности разрешённого сценария,
 а не от увеличения числа unit tests. Общая цель не завершена.
+
+
+## Контролируемый TEST listing: остановка по правилам — 2026-10-30 19:50 МСК
+
+Новый запрос разрешает ровно один Telegram/Stars TEST TEST TEST, описание
+«TEST TEST TEST — проверка работы системы.», белое TEST фото, 1000→749 RUB,
+DEFAULT free publication и deletion; не разрешает paid/buyer sends/delivery/global flags.
+Разрешение получено, повторно не запрашивалось.
+
+Этап 1 выполнен read-only штатными SafeAccount/Playerok: viewer/user,
+GamePageCategory, gameCategoryObtainingTypes, два gameCategoryDataFields,
+gameCategoryAgreements — все 7 HTTP200, JSON data; authorized=true, pending=0.
+Stars category 1ef2da4b-1ffc-62f0-b165-b07be0dc1444; два способа передачи,
+fee_multiplier=0.1 (комиссия продажи, не стоимость размещения).
+Свидетельства: локальный data/controlled_listing_preflight_20261030.json,
+UTC 16:50:20, HTTP metadata/hash и актуальная public category schema.
+
+Официальные https://playerok.com/terms-of-sale проверены в интернете сегодня:
+общая возможность бесплатной публикации есть, но Условия прямо запрещают создание
+и удаление товаров через программные продукты (боты, скрипты и т.д.). Также требуют
+точного отражения товара в описании/фото. Разрешение на исключение для TEST/API
+не найдено. Прежний технический create был отклонён HTTP400 и не повторяется.
+Это остановка по правилам площадки в рамках пользовательского ограничения,
+а не отказ API на текущий mutation и не недостаток пользовательского разрешения.
+Индивидуальный DEFAULT quote не получен: новый item ID не создан; нельзя заявлять,
+что API подтвердил именно этому лоту стоимость 0.
+
+Этапы 2–8 NOT_EXECUTED: create/edit/discount/publish/readback/delete не запускались.
+Mutations=0, created item ID=null; новый черновик/опубликованный товар не оставлен.
+Существующие объявления и рабочая БД не менялись; writes=false/automation=false.
+Live-критерии управления лотом остаются открытыми. Код не менялся, локальные тесты
+не запускались: они не снимают запрет и не доказывают live create/delete.
+Для продолжения этого API-сценария нужно явное исключение/разрешённый тестовый
+контур от Playerok; повторный запрос пользователя сам по себе правила не меняет.

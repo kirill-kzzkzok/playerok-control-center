@@ -291,3 +291,20 @@ requires actual Stars transfer source, which is absent from stock MVP. User's dr
 creation request does not authorize publication/payment/delivery/config enablement.
 Local white TEST asset/proposal prepared; server technical listing not retried. See
 LIVE_MVP_PLAN.md for exact external preconditions and authorized-stage boundaries.
+
+
+## Контролируемый live-сценарий TEST — 2026-10-30 19:50 МСК
+
+Статус: BLOCKED_AT_RULES_PREFLIGHT, не live-приёмка create/edit/discount/publish/delete.
+Пользователь разрешил один Stars TEST lot 1000→749 RUB/DEFAULT и удаление.
+Свежие реальные read-only запросы приложения: 7 HTTP200, auth=true, Stars schema/
+obtaining/data fields доступны, pending agreements=0. Локальное свидетельство:
+data/controlled_listing_preflight_20261030.json (UTC16:50:20, sanitized HTTP facts).
+
+https://playerok.com/terms-of-sale проверены сегодня: общая бесплатная публикация
+предусмотрена; создание и удаление через ботов/скрипты прямо запрещены.
+Индивидуальный DEFAULT0 quote отсутствует без нового item ID. TEST-исключение не
+установлено. По условию пользователя не обходить правила этапы2–8 не выполнялись.
+Ни нового ID, ни draft/published lot, ни mutation/платежа в этой попытке нет.
+Нельзя засчитывать серверное чтение категории как успешную публикацию/удаление.
+Все соответствующие write acceptance criteria остаются незакрытыми.
