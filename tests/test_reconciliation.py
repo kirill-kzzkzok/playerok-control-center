@@ -293,7 +293,7 @@ async def test_stopped_unknown_photo_keeps_evidence_file(setup, tmp_path):
     assert source.exists()
 
 
-async def test_stop_uncertain_publish_releases_the_launch_for_a_new_one(setup):
+async def test_stop_uncertain_publish_never_releases_the_launch(setup):
     store, _, service = setup
     # A launch publication that became UNCERTAIN; its draft is stuck in QUEUED.
     store.draft(1, {"launch_target": "item", "account_id": "seller", "mode": "gifts"})
@@ -310,8 +310,18 @@ async def test_stop_uncertain_publish_releases_the_launch_for_a_new_one(setup):
     store.set_setting("launch:prepared:item", {"id": draft_id, "owner": 1, "revision": 0, "operation": ident})
     expected = signature(store.rows("SELECT * FROM outbox WHERE id=?", (ident,))[0])
     await service.resolve(1, ident, expected, "STOP_UNCERTAIN", "Запрос не начинался, остановлено")
-    assert store.get_draft(draft_id, 1)["state"] == "DRAFT"
-    assert not store.setting("launch:prepared:item")
+    # The owner stopping retries does NOT prove the publish never reached the server:
+    # the launch stays confirmed-blocked (QUEUED + marker) until a real reconciliation.
+    assert store.get_draft(draft_id, 1)["state"] == "QUEUED"
+    assert store.setting("launch:prepared:item")["operation"] == ident
+    # No new launch operation can be queued for the same revision while blocked.
+    again = store.enqueue(
+        "launch:" + draft_id + ":0",
+        "publish",
+        "item",
+        {"priority_id": "free", "price": 100, "raw_price": 100, "launch_id": draft_id},
+    )
+    assert again == ident
 
 
 def test_upgrade_backfills_existing_unknown_operation_once_without_exposing_payload(tmp_path):

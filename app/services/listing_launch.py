@@ -3,7 +3,7 @@
 import hashlib
 from dataclasses import asdict
 
-from app.database.store import Conflict, encode, now
+from app.database.store import Conflict, Store, encode, now
 from app.services.automation import Automation, DeliveryPolicy, message_text
 from app.services.finance import money
 from app.services.inventory import Inventory
@@ -21,6 +21,12 @@ def launch_key(ident, revision):
     """Revision in the operation key: a retry after PERMANENT_FAILED (which bumps the
     draft revision) queues a fresh operation instead of returning the dead one."""
     return f"launch:{ident}:{revision}"
+
+
+def launch_prefix(ident):
+    """Exact LIKE prefix for all revisions of one launch draft; ids are hex so the
+    pattern contains no SQL wildcards."""
+    return launch_key(ident, "%")
 
 
 class ListingLaunch:
@@ -186,6 +192,21 @@ class ListingLaunch:
                 or policy.max_operations_per_item < 1
             ):
                 raise ValidationError("Настройте лимиты расходов Playerok не ниже выбранного тарифа")
+            # The launch budget must stay in sync with the live global policy: a stale
+            # copy would silently overwrite other lots' promotion settings on queue().
+            # The volatile `enabled` flag is excluded: queue() legitimately flips it for
+            # the opt-in schedule without invalidating the confirmed budget itself.
+            _revision, current_policy, _ = PromotionSettings(self.store, self.api).get()
+            expected = dict(value["promotion_policy"])
+            expected.pop("enabled", None)
+            actual = asdict(current_policy)
+            actual.pop("enabled", None)
+            if expected != actual:
+                raise Conflict(
+                    "Общие настройки продвижения изменились. Откройте черновик запуска и обновите лимиты"
+                )
+            # policy_revision is deliberately NOT part of the readiness digest: the
+            # opt-in schedule enable in queue() bumps it without changing the budget.
             viewer = await self.api.call("get")
             if (
                 viewer.get("id") != value["account_id"]
@@ -220,12 +241,18 @@ class ListingLaunch:
             )
         item = value["launch_target"]
         try:
-            if value["publication"] == "PREMIUM":
+            if value["publication"] == "PREMIUM" and value["promotion"]:
+                # Only the schedule enable flag may be written, and only against the
+                # exact revision confirmed in the readiness digest: other lots' limits,
+                # schedule and selections are never touched by this launch.
                 settings = PromotionSettings(self.store, self.api)
                 p_revision, existing, selection = settings.get()
-                updated = {**value["promotion_policy"], "enabled": existing.enabled or value["promotion"]}
-                if updated != asdict(existing):
-                    settings.save(owner, p_revision, updated, selection)
+                if asdict(existing) != {**value["promotion_policy"], "enabled": existing.enabled}:
+                    raise Conflict("Общие настройки продвижения изменились. Подтвердите новые лимиты")
+                if not existing.enabled:
+                    settings.save(
+                        owner, p_revision, {**value["promotion_policy"], "enabled": True}, selection
+                    )
             if value["mode"] == "gifts":
                 s = self.gifts
                 await s.bind(
@@ -325,14 +352,15 @@ class ListingLaunch:
             return operation
         except BaseException:
             # Never re-open a draft after a publication operation may already exist.
-            # A failed preparation must also release launch:prepared, otherwise a later
-            # plain publish is rejected by guard() forever (operation stays None).
+            # Match ONLY this revision's operation: older revisions' dead operations
+            # must not keep the new attempt stuck in QUEUED forever. A revision is
+            # never queued twice (draft CAS), so an existing key means THIS attempt
+            # enqueued it and owns the outcome.
             with self.store.transaction() as db:
                 if not db.execute(
-                    "SELECT 1 FROM outbox WHERE operation_key LIKE ?", (launch_key(ident, "%")[:-1],)
+                    "SELECT 1 FROM outbox WHERE operation_key=?", (launch_key(ident, revision),)
                 ).fetchone():
-                    db.execute("UPDATE drafts SET state='DRAFT' WHERE id=? AND state='QUEUED'", (ident,))
-                    db.execute("DELETE FROM settings WHERE key=?", ("launch:prepared:" + item,))
+                    Store.release_launch(db, ident, item, {"launch_id": ident}, "PERMANENT_FAILED")
             raise
 
     def guard(self, action):

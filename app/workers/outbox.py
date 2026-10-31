@@ -371,17 +371,30 @@ class Executor:
                 raise ValidationError("Условия изменились. Прочитайте их и подтвердите заново.")
             accepted = []
             for entry in current:
-                result = await self.mutate(
-                    action,
-                    "acceptGameCategoryAgreement",
-                    "accept_game_category_agreement",
-                    agreement_id=entry["id"],
-                )
+                try:
+                    result = await self.mutate(
+                        action,
+                        "acceptGameCategoryAgreement",
+                        "accept_game_category_agreement",
+                        agreement_id=entry["id"],
+                    )
+                except (ValidationError, Conflict):
+                    if accepted:
+                        # Earlier agreements in this operation were already accepted by
+                        # the server: a local guard failure now is not proof nothing was
+                        # sent — keep the external outcome uncertain, never release.
+                        raise APIError("AGREEMENT_PARTIAL_STATE", uncertain=True) from None
+                    raise
                 if not isinstance(result, dict) or result.get("id") != entry["id"]:
                     raise APIError("AGREEMENT_RESULT_UNKNOWN", uncertain=True)
                 accepted.append(entry["id"])
-            if await Agreements(self.api).pending(target, payload.get("obtaining_type_id")):
-                raise APIError("AGREEMENT_ACCEPTANCE_NOT_CONFIRMED", uncertain=True)
+            try:
+                if await Agreements(self.api).pending(target, payload.get("obtaining_type_id")):
+                    raise APIError("AGREEMENT_ACCEPTANCE_NOT_CONFIRMED", uncertain=True)
+            except (ValidationError, Conflict) as caught:
+                # The final readback happens after server-accepted mutations: a local
+                # classification error here must not mark the operation as never-sent.
+                raise APIError(getattr(caught, "code", "AGREEMENT_PARTIAL_STATE"), uncertain=True) from None
             return {"accepted_ids": accepted, "confirmed": True}
         if kind == "publish":
             item = await self.owned_item(target)
@@ -514,7 +527,10 @@ class Executor:
                 if any(
                     datetime.fromisoformat(upload["expires_at"]) <= datetime.now(UTC) for upload in uploads
                 ):
-                    raise ValidationError("Срок временного вложения истёк до отправки")
+                    # Uploads already exist on the server: the message was never sent,
+                    # but the operation is not "nothing happened" — requeueing would
+                    # re-upload; keep it uncertain for manual review instead.
+                    raise APIError("CHAT_UPLOAD_EXPIRED_AFTER_UPLOAD", uncertain=True)
                 result = await self.mutate(
                     action,
                     "createChatMessage",

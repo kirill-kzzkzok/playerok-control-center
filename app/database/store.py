@@ -260,7 +260,7 @@ class Store:
             return {**dict(row), "lease_token": token, "payload": json.loads(row["payload"])}
 
     @staticmethod
-    def release_launch(db, ident, target, payload_json, status):
+    def release_launch(db, ident, target, payload_json, status, error=None):
         """Release a terminally failed launch: draft back to DRAFT (+revision), drop the marker.
 
         Shared by automatic finish() and manual owner resolution; UNCERTAIN never releases.
@@ -270,7 +270,14 @@ class Store:
         except ValueError:
             return
         launch_id = payload.get("launch_id")
-        if status != "PERMANENT_FAILED" or not launch_id:
+        # Only a proven-local or server-rejected failure releases the launch: local
+        # guards never sent anything, and an HTTP 4xx means the server refused the
+        # request (no publication happened). Anything else — network errors, unknown
+        # results, manual stops — keeps the launch blocked for reconciliation.
+        releasable = error in {None, "VALIDATION_FAILED"} or (
+            isinstance(error, str) and error.startswith("HTTP_4")
+        )
+        if status != "PERMANENT_FAILED" or not launch_id or not releasable:
             return
         db.execute(
             "UPDATE drafts SET state='DRAFT',revision=revision+1 WHERE id=? AND state='QUEUED'",
@@ -310,7 +317,7 @@ class Store:
             row = db.execute(
                 "SELECT operation_key,kind,target,payload FROM outbox WHERE id=?", (ident,)
             ).fetchone()
-            self.release_launch(db, ident, row["target"], row["payload"], status)
+            self.release_launch(db, ident, row["target"], row["payload"], status, error=error)
             if row["kind"] in {"premium_publish", "premium_bump"}:
                 from app.services.paid_promotions import finish_expense
 

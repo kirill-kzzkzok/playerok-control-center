@@ -100,9 +100,24 @@ class OperationsPanel:
                 }:
                     rows.append([("🔎 Сверить успешный результат", "ops:confirm:" + ident)])
                 rows.append([("⛔ Остановить без повтора", "ops:stop:" + ident)])
+            elif (
+                row["error_code"] == "MANUALLY_STOPPED_UNCERTAIN"
+                and row["kind"] in {"premium_publish", "premium_bump"}
+                and row["status"] == "PERMANENT_FAILED"
+            ):
+                text += "\n\nПовтор остановлен, но платёж остался неизвестным. Сверка квитанции по-прежнему доступна."
+                rows.append([("🔎 Сверить квитанцию и закрыть расход", "ops:confirm:" + ident)])
             rows.append([("История операций", "ops:list:ALL:0")])
             return text, keyboard(rows)
-        if command not in {"stop", "confirm"} or row["status"] != "UNCERTAIN":
+        if command not in {"stop", "confirm"} or (
+            row["status"] != "UNCERTAIN"
+            and not (
+                command == "confirm"
+                and row["status"] == "PERMANENT_FAILED"
+                and row["error_code"] == "MANUALLY_STOPPED_UNCERTAIN"
+                and row["kind"] in {"premium_publish", "premium_bump"}
+            )
+        ):
             raise Conflict("Операция уже разрешена или действие недоступно")
         data = {"id": ident, "signature": signature(row), "decision": "STOP_UNCERTAIN"}
         if command == "confirm":

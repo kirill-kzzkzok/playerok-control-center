@@ -72,6 +72,18 @@ def launch(rig):
 
 async def configured(r, mode="gifts", **options):
     r.premium = options.get("publication") == "PREMIUM"
+    if "promotion_policy" in options:
+        # The budget lives in the global policy (as the real UI saves it), the launch
+        # draft only carries the confirmed full copy.
+        from dataclasses import asdict
+
+        from app.services.promotion_settings import PromotionSettings
+        from app.services.promotions import PromotionPolicy
+
+        revision, policy, selection = PromotionSettings(r.store, r.api).get()
+        full = asdict(PromotionPolicy(**{**asdict(policy), **options["promotion_policy"]}))
+        PromotionSettings(r.store, r.api).save(7, revision, full, selection)
+        options = {**options, "promotion_policy": full}
     ident = await r.launch.open(
         7,
         "item",
@@ -244,6 +256,78 @@ async def test_local_stop_before_publication_is_permanent_not_uncertain(launch):
     assert not r.publications and r.api.item["status"] == "DRAFT"
 
 
+async def test_failed_preparation_disarms_gift_listing_it_just_armed(launch):
+    r = launch
+    # Scenario A: gifts are bound+armed inside queue(), then the publication step
+    # fails BEFORE any outbox operation exists (PREMIUM balance drops mid-flight).
+    r.api.item["status"] = "DRAFT"
+    r.quotes = [
+        {"id": "free", "type": "DEFAULT", "price": 0, "period": 7},
+        {"id": "premium", "type": "PREMIUM", "price": 10, "period": 7},
+    ]
+
+    async def failing_call(method, **kwargs):
+        if method == "get":
+            return {"id": "shop", "profile": {"balance": {"available": 0}}}
+        return await r.api.call(method, **kwargs)
+
+    original_call = r.api.call
+    budget = {"per_operation": 50, "daily": 100, "monthly": 1000, "max_operations_per_item": 20}
+    ident, revision = await configured(
+        r, mode="gifts", publication="PREMIUM", quote_id="premium", promotion_policy=budget
+    )
+
+    # Drop the balance AFTER readiness was confirmed: queue() re-checks it inside
+    # PaidPromotions.queue and must fail after the gift listing was already armed.
+    async def depleted(method, **kwargs):
+        if method == "get":
+            return {"id": "shop", "profile": {"balance": {"available": 0}}}
+        return await original_call(method, **kwargs)
+
+    r.api.call = depleted
+    with pytest.raises((ValidationError, Conflict)):
+        await r.launch.queue(7, ident, revision)
+    r.api.call = original_call
+    # Partial preparation is fully rolled back: no armed gift spending, no marker,
+    # draft reusable, and a plain publish of the same item still works.
+    listing = r.service.listing("item")
+    assert not listing or not listing["enabled"]
+    assert not r.store.setting("launch:prepared:item")
+    assert r.store.get_draft(ident, 7)["state"] == "DRAFT"
+    assert not r.remote.payments and r.api.item["status"] == "DRAFT"
+
+
+async def test_launch_policy_change_does_not_touch_other_lots_approvals(launch):
+    r = launch
+
+    budget = {"per_operation": 50, "daily": 100, "monthly": 1000, "max_operations_per_item": 20}
+    # Lot B: an already-approved PREMIUM tariff with its own promotion settings.
+    ident_b, revision_b = await configured(
+        r, mode="text", publication="PREMIUM", quote_id="premium", promotion=True, promotion_policy=budget
+    )
+    op_b = await r.launch.queue(7, ident_b, revision_b)
+    await r.worker.once()
+    assert r.store.rows("SELECT status FROM outbox WHERE id=?", (op_b,))[0]["status"] == "SUCCEEDED"
+    approval_b = r.store.setting("promotions:approved:item")
+    assert approval_b["item"]["id"] == "item"
+
+    # Lot A launch with a HIGHER budget: its save must not invalidate B's approval.
+    higher = {"per_operation": 80, "daily": 200, "monthly": 2000, "max_operations_per_item": 30}
+    from dataclasses import asdict
+
+    from app.services.promotion_settings import PromotionSettings
+    from app.services.promotions import PromotionPolicy
+
+    ps = PromotionSettings(r.store, r.api)
+    revision, policy, selection = ps.get()
+    ps.save(7, revision, asdict(PromotionPolicy(**{**asdict(policy), **higher})), selection)
+    approval_after = r.store.setting("promotions:approved:item")
+    # The stored approval for B still exists with its confirmed tariff fields.
+    assert approval_after["item"]["id"] == "item"
+    assert approval_after["quote_id"] == approval_b["quote_id"]
+    assert approval_after["amount"] == approval_b["amount"]
+
+
 async def test_premium_launch_with_prepared_auto_delivery(launch):
     r = launch
     budget = {"per_operation": 50, "daily": 100, "monthly": 1000, "max_operations_per_item": 20}
@@ -291,6 +375,67 @@ async def test_empty_stock_blocks_launch_before_any_operation(launch):
         await r.launch.check(7, value)
     assert not r.store.rows("SELECT 1 FROM outbox WHERE operation_key LIKE 'launch:%'")
     assert not r.publications and r.api.item["status"] == "DRAFT"
+
+
+async def test_second_attempt_failure_releases_even_after_dead_prior_operation(launch):
+    r = launch
+    # Attempt 1: launch fails terminally; release bumps the draft revision.
+    ident, revision = await configured(r)
+    r.failure = "before"
+    op1 = await r.launch.queue(7, ident, revision)
+    await r.worker.once()
+    assert r.store.rows("SELECT status FROM outbox WHERE id=?", (op1,))[0]["status"] == "PERMANENT_FAILED"
+    draft = r.store.get_draft(ident, 7)
+    assert draft["state"] == "DRAFT" and draft["revision"] > revision
+    # Attempt 2 on the new revision: preparation fails BEFORE creating the operation
+    # (manual mode + an enabled delivery policy on the item).
+    r.store.execute(
+        'INSERT INTO delivery_policies VALUES(\'item\',1,7,\'{"enabled": true, "mode": "text",'
+        ' "text": "x", "greeting": "", "after": "", "mark_sent": false, "auto_enroll": true}\','
+        " '2026-10-31T00:00:00+00:00')"
+    )
+    value = draft["payload"]
+    value["mode"] = "manual"
+    r.failure = None
+    value["ready"] = await r.launch.check(7, value)
+    r.store.update_draft(ident, 7, draft["revision"], value)
+    revision2 = r.store.get_draft(ident, 7)["revision"]
+    with pytest.raises(Conflict):
+        await r.launch.queue(7, ident, revision2)
+    # The stale dead operation of revision 1 must NOT keep attempt 2 stuck:
+    # the draft returns to DRAFT, the marker is gone, no live automation remains.
+    after = r.store.get_draft(ident, 7)
+    assert after["state"] == "DRAFT", after
+    assert not r.store.setting("launch:prepared:item")
+    policy = r.store.rows("SELECT payload FROM delivery_policies WHERE item_id='item'")[0]
+    assert not json.loads(policy["payload"])["enabled"]
+
+
+async def test_queued_draft_screen_links_the_real_operation(launch):
+    r = launch
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    ui = Interaction(bot, dispatcher(r.store, r.api))
+    try:
+        ident, revision = await configured(r)
+        op = await r.launch.queue(7, ident, revision)
+        await ui.click("launch:open:" + ident)
+        markup = session.calls[-1].reply_markup
+        result_buttons = [
+            b.callback_data
+            for row in markup.inline_keyboard
+            for b in row
+            if "result:show:" in (b.callback_data or "")
+        ]
+        assert result_buttons == ["result:show:" + op], result_buttons
+        # Prefix isolation: another draft id never matches this launch's operations.
+        from app.services.listing_launch import launch_prefix
+
+        assert not r.store.rows(
+            "SELECT 1 FROM outbox WHERE operation_key LIKE ?", (launch_prefix(ident + "ff"),)
+        )
+    finally:
+        await bot.session.close()
 
 
 async def test_dispatcher_configuration_restart_preview_and_final_button(launch):

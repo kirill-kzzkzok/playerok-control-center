@@ -6,7 +6,7 @@ from app.database.store import Conflict
 from app.gifts.core import gift_name
 from app.services.automation import message_text
 from app.services.inventory import stock_values
-from app.services.listing_launch import ListingLaunch, launch_key
+from app.services.listing_launch import ListingLaunch, launch_prefix
 from app.services.products import ValidationError, priority_price_basis
 from app.services.promotions import PromotionPolicy
 from app.telegram.formatting import escaped
@@ -40,7 +40,7 @@ class LaunchPanel:
         if draft["state"] != "DRAFT":
             ops = self.store.rows(
                 "SELECT id FROM outbox WHERE operation_key LIKE ? ORDER BY created_at DESC LIMIT 1",
-                (launch_key(ident, "%")[:-1],),
+                (launch_prefix(ident),),
             )
             return (
                 "⏳ Запуск уже подтверждён. Повторная публикация заблокирована до проверки результата.",

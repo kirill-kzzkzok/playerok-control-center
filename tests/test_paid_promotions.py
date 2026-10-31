@@ -502,3 +502,30 @@ async def test_recovered_before_intent_can_be_stopped_without_claiming_a_payment
         await r.service.execute(r.worker.executor, action)
     assert not r.api.charges
     await enqueue(r, key="safe-new-preview")
+
+
+async def test_stopped_paid_operation_can_still_be_reconciled_to_success(rig):
+    r = rig
+    r.api.timeout = True
+    op = await enqueue(r)
+    await r.worker.once()
+    assert len(r.api.charges) == 1  # the server actually charged before the timeout
+    # The lost response arrives late (journal intent), giving a receipt candidate.
+    from app.services.paid_promotions import intent_key
+
+    intent = r.store.setting(intent_key(op), {})
+    r.store.set_setting(intent_key(op), {**intent, "candidate_id": "receipt-1"})
+    service = Reconciliation(r.store, r.api)
+    row = r.store.rows("SELECT * FROM outbox WHERE id=?", (op,))[0]
+    await service.resolve(7, op, signature(row), "STOP_UNCERTAIN", "Пауза до ручной проверки квитанции")
+    assert r.store.rows("SELECT status FROM promotion_expenses")[0]["status"] == "UNCERTAIN"
+    # Later the owner finds the receipt on Playerok and re-confirms the stopped
+    # operation: the expense closes as SUCCEEDED, the deadlock is escapable.
+    r.api.timeout = False
+    r.api.charges = []  # evidence() reads the item state; no new charge happens
+    row = r.store.rows("SELECT * FROM outbox WHERE id=?", (op,))[0]
+    await service.resolve(
+        7, op, signature(row), "CONFIRM_READ_STATE", "Квитанция проверена лично на Playerok"
+    )
+    assert r.store.rows("SELECT status FROM promotion_expenses")[0]["status"] == "SUCCEEDED"
+    assert not r.api.charges

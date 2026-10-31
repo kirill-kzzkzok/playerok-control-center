@@ -40,7 +40,11 @@ class Reconciliation:
     def action(self, actor, ident, *, uncertain=False):
         self.owner(actor)
         rows = self.store.rows("SELECT * FROM outbox WHERE id=?", (ident,))
-        if not rows or (uncertain and rows[0]["status"] != "UNCERTAIN"):
+        if not rows or (
+            uncertain
+            and rows[0]["status"] != "UNCERTAIN"
+            and rows[0]["error_code"] != "MANUALLY_STOPPED_UNCERTAIN"
+        ):
             raise Conflict("Операция недоступна или уже разрешена")
         return rows[0]
 
@@ -164,7 +168,12 @@ class Reconciliation:
         result = {**evidence, "resolution_source": "OWNER_DECISION", "actor": actor, "decision": decision}
         with self.store.transaction() as db:
             current = db.execute("SELECT * FROM outbox WHERE id=?", (ident,)).fetchone()
-            if not current or current["status"] != "UNCERTAIN" or signature(dict(current)) != expected:
+            reconfirm = current["error_code"] == "MANUALLY_STOPPED_UNCERTAIN" and decision != "STOP_UNCERTAIN"
+            if (
+                not current
+                or (current["status"] != "UNCERTAIN" and not reconfirm)
+                or signature(dict(current)) != expected
+            ):
                 raise Conflict("Операция уже разрешена другим действием")
             if action["kind"] in {"premium_publish", "premium_bump"} and status == "SUCCEEDED":
                 from app.services.paid_promotions import finish_expense, intent_key
@@ -194,7 +203,10 @@ class Reconciliation:
                 ):
                     raise Conflict("Резерв изменился; выдача не может быть подтверждена")
             db.execute(
-                "INSERT INTO operation_resolutions VALUES(?,?,?,?,?,?,?,?)",
+                "INSERT INTO operation_resolutions VALUES(?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(operation_id) DO UPDATE SET actor=excluded.actor,decision=excluded.decision,"
+                "reason=excluded.reason,evidence=excluded.evidence,previous_error_code=excluded.previous_error_code,"
+                "previous_result=excluded.previous_result,resolved_at=excluded.resolved_at",
                 (
                     ident,
                     actor,
@@ -206,6 +218,10 @@ class Reconciliation:
                     now(),
                 ),
             )
+            # Owner resolution of a launch publication NEVER releases the launch:
+            # STOP_UNCERTAIN only stops retries; it does not prove the external request
+            # was never sent (the item may already be published). CONFIRM_* success
+            # keeps the draft QUEUED as the completed launch.
             db.execute(
                 "UPDATE outbox SET status=?,result=?,error_code=?,lease_token=NULL,lease_until=NULL WHERE id=?",
                 (status, encode(result), error, ident),
@@ -233,10 +249,9 @@ class Reconciliation:
                         "UPDATE delivery_chains SET status=? WHERE order_id=? AND status='BLOCKED'",
                         (state, action["target"]),
                     )
-            # Owner resolution of a launch publication must apply the same terminal
-            # release as automatic finish(); STOP_UNCERTAIN means no send ever started.
-            if action["kind"] in {"publish", "premium_publish"}:
-                self.store.release_launch(db, ident, action["target"], action["payload"], status)
+            # Owner resolution NEVER releases a launch: an owner decision cannot prove
+            # the external publication request was never sent. STOP_UNCERTAIN only
+            # stops retries (the draft stays QUEUED = manual attention required).
             if action["kind"] == "delivery":
                 db.execute(
                     "INSERT INTO order_history(order_id,source,new_status,actor,note,created_at) SELECT id,'MANUAL_DELIVERY_RESOLUTION',status,?,?,? FROM orders WHERE id=?",

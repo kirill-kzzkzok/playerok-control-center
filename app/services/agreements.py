@@ -1,6 +1,7 @@
 import hashlib
 import json
 
+from app.database.store import Conflict
 from app.services.products_errors import ValidationError
 
 
@@ -309,12 +310,21 @@ class AutoAgreements:
                 (encode(action["payload"]), action["id"], action["lease_token"]),
             )
             self.journal(category, method, conditions, "DISPATCH_INTENT", action["id"])
-            result = await executor.mutate(
-                action,
-                "acceptGameCategoryAgreement",
-                "accept_game_category_agreement",
-                agreement_id=entry["id"],
-            )
+            try:
+                result = await executor.mutate(
+                    action,
+                    "acceptGameCategoryAgreement",
+                    "accept_game_category_agreement",
+                    agreement_id=entry["id"],
+                )
+            except (ValidationError, Conflict) as caught:
+                if accepted:
+                    # Later-loop local guard failures happen after server-accepted
+                    # agreements: the external outcome is uncertain, not "never sent".
+                    raise APIError(
+                        getattr(caught, "code", "AGREEMENT_PARTIAL_STATE"), uncertain=True
+                    ) from None
+                raise
             if not isinstance(result, dict) or result.get("id") != entry["id"]:
                 raise APIError("AGREEMENT_RESULT_UNKNOWN", uncertain=True)
             # A success body alone does not prove server requirements cleared.

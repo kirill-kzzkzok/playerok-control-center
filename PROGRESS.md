@@ -2270,3 +2270,28 @@ Clean HEAD c8ffed3. Source-only backup: data\backups\ux-source-20261031T022509Z.
 - zombie_bear-цепочка проверена независимо: 10/10 подтверждено (ID из каталога, свежая цена, баланс+резервы, obtaining_fields, нет повторов/двойной выдачи, частичная выдача ≠ полная, fulfill только после доставки, чужой заказ/бюджет закрыты).
 - Закрыты пробелы покрытия ТЗ: PREMIUM+автовыдача, платное автоподнятие до публикации, пустой склад блокирует запуск (3 новых теста; фикстура получила premium-квитанцию). Частичные пробелы (8/9/10/25) покрыты runtime-тестами в других файлах.
 - Целевые группы: listing_launch 19/19, reconciliation 22/22, gifts 82; ruff check/format PASS. Финальный полный pytest запущен.
+
+
+### Корректирующий аудит 8f6073d — начато 2026-11-01
+Проверяются 4 заявленных дефекта. Д1 (launch_key(ident,'%')[:-1] теряет %) ПОДТВЕРЖДЁН воспроизведением на SQLite (0 операций найдено) и исправлен: launch_prefix() + тест test_queued_draft_screen_links_the_real_operation (20/20). Д2/Д3/Д4 — анализ по коду подтверждает: rollback queue() не гасит включённую автоматику; resolve(STOP_UNCERTAIN) освобождает запуск при неизвестном внешнем результате; check() не включает revision глобальной политики в дайджест готовности. Правки и RED/GREEN тесты в процессе. Рабочие данные/.env не тронуты.
+
+
+### Корректирующий аудит 8f6073d — исправления применены 2026-11-01
+- Д1 (LIKE без %) ПОДТВЕРЖДЁН и ИСПРАВЛЕН: launch_prefix() вместо среза; RED доказан отдельным скриптом (оригинальный паттерн 0 операций), GREEN test_queued_draft_screen_links_the_real_operation.
+- Д2 (неполный откат) ПОДТВЕРЖДЁН и ИСПРАВЛЕН: rollback queue() теперь вызывает Store.release_launch (гасит gift_listings/delivery_policies + маркер + драфт в одной транзакции), только если операция публикации не создана. Тест test_failed_preparation_disarms_gift_listing_it_just_armed (сценарий A: gifts armed → PREMIUM-сбой → полная очистка).
+- Д3 (STOP_UNCERTAIN освобождает запуск) ПОДТВЕРЖДЁН и ИСПРАВЛЕН: resolve() больше НИКОГДА не вызывает release_launch; release в finish() ограничен доказуемо-локальными кодами (VALIDATION_FAILED/None/HTTP_4*). Тест test_stop_uncertain_publish_never_releases_the_launch.
+- Д4 (глобальная политика) ПОДТВЕРЖДЁН и ИСПРАВЛЕН: check() сверяет promotion_policy с живой глобальной (без volatile enabled) — рассинхрон => Conflict «обновите лимиты»; queue() пишет ТОЛЬКО enabled-флаг (не перезаписывает лимиты/расписание/selection других лотов), только при opt-in promotion. Тест test_launch_policy_change_does_not_touch_other_lots_approvals.
+- Доп.: agreements-цикл — ValidationError после первого принятого соглашения теперь APIError(uncertain) вместо PERMANENT_FAILED (частичная внешняя мутация не маскируется под локальный отказ).
+- Целевые: listing_launch 22/22, reconciliation+paid+gifts+ui 150/150; ruff check/format PASS. Полный pytest в процессе; независимые аудиты A/B/C субагентами запущены.
+
+
+### Аудиты A/B/C — находки закрыты 2026-11-01
+- A1 (высокий, подтверждён воспроизведением): rollback queue() матчил операции ВСЕХ ревизий — мёртвая операция прошлой попытки держала новую в вечном QUEUED. Исправлено: точный ключ launch_key(ident, revision) (ревизия не ставится дважды из-за CAS). Тест test_second_attempt_failure_releases_even_after_dead_prior_operation.
+- A4 (средний): платное продвижение не гасится при rollback запуска. Оценено осознанно: enabled-планировщик не тратит на DRAFT (workers/promotions.py:109), требуются approval+authority; частичное изменение не создаёт списаний. Остаточный риск задокументирован.
+- B4: ValidationError «вложение истекло» после upload-мутаций → APIError CHAT_UPLOAD_EXPIRED_AFTER_UPLOAD (uncertain).
+- B8: финальная сверка agreements после мутаций → APIError uncertain (не PERMANENT_FAILED).
+- B9: авто-соглашения — mutate на итерациях ≥2 обёрнут: ValidationError после принятых → APIError uncertain.
+- B3 (тупик STOP_UNCERTAIN premium): resolve теперь допускает повторный CONFIRM для остановленных (MANUALLY_STOPPED_UNCERTAIN) premium-операций: закрывает UNCERTAIN-расход, operation_resolutions — upsert. UI показывает «Сверить квитанцию и закрыть расход». Тест test_stopped_paid_operation_can_still_be_reconciled_to_success.
+- B11 (gift_refund readback) и B-оговорки (UNAUTHORIZED/RATE_LIMITED на read — зависание без release, безопасная сторона) — оценены: refund UNCERTAIN журналируется отдельно, launch не освобождается (fail-safe). Правки не требуются.
+- C: изоляция политик подтверждена корректной (включение A не активирует B; требуется approval каждого лота; сбои A не трогают B).
+- Прогоны: listing 23/23, paid+reconciliation 55/55, agreements 41/41; ruff/format/compile PASS. Полный pytest финальный запущен.
