@@ -315,7 +315,7 @@ def create_router(store, api, products, synchronizer):
                     f"{escape(s.get('name') or s.get('type') or '?')}: {s.get('price', 'неизвестно')} ₽ · {s.get('period', '?')} дн."
                     for s in statuses
                 )
-                text += "\n\nПросмотр ничего не покупает. Платные действия запрещены."
+                text += "\n\nПросмотр ничего не покупает. Покупка платного размещения здесь не реализована."
                 markup = keyboard([[("⬅️ Лот", "item:" + ident)]])
             elif action.startswith(("discount:", "editprice:")):
                 ident = action.split(":", 1)[1]

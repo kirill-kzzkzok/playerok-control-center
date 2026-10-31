@@ -245,12 +245,17 @@ class GiftService:
     async def arm(self, owner, item_id, revision, *, auto_fulfill=False):
         data = await self.inspect_item(owner, item_id)
         self.settings.require_configured()
-        if (
-            not self.settings.payment_enabled
-            or not getattr(self.api.account, "writes_enabled", False)
-            or not getattr(self.api.account, "automation_enabled", False)
-        ):
-            raise GiftValidationError("Глобальные платные отправки / записи / автоматика выключены")
+        disabled = []
+        if not self.settings.payment_enabled:
+            disabled.append("покупка подарков выключена (TG_GIFT_PAYMENTS_ENABLED)")
+        if not getattr(self.api.account, "writes_enabled", False):
+            disabled.append("записи Playerok выключены или аккаунт не подтверждён (PLAYEROK_WRITES_ENABLED)")
+        if not getattr(self.api.account, "automation_enabled", False):
+            disabled.append(
+                "автоматизация выключена или аккаунт не подтверждён (PLAYEROK_AUTOMATION_ENABLED)"
+            )
+        if disabled:
+            raise GiftValidationError("; ".join(disabled))
         await self.refresh()
         if data["item"]["status"] != "APPROVED":
             raise GiftValidationError("Включать можно только опубликованный лот")

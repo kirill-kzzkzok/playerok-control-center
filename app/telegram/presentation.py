@@ -98,6 +98,10 @@ def error_text(error):
     from app.services.playerok_connection import REASONS
 
     if isinstance(error, APIError):
+        if error.code == "WRITES_DISABLED":
+            return "Записи Playerok выключены или аккаунт не подтверждён. Проверьте разрешение записей и подключение в профиле."
+        if error.code == "OPERATION_FORBIDDEN":
+            return "Этот тип операции не поддерживается защищённым клиентом. Другие разрешённые функции доступны отдельно."
         reason = REASONS.get(error.code)
         if reason:
             return escaped(reason + ". Откройте профиль и проверьте соединение.", 800)

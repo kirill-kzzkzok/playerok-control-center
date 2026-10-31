@@ -54,8 +54,8 @@ class Config:
             not proxy.startswith("https://") or "@" in proxy
         ):
             raise ConfigurationError("Прокси должен использовать HTTPS без credentials в URL")
-        if values.get("PAID_OPERATIONS_ENABLED", "false").lower() == "true":
-            raise ConfigurationError("Платные операции в этой сборке запрещены")
+        # Deprecated PAID_OPERATIONS_ENABLED is intentionally ignored for old .env files.
+        # Each implemented operation has its own opt-in; this legacy flag grants no authority.
         return cls(
             token,
             header,
