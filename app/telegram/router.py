@@ -281,7 +281,10 @@ def create_router(store, api, products, synchronizer):
                     raise ValidationError("Неизвестный статус товара")
                 filters = (await state.get_data()).get("item_filters", {})
                 filters["status"] = None if value == "ALL" else value
-                await state.set_data({"item_filters": filters})
+                gift_picker = (await state.get_data()).get("gift_picker", False)
+                await state.set_data(
+                    {"item_filters": filters, **({"gift_picker": True} if gift_picker else {})}
+                )
                 await state.set_state(None)
                 text, markup = await listings_panel.show("items", state)
             elif action == "il:back":

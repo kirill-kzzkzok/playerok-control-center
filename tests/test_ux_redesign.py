@@ -84,6 +84,60 @@ def buttons(method):
     }
 
 
+async def test_gift_picker_server_drafts_keep_selection_context_after_restart(ux):
+    r = ux
+    await r.ui.click("gft:bindings")
+    choices = buttons(r.session.calls[-1])
+    route = next(k for k, v in choices.items() if "Выбрать товар" in v)
+    await r.ui.click(route)
+    assert "itemfilter:DRAFT" in buttons(r.session.calls[-1])
+    assert "gft:item:lot" in buttons(r.session.calls[-1])
+    assert "drafts" not in buttons(r.session.calls[-1])
+    r.ui.dp = dispatcher(r.store, r.api)
+    r.api.value["status"] = "DRAFT"
+    await r.ui.click("itemfilter:DRAFT")
+    assert (await r.state.get_data())["gift_picker"] is True
+    assert "gft:item:lot" in buttons(r.session.calls[-1])
+    assert r.api.calls[-1][1]["statuses"][0].name == "DRAFT"
+    await r.ui.click("il:search")
+    await r.ui.message("Item")
+    assert "gft:item:lot" in buttons(r.session.calls[-1])
+    await r.ui.click("il:reset")
+    assert "gft:item:lot" in buttons(r.session.calls[-1])
+    await r.ui.click("home")
+    await r.ui.click("items")
+    assert "item:lot" in buttons(r.session.calls[-1])
+    assert "drafts" in buttons(r.session.calls[-1])
+    assert not r.store.rows("SELECT * FROM outbox")
+
+
+async def test_gift_picker_opens_server_draft_binding_without_enabling_delivery(ux):
+    from app.gifts.settings import GiftSettings
+
+    r = ux
+    r.api.gift_settings = GiftSettings(0, "", "data/test", "stars", "gift", "username", False, 100, 300)
+    r.api.value.update(
+        status="DRAFT",
+        description="Gift\ngift: zombie_bear, rose",
+        category={"id": "stars"},
+        obtaining_type={"id": "gift"},
+    )
+
+    async def schema(*args, **kwargs):
+        yield [{"id": "username", "type": "OBTAINING_DATA", "required": True}]
+
+    r.api.pages = schema
+    r.ui.dp = dispatcher(r.store, r.api)
+    await r.ui.click("gft:bindings")
+    await r.ui.click("gft:choose")
+    await r.ui.click("itemfilter:DRAFT")
+    await r.ui.click("gft:item:lot")
+    assert "gft:bind:lot" in buttons(r.session.calls[-1])
+    assert "zombie_bear" in r.session.calls[-1].text
+    assert not r.store.rows("SELECT * FROM gift_listings")
+    assert not r.store.rows("SELECT * FROM outbox")
+
+
 async def test_home_exactly_five_no_fake_connection_and_conditional_attention(ux):
     r = ux
     assert set(buttons(r.session.calls[-1])) == {"items", "orders", "chats", "gft:home", "more"}

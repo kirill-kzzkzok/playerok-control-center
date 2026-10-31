@@ -12,8 +12,12 @@ class ItemCategoryPicker:
         self.api = api
 
     async def start(self, state):
+        data = await state.get_data()
         await state.set_data(
-            {"item_filters": checked_filters((await state.get_data()).get("item_filters", {}))}
+            {
+                "item_filters": checked_filters(data.get("item_filters", {})),
+                **({"gift_picker": True} if data.get("gift_picker") else {}),
+            }
         )
         await state.set_state("itemlist:category_search")
         return "📂 Введите название игры для поиска категории Playerok.", keyboard(
@@ -97,7 +101,8 @@ class ItemCategoryPicker:
 
     async def action(self, action, state):
         parts = action.split(":")
-        view = (await state.get_data()).get("category_picker", {})
+        data = await state.get_data()
+        view = data.get("category_picker", {})
         if (
             await state.get_state() != "itemlist:category_search"
             or len(parts) != 4
@@ -128,6 +133,8 @@ class ItemCategoryPicker:
         filters = checked_filters((await state.get_data()).get("item_filters", {}))
         filters["category_id"] = selected["id"]
         filters = checked_filters(filters)
-        await state.set_data({"item_filters": filters})
+        await state.set_data(
+            {"item_filters": filters, **({"gift_picker": True} if data.get("gift_picker") else {})}
+        )
         await state.set_state(None)
         return None

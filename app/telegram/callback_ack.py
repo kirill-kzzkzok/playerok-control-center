@@ -61,6 +61,7 @@ def navigation(action):
         "gft:stop",
         "gft:catalog",
         "gft:bindings",
+        "gft:choose",
     } or action.startswith(
         (
             "item:",

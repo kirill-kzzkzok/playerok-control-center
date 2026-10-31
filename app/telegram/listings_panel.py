@@ -19,6 +19,7 @@ class ListingsPanel:
         if kind not in {"items", "chats"}:
             raise ValidationError("Неизвестный список")
         data = await state.get_data()
+        gift_picker = kind == "items" and data.get("gift_picker") is True
         cursor, seen, number = None, [], 1
         if nonce is not None:
             if (
@@ -45,6 +46,8 @@ class ListingsPanel:
                 **extra,
             )
             title, prefix = "📦 Мои товары", "item"
+            if gift_picker:
+                title, prefix = "🎁 Выберите товар для подарков", "gft:item"
         else:
             page = await self.api.call("get_chats", count=10, after_cursor=cursor)
             title, prefix = "💬 Диалоги", "chat"
@@ -91,7 +94,12 @@ class ListingsPanel:
             rows.append([("Далее →", f"listnext:{kind}:{next_nonce}")])
         if kind == "items":
             rows.extend(
-                [[("🔎 Поиск", "il:search"), ("Фильтры", "itemfilters")], [("💾 Черновики", "drafts")]]
+                [
+                    [("🔎 Поиск", "il:search"), ("Фильтры", "itemfilters")],
+                    [("💾 Черновики Playerok", "itemfilter:DRAFT")]
+                    if gift_picker
+                    else [("💾 Черновики", "drafts")],
+                ]
             )
         # Save only after the whole response/buttons validate; errors leave retryable cursor.
         await state.update_data(
@@ -107,12 +115,15 @@ class ListingsPanel:
             else "На этой странице записей нет."
         )
         note = "\nФрагменты — по сохранённой истории." if kind == "chats" else ""
+        if gift_picker:
+            note = "\nВыберите созданный на Playerok товар, включая серверные черновики. Локальный черновик сначала нужно создать на Playerok через мастер."
         if kind == "items" and any(v is not None and v != "" for v in filters.values()):
-            note = f"\nСовпало: {len(values)}. Фильтрация постраничная."
+            note += f"\nСовпало: {len(values)}. Фильтрация постраничная."
             if not values:
                 note += " По ещё не загруженным страницам поиск не выполнен."
         return f"<b>{title}</b> · страница {number}\n" + ("" if values else empty) + note, keyboard(
-            rows, back=("⬅️ Мой магазин", "home")
+            rows,
+            back=("⬅️ Товары с подарками", "gft:bindings") if gift_picker else ("⬅️ Мой магазин", "home"),
         )
 
     async def filter_action(self, action, state):
@@ -122,11 +133,15 @@ class ListingsPanel:
         filters = checked_filters(data.get("item_filters", {}))
         if action == "il:reset":
             await state.clear()
+            if data.get("gift_picker"):
+                await state.set_data({"gift_picker": True})
             return await self.show("items", state)
         field = action.removeprefix("il:")
         if field in {"PREMIUM", "DEFAULT", "ALL"}:
             filters["priority"] = None if field == "ALL" else field
-            await state.set_data({"item_filters": filters})
+            await state.set_data(
+                {"item_filters": filters, **({"gift_picker": True} if data.get("gift_picker") else {})}
+            )
             return await self.show("items", state)
         prompts = {
             "search": "Название: от 1 до 200 символов; «-» очищает поиск.",
@@ -135,13 +150,16 @@ class ListingsPanel:
         }
         if field not in prompts:
             raise ValidationError("Фильтр недоступен")
-        await state.set_data({"item_filters": filters})
+        await state.set_data(
+            {"item_filters": filters, **({"gift_picker": True} if data.get("gift_picker") else {})}
+        )
         await state.set_state("itemlist:" + field)
         return prompts[field], keyboard([[("Отмена", "itemfilters")]])
 
     async def filter_message(self, message, state):
         current = await state.get_state()
-        filters = checked_filters((await state.get_data()).get("item_filters", {}))
+        data = await state.get_data()
+        filters = checked_filters(data.get("item_filters", {}))
         text = (message.text or "").strip()
         if current == "itemlist:category_search":
             return await self.category_picker.search(text, state)
@@ -161,6 +179,8 @@ class ListingsPanel:
         else:
             raise ValidationError("Ввод фильтра устарел")
         filters = checked_filters(filters)
-        await state.set_data({"item_filters": filters})
+        await state.set_data(
+            {"item_filters": filters, **({"gift_picker": True} if data.get("gift_picker") else {})}
+        )
         await state.set_state(None)
         return await self.show("items", state)

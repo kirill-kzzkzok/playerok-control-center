@@ -167,10 +167,16 @@ class GiftsPanel:
                 nav.append(("Далее →", f"gft:bindings:{page + 1}"))
             if nav:
                 buttons.append(nav)
-            buttons.append([("➕ Выбрать товар", "items")])
+            buttons.append([("➕ Выбрать товар", "gft:choose")])
             return "🎁 <b>Товары с подарками</b>\n" + (
                 "Выберите товар для настройки." if rows else "Привязок пока нет. Выберите подходящий товар."
             ), keyboard(buttons, back=("⬅️ Подарки", "gft:home"))
+        if command == "choose":
+            from app.telegram.listings_panel import ListingsPanel
+
+            await state.clear()
+            await state.set_data({"gift_picker": True})
+            return await ListingsPanel(s.api, self.store).show("items", state)
         if command == "stop":
             s.stop(owner)
             await state.clear()
