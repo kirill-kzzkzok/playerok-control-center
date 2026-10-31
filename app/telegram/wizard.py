@@ -139,7 +139,12 @@ class Wizard:
         mode = payload.get("delivery", "manual")
         lines.append(
             "Режим выдачи: "
-            + {"manual": "Ручной", "text": "Постоянный текст", "stock": "Уникальный запас"}[mode]
+            + {
+                "manual": "Ручной",
+                "text": "Постоянный текст",
+                "stock": "Уникальный запас",
+                "gifts": "Telegram Gifts",
+            }[mode]
         )
         if mode == "stock":
             if payload.get("delivery_data"):
@@ -318,11 +323,12 @@ class Wizard:
         elif step == "price":
             text = "💰 <b>Базовая цена</b>\nВведите целую сумму в рублях. Настоящая скидка устанавливается отдельным подтверждённым действием после создания серверного черновика."
         elif step == "delivery":
-            text = "⚡ <b>Выдача</b>\nВыберите локальный режим. Автовыдача остаётся выключенной до отдельного включения после проверки."
+            text = "⚡ <b>Выдача</b>\nВыберите способ. Полную настройку и проверку завершим на неопубликованном черновике до итогового запуска."
             choices = [
                 {"name": "Ручная", "value": "manual"},
                 {"name": "Постоянный текст", "value": "text"},
                 {"name": "Уникальные значения", "value": "stock"},
+                {"name": "Telegram Gifts", "value": "gifts"},
             ]
         elif step == "delivery_data":
             text = "🔐 Пришлите текст выдачи или уникальные значения (одно на строку). Данные сохраняются только в локальной БД."
@@ -667,7 +673,7 @@ class Wizard:
                 payload["delivery"] = choice["value"]
                 payload["step"] = (
                     ("preview" if payload.get("return_preview") else "confirm")
-                    if choice["value"] == "manual"
+                    if choice["value"] in {"manual", "gifts"}
                     else "delivery_data"
                 )
             elif step == "finance_method":
@@ -753,8 +759,15 @@ class Wizard:
             ident = await method(draft["id"], owner, draft["revision"])
             await state.clear()
             return (
-                "⏳ Ожидает выполнения. Результат придёт отдельным сообщением; товар пока не считается созданным.",
-                keyboard([[("Открыть результат", "result:show:" + ident)]]),
+                "⏳ Готовим неопубликованный черновик Playerok. Затем продолжите здесь настройку выдачи и публикации; продаж ещё нет.",
+                keyboard(
+                    [
+                        [("Открыть результат", "result:show:" + ident)],
+                        [("Продолжить настройку и запуск", "launch:from:" + draft["id"])],
+                    ]
+                    if not payload.get("edit_target")
+                    else [[("Открыть результат", "result:show:" + ident)]]
+                ),
             )
         else:
             raise ValidationError("Действие не соответствует шагу")

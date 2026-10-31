@@ -60,8 +60,15 @@ class GiftService:
             "id"
         ) != s.obtaining_type_id:
             raise GiftValidationError("Не совпадает настроенная категория или способ «Подарок»")
-        if item.get("deleted_at") or item.get("status") not in {"DRAFT", "APPROVED"}:
-            raise GiftValidationError("Лот удалён или недоступен для настройки")
+        if item.get("deleted_at") or item.get("status") not in {
+            "DRAFT",
+            "APPROVED",
+            "PENDING_APPROVAL",
+            "PENDING_MODERATION",
+        }:
+            raise GiftValidationError(
+                "Состояние товара не разрешает настройку подарков. Обновите карточку товара"
+            )
         code = gift_code_from_description(item.get("description"), max_count=self.settings.max_gifts)
         # The schema is authoritative for field identity/type, never a label/substring heuristic.
         fields = []
@@ -200,11 +207,20 @@ class GiftService:
             raise GiftFailure("GIFT_STEP_NOT_FOUND")
         return rows[0]
 
-    def limits(self):
+    def limits(self, item_id=None):
         v = self.store.setting("gifts:limits", {})
+        local = self.store.setting("gifts:listing_options:" + item_id, {}) if item_id else {}
         return (
-            min(int(v.get("order", self.settings.max_order_stars)), self.settings.max_order_stars),
-            min(int(v.get("day", self.settings.max_daily_stars)), self.settings.max_daily_stars),
+            min(
+                int(v.get("order", self.settings.max_order_stars)),
+                self.settings.max_order_stars,
+                int(local.get("order", self.settings.max_order_stars)),
+            ),
+            min(
+                int(v.get("day", self.settings.max_daily_stars)),
+                self.settings.max_daily_stars,
+                int(local.get("day", self.settings.max_daily_stars)),
+            ),
         )
 
     def set_limits(self, owner, per_order, daily):
@@ -242,7 +258,7 @@ class GiftService:
             )
         event("WARNING", "Экстренная остановка новых подарочных покупок", level=30)
 
-    async def arm(self, owner, item_id, revision, *, auto_fulfill=False):
+    async def arm(self, owner, item_id, revision, *, auto_fulfill=False, prepublication=False):
         data = await self.inspect_item(owner, item_id)
         self.settings.require_configured()
         disabled = []
@@ -257,7 +273,7 @@ class GiftService:
         if disabled:
             raise GiftValidationError("; ".join(disabled))
         await self.refresh()
-        if data["item"]["status"] != "APPROVED":
+        if data["item"]["status"] != ("DRAFT" if prepublication else "APPROVED"):
             raise GiftValidationError("Включать можно только опубликованный лот")
         with self.store.transaction() as db:
             row = db.execute("SELECT * FROM gift_listings WHERE item_id=?", (item_id,)).fetchone()
@@ -414,6 +430,8 @@ class GiftService:
         l = self.listing(job["item_id"])
         try:
             data = await self.inspect_item(l["owner_id"], job["item_id"])
+            if data["item"]["status"] != "APPROVED":
+                raise GiftFailure("LISTING_NOT_PUBLISHED")
             if data["hash"] != l["description_sha256"] or data["code"] != l["gift_code"]:
                 raise GiftFailure("LISTING_CHANGED")
         except ValueError:
@@ -518,7 +536,7 @@ class GiftService:
                 (j["order_id"],),
             ).fetchone():
                 raise GiftFailure("PAYMENT_LOCKED")
-            per_order, daily = self.limits()
+            per_order, daily = self.limits(j["item_id"])
             day = datetime.now(UTC).date().isoformat()
             # Outstanding reservations + actual/unknown dispatches today are both charged.
             actual = db.execute(
@@ -618,7 +636,12 @@ class GiftService:
         # Native updateDeal is confirmed in the official seller UI, with the adapter's
         # conservative status/ownership/non-system guard and independent readback.
         capability = getattr(self.api, "gift_refund_capability", None)
-        supported = await capability(order) if capability and self.settings.refund_enabled else False
+        options = self.store.setting("gifts:listing_options:" + job["item_id"], {})
+        supported = (
+            await capability(order)
+            if capability and self.settings.refund_enabled and options.get("refund", True)
+            else False
+        )
         if supported is True:
             with self.store.transaction() as db:
                 op = self.store.enqueue(

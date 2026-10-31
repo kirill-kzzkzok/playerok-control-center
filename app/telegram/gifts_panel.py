@@ -3,6 +3,7 @@
 import asyncio
 import json
 import secrets
+import uuid
 from collections import Counter
 from html import escape
 
@@ -11,6 +12,9 @@ from app.gifts.core import SEED_GIFTS, GiftValidationError, gift_code_from_descr
 from app.gifts.mtproto import GiftFailure, PersonalGiftSender
 from app.gifts.service import GiftService
 from app.gifts.settings import GiftSettings
+from app.playerok.adapter import APIError
+from app.security.logging import event
+from app.services.playerok_connection import REASONS
 from app.telegram.keyboards import keyboard
 from app.telegram.presentation import item_label, order_label, status
 
@@ -41,9 +45,29 @@ class GiftsPanel:
             return await self._callback(action, owner, state)
         except (GiftValidationError, GiftFailure, Conflict):
             raise
-        except Exception:  # noqa: BLE001 -- panel boundary must never expose raw MTProto exceptions
+        except Exception as error:  # noqa: BLE001 -- never log raw exception args or transport data
+            ident = uuid.uuid4().hex[:12]
+            stage = action.split(":")[1] if ":" in action else "unknown"
+            stage = stage if stage.isascii() and stage.isalnum() else "unknown"
+            code = error.code if isinstance(error, APIError) and error.code in REASONS else "INTERNAL_ERROR"
+            event(
+                "ERROR",
+                f"Gifts panel stage={stage} type={type(error).__name__} code={code} diagnostic={ident}",
+                level=40,
+            )
+            if isinstance(error, APIError):
+                reason = REASONS.get(error.code, "Playerok не подтвердил ответ на запрос")
+                raise GiftValidationError(
+                    reason + ". Обновите проверку в профиле. Диагностика: " + ident
+                ) from None
+            if isinstance(error, (TimeoutError, ConnectionError)):
+                raise GiftValidationError(
+                    "Проверка не завершилась: соединение прервано или истекло время ожидания. Повторите проверку готовности. Диагностика: "
+                    + ident
+                ) from None
             raise GiftValidationError(
-                "Не удалось проверить Telegram/Playerok. Расходы не выполнялись; проверьте подключение."
+                "Внутренняя ошибка настройки подарков. Операция остановлена; передайте код диагностики для исправления: "
+                + ident
             ) from None
 
     async def _callback(self, action, owner, state):
@@ -115,11 +139,9 @@ class GiftsPanel:
             try:
                 async with asyncio.timeout(30):
                     await s.refresh()
-            except Exception:  # noqa: BLE001 -- never reflect account/session errors
+            except Exception:
                 self.store.set_setting("gifts:connection", {"status": "CHECK_FAILED"})
-                raise GiftValidationError(
-                    "Личный Telegram недоступен. Проверьте локальную авторизацию; расходы не выполнялись."
-                ) from None
+                raise
             return await self.callback("gft:home", owner, state)
         if command == "catalog":
             entries = {v["code"]: v for v in self.store.rows("SELECT * FROM gift_catalog")}

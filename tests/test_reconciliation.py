@@ -293,6 +293,27 @@ async def test_stopped_unknown_photo_keeps_evidence_file(setup, tmp_path):
     assert source.exists()
 
 
+async def test_stop_uncertain_publish_releases_the_launch_for_a_new_one(setup):
+    store, _, service = setup
+    # A launch publication that became UNCERTAIN; its draft is stuck in QUEUED.
+    store.draft(1, {"launch_target": "item", "account_id": "seller", "mode": "gifts"})
+    draft_id = store.rows("SELECT id FROM drafts")[0]["id"]
+    store.execute("UPDATE drafts SET state='QUEUED' WHERE id=?", (draft_id,))
+    ident = store.enqueue(
+        "launch:" + draft_id + ":0",
+        "publish",
+        "item",
+        {"priority_id": "free", "price": 100, "raw_price": 100, "launch_id": draft_id},
+    )
+    action = store.claim()
+    store.finish(ident, action["lease_token"], "UNCERTAIN", error="NETWORK_ERROR")
+    store.set_setting("launch:prepared:item", {"id": draft_id, "owner": 1, "revision": 0, "operation": ident})
+    expected = signature(store.rows("SELECT * FROM outbox WHERE id=?", (ident,))[0])
+    await service.resolve(1, ident, expected, "STOP_UNCERTAIN", "Запрос не начинался, остановлено")
+    assert store.get_draft(draft_id, 1)["state"] == "DRAFT"
+    assert not store.setting("launch:prepared:item")
+
+
 def test_upgrade_backfills_existing_unknown_operation_once_without_exposing_payload(tmp_path):
     path = tmp_path / "upgrade.sqlite"
     store = Store(path)

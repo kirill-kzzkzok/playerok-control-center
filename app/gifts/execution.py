@@ -127,9 +127,14 @@ async def execute_followup(executor, action):
     chat = await executor.api.call("get_chat", chat_id=chat_id)
     if chat.get("id") != chat_id or chat.get("is_texting_allowed") is not True:
         raise ValidationError("Отправка уведомления в чат недоступна")
-    result = await executor.mutate(
-        action, "createChatMessage", "send_message", chat_id=chat_id, text=MESSAGES[outcome]
-    )
+    text = MESSAGES[outcome]
+    if outcome == "DELIVERED":
+        after = executor.store.setting("gifts:listing_options:" + j["item_id"], {}).get("after", "")
+        if after:
+            from app.services.automation import message_text
+
+            text = message_text(after, required=True)
+    result = await executor.mutate(action, "createChatMessage", "send_message", chat_id=chat_id, text=text)
     if not result.get("id"):
         raise APIError("GIFT_NOTICE_UNKNOWN", uncertain=True)
     event("SUCCESS", "Уведомление покупателю отправлено", order=target, operation=action["id"])

@@ -54,6 +54,10 @@ class Executor:
         }
 
     def dispatch_guard(self, action):
+        if action["kind"] in {"publish", "premium_publish"}:
+            from app.services.listing_launch import ListingLaunch
+
+            ListingLaunch(self.store, self.api, self.gifts()).guard(action)
         from app.services.agreements import AutoAgreements
 
         if action["kind"] == "agreements" and action["payload"].get("automatic"):
@@ -177,6 +181,10 @@ class Executor:
 
     async def __call__(self, action):
         kind, target, payload = action["kind"], action["target"], action["payload"]
+        if kind in {"publish", "premium_publish"}:
+            from app.services.listing_launch import ListingLaunch
+
+            await ListingLaunch(self.store, self.api, self.gifts()).preflight(action)
         if kind in {"premium_publish", "premium_bump"}:
             from app.services.paid_promotions import PaidPromotions
 
@@ -401,7 +409,17 @@ class Executor:
                 }
             ):
                 raise APIError("PUBLICATION_NOT_CONFIRMED", uncertain=True)
-            return self.item_result(result)
+            try:
+                current = await self.owned_item(target)
+                # Server may legitimately advance the status after the mutation reply
+                # (PENDING_APPROVAL→APPROVED); id/owner/price remain strictly checked.
+                if current.get("status") not in {"APPROVED", "PENDING_APPROVAL", "PENDING_MODERATION"} or (
+                    current.get("price") != item["price"]
+                ):
+                    raise ValueError
+            except (APIError, ValueError, TypeError):
+                raise APIError("PUBLICATION_READBACK_UNKNOWN", uncertain=True) from None
+            return self.item_result(current)
         if kind in {"edit", "delete"}:
             current = await self.owned_item(target)
             if kind == "delete":
@@ -578,7 +596,9 @@ class OutboxWorker:
         event("INFO", "Начало операции: " + action["kind"], order=action["target"], operation=action["id"])
         try:
             result = await self.executor(action)
-        except ValidationError:
+        except (ValidationError, Conflict):
+            # Local guards (launch stop, stale confirmation, changed readiness) prove the
+            # request was never sent: PERMANENT_FAILED, not an uncertain external outcome.
             self.finish(action["id"], action["lease_token"], "PERMANENT_FAILED", error="VALIDATION_FAILED")
         except APIError as error:
             self.finish(

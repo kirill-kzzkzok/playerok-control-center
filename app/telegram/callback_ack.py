@@ -83,6 +83,9 @@ def navigation(action):
             "gft:job:",
             "gft:list:",
             "gft:item:",
+            "launch:open:",
+            "launch:from:",
+            "launch:item:",
             "stock:list:",
         )
     )

@@ -117,6 +117,7 @@ async def run_connected(config, *, network_diagnostics=False):
         event("SUCCESS", "Telegram Bot подключён")
         connection = PlayerokConnection(store, api)
         await connection.check(cooldown=0)
+        tasks.append(supervisor.start("playerok-connection-recovery", lambda: connection.run(stop), stop))
         store.backup(
             Path("data/backups") / (datetime.now(UTC).strftime("startup-%Y%m%dT%H%M%S") + ".sqlite3")
         )

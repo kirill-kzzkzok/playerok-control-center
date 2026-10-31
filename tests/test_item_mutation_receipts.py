@@ -61,7 +61,27 @@ async def test_publish_incomplete_or_nonpublished_receipt_is_unknown_without_rep
 @pytest.mark.parametrize("status", ["APPROVED", "PENDING_APPROVAL", "PENDING_MODERATION"])
 async def test_explicit_published_or_moderation_status_is_retained(store, status):
     api = FakeAPI()
-    api.account.publish_item = lambda **kwargs: {"id": "item", "status": status}
+    state = {"status": "DRAFT"}
+
+    async def call(method, **kwargs):
+        if method == "get_item":
+            return {
+                "id": kwargs["id"],
+                "user": {"id": "seller"},
+                "status": state["status"],
+                "price": 100,
+                "raw_price": 100,
+            }
+        assert method == "get_item_priority_statuses"
+        return [{"id": "free", "type": "DEFAULT", "price": 0}]
+
+    api.call = call
+
+    def publish(**kwargs):
+        state["status"] = status
+        return {"id": "item", "status": status}
+
+    api.account.publish_item = publish
     store.enqueue("publish", "publish", "item", {"priority_id": "free", "price": 100, "raw_price": 100})
     await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
     row = store.rows("SELECT status,result FROM outbox")[0]

@@ -881,7 +881,7 @@ async def test_raw_mtproto_valueerror_is_not_reflected_in_panel(rig):
     try:
         await ui.click("gft:bind:item")
         assert "do-not-expose-private-peer" not in session.calls[-1].text
-        assert "Не удалось проверить" in session.calls[-1].text
+        assert "Внутренняя ошибка" in session.calls[-1].text
         assert not r.service.listing("item") and not r.remote.payments
     finally:
         await bot.session.close()

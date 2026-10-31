@@ -67,7 +67,10 @@ async def test_real_handlers_queue_then_notify_owner_confirmed_result_once(rig, 
             await ui.message("749" if kind == "discount" else "New product name")
         token = (await state.get_data())["confirm_token"]
         await ui.click("commit:" + token)
-    assert "Ожидает выполнения" in session.calls[-1].text
+    assert (
+        "Ожидает выполнения" in session.calls[-1].text
+        or "Готовим неопубликованный черновик" in session.calls[-1].text
+    )
     assert "SUCCEEDED" not in session.calls[-1].text
     ident = store.rows("SELECT id FROM outbox")[0]["id"]
     assert store.rows("SELECT owner_id FROM operation_receipts") == [{"owner_id": 7}]

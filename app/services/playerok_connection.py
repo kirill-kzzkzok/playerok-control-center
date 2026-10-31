@@ -132,3 +132,16 @@ class PlayerokConnection:
                 level=20 if self.state["status"] == "CONNECTED" else 30,
             )
             return dict(self.state)
+
+    async def run(self, stop):
+        """Reverify identity after failure, never restore gates from cached success."""
+        delay = 30
+        while not stop.is_set():
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=delay)
+            except TimeoutError:
+                if self.state["status"] != "CONNECTED":
+                    await self.check()
+                    delay = 30 if self.state["status"] == "CONNECTED" else min(delay * 2, 300)
+                else:
+                    delay = 30

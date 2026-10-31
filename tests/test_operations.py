@@ -19,6 +19,7 @@ class FakeAccount:
 
     def __init__(self):
         self.calls = []
+        self.published = {}
 
     @contextmanager
     def permit(self, operation):
@@ -38,6 +39,7 @@ class FakeAccount:
         )
 
     def publish_item(self, **kwargs):
+        self.published[kwargs["item_id"]] = "PENDING_APPROVAL"
         return SimpleNamespace(id=kwargs["item_id"], status="PENDING_APPROVAL")
 
     def update_item(self, **kwargs):
@@ -64,10 +66,11 @@ class FakeAPI:
         if method == "get_game_category":
             return {"id": kwargs["id"], "options": []}
         if method == "get_item":
+            published = getattr(self.account, "published", {}).get(kwargs["id"])
             return {
                 "id": kwargs["id"],
                 "user": {"id": self.item_owner},
-                "status": "DRAFT",
+                "status": published or "DRAFT",
                 "price": 100,
                 "raw_price": 100,
             }

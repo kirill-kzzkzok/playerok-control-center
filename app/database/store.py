@@ -259,6 +259,43 @@ class Store:
             )
             return {**dict(row), "lease_token": token, "payload": json.loads(row["payload"])}
 
+    @staticmethod
+    def release_launch(db, ident, target, payload_json, status):
+        """Release a terminally failed launch: draft back to DRAFT (+revision), drop the marker.
+
+        Shared by automatic finish() and manual owner resolution; UNCERTAIN never releases.
+        """
+        try:
+            payload = json.loads(payload_json) if isinstance(payload_json, str) else dict(payload_json or {})
+        except ValueError:
+            return
+        launch_id = payload.get("launch_id")
+        if status != "PERMANENT_FAILED" or not launch_id:
+            return
+        db.execute(
+            "UPDATE drafts SET state='DRAFT',revision=revision+1 WHERE id=? AND state='QUEUED'",
+            (launch_id,),
+        )
+        db.execute("DELETE FROM settings WHERE key=?", ("launch:prepared:" + target,))
+        # The failed launch must not leave live auto-delivery behind: it would keep
+        # spending on a still-unpublished item or arm a plain publish silently.
+        db.execute(
+            "UPDATE gift_listings SET enabled=0,revision=revision+1 WHERE item_id=? AND enabled=1", (target,)
+        )
+        if db.execute(
+            "SELECT 1 FROM delivery_policies WHERE item_id=? AND json_extract(payload,'$.enabled')=1",
+            (target,),
+        ).fetchone():
+            db.execute(
+                "UPDATE delivery_policies SET payload=json_set(payload,'$.enabled',0),"
+                "revision=revision+1,updated_at=? WHERE item_id=?",
+                (now(), target),
+            )
+            db.execute(
+                "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (f"delivery:{target}:enabled", "false"),
+            )
+
     def finish(self, ident, token, status, result=None, error=None):
         if status not in {"SUCCEEDED", "RETRYABLE_FAILED", "UNCERTAIN", "PERMANENT_FAILED"}:
             raise ValueError("Недопустимый результат операции")
@@ -270,7 +307,10 @@ class Store:
             if r.rowcount != 1:
                 raise Conflict("Lease операции потерян")
             # Delivery state and external outcome must commit together.
-            row = db.execute("SELECT operation_key,kind,target FROM outbox WHERE id=?", (ident,)).fetchone()
+            row = db.execute(
+                "SELECT operation_key,kind,target,payload FROM outbox WHERE id=?", (ident,)
+            ).fetchone()
+            self.release_launch(db, ident, row["target"], row["payload"], status)
             if row["kind"] in {"premium_publish", "premium_bump"}:
                 from app.services.paid_promotions import finish_expense
 

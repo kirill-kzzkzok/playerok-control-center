@@ -233,6 +233,10 @@ class Reconciliation:
                         "UPDATE delivery_chains SET status=? WHERE order_id=? AND status='BLOCKED'",
                         (state, action["target"]),
                     )
+            # Owner resolution of a launch publication must apply the same terminal
+            # release as automatic finish(); STOP_UNCERTAIN means no send ever started.
+            if action["kind"] in {"publish", "premium_publish"}:
+                self.store.release_launch(db, ident, action["target"], action["payload"], status)
             if action["kind"] == "delivery":
                 db.execute(
                     "INSERT INTO order_history(order_id,source,new_status,actor,note,created_at) SELECT id,'MANUAL_DELIVERY_RESOLUTION',status,?,?,? FROM orders WHERE id=?",

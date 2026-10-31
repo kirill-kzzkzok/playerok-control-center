@@ -2239,3 +2239,34 @@ Clean HEAD c8ffed3. Source-only backup: data\backups\ux-source-20261031T022509Z.
 
 ### Итог проверки выбора подарочного черновика
 Полный pytest: **1261 passed in 233.50s**. Ruff check и format --check: PASS (206 файлов); pip check: PASS; проверка изменённых файлов на локальные секреты: 0 находок. Миграций и изменений бизнес-сервисов нет. Все проверки локальные, через временные SQLite/Dispatcher и контролируемые API; визуальная live-проверка Telegram владельцем после перезапуска ещё нужна. Реальные записи/выдачи/платежи не выполнялись.
+
+
+## 2026-10-31 — предварительная настройка и запуск (начато)
+План: (1) воспроизведение и точные безопасные ошибки Gifts + восстановление Playerok; (2) подготовка локальной выдачи на серверном DRAFT и durable подтверждение; (3) встроенные экраны полной настройки/превью/единого запуска; (4) Dispatcher/fault/restart тесты, полный pytest/Ruff/review и commit/push. PROJECT_SPEC дополнен без удаления прежних разделов; файл остаётся ignored. Рабочие секреты/SQLite/сессии не меняются, live-записей не будет.
+
+
+### Восстановление после прерывания — checkpoint 2026-10-31 (вечер)
+- Прочитаны PROGRESS/тестовые артефакты/полный git diff. Предыдущий агент дошёл до целевых тестов: 12/13, 1 падение — тест обращался к кортежу sent[0]["text"]; исправлено на sent[0][1]. Резервные копии 17 затронутых файлов в data/backups/launch-20261031/ (ignored).
+- Полная регрессия вскрыла 7 падений: 6 — новый readback-контракт публикации (outbox.py: get_item после publishItem должен подтвердить статус/цену) против старых стейтлесc-фейков (FakeAPI/test_item_mutation_receipts/test_placement_basis/test_dispatch_recovery), 1 — изменённый текст мастера. Фейки переведены на состояние (published map), тесты обновлены без ослабления assertion.
+- Найден и исправлен реальный дефект тупика: PERMANENT_FAILED запуск навсегда блокировал товар (драфт QUEUED, launch:prepared не снимался, guard отвергал любую публикацию). Фикс в store.finish(): атомарный сброс драфта в DRAFT (+revision) и удаление launch:prepared при PERMANENT_FAILED с launch_id; UNCERTAIN никогда не освобождается. Регрессионный тест test_permanent_failure_releases_the_item_for_a_new_launch_or_publish добавлен.
+- Ruff check/format: PASS (209 файлов). Целевые тесты: 14/14. Полный pytest запущен; статические проверки и результаты ниже.
+- Лимиты/секреты/платные операции: ничего не трогал; все тесты на временных SQLite и моках.
+
+
+### Регрессия зелёная — 2026-10-31
+- Полный pytest: **1275 passed in 151.55s**, 0 failed/skipped. Предыдущий полный запуск агента: 8 падений (6 readback-фейки + текст мастера + SafeAccount.published коллизия) — все устранены без ослабления assertion: фейки стали stateful (FakeAccount.published + getattr-устойчивость), тест текста мастера принимает новый экран запуска.
+- Ruff check + format --check: PASS (209 файлов); pip check: PASS; offline selfcheck: OK (21 миграция, 0 внешних запросов); .env не менялся (0 сигнатур секретов в диффе).
+- Ожидаются отчёты независимых ревьюеров (дифф, zombie_bear-цепочка, покрытие 25 сценариев ТЗ); по находкам — точечные фиксы + повторный прогон затронутых групп.
+
+
+### Независимый ревью — находки закрыты 2026-10-31 (ночь)
+- Ревьюер (субагент) прогнал полный дифф + 4 воспроизводящие пробы: 7 находок (4 high, 2 medium, 1 low). Все high закрыты кодом + тестами:
+  1) Conflict локальных guard'ов публикации классифицировался UNCERTAIN → теперь (ValidationError, Conflict) => PERMANENT_FAILED (outbox.once): останов до отправки не «неопределённость». Тест test_local_stop_before_publication_is_permanent_not_uncertain.
+  2) Сбой подготовки queue() оставлял launch:prepared(operation=None) навсегда → rollback теперь снимает маркер (если операция не создана). Тест test_failed_preparation_releases_launch_marker_for_plain_publish.
+  3) Ключ launch:<ident> без ревизии возвращал мёртвую PERMANENT_FAILED операцию при повторе → launch_key(ident, revision); release поднимает ревизию драфта; UI ищет операцию по префиксу. Тест: op2 != op в test_permanent_failure_releases...
+  4) resolve() обходил release → общий Store.release_launch() вызывается из finish() и resolve() (publish/premium_publish). Тест test_stop_uncertain_publish_releases_the_launch_for_a_new_one.
+  6) Release гасит gift_listings.enabled и delivery_policies.enabled (+ настройку delivery:<item>:enabled), чтобы неудавшийся запуск не оставил живую автоматику. Тест ассертит listing disabled.
+  5) Readback публикации допускает легитимное продвижение статуса (PENDING_APPROVAL→APPROVED), id/владение/цена остаются строгими. Низкоприоритетная находка 7 (baseline описания в savegifts) признана осознанным компромиссом: edit-путь уже перечитывает и валидирует описание на сервере; отдельного разрешения не требуется.
+- zombie_bear-цепочка проверена независимо: 10/10 подтверждено (ID из каталога, свежая цена, баланс+резервы, obtaining_fields, нет повторов/двойной выдачи, частичная выдача ≠ полная, fulfill только после доставки, чужой заказ/бюджет закрыты).
+- Закрыты пробелы покрытия ТЗ: PREMIUM+автовыдача, платное автоподнятие до публикации, пустой склад блокирует запуск (3 новых теста; фикстура получила premium-квитанцию). Частичные пробелы (8/9/10/25) покрыты runtime-тестами в других файлах.
+- Целевые группы: listing_launch 19/19, reconciliation 22/22, gifts 82; ruff check/format PASS. Финальный полный pytest запущен.

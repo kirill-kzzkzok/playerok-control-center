@@ -113,19 +113,24 @@ class PaidPromotions:
         )
         self.store.audit(owner, "ARM_PAID_PROMOTIONS", "*", "EXPLICIT_OWNER_PERMISSION")
 
-    async def approve(self, owner, value):
+    async def approve(self, owner, value, *, prepublication=False):
         fresh = await self.preview(owner, value["item"]["id"], value["quote_id"])
         if any(
             fresh.get(k) != value.get(k)
             for k in ("account_id", "item", "quote_id", "amount", "period", "policy_revision")
         ):
             raise Conflict("Тариф или товар изменился. Откройте новое превью")
-        if fresh["item"]["status"] != "APPROVED" or fresh["item"]["priority"] != "PREMIUM":
+        allowed = (
+            fresh["item"]["status"] == "DRAFT"
+            if prepublication
+            else fresh["item"]["status"] == "APPROVED" and fresh["item"]["priority"] == "PREMIUM"
+        )
+        if not allowed:
             raise ValidationError("Для автоподнятия сначала опубликуйте или повысьте товар до PREMIUM")
         self.store.set_setting("promotions:approved:" + fresh["item"]["id"], fresh)
         self.store.audit(owner, "APPROVE_PREMIUM_TARIFF", fresh["item"]["id"], "EXPLICIT_OWNER_PERMISSION")
 
-    async def queue(self, owner, value, key, *, automatic=False):
+    async def queue(self, owner, value, key, *, automatic=False, launch=None):
         existing = self.store.rows("SELECT id FROM outbox WHERE operation_key=?", (key,))
         if existing:
             return existing[0]["id"]
@@ -182,7 +187,11 @@ class PaidPromotions:
                 raise ValidationError("Недостаточно доступного баланса Playerok с учётом резервов")
             kind = "premium_publish" if fresh["item"]["status"] == "DRAFT" else "premium_bump"
             payload = {**fresh, "actor": owner, "automatic": automatic}
+            if launch:
+                payload.update(launch_id=launch["id"], launch_revision=launch["revision"])
             op = self.store.enqueue(key, kind, fresh["item"]["id"], payload, db, actor=owner)
+            if launch:
+                self.store.set_setting("launch:prepared:" + fresh["item"]["id"], {**launch, "operation": op})
             db.execute(
                 "INSERT INTO promotion_expenses VALUES(?,?,?,'RESERVED',?)",
                 (key, fresh["item"]["id"], fresh["amount"], now()),
