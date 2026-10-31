@@ -931,3 +931,17 @@ Readiness/generation fences gift admission and final paid dispatch without chang
 Outbox/receipt/UNKNOWN semantics. Service EOF/Job ownership controls crash cleanup.
 Callback ACK precedes per-owner FSM isolation, with bounded timeout and conservative
 mutating-action admission. Full contracts/evidence/Go file list: LOCALVPN_INTEGRATION.md.
+
+
+## Narrow automatic seller agreements (31.10.2026)
+
+SafeAccount.operation_allowed grants the separate auto flag only to the fixed
+acceptGameCategoryAgreement mutation, behind verified current identity. Executor also
+checks the SQLite binding/scope/lease; its thread-side final read uses the same native
+client before each mutation. Kind/operation-ID-filtered Outbox claims prevent other
+queued writes from executing in read-only mode. Products schema preparation drives
+the same queue inline; open wizard waits persist and AgreementResumer uses the existing
+Dispatcher FSM isolation after restart. Unknown results are reconciled by read-only
+server-no-pending proof, never reset/retried. Existing settings hold version-hash journal
+and churn budget; no schema migration or new delivery/payment architecture. Optional
+terms inspector bypasses acceptance and uses fresh read-only schema snapshots.

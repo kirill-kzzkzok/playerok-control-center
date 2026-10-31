@@ -221,10 +221,22 @@ class Store:
                 )
             return connection.execute("SELECT id FROM outbox WHERE operation_key=?", (key,)).fetchone()[0]
 
-    def claim(self, lease_seconds=60):
+    def claim(self, lease_seconds=60, *, kinds=None, operation_id=None):
         with self.transaction() as db:
+            filters, args = "", []
+            if kinds is not None:
+                if not kinds:
+                    return None
+                filters += " AND kind IN (" + ",".join("?" for _ in kinds) + ")"
+                args.extend(kinds)
+            if operation_id is not None:
+                filters += " AND id=?"
+                args.append(operation_id)
             row = db.execute(
-                "SELECT * FROM outbox WHERE status IN ('PENDING','RETRYABLE_FAILED') ORDER BY created_at LIMIT 1"
+                "SELECT * FROM outbox WHERE status IN ('PENDING','RETRYABLE_FAILED')"
+                + filters
+                + " ORDER BY created_at LIMIT 1",
+                args,
             ).fetchone()
             if row is None:
                 return None

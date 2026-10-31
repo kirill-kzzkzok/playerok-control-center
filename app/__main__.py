@@ -46,7 +46,17 @@ logger = logging.getLogger(__name__)
 
 async def outbox_loop(worker, stop):
     while not stop.is_set():
-        processed = await worker.once() if worker.executor.api.account.writes_enabled else False
+        account = worker.executor.api.account
+        processed = (
+            await worker.once()
+            if account.writes_enabled
+            else (
+                await worker.once(kinds=("agreements",))
+                if getattr(account, "auto_accept_agreements", False)
+                and getattr(account, "connection_verified", False)
+                else False
+            )
+        )
         if not processed:
             try:
                 await asyncio.wait_for(stop.wait(), timeout=2)
@@ -66,6 +76,7 @@ async def run_connected(config, *, network_diagnostics=False):
     store = Store(config.database_path)
     account = SafeAccount(config.playerok_header, writes_enabled=config.writes_enabled)
     account.automation_enabled = config.automation_enabled
+    account.auto_accept_agreements = getattr(config, "auto_accept_agreements", False)
     api = Playerok(account)
     mode = getattr(config, "telegram_transport", "legacy")
     worker = mode == "worker" or (mode == "legacy" and config.use_proxy)
@@ -147,29 +158,37 @@ async def run_connected(config, *, network_diagnostics=False):
                     stop,
                 )
             )
-        if config.writes_enabled:
-            if config.automation_enabled:
-                tasks.append(
-                    supervisor.start("auto-replies", lambda: AutoReplyWorker(store, api).run(stop), stop)
+        if config.writes_enabled and config.automation_enabled:
+            tasks.append(
+                supervisor.start("auto-replies", lambda: AutoReplyWorker(store, api).run(stop), stop)
+            )
+            tasks.append(
+                supervisor.start(
+                    "future-order-enrollment", lambda: EnrollmentWorker(store, api).run(stop), stop
                 )
-                tasks.append(
-                    supervisor.start(
-                        "future-order-enrollment", lambda: EnrollmentWorker(store, api).run(stop), stop
-                    )
+            )
+            tasks.append(supervisor.start("delivery-chains", lambda: ChainWorker(store, api).run(stop), stop))
+            settings = getattr(api, "gift_settings", None) or GiftSettings.load()
+            tasks.append(
+                supervisor.start(
+                    "telegram-gifts",
+                    lambda: GiftWorker(store, api, settings, api.gift_sender).run(stop),
+                    stop,
                 )
-                tasks.append(
-                    supervisor.start("delivery-chains", lambda: ChainWorker(store, api).run(stop), stop)
-                )
-                settings = getattr(api, "gift_settings", None) or GiftSettings.load()
-                tasks.append(
-                    supervisor.start(
-                        "telegram-gifts",
-                        lambda: GiftWorker(store, api, settings, api.gift_sender).run(stop),
-                        stop,
-                    )
-                )
+            )
+        if config.writes_enabled or getattr(config, "auto_accept_agreements", False):
             worker = OutboxWorker(store, Executor(store, api, products))
             tasks.append(supervisor.start("outbox", lambda: outbox_loop(worker, stop), stop))
+        if getattr(config, "auto_accept_agreements", False):
+            from app.workers.agreements import AgreementResumer
+
+            tasks.append(
+                supervisor.start(
+                    "agreements-resume",
+                    lambda: AgreementResumer(store, api, products, dispatcher, bot).run(stop),
+                    stop,
+                )
+            )
         logger.info(
             "Telegram panel started; writes=%s; first_start_claim=%s",
             config.writes_enabled,

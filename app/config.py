@@ -22,6 +22,7 @@ class Config:
     realtime_enabled: bool = True
     automation_enabled: bool = False
     telegram_transport: str = "legacy"
+    auto_accept_agreements: bool = False
 
     @classmethod
     def load(cls, path: str = ".env"):
@@ -67,6 +68,7 @@ class Config:
             values.get("PLAYEROK_REALTIME_ENABLED", "true").lower() == "true",
             values.get("PLAYEROK_AUTOMATION_ENABLED", "false").lower() == "true",
             network.mode,
+            values.get("PLAYEROK_AUTO_ACCEPT_AGREEMENTS", "false").lower() == "true",
         )
 
     def require_owner(self):

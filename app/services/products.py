@@ -213,8 +213,10 @@ class Products:
     async def schema(self, category_id, obtaining_type_id):
         return (await self.schema_details(category_id, obtaining_type_id))["form"]
 
-    async def schema_details(self, category_id, obtaining_type_id):
+    async def schema_details(self, category_id, obtaining_type_id, *, auto_agreements=True):
         category = await self.api.call("get_game_category", id=category_id)
+        if getattr(self.api.account, "auto_accept_agreements", False) and category.get("id") != category_id:
+            raise ValidationError("Playerok вернул другую категорию")
         obtaining = []
         async for page in self.api.pages(
             "get_game_category_obtaining_types", "obtaining_types", game_category_id=category_id
@@ -233,7 +235,18 @@ class Products:
         ):
             fields.extend(page)
         selected = next((entry for entry in obtaining if entry["id"] == obtaining_type_id), {})
+        if getattr(self.api.account, "auto_accept_agreements", False) and (
+            len({entry["id"] for entry in obtaining}) != len(obtaining)
+            or selected.get("game_category_id") not in {None, category_id}
+        ):
+            raise ValidationError("Принадлежность способа передачи категории не подтверждена")
         conditions = await Agreements(self.api).snapshot(category, selected)
+        if auto_agreements and getattr(self.api.account, "auto_accept_agreements", False):
+            from app.services.agreements import AutoAgreements
+
+            conditions = await AutoAgreements(self.store, self.api).ensure(
+                category_id, obtaining_type_id, conditions
+            )
         return {
             "conditions": conditions,
             "category_name": category.get("name"),
@@ -357,6 +370,8 @@ class Products:
             return operation
 
     async def free_priority(self, item_id, price):
+        if getattr(getattr(self.api, "account", None), "auto_accept_agreements", False):
+            await self.prepare_item_agreements(await self.owned_item(item_id))
         statuses = await self.priority_preview(item_id, price)
         for status in statuses:
             if (
@@ -366,3 +381,11 @@ class Products:
             ):
                 return status
         raise ValidationError("Бесплатность размещения не подтверждена API")
+
+    async def prepare_item_agreements(self, item):
+        if getattr(self.api.account, "auto_accept_agreements", False):
+            category = (item.get("category") or {}).get("id")
+            if not category:
+                raise ValidationError("Категория лота не подтверждена")
+            details = await self.schema_details(category, (item.get("obtaining_type") or {}).get("id"))
+            require_conditions({}, details["conditions"])

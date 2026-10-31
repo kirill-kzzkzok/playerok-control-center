@@ -77,7 +77,14 @@ class Wizard:
         payload["field_index"] = 0
         payload["conditions"] = snapshot["conditions"]
         payload["conditions_page"] = 0
-        payload["step"] = "conditions" if snapshot["conditions"]["documents"] else "fields"
+        if snapshot["conditions"].get("automatic"):
+            if snapshot["conditions"].get("auto_confirmed"):
+                payload["conditions_ack"] = snapshot["conditions"]["hash"]
+                payload["step"] = payload.pop("conditions_return", "fields")
+            else:
+                payload["step"] = "agreements_wait"
+        else:
+            payload["step"] = "conditions" if snapshot["conditions"]["documents"] else "fields"
 
     def condition_pages(self, payload):
         documents = payload.get("conditions", {}).get("documents", [])
@@ -161,6 +168,15 @@ class Wizard:
         data = await state.get_data()
         draft = self.store.get_draft(data["draft_id"], owner)
         payload = draft["payload"]
+        if (
+            payload.get("step") == "conditions"
+            and getattr(self.api.account, "auto_accept_agreements", False)
+            and not payload.get("manual_conditions_view")
+        ):
+            await self.load_form(payload, payload.get("obtaining_type_id"))
+            await state.update_data(revision=draft["revision"])
+            await self.save(owner, state, payload)
+            return await self.screen(owner, state)
         nonce = secrets.token_hex(3)
         await state.update_data(view_token=nonce, revision=draft["revision"])
         rows, choices = [], []
@@ -193,6 +209,24 @@ class Wizard:
                 await self.save(owner, state, payload)
                 return await self.screen(owner, state)
             text = "📬 <b>Способ получения</b>\nВыберите вариант Playerok."
+        elif step == "agreements_wait":
+            status = payload["conditions"].get("auto_status", "WAITING")
+            reasons = {
+                "UNCERTAIN": "Ответ мог потеряться. Выполняется только чтение серверного состояния.",
+                "PROCESSING": "Принятие выполняется другим обработчиком.",
+                "WAITING_OTHER_METHOD": "Ожидается сверка условий другого способа передачи этой категории.",
+                "VERSION_CHANGE_LIMIT": "Условия меняются слишком часто; автоматическая отправка приостановлена.",
+                "NETWORK_ERROR": "Сетевая ошибка. Принятие не подтверждено; повторной отправки нет.",
+                "VALIDATION_FAILED": "Playerok вернул неподдерживаемые или несогласованные условия.",
+                "UNAUTHORIZED_OR_CHALLENGE": "Playerok требует проверить авторизацию; обход не выполняется.",
+            }
+            text = "⏳ Проверка условий Playerok\n" + reasons.get(
+                status, "Ожидается серверное подтверждение: " + escaped(status)
+            )
+            text += (
+                "\nПри подтверждении мастер продолжится автоматически. Неизвестное принятие не повторяется."
+            )
+            rows.append([("🔄 Безопасно проверить", f"w:{nonce}:agreements_check")])
         elif step == "conditions":
             pages = self.condition_pages(payload)
             current = min(max(payload.get("conditions_page", 0), 0), len(pages) - 1)
@@ -202,17 +236,19 @@ class Wizard:
                 navigation.append(("← Условия", f"w:{nonce}:conditions_prev"))
             if current + 1 < len(pages):
                 navigation.append(("Условия →", f"w:{nonce}:conditions_next"))
-            else:
+            elif not payload.get("manual_conditions_view"):
                 label = (
                     "Принимаю условия на Playerok"
                     if payload["conditions"]["pending"]
                     else "Инструкцию прочитал · далее"
                 )
                 rows.append([(label, f"w:{nonce}:conditions_done")])
+            if payload.get("manual_conditions_view"):
+                rows.append([("Вернуться без подтверждений", f"w:{nonce}:conditions_done")])
             if navigation:
                 rows.append(navigation)
             rows.append([("🔄 Проверить принятие на Playerok", f"w:{nonce}:conditions_refresh")])
-            if payload["conditions"]["pending"]:
+            if payload["conditions"]["pending"] and not payload.get("manual_conditions_view"):
                 text += "\n\nPlayerok требует принять условия. Только явное подтверждение отправит отдельную операцию; создание товара здесь не выполняется."
         elif step == "fields":
             form = payload["form"]
@@ -390,7 +426,7 @@ class Wizard:
                 for i, choice in enumerate(choices)
             ] + rows
         await state.update_data(choices=choices)
-        if step not in {"game", "preview"}:
+        if step not in {"game", "preview", "agreements_wait"}:
             rows.append([("⬅️ Назад", f"w:{nonce}:back")])
         if payload.get("return_preview") and step != "preview":
             rows.append([("Вернуться к превью", f"w:{nonce}:preview_return")])
@@ -406,7 +442,21 @@ class Wizard:
         payload, action = draft["payload"], parts[2]
         step = payload["step"]
         removed_photo = None
-        if action == "preview_page" and step == "preview":
+        if (
+            action == "conditions_done"
+            and step == "conditions"
+            and payload.pop("manual_conditions_view", False)
+        ):
+            payload["step"] = payload.pop("conditions_return", "preview")
+        elif (
+            action == "agreements_check"
+            and step == "agreements_wait"
+            or action == "conditions_done"
+            and step == "conditions"
+            and getattr(self.api.account, "auto_accept_agreements", False)
+        ):
+            await self.load_form(payload, payload.get("obtaining_type_id"))
+        elif action == "preview_page" and step == "preview":
             number = int(parts[3])
             pages = self.preview_pages(payload, format_calculation(draft_calculation(payload)))
             if not 0 <= number < len(pages):
@@ -500,11 +550,23 @@ class Wizard:
                 self.store.audit(owner, "CONDITIONS_REVIEWED", payload["category_id"], conditions["hash"])
                 payload["step"] = payload.pop("conditions_return", "fields")
         elif action == "conditions_refresh" and step in {"conditions", "preview"}:
-            if step == "preview":
-                payload["conditions_return"] = "preview"
-            await self.load_form(payload, payload.get("obtaining_type_id"))
-            if not payload["conditions"]["documents"]:
-                payload["step"] = payload.pop("conditions_return", "fields")
+            if getattr(self.api.account, "auto_accept_agreements", False):
+                snapshot = await self.products.schema_details(
+                    payload["category_id"], payload.get("obtaining_type_id"), auto_agreements=False
+                )
+                payload.update(
+                    conditions=snapshot["conditions"],
+                    conditions_page=0,
+                    manual_conditions_view=True,
+                    conditions_return=payload.get("conditions_return", step),
+                    step="conditions",
+                )
+            else:
+                if step == "preview":
+                    payload["conditions_return"] = "preview"
+                await self.load_form(payload, payload.get("obtaining_type_id"))
+                if not payload["conditions"]["documents"]:
+                    payload["step"] = payload.pop("conditions_return", "fields")
         elif action == "choice_page":
             try:
                 number = int(parts[3])
@@ -540,6 +602,7 @@ class Wizard:
                     payload["step"] = (
                         "conditions"
                         if payload.get("conditions", {}).get("documents")
+                        and not getattr(self.api.account, "auto_accept_agreements", False)
                         else "category"
                         if payload.get("obtaining_not_required")
                         else "obtaining"

@@ -58,7 +58,7 @@ class SafeAccount(Account):
     def __new__(cls, *args, **kwargs):
         return object.__new__(cls)
 
-    def __init__(self, header, writes_enabled=False, client=None):
+    def __init__(self, header, writes_enabled=False, client=None, *, auto_accept_agreements=False):
         # Avoid upstream singleton, temporary certificate, TLS fingerprint spoofing and retries.
         self.cookies = parse_cookies(header)
         self.base_url = "https://playerok.com"
@@ -66,6 +66,7 @@ class SafeAccount(Account):
         self.id = self.username = self.profile = None
         self._is_initiated = False
         self.writes_enabled = writes_enabled
+        self.auto_accept_agreements = auto_accept_agreements
         self.client = client or httpx.Client(timeout=20, follow_redirects=False, verify=True)
         self._lock = threading.RLock()
         self._permitted = None
@@ -77,7 +78,7 @@ class SafeAccount(Account):
     @contextmanager
     def permit(self, operation, dispatch_guard=None):
         with self._lock:
-            if not self.writes_enabled:
+            if not self.operation_allowed(operation):
                 raise APIError("WRITES_DISABLED")
             self._permitted = operation
             self._permit_thread = threading.get_ident()
@@ -88,6 +89,15 @@ class SafeAccount(Account):
                 self._permitted = None
                 self._permit_thread = None
                 self._dispatch_guard = None
+
+    def operation_allowed(self, operation):
+        return self.writes_enabled or (
+            operation == "acceptGameCategoryAgreement"
+            and self.auto_accept_agreements
+            and getattr(self, "connection_verified", False) is True
+            and getattr(self, "verified_account_id", None) == self.id
+            and bool(self.id)
+        )
 
     def request(self, method, url, headers, payload=None, files=None, pass_304=False):
         if url != "https://playerok.com/graphql" or method not in {"get", "post"}:
@@ -116,7 +126,7 @@ class SafeAccount(Account):
             }:
                 raise APIError("OPERATION_FORBIDDEN")
             if (
-                not self.writes_enabled
+                not self.operation_allowed(operation)
                 or self._permitted != operation
                 or self._permit_thread != threading.get_ident()
             ):
@@ -144,7 +154,7 @@ class SafeAccount(Account):
             if not read and self._dispatch_guard:
                 self._dispatch_guard()
             if not read and (
-                not self.writes_enabled
+                not self.operation_allowed(operation)
                 or getattr(self, "connection_verified", True) is not True
                 or getattr(self, "verified_account_id", self.id) != self.id
             ):

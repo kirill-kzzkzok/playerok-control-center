@@ -17,6 +17,7 @@ from app.playerok.adapter import APIError
 from app.services.automation import Automation
 from app.services.discounts import discount_plan
 from app.services.products import ValidationError, listing_price, listing_text, priority_price_basis
+from app.telegram.agreements_panel import AgreementsPanel
 from app.telegram.auto_replies_panel import AutoRepliesPanel
 from app.telegram.automation_panel import AutomationPanel
 from app.telegram.automation_queue import AutomationQueue
@@ -84,6 +85,7 @@ def create_router(store, api, products, synchronizer):
     stock_panel = StockPanel(store, api)
     gifts_panel = GiftsPanel(store, api)
     operation_results = OperationResults(store)
+    agreements_panel = AgreementsPanel(store, api, products)
 
     @router.message(CommandStart())
     async def start(message, state):
@@ -157,6 +159,8 @@ def create_router(store, api, products, synchronizer):
                 )
             if action == "create":
                 text, markup = await wizard.start(owner, state)
+            elif action.startswith("agv:"):
+                text, markup = await agreements_panel.callback(action, state)
             elif action.startswith("gft:"):
                 text, markup = await gifts_panel.callback(action, owner, state)
             elif finance.handles(action):
@@ -329,6 +333,7 @@ def create_router(store, api, products, synchronizer):
                 item = await api.call("get_item", id=ident)
                 if not api.account.id or (item.get("user") or {}).get("id") != api.account.id:
                     raise ValidationError("Владение товаром не подтверждено")
+                await products.prepare_item_agreements(item)
                 await state.set_state("editphoto" if kind == "editphoto" else "edit")
                 await state.set_data(
                     {
@@ -504,6 +509,7 @@ def create_router(store, api, products, synchronizer):
                 markup = keyboard(
                     [
                         [("🔄 Сверить API", "sync")],
+                        [("📄 Условия продавца · просмотр", "agv:list:0")],
                         [("⚠️ Неопределённые операции", "ops:list:UNCERTAIN:0")],
                         [("🧾 История операций", "ops:list:ALL:0")],
                     ]

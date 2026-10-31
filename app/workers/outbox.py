@@ -54,7 +54,11 @@ class Executor:
         }
 
     def dispatch_guard(self, action):
-        if not getattr(self.api.account, "writes_enabled", False):
+        from app.services.agreements import AutoAgreements
+
+        if action["kind"] == "agreements" and action["payload"].get("automatic"):
+            AutoAgreements(self.store, self.api).authority(action["payload"].get("account_id"))
+        elif not getattr(self.api.account, "writes_enabled", False):
             raise ValidationError("Записи Playerok выключены")
         rows = self.store.rows(
             "SELECT status,lease_token,lease_until FROM outbox WHERE id=?", (action["id"],)
@@ -110,6 +114,19 @@ class Executor:
                 if cancelled.is_set():
                     raise ValidationError("Операция отменена до отправки")
                 self.dispatch_guard(action)
+                if (
+                    action["kind"] == "agreements"
+                    and action["payload"].get("automatic")
+                    and isinstance(self.api.account, SafeAccount)
+                ):
+                    from app.services.agreements import AutoAgreements
+
+                    AutoAgreements(self.store, self.api).before_dispatch(action)
+                    # The fresh read can itself wait on the network. Recheck
+                    # cancellation, account/policy and lease AFTER it, before POST.
+                    if cancelled.is_set():
+                        raise ValidationError("Операция отменена до отправки")
+                    self.dispatch_guard(action)
 
             scope = (
                 self.api.account.permit(operation, dispatch_guard=guard)
@@ -326,6 +343,10 @@ class Executor:
             self.store.execute("UPDATE drafts SET state='UPDATED' WHERE id=?", (draft["id"],))
             return {"remote_id": target}
         if kind == "agreements":
+            if payload.get("automatic"):
+                from app.services.agreements import AutoAgreements
+
+                return await AutoAgreements(self.store, self.api).execute(self, action)
             if payload.get("account_id") != self.api.account.id:
                 raise ValidationError("Аккаунт изменился после подтверждения условий")
             current = await Agreements(self.api).pending(target, payload.get("obtaining_type_id"))
@@ -380,6 +401,8 @@ class Executor:
                 if result is not True:
                     raise APIError("DELETE_RESULT_UNKNOWN", uncertain=True)
                 return {"removed": True}
+            if getattr(self.api.account, "auto_accept_agreements", False):
+                await self.products.prepare_item_agreements(current)
             changes = {k: v for k, v in payload.items() if k in {"name", "description", "price"}}
             if set(payload) - {"name", "description", "price", "add_photos", "replace_attachment_ids"}:
                 raise ValidationError("Изменение содержит неподдерживаемые поля")
@@ -528,7 +551,12 @@ class OutboxWorker:
         except Conflict:
             self.store.record_late_result(ident, token, status, result=result, error=error)
 
-    async def once(self):
+    async def once(self, *, kinds=None, operation_id=None):
+        # Defense in depth: read-only mode never claims any other pending action,
+        # even if the caller forgot to pass the agreement-only filter.
+        account = getattr(getattr(self.executor, "api", None), "account", None)
+        if getattr(account, "auto_accept_agreements", False) and not account.writes_enabled:
+            kinds = ("agreements",) if kinds is None else tuple(k for k in kinds if k == "agreements")
         recovered = self.store.recover()
         if recovered:
             event(
@@ -536,7 +564,7 @@ class OutboxWorker:
                 f"Восстановлено операций после истечения lease: {recovered}. Неизвестные отправки не повторяются.",
                 level=30,
             )
-        action = self.store.claim(lease_seconds=180)
+        action = self.store.claim(lease_seconds=180, kinds=kinds, operation_id=operation_id)
         if not action:
             return False
         event("INFO", "Начало операции: " + action["kind"], order=action["target"], operation=action["id"])
