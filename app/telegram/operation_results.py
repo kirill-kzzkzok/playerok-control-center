@@ -7,6 +7,7 @@ from urllib.parse import quote
 from aiogram.types import InlineKeyboardButton
 
 from app.database.store import Conflict
+from app.gifts.core import gift_name
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 from app.telegram.presentation import status as human_status
@@ -108,7 +109,7 @@ class OperationResults:
                 if done and done < len(steps):
                     text += "\nДоставлено частично. Остальные подарки не подтверждены; полный возврат и отметка выполнения запрещены."
                 for g in steps:
-                    text += f"\n{escaped(g['code'], 40)} {g['position'] + 1}/{len(steps)} · {human_status(g['state'])} · {g['stars']} ⭐"
+                    text += f"\n{escaped(gift_name(g['code']), 70)} {g['position'] + 1}/{len(steps)} · {human_status(g['state'])} · {g['stars']} ⭐"
                     if g["error_code"]:
                         text += " · " + escaped(g["error_code"], 70)
             buttons.append([("Подарочный заказ и безопасная сверка", "gft:job:" + row["target"])])

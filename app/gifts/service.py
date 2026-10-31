@@ -95,10 +95,14 @@ class GiftService:
                 "INSERT OR IGNORE INTO settings VALUES('gifts:personal_account_id',?)",
                 (encode(self.sender.me.id),),
             )
-            for code, (emoji, gift_id, _) in SEED_GIFTS.items():
+            for code, (emoji, gift_id, seed_stars) in SEED_GIFTS.items():
                 gift = next((g for g in gifts if g.id == gift_id), None)
                 if gift is None:
-                    db.execute("UPDATE gift_catalog SET available=0,checked_at=? WHERE code=?", (now(), code))
+                    db.execute(
+                        "INSERT INTO gift_catalog VALUES(?,?,?,?,0,?) ON CONFLICT(code) DO UPDATE SET "
+                        "available=0,checked_at=excluded.checked_at",
+                        (code, emoji, str(gift_id), seed_stars, now()),
+                    )
                     continue
                 if not isinstance(gift.stars, int) or gift.stars <= 0:
                     raise GiftFailure("CATALOG_PRICE_INVALID")

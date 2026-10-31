@@ -18,6 +18,14 @@ SEED_GIFTS: dict[str, tuple[str, int, int]] = {
     row["code"]: (row["emoji"], int(row["gift_id"]), int(row["stars"])) for row in _catalog["gifts"]
 }
 
+
+def gift_name(code):
+    """Display labels never participate in ID selection or payment intent."""
+    return {"bear": "🧸 Медведь", "zombie_bear": "🧟 Зомби-медведь"}.get(
+        code, f"{SEED_GIFTS[code][0]} {code}" if code in SEED_GIFTS else code
+    )
+
+
 TAG = re.compile(r"^gift:\s*(.+?)\s*$", re.IGNORECASE)
 USERNAME = re.compile(r"^@?([A-Za-z][A-Za-z0-9_]{4,31})$")
 
@@ -31,7 +39,7 @@ def gift_reason(code):
         "BALANCE_TOO_LOW": "Недостаточно Stars для оставшегося пакета",
         "BUDGET_EXCEEDED": "Суммарная стоимость превышает лимит заказа или суток",
         "PRICE_CHANGED": "Изменилась цена подарка: подтвердите новую привязку",
-        "GIFT_UNAVAILABLE": "Подарок недоступен: требуется ручное решение",
+        "GIFT_UNAVAILABLE": "Подарок недоступен: обновите каталог и проверьте привязку",
         "GIFT_QUANTITY_UNAVAILABLE": "Недостаточно доступных подарков выбранного вида",
         "RECIPIENT_CHANGED": "Получатель изменился: отправка заблокирована",
         "RECIPIENT_GIFTS_FORBIDDEN": "Получатель запретил приём этого вида подарков",

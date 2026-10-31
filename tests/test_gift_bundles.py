@@ -223,7 +223,7 @@ async def test_bundle_dispatcher_preview_restart_progress_and_partial_retry(rig)
     state = FSMContext(SQLiteStorage(r.store), StorageKey(bot_id=123, chat_id=7, user_id=7))
     try:
         await ui.click("gft:bind:item")
-        assert "bear ×2 — 30 Stars" in session.calls[-1].text and "55 Stars" in session.calls[-1].text
+        assert "Медведь ×2 — 30 Stars" in session.calls[-1].text and "55 Stars" in session.calls[-1].text
         p = (await state.get_data())["gift_bind"]
         ui.dp = dispatcher(r.store, r.api)
         await ui.click("gft:confirmbind:" + p["nonce"])
@@ -344,7 +344,7 @@ async def test_owner_notice_shows_partial_delivery_without_recipient_or_false_su
         await OperationResults(r.store).notify(bot)
         output = "\n".join(c.text for c in session.calls if hasattr(c, "text"))
         assert "Realbuyer" not in output
-        assert "Доставлено частично" in output and "bear" in output and "rose" in output
+        assert "Доставлено частично" in output and "Медведь" in output and "rose" in output
         assert not r.api.sent
     finally:
         await bot.session.close()

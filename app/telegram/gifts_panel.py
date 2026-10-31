@@ -7,7 +7,7 @@ from collections import Counter
 from html import escape
 
 from app.database.store import Conflict
-from app.gifts.core import SEED_GIFTS, GiftValidationError, gift_code_from_description, gift_reason
+from app.gifts.core import SEED_GIFTS, GiftValidationError, gift_code_from_description, gift_name, gift_reason
 from app.gifts.mtproto import GiftFailure, PersonalGiftSender
 from app.gifts.service import GiftService
 from app.gifts.settings import GiftSettings
@@ -32,7 +32,7 @@ class GiftsPanel:
         prices = {g["code"]: g["stars"] for g in bundle}
         lines = ["🎁 Привязка подарков"]
         for code, count in counts.items():
-            lines.append(f"{SEED_GIFTS[code][0]} {escape(code)} ×{count} — {prices[code] * count} Stars")
+            lines.append(f"{escape(gift_name(code))} ×{count} — {prices[code] * count} Stars")
         lines += [f"Всего: {len(bundle)} подарка", f"Стоимость: {sum(g['stars'] for g in bundle)} Stars"]
         return "\n".join(lines)
 
@@ -124,10 +124,10 @@ class GiftsPanel:
         if command == "catalog":
             entries = {v["code"]: v for v in self.store.rows("SELECT * FROM gift_catalog")}
             lines = []
-            for code, (emoji, _, seed) in SEED_GIFTS.items():
+            for code, (_, _, seed) in SEED_GIFTS.items():
                 v = entries.get(code)
                 lines.append(
-                    f"{emoji} <code>{code}</code>: "
+                    f"{escape(gift_name(code))} · "
                     + (
                         f"{v['stars']} ⭐ · {'доступен' if v['available'] else 'недоступен'} · {escape(v['checked_at'])}"
                         if v
@@ -284,7 +284,7 @@ class GiftsPanel:
                     if g["state"] == "BLOCKED"
                     else "⏳"
                 )
-                text += f"\n{icon} {escape(g['code'])} {g['position'] + 1}/{len(steps)} · {g['stars']} ⭐ · {g['state']}"
+                text += f"\n{icon} {escape(gift_name(g['code']))} {g['position'] + 1}/{len(steps)} · {g['stars']} ⭐ · {g['state']}"
                 if g["error_code"]:
                     text += (
                         "\nПричина: " + escape(gift_reason(g["error_code"])) + " · " + escape(g["error_code"])
@@ -299,7 +299,7 @@ class GiftsPanel:
                     rows.append(
                         [
                             (
-                                f"История {g['code']} {g['position'] + 1}/{len(steps)}",
+                                f"История {gift_name(g['code'])} {g['position'] + 1}/{len(steps)}",
                                 "ops:show:" + g["operation_id"],
                             )
                         ]
@@ -331,7 +331,7 @@ class GiftsPanel:
                         if g["state"] == "BLOCKED"
                         else "⏳"
                     )
-                    text += f"\n{icon} {escape(g['code'])} {g['position'] + 1}/{len(steps)} · {status(g['state'])}"
+                    text += f"\n{icon} {escape(gift_name(g['code']))} {g['position'] + 1}/{len(steps)} · {status(g['state'])}"
                 if done and done < len(steps):
                     text += "\n⚠️ Частичная выдача. Полный возврат и отметка выполнения запрещены."
                 if j["error_code"]:
