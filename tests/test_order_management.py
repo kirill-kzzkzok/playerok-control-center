@@ -196,13 +196,15 @@ async def test_card_falls_back_to_cache_without_displaying_delivery_secrets(setu
     service.orders.add_stock("item", ["private code"])
     api.call.side_effect = APIError("NETWORK_ERROR")
     text, markup = await OrdersPanel(store, api).card(1, "order")
-    assert "локальный кеш" in text and "&lt;product&gt;" in text
+    assert "Сохранённые данные" in text and "&lt;product&gt;" in text
     assert "private code" not in text
     assert not any(
         button.callback_data and button.callback_data.startswith("od:prepare:")
         for row in markup.inline_keyboard
         for button in row
     )
+    assert any(button.callback_data == "od:details:order" for row in markup.inline_keyboard for button in row)
+    _, markup = await OrdersPanel(store, api).card(1, "order", details=True)
     assert any(
         button.url == "https://playerok.com/deal/order" for row in markup.inline_keyboard for button in row
     )

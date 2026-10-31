@@ -129,6 +129,9 @@ async def test_dispatcher_card_gallery_and_foreign_owner_without_mutations(conte
         await ui.message("/start")
         await ui.click("item:lot")
         sent = session.calls[-1]
+        assert "Опубликован" in sent.text
+        await ui.click("iv:details:lot")
+        sent = session.calls[-1]
         assert "Сделки по API: 0" in sent.text
         callback = next(
             button.callback_data

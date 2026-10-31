@@ -9,6 +9,7 @@ from aiogram.types import InlineKeyboardButton
 from app.database.store import Conflict
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
+from app.telegram.presentation import status as human_status
 
 TITLES = {
     "gift_send": "Telegram-подарок",
@@ -47,14 +48,14 @@ class OperationResults:
         status, kind = row["status"], row["kind"]
         title = TITLES.get(kind, "Операция")
         label = {
-            "PENDING": "В очереди (QUEUED)",
+            "PENDING": "Ожидает выполнения",
             "PROCESSING": "Выполняется",
             "RETRYABLE_FAILED": "Ожидает безопасной обработки",
-            "SUCCEEDED": "Подтверждено (SUCCEEDED)",
-            "UNCERTAIN": "Результат неизвестен (UNCERTAIN)",
+            "SUCCEEDED": "Выполнено и подтверждено",
+            "UNCERTAIN": "Результат неизвестен",
             "PERMANENT_FAILED": "Операция остановлена",
         }[status]
-        text = f"🧾 <b>{title}</b>\n{label}\nОперация: <code>{escaped(ident, 100)}</code>"
+        text = f"🧾 <b>{title}</b>\n{label}"
         buttons = []
         if status in {"PENDING", "PROCESSING", "RETRYABLE_FAILED"}:
             text += "\nПостановка в очередь не означает выполнения."
@@ -84,7 +85,7 @@ class OperationResults:
                     text += "\nID: <code>" + escaped(result["remote_id"], 100) + "</code>"
                 if result.get("status") or result.get("remote_status"):
                     actual = result.get("status") or result["remote_status"]
-                    text += "\nСтатус в ответе сервера: " + escaped(actual, 60)
+                    text += "\nСтатус в ответе сервера: " + human_status(actual, "item")
                     if actual in {"PENDING_APPROVAL", "PENDING_MODERATION"}:
                         text += "\nОжидает модерации; активным пока не считается."
                 if result.get("price") is not None:
@@ -97,7 +98,7 @@ class OperationResults:
                 "SELECT state,refund_state FROM gift_jobs WHERE order_id=?", (row["target"],)
             )
             if job:
-                text += f"\nПодарок: {job[0]['state']} · возврат: {job[0]['refund_state']}"
+                text += f"\nПодарок: {human_status(job[0]['state'])} · возврат: {human_status(job[0]['refund_state'])}"
                 steps = self.store.rows(
                     "SELECT code,position,state,stars,error_code FROM gift_steps WHERE order_id=? ORDER BY position",
                     (row["target"],),
@@ -105,9 +106,9 @@ class OperationResults:
                 done = sum(g["state"] == "SUCCEEDED" for g in steps)
                 text += f"\nПрогресс пакета: {done}/{len(steps)}"
                 if done and done < len(steps):
-                    text += "\nPARTIALLY_DELIVERED — оставшиеся подарки не подтверждены; полный возврат и SENT запрещены."
+                    text += "\nДоставлено частично. Остальные подарки не подтверждены; полный возврат и отметка выполнения запрещены."
                 for g in steps:
-                    text += f"\n{escaped(g['code'], 40)} {g['position'] + 1}/{len(steps)} · {g['state']} · {g['stars']} Stars"
+                    text += f"\n{escaped(g['code'], 40)} {g['position'] + 1}/{len(steps)} · {human_status(g['state'])} · {g['stars']} ⭐"
                     if g["error_code"]:
                         text += " · " + escaped(g["error_code"], 70)
             buttons.append([("Подарочный заказ и безопасная сверка", "gft:job:" + row["target"])])
@@ -126,6 +127,7 @@ class OperationResults:
         elif kind != "delete":
             buttons.append([("Открыть актуальную карточку", "item:" + row["target"])])
         buttons += [
+            [("Подробности операции", "ops:show:" + ident)],
             [("🔄 Обновить результат", "result:show:" + ident)],
             [("Все результаты", "result:list:0")],
         ]
@@ -154,7 +156,12 @@ class OperationResults:
             (owner, page * 10),
         )
         buttons = [
-            [(TITLES.get(row["kind"], row["kind"]) + " · " + row["status"], "result:show:" + row["id"])]
+            [
+                (
+                    TITLES.get(row["kind"], row["kind"]) + " · " + human_status(row["status"]),
+                    "result:show:" + row["id"],
+                )
+            ]
             for row in rows[:10]
         ]
         nav = []

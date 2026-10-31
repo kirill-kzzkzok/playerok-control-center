@@ -94,12 +94,18 @@ class ProfilePanel:
             lines.append("Проверка уже выполняется либо прошло менее5 секунд. Новый запрос не отправлен.")
         return "\n".join(lines)
 
-    async def handle(self, message, *, refresh=False):
+    async def handle(self, message, *, refresh=False, details=False):
         if self.store is not None:
             connection = getattr(self.api, "connection", None) or PlayerokConnection(self.store, self.api)
             status = await connection.check()
             text = self.connection_caption(status)
-            markup = keyboard([[("🔄 Проверить соединение", "profile:check")]])
+            markup = keyboard(
+                [
+                    [("🔄 Проверить соединение", "profile:check")],
+                    [("Баланс и данные аккаунта", "profile:details")],
+                ],
+                back=("⬅️ Ещё", "more"),
+            )
             if refresh:
                 try:
                     return await message.edit_text(text, reply_markup=markup)
@@ -112,7 +118,7 @@ class ProfilePanel:
                     ):
                         return await message.answer(text, reply_markup=markup)
                     raise
-            if status["status"] == "CONNECTED" and connection.viewer:
+            if details and status["status"] == "CONNECTED" and connection.viewer:
                 try:
                     async with asyncio.timeout(8):
                         await self.photo(message, connection.viewer)

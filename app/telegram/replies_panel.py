@@ -147,6 +147,6 @@ class RepliesPanel:
                 "confirm_token": nonce,
             }
         )
-        return "Подтвердите ответ покупателю:\n\n" + escape(payload["text"]) + (
+        return "Отправить покупателю?\n\n" + escape(payload["text"]) + (
             f"\n📷 Фотографий: {len(photos)}" if photos else ""
-        ), keyboard([[("✅ Отправить", "commit:" + nonce)]])
+        ), keyboard([[("✅ Отправить", "commit:" + nonce)]], back=("Отмена", "chat:" + chat_id))

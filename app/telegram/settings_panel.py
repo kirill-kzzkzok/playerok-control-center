@@ -1,7 +1,7 @@
 from app.database.store import Conflict
 from app.services.notification_preferences import LABELS, NotificationPreferences
-from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
+from app.telegram.presentation import connection_summary, status
 
 
 class SettingsPanel:
@@ -40,20 +40,16 @@ class SettingsPanel:
         self.owner(owner)
         if action == "settings":
             return (
-                "⚙️ <b>Настройки</b>\nЗаписи API: "
-                + ("включены" if self.api.account.writes_enabled else "выключены")
-                + "\nПлатежи и автовывод запрещены. Владелец закреплён локально.",
+                "⚙️ <b>Настройки</b>\nВыберите, что настроить.",
                 keyboard(
                     [
-                        [("🔐 Подключения", "sp:connections"), ("🛡️ Безопасность", "sp:security")],
-                        [("⚡ Автовыдача", "automation"), ("⬆️ Автоподнятие · настройки", "promotions")],
-                        [("✅ Подтверждение выполнения", "sp:fulfillment")],
-                        [("💬 Ответы и шаблоны", "quickreplies"), ("🔔 Уведомления", "sp:notifications")],
-                        [("💬 Правила автоответов", "ar:menu")],
-                        [("💰 Финансовые параметры", "providers"), ("📊 Статистика", "stats:7")],
-                        [("💾 Резервная копия БД", "backup"), ("🩺 Диагностика", "diagnostics")],
-                        [("🧹 Очистка интерфейса", "ic:preview")],
-                    ]
+                        [("🔔 Уведомления", "sp:notifications")],
+                        [("⚡ Быстрые ответы", "quickreplies"), ("💬 Автоответы", "ar:menu")],
+                        [("Подключения", "sp:connections"), ("Безопасность", "sp:security")],
+                        [("Финансовые параметры", "providers")],
+                        [("Подтверждение выполнения", "sp:fulfillment")],
+                    ],
+                    back=("⬅️ Ещё", "more"),
                 ),
             )
         if action == "sp:notifications":
@@ -66,15 +62,17 @@ class SettingsPanel:
             return self.notifications(owner)
         if action == "sp:connections":
             return (
-                "🔐 <b>Подключения</b>\nPlayerok: "
-                + escaped(self.store.setting("playerok:connection", "ещё не проверен"), 100)
+                "🔐 <b>Подключения</b>\n"
+                + connection_summary(self.api)
                 + "\nСверка заказов: "
-                + escaped(self.store.setting("sync:health", {}).get("status", "NOT_STARTED"), 100)
+                + status(self.store.setting("sync:health", {}).get("status", "NOT_STARTED"))
                 + "\nТранзакции: "
-                + escaped(self.store.setting("transactions:health", {}).get("status", "NOT_STARTED"), 100)
-                + "\n\nЭто сохранённые состояния, не новая проверка сети. Токены и cookies меняются только в локальном .env и в Telegram не показываются."
-                + "\nДля read-only проверки HTTP: .venv/Scripts/python -m app.auth_diagnostics",
-                keyboard([[("Подробная диагностика", "diagnostics"), ("Настройки", "settings")]]),
+                + status(self.store.setting("transactions:health", {}).get("status", "NOT_STARTED"))
+                + "\nНовая проверка доступна в профиле. Состояния синхронизации сохранены ранее.",
+                keyboard(
+                    [[("Проверить Playerok", "profile:check")], [("Диагностика", "diagnostics")]],
+                    back=("⬅️ Настройки", "settings"),
+                ),
             )
         if action == "sp:security":
             owners = self.store.rows("SELECT count(*) AS n FROM administrators")[0]["n"]
@@ -82,7 +80,7 @@ class SettingsPanel:
                 f"🛡️ <b>Безопасность</b>\nЗакреплённых владельцев: {owners}\nВаш Telegram ID: <code>{owner}</code>"
                 + "\nДоступ только в личном чате закреплённого владельца. Новый /start не заменяет владельца."
                 + "\nСекреты и резервные копии хранятся локально. База содержит сообщения и данные выдачи."
-                + "\nПлатные операции и автоматический вывод заблокированы. Переключение настроек уведомлений не включает записи API."
+                + "\nДенежные действия требуют отдельных разрешений. Настройка уведомлений не включает операции магазина."
                 + "\nНеопределённые операции не повторяются автоматически; проверяйте их на Playerok.",
                 keyboard(
                     [[("Неопределённые операции", "ops:list:UNCERTAIN:0")], [("Настройки", "settings")]]
@@ -91,10 +89,9 @@ class SettingsPanel:
         if action == "sp:fulfillment":
             return (
                 (
-                    "✅ <b>Подтверждение выполнения</b>\nВ карточке оплаченного заказа выберите «Я выполнил заказ». "
-                    "Требуются проверка передачи товара и подтверждение владельца; для официального продавца проверяется требование отчёта."
-                    "\nФлаг mark_sent у цепочки завершает её состоянием NEEDS_FULFILLMENT, а не автоматической записью SENT."
-                    "\nПодтверждение получения покупателем бот не подделывает. Полностью автоматический SENT без личной проверки не реализован."
+                    "✅ <b>Подтверждение выполнения</b>\nВ карточке заказа выберите «Подтвердить выполнение» только после передачи товара."
+                    "\nПлощадка может потребовать отчёт. Получение подтверждает покупатель."
+                    "\nДля подарков автоматическая отметка продавца требует отдельного разрешения и подтверждения всех подарков. Этот экран ничего не включает."
                 ),
                 keyboard([[("Заказы", "orders"), ("Автовыдача", "automation")], [("Настройки", "settings")]]),
             )

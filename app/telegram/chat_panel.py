@@ -59,10 +59,9 @@ class ChatPanel:
             text = "[сообщение удалено]" if message.get("deleted_at") else message.get("text") or "[событие]"
             images = message.get("images") or []
             attachment = f"\n📷 Изображений: {len(images)}" if images else ""
-            blocks.append(
-                f"<b>{author}</b> · {date}\nID: <code>{escaped(message['id'], 72)}</code>\n{escaped(text, 290)}{attachment}"
-            )
-        rows = [[("✉️ Ответить", "reply:" + ident), ("✅ Прочитано", "readchat:" + ident)]]
+            blocks.append(f"<b>{author}</b> · {date}\n{escaped(text, 290)}{attachment}")
+        rows = [[("✉️ Ответить", "compose:" + ident), ("✅ Прочитано", "readchat:" + ident)]]
+        rows.append([("⚡ Быстрый ответ", "reply:" + ident)])
         navigation = []
         if view["index"]:
             navigation.append(("← Новее", f"chatpage:{view['nonce']}:newer"))
@@ -72,11 +71,11 @@ class ChatPanel:
             rows.append(navigation)
         if media:
             rows.append([("📷 Открыть фотографии", f"chatmedia:{view['nonce']}:0")])
-        rows.append([("🔄 Последние", "chat:" + ident)])
+        rows.append([("⋯ Ещё", "chatmore:" + ident)])
         return (
             f"💬 <b>Диалог · страница {view['index'] + 1}</b>\n\n"
             + ("\n\n".join(blocks) if blocks else "Сообщений нет."),
-            keyboard(rows),
+            keyboard(rows, back=("⬅️ К сообщениям", "chats")),
         )
 
     async def media(self, action, state):

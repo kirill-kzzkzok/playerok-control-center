@@ -95,7 +95,7 @@ async def test_dispatcher_filters_compose_persist_restart_validate_and_reset(tmp
         assert item_buttons() == {"item:match", "item:ordinary"}
         await ui.click("il:PREMIUM")
         assert item_buttons() == {"item:match"}
-        assert "совпало: 1" in session.calls[-1].text
+        assert "Совпало: 1" in session.calls[-1].text
         assert "постраничная" in session.calls[-1].text
         await ui.click("il:category")
         await ui.message("category-id")

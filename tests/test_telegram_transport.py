@@ -269,7 +269,7 @@ async def test_profile_status_survives_optional_photo_timeout(tmp_path, monkeypa
     session = FailedPhoto()
     bot = Bot("123:" + "x" * 35, session=session)
     try:
-        await Interaction(bot, production_dispatcher(store, API())).click("profile")
+        await Interaction(bot, production_dispatcher(store, API())).click("profile:details")
         assert session.calls[-1].__api_method__ == "sendMessage"
         assert "Подключён" in session.calls[-1].text
         assert sum(m.__api_method__ == "sendPhoto" for m in session.calls) == 1

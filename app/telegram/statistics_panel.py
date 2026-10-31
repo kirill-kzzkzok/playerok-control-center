@@ -23,7 +23,7 @@ class StatisticsPanel:
     def __init__(self, store):
         self.store = store
 
-    def markup(self, days, *, details=False):
+    def markup(self, days, *, details=False, expanded=False):
         rows = [
             [
                 ("24 ч", "stats:1"),
@@ -33,6 +33,9 @@ class StatisticsPanel:
                 ("Всё", "stats:0"),
             ]
         ]
+        if not details and not expanded:
+            rows += [[("Графики и отчёты", f"sr:{days}")]]
+            return keyboard(rows, back=("⬅️ Ещё", "more"))
         rows.extend([[(label, f"st:{days}:{view}")] for view, label in VIEWS.items()])
         if not details:
             rows.append([("Подробности и покрытие", f"sd:{days}:details")])
@@ -46,11 +49,15 @@ class StatisticsPanel:
         rows.append([("Поступления и расходы по транзакциям", f"sd:{days}:transactions")])
         rows.append([("Прибыль по учтённым заказам", f"sd:{days}:profit")])
         rows.append([("Сверенные комиссии продажи", f"sd:{days}:settlements")])
-        return keyboard(rows)
+        return keyboard(rows, back=("⬅️ К статистике", f"stats:{days}"))
 
     async def handle(self, action, message, *, owner=None):
         parts = action.split(":")
         days = int(parts[1])
+        if parts[0] == "sr":
+            return await message.answer(
+                "📊 <b>Графики и отчёты</b>", reply_markup=self.markup(days, expanded=True)
+            )
         stats = await asyncio.to_thread(statistics, self.store, days)
         view = parts[2] if len(parts) == 3 else "overview"
         if parts[0] == "sd":
@@ -184,6 +191,19 @@ class StatisticsPanel:
             else:
                 raise ValueError("Раздел статистики недоступен")
             return await message.answer(text, reply_markup=self.markup(days, details=True))
+        if parts[0] == "stats":
+            text = (
+                f"📊 <b>Статистика · {'всё время' if days == 0 else str(days) + ' дн.'}</b>"
+                + f"\nЗаказов: {stats['orders']} · оплаченных: {stats['paid']}"
+                + f"\nИзвестная выручка до комиссий: {stats['revenue']} ₽"
+                + "\nПо сохранённой истории; полнота магазина не подтверждена."
+                + (
+                    f"\nНеизвестных сумм: {stats['unknown_paid_amounts']}"
+                    if stats["unknown_paid_amounts"]
+                    else ""
+                )
+            )
+            return await message.answer(text, reply_markup=self.markup(days))
         if view not in VIEWS:
             raise ValueError("График недоступен")
         image = await asyncio.to_thread(revenue_chart, stats, view)

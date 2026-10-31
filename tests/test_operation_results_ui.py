@@ -67,7 +67,7 @@ async def test_real_handlers_queue_then_notify_owner_confirmed_result_once(rig, 
             await ui.message("749" if kind == "discount" else "New product name")
         token = (await state.get_data())["confirm_token"]
         await ui.click("commit:" + token)
-    assert "QUEUED" in session.calls[-1].text
+    assert "Ожидает выполнения" in session.calls[-1].text
     assert "SUCCEEDED" not in session.calls[-1].text
     ident = store.rows("SELECT id FROM outbox")[0]["id"]
     assert store.rows("SELECT owner_id FROM operation_receipts") == [{"owner_id": 7}]
@@ -76,18 +76,18 @@ async def test_real_handlers_queue_then_notify_owner_confirmed_result_once(rig, 
     await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
     ui.dp = dispatcher(store, api)
     await Notifications(store, bot).once()
-    assert "SUCCEEDED" in session.calls[-1].text
+    assert "Выполнено и подтверждено" in session.calls[-1].text
     if kind == "create":
         assert "Product name" in session.calls[-1].text and "remote1" in session.calls[-1].text
     if kind == "publish":
-        assert "PENDING_APPROVAL" in session.calls[-1].text and "Ожидает модерации" in session.calls[-1].text
+        assert "На проверке" in session.calls[-1].text and "Ожидает модерации" in session.calls[-1].text
     if kind == "discount":
         assert "749" in session.calls[-1].text and "1000" in session.calls[-1].text
     count = len(session.calls)
     await Notifications(store, bot).once()
     assert len(session.calls) == count
     await ui.click("result:show:" + ident)
-    assert "SUCCEEDED" in session.calls[-1].text
+    assert "Выполнено и подтверждено" in session.calls[-1].text
     for method in session.calls:
         assert "private-buyer-data" not in (getattr(method, "text", None) or "")
 
@@ -105,7 +105,7 @@ async def test_uncertain_operation_and_unknown_telegram_ack_never_offer_replay(r
     await worker.once()
     ident = store.rows("SELECT id FROM outbox")[0]["id"]
     text, markup = OperationResults(store).show(7, ident)
-    assert "UNCERTAIN" in text
+    assert "Результат неизвестен" in text
     assert not any("commit:" in (b.callback_data or "") for row in markup.inline_keyboard for b in row)
     failed = SimpleNamespace(send_message=AsyncMock(side_effect=RuntimeError("do not persist private error")))
     await OperationResults(store).notify(failed)

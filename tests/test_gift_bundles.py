@@ -236,7 +236,7 @@ async def test_bundle_dispatcher_preview_restart_progress_and_partial_retry(rig)
         t.stars = 0
         await r.worker.once()
         await ui.click("gft:job:order")
-        assert "1/3" in session.calls[-1].text and "PARTIALLY_DELIVERED" in session.calls[-1].text
+        assert "1/3" in session.calls[-1].text and "Частичная выдача" in session.calls[-1].text
         assert "Realbuyer" not in session.calls[-1].text
         t.stars = 100
         await ui.click("gft:retrycheck:order")
@@ -344,7 +344,7 @@ async def test_owner_notice_shows_partial_delivery_without_recipient_or_false_su
         await OperationResults(r.store).notify(bot)
         output = "\n".join(c.text for c in session.calls if hasattr(c, "text"))
         assert "Realbuyer" not in output
-        assert "PARTIALLY_DELIVERED" in output and "bear" in output and "rose" in output
+        assert "Доставлено частично" in output and "bear" in output and "rose" in output
         assert not r.api.sent
     finally:
         await bot.session.close()

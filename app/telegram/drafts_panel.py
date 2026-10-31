@@ -3,6 +3,14 @@ from app.services.catalog import DRAFT_FILTERS, draft_page
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 
+DRAFT_LABELS = {
+    "DRAFT": "Черновик",
+    "QUEUED": "Ожидает выполнения",
+    "REMOTE_DRAFT": "Создан на Playerok",
+    "UPDATED": "Изменён",
+    "CANCELLED": "Отменён",
+}
+
 
 class DraftsPanel:
     def __init__(self, store):
@@ -23,7 +31,16 @@ class DraftsPanel:
         if not result["rows"]:
             text += "\nЗаписи не найдены."
         rows = [
-            [((str(row["name"] or "Новый товар")[:42] + " · " + row["state"])[:64], "draft:" + row["id"])]
+            [
+                (
+                    (
+                        str(row["name"] or "Новый товар")[:42]
+                        + " · "
+                        + DRAFT_LABELS.get(row["state"], "Откройте результат")
+                    )[:64],
+                    "draft:" + row["id"],
+                )
+            ]
             for row in result["rows"]
         ]
         navigation = []

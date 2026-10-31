@@ -33,7 +33,7 @@ class PromotionsPanel:
         await state.set_state(None)
         await state.set_data({"promotion": data})
         nonce, values = data["nonce"], data["values"]
-        text = f"🚀 <b>Продвижение · dry-run · v{data['revision']}</b>\nПолитика: {'включена для проверки' if values['enabled'] else 'выключена'}\nРежим: {'по времени' if values['mode'] == 'time' else 'по позиции'}\nВыбор: {'все подходящие кроме исключённых' if data['selection'] == 'all' else 'только выбранные'}\nНочь: {'включена' if values['night_enabled'] else 'выключена'} · {values['night_start_hour']:02d}:00–{values['night_end_hour']:02d}:00 МСК\nПлатное исполнение отсутствует. Сохранение и проверка ничего не покупают."
+        text = f"🚀 <b>Продвижение — проверка</b>\nПолитика: {'включена для проверки' if values['enabled'] else 'выключена'}\nРежим: {'по времени' if values['mode'] == 'time' else 'по позиции'}\nВыбор: {'все подходящие кроме исключённых' if data['selection'] == 'all' else 'только выбранные'}\nНочь: {'включена' if values['night_enabled'] else 'выключена'} · {values['night_start_hour']:02d}:00–{values['night_end_hour']:02d}:00 МСК\nПлатное исполнение отсутствует. Сохранение и проверка ничего не покупают."
         rows = [
             [("Переключить политику", f"pp:{nonce}:toggle:enabled"), ("Режим", f"pp:{nonce}:mode")],
             [("Ночной режим", f"pp:{nonce}:toggle:night_enabled"), ("Выбор лотов", f"pp:{nonce}:selection")],
@@ -45,14 +45,50 @@ class PromotionsPanel:
                 [("💾 Сохранить", f"pp:{nonce}:save")],
                 [("⛔ Выключить", "promo:stop")],
                 [("Выбрать товар и проверить", "items")],
-                [("История расходов", "aq:list:expenses:0"), ("История dry-run", "aq:list:evaluations:0")],
+                [
+                    ("История расходов", "aq:list:expenses:0"),
+                    ("История проверки без оплаты", "aq:list:evaluations:0"),
+                ],
                 [
                     ("Выбранные / исключённые", "aq:list:targets:0"),
                     ("Очередь проверок", "aq:list:schedule:0"),
                 ],
             ]
         )
-        return text, keyboard(rows)
+        if not data.get("advanced"):
+            text = (
+                "🚀 <b>Продвижение — проверка</b>\nСейчас доступен только расчёт. Деньги не списываются.\nПроверки: "
+                + ("включены" if values["enabled"] else "выключены")
+            )
+            rows = [
+                [("Выбрать товар и проверить", "items")],
+                [("Настройки расчёта", f"pp:{nonce}:advanced")],
+                [("История проверок", "tools:promotion")],
+                [("⛔ Остановить проверки", "promo:stop")],
+            ]
+        else:
+            group = data.get("group", "general")
+            groups = {
+                "general": [],
+                "time": ["interval_seconds", "check_seconds", "threshold", "cooldown_seconds"],
+                "night": ["night_interval_seconds", "night_threshold", "night_start_hour", "night_end_hour"],
+                "budget": ["per_operation", "daily", "monthly", "max_operations_per_item"],
+            }
+            if group not in groups:
+                raise ValidationError("Экран настройки устарел")
+            if group == "general":
+                rows = rows[:2] + [
+                    [("Интервалы и позиция", f"pp:{nonce}:group:time")],
+                    [("Ночное расписание", f"pp:{nonce}:group:night")],
+                    [("Бюджет и ограничения", f"pp:{nonce}:group:budget")],
+                ]
+            else:
+                rows = [
+                    [(f"{EDIT[name]}: {values[name]}", f"pp:{nonce}:edit:{name}")] for name in groups[group]
+                ]
+                rows.append([("⬅️ К параметрам", f"pp:{nonce}:group:general")])
+            rows += [[("💾 Сохранить", f"pp:{nonce}:save")], [("⬅️ Основной экран", f"pp:{nonce}:basic")]]
+        return text, keyboard(rows, back=("⬅️ Ещё", "more"))
 
     async def callback(self, action, owner, state):
         self.service.access.orders.owner(owner)
@@ -69,7 +105,7 @@ class PromotionsPanel:
                     for row in rows
                 )
                 if rows
-                else "Записей нет. Оценки dry-run не считаются расходом."
+                else "Записей нет. Оценки проверки без оплаты не считаются расходом."
             )
             return text, keyboard([[("Настройки", "promotions")]])
         if action in {"promotions", "promo:stop"}:
@@ -109,7 +145,7 @@ class PromotionsPanel:
                 ]
             )
             return (
-                f"🚀 <b>Лот · проверка</b>\nВыбран: {'да' if self.service.selected(parts[2], selection) else 'нет'}\nВерсия политики: {revision}\nВыберите реальную стоимость для dry-run. Это не покупка. Политика и quote будут перечитаны.",
+                f"🚀 <b>Лот · проверка</b>\nВыбран: {'да' if self.service.selected(parts[2], selection) else 'нет'}\nВерсия политики: {revision}\nВыберите реальную стоимость для проверки без оплаты. Это не покупка. Политика и quote будут перечитаны.",
                 keyboard(rows),
             )
         data = await state.get_data()
@@ -123,7 +159,7 @@ class PromotionsPanel:
             if parts[2] != "quote" or not 0 <= int(parts[3]) < len(view["quotes"]):
                 raise ValidationError("Стоимость недоступна")
             result = await self.service.evaluate(owner, view["id"], view["quotes"][int(parts[3])])
-            return "🔎 <b>Dry-run продвижения</b>\nПо политике: " + (
+            return "🔎 <b>Проверка продвижения</b>\nПо политике: " + (
                 "допустимо" if result["would_allow"] else "запрещено"
             ) + "\nСтоимость: " + escaped(result["price"], 40) + " ₽\nПричины: " + escaped(
                 "; ".join(result["reasons"]) or "нет", 2000
@@ -138,7 +174,11 @@ class PromotionsPanel:
         if len(parts) not in {3, 4} or parts[1] != view.get("nonce"):
             raise Conflict("Настройки продвижения устарели")
         command, values = parts[2], view["values"]
-        if command == "toggle" and len(parts) == 4 and parts[3] in {"enabled", "night_enabled"}:
+        if command in {"advanced", "basic"}:
+            view["advanced"] = command == "advanced"
+        elif command == "group" and len(parts) == 4 and parts[3] in {"general", "time", "night", "budget"}:
+            view["group"] = parts[3]
+        elif command == "toggle" and len(parts) == 4 and parts[3] in {"enabled", "night_enabled"}:
             values[parts[3]] = not values[parts[3]]
         elif command == "mode":
             values["mode"] = "position" if values["mode"] == "time" else "time"

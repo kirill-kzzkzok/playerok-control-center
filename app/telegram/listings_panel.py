@@ -1,17 +1,18 @@
+import json
 import secrets
+from datetime import UTC, datetime
 
 from app.playerok.adapter import validate_page
 from app.services.item_filters import checked_filters, matches_item
 from app.services.products import ValidationError
-from app.telegram.formatting import escaped
 from app.telegram.item_category_picker import ItemCategoryPicker
 from app.telegram.keyboards import keyboard
 from playerokapi.enums import ItemStatuses
 
 
 class ListingsPanel:
-    def __init__(self, api):
-        self.api = api
+    def __init__(self, api, store=None):
+        self.api, self.store = api, store
         self.category_picker = ItemCategoryPicker(api)
 
     async def show(self, kind, state, *, nonce=None):
@@ -48,18 +49,39 @@ class ListingsPanel:
             page = await self.api.call("get_chats", count=10, after_cursor=cursor)
             title, prefix = "💬 Диалоги", "chat"
         values, next_cursor = validate_page(page, kind, seen)
-        loaded = len(values)
         if kind == "items":
             values = [item for item in values if matches_item(item, filters)]
         # An empty page with continuation still offers Next; it does not mean EOF.
-        rows = []
+        rows = [[("➕ Создать товар", "create")]] if kind == "items" else []
         for value in values:
             user = value.get("user") or {}
             label = value.get("name") or user.get("username") or value["id"]
             if kind == "items":
-                label = f"{value.get('price', '?')} ₽ · {label}"
+                if self.store is not None and isinstance(value.get("name"), str):
+                    self.store.set_setting("ui:item:" + value["id"] + ":name", value["name"][:200])
+                label = f"{label} · {value.get('price', '?')} ₽"
             elif value.get("unread_messages_counter"):
                 label = f"🔵 {value['unread_messages_counter']} · {label}"
+            if kind == "chats" and self.store is not None:
+                cached = self.store.rows(
+                    "SELECT payload FROM chat_messages WHERE chat_id=? ORDER BY created_at DESC,id DESC LIMIT 1",
+                    (value["id"],),
+                )
+                if cached:
+                    last = json.loads(cached[0]["payload"])
+                    snippet = (
+                        "Фото" if last.get("images") and not last.get("text") else last.get("text") or ""
+                    )
+                    if last.get("deleted_at"):
+                        snippet = "Сообщение удалено"
+                    stamp = ""
+                    try:
+                        date = datetime.fromisoformat(last.get("created_at") or "")
+                        if date.tzinfo is not None:
+                            stamp = date.astimezone(UTC).strftime(" · %H:%M UTC")
+                    except (ValueError, TypeError):
+                        pass
+                    label = label[:22] + " · " + " ".join(snippet.split())[:20] + stamp
             callback = f"{prefix}:{value['id']}"
             if len(callback.encode("utf-8")) > 64:
                 raise ValidationError("Идентификатор записи не помещается в кнопку Telegram")
@@ -68,7 +90,9 @@ class ListingsPanel:
         if next_cursor:
             rows.append([("Далее →", f"listnext:{kind}:{next_nonce}")])
         if kind == "items":
-            rows.append([("🔎 Фильтры", "itemfilters")])
+            rows.extend(
+                [[("🔎 Поиск", "il:search"), ("Фильтры", "itemfilters")], [("💾 Черновики", "drafts")]]
+            )
         # Save only after the whole response/buttons validate; errors leave retryable cursor.
         await state.update_data(
             list_kind=kind,
@@ -82,17 +106,14 @@ class ListingsPanel:
             if next_cursor
             else "На этой странице записей нет."
         )
-        note = ""
-        if kind == "items":
-            note = f"\nНа серверной странице: {loaded} · совпало: {len(values)}. Фильтрация постраничная."
-            note += "\nФильтры: " + escaped(
-                {key: value for key, value in filters.items() if value is not None and value != ""}, 500
-            )
+        note = "\nФрагменты — по сохранённой истории." if kind == "chats" else ""
+        if kind == "items" and any(v is not None and v != "" for v in filters.values()):
+            note = f"\nСовпало: {len(values)}. Фильтрация постраничная."
             if not values:
-                empty += " Это не поиск по ещё не загруженным страницам."
-        return f"<b>{title}</b> · страница {number}\n" + (
-            "Выберите запись." if values else empty
-        ) + note, keyboard(rows)
+                note += " По ещё не загруженным страницам поиск не выполнен."
+        return f"<b>{title}</b> · страница {number}\n" + ("" if values else empty) + note, keyboard(
+            rows, back=("⬅️ Мой магазин", "home")
+        )
 
     async def filter_action(self, action, state):
         if action == "il:pickcategory":

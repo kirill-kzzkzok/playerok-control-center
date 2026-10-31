@@ -14,7 +14,6 @@ from aiogram.types import BufferedInputFile
 from app.database.store import Conflict
 from app.localvpn import active_proxy
 from app.playerok.adapter import APIError
-from app.services.automation import Automation
 from app.services.discounts import discount_plan
 from app.services.products import ValidationError, listing_price, listing_text, priority_price_basis
 from app.telegram.agreements_panel import AgreementsPanel
@@ -28,6 +27,7 @@ from app.telegram.finance_panel import FinancePanel
 from app.telegram.formatting import escaped
 from app.telegram.fulfillment_panel import FulfillmentPanel
 from app.telegram.gifts_panel import GiftsPanel
+from app.telegram.home_panel import HomePanel
 from app.telegram.interface_cleanup_panel import InterfaceCleanupPanel
 from app.telegram.item_panel import ItemPanel
 from app.telegram.keyboards import keyboard, main_menu
@@ -36,6 +36,7 @@ from app.telegram.operation_results import OperationResults
 from app.telegram.operations_panel import OperationsPanel
 from app.telegram.order_finance_panel import OrderFinancePanel
 from app.telegram.orders_panel import OrdersPanel
+from app.telegram.presentation import context_back, error_text
 from app.telegram.profile_panel import ProfilePanel
 from app.telegram.promotions_panel import PromotionsPanel
 from app.telegram.replies_panel import RepliesPanel
@@ -80,8 +81,9 @@ def create_router(store, api, products, synchronizer):
     interface_cleanup = InterfaceCleanupPanel(store)
     order_finance_panel = OrderFinancePanel(store, api)
     profile_panel = ProfilePanel(api, store)
-    item_panel = ItemPanel(api)
-    listings_panel = ListingsPanel(api)
+    home_panel = HomePanel(store, api)
+    item_panel = ItemPanel(api, store)
+    listings_panel = ListingsPanel(api, store)
     stock_panel = StockPanel(store, api)
     gifts_panel = GiftsPanel(store, api)
     operation_results = OperationResults(store)
@@ -89,12 +91,13 @@ def create_router(store, api, products, synchronizer):
 
     @router.message(CommandStart())
     async def start(message, state):
+        data = await state.get_data()
+        for key in ("item_filters", "order_search", "order_filter"):
+            if key in data:
+                store.set_setting(f"ui:{message.from_user.id}:{key}", data[key])
         await state.clear()
-        await message.answer(
-            "🟣 <b>PLAYEROK CONTROL CENTER</b>\n\nПанель магазина. Платежи за подарки требуют отдельных разрешений.\n"
-            "Черновики и история сохраняются локально.",
-            reply_markup=main_menu(),
-        )
+        text, markup = home_panel.home()
+        await message.answer(text, reply_markup=markup)
 
     @router.callback_query()
     async def callback(query, state, callback_ack=None):
@@ -122,14 +125,27 @@ def create_router(store, api, products, synchronizer):
             )
         )
         try:
-            if action in {"profile", "profile:check", "diagnostics", "backup"} or action.startswith(
+            # Persist only harmless list preferences, never confirmation tokens or pending actions.
+            view_data = await state.get_data()
+            for key in ("item_filters", "order_search", "order_filter"):
+                if key in view_data:
+                    store.set_setting(f"ui:{owner}:{key}", view_data[key])
+            if action in {
+                "profile",
+                "profile:check",
+                "profile:details",
+                "diagnostics",
+                "backup",
+            } or action.startswith(
                 (
                     "item:",
+                    "iv:",
                     "order:",
                     "chat:",
                     "result:",
                     "delivered:",
                     "stats:",
+                    "sr:",
                     "st:",
                     "sd:",
                     "sp:",
@@ -141,6 +157,7 @@ def create_router(store, api, products, synchronizer):
                     "aq:evaluation:",
                     "gft:item:",
                     "gft:job:",
+                    "gft:details:",
                     "gft:list:",
                     "gft:catalog",
                     "gft:bindings",
@@ -151,13 +168,12 @@ def create_router(store, api, products, synchronizer):
                 await state.clear()
             if action == "home":
                 await state.clear()
-                return await display(
-                    message,
-                    "🟣 <b>PLAYEROK CONTROL CENTER</b>\nУправление магазином",
-                    main_menu(),
-                    not preserve,
-                )
-            if action == "create":
+                text, markup = home_panel.home()
+                return await display(message, text, markup, not preserve)
+            if action in {"more", "attention", "tools"} or action.startswith("tools:"):
+                await state.clear()
+                text, markup = home_panel.show(action, owner)
+            elif action == "create":
                 text, markup = await wizard.start(owner, state)
             elif action.startswith("agv:"):
                 text, markup = await agreements_panel.callback(action, state)
@@ -223,7 +239,10 @@ def create_router(store, api, products, synchronizer):
                     rows = [[("Открыть серверный лот", "item:" + binding[0]["remote_id"])]] if binding else []
                     text, markup = "Состояние: " + escape(draft["state"]), keyboard(rows)
             elif action in {"items", "chats"}:
+                filters = store.setting(f"ui:{owner}:item_filters", {})
                 await state.clear()
+                if action == "items":
+                    await state.update_data(item_filters=filters)
                 text, markup = await listings_panel.show(action, state)
             elif action == "itemfilters":
                 await state.set_state(None)
@@ -274,31 +293,12 @@ def create_router(store, api, products, synchronizer):
                 if len(parts) != 3:
                     raise ValidationError("Список устарел. Откройте его заново")
                 text, markup = await listings_panel.show(parts[1], state, nonce=parts[2])
-            elif action.startswith("item:"):
-                ident = action.split(":", 1)[1]
-                item, text, photo_rows = await item_panel.card(ident, state)
-                text += "\n\n" + (
-                    gifts_panel.summary(ident)
-                    if gifts_panel.service.listing(ident)
-                    else escaped(Automation(store, api).status_text(ident), 1600)
-                )
-                rows = [
-                    [("📚 Склад", "stock:view:" + ident)],
-                    [("🎁 Telegram-подарок", "gft:item:" + ident)],
-                    [("💰 Цена / Скидка", "discount:" + ident), ("📋 Описание", "editdesc:" + ident)],
-                    [("📝 Название", "editname:" + ident), ("🖼 Заменить фото", "editphoto:" + ident)],
-                    [("🧩 Атрибуты и данные", "editfields:" + ident)],
-                    [("⭐ Стоимость размещения", "quote:" + ident)],
-                    [("💰 Финансовый расчёт", "finance:" + ident)],
-                    [("⚡ Политика выдачи · dry-run", "auto:item:" + ident)],
-                    [("🚀 Продвижение · dry-run", "promo:item:" + ident)],
-                    [("🗑 Удалить", "delete:" + ident)],
-                ]
-                for draft_id in stock_panel.service.prepared(owner, ident):
-                    rows.append([("📥 Перенести запас из мастера", "stock:transfer:" + draft_id)])
-                if item.get("status") == "DRAFT":
-                    rows.append([("Бесплатная публикация · превью", "publish:" + ident)])
-                markup = keyboard(photo_rows + rows)
+            elif action.startswith(("item:", "iv:")):
+                if action.startswith("item:"):
+                    ident, section = action.split(":", 1)[1], "card"
+                else:
+                    _, section, ident = action.split(":", 2)
+                text, markup = await item_panel.screen(ident, section, state, owner, gifts_panel, stock_panel)
             elif action.startswith("itemmedia:"):
                 image, caption, markup = await item_panel.media(action, state)
                 await message.answer_photo(
@@ -386,11 +386,31 @@ def create_router(store, api, products, synchronizer):
                 store.audit(owner, "QUEUE_" + pending["kind"], pending["target"], "PENDING")
                 await state.clear()
                 text, markup = (
-                    f"Операция в очереди (QUEUED): <code>{ident}</code>. Это ещё не результат; он придёт отдельным сообщением.",
+                    "⏳ Ожидает выполнения. Подтверждённый результат придёт отдельным сообщением.",
                     keyboard([[("Открыть результат", "result:show:" + ident)]]),
                 )
             elif action in {"orders", "orderfilters"} or action.startswith(("orderpage:", "order:", "od:")):
+                if action == "orders":
+                    await state.update_data(
+                        order_search=store.setting(f"ui:{owner}:order_search", ""),
+                        order_filter=store.setting(f"ui:{owner}:order_filter", "ALL"),
+                    )
                 text, markup = await orders_panel.callback(action, owner, state)
+            elif action.startswith("chatmore:"):
+                await state.clear()
+                ident = action.split(":", 1)[1]
+                await api.call("get_chat", chat_id=ident)
+                text, markup = (
+                    "💬 <b>Действия с диалогом</b>",
+                    keyboard(
+                        [
+                            [("⚡ Быстрый ответ", "reply:" + ident)],
+                            [("🔄 Обновить историю", "chat:" + ident)],
+                            [("Шаблоны ответов", "quickreplies")],
+                        ],
+                        back=("⬅️ К диалогу", "chat:" + ident),
+                    ),
+                )
             elif action.startswith(("chat:", "chatpage:")):
                 text, markup = await chats.show(action, state)
             elif action.startswith("chatmedia:"):
@@ -419,6 +439,18 @@ def create_router(store, api, products, synchronizer):
                     "Отметить все сообщения этого диалога прочитанными в Playerok?",
                     keyboard([[("✅ Подтвердить", "commit:" + nonce)]]),
                 )
+            elif action.startswith("compose:"):
+                ident = action.split(":", 1)[1]
+                await api.call("get_chat", chat_id=ident)
+                origin = replies.replies.origin(owner, message.message_id, ident)
+                await state.set_state("reply")
+                await state.set_data({"chat_id": ident, "origin_event": origin})
+                text, markup = (
+                    "✉️ <b>Ответ покупателю</b>\nПришлите текст или фото. Перед отправкой будет подтверждение.",
+                    keyboard(
+                        [[("⚡ Быстрый ответ", "reply:" + ident)]], back=("⬅️ К диалогу", "chat:" + ident)
+                    ),
+                )
             elif action.startswith("reply:"):
                 ident = action.split(":", 1)[1]
                 await api.call("get_chat", chat_id=ident)
@@ -432,9 +464,13 @@ def create_router(store, api, products, synchronizer):
                     + ". Сохранённая история доступна локально; полная загрузка может занять несколько циклов.",
                     keyboard([[("🛒 Заказы", "orders")]]),
                 )
-            elif action in {"profile", "profile:check"}:
-                return await profile_panel.handle(message, refresh=action == "profile:check")
-            elif action.startswith(("stats:", "st:", "sd:")):
+            elif action in {"profile", "profile:check", "profile:details"}:
+                return await profile_panel.handle(
+                    message,
+                    refresh=action == "profile:check" and not preserve,
+                    details=action == "profile:details",
+                )
+            elif action.startswith(("stats:", "st:", "sd:", "sr:")):
                 return await statistics_panel.handle(action, message, owner=owner)
             elif action == "settings" or action.startswith("sp:"):
                 if action == "settings":
@@ -516,10 +552,9 @@ def create_router(store, api, products, synchronizer):
                 )
             else:
                 raise ValidationError("Кнопка устарела. Откройте главное меню.")
-            await display(message, text, markup, not preserve)
+            await display(message, text, context_back(markup, action), not preserve)
         except (APIError, ValidationError, Conflict, ValueError) as error:
-            code = error.code if isinstance(error, APIError) else str(error)
-            await message.answer("❗ " + escaped(code, 800), reply_markup=keyboard([]))
+            await message.answer("❗ " + error_text(error), reply_markup=keyboard([]))
         except sqlite3.Error:
             await message.answer(
                 "❗ Не удалось сохранить локальные данные. Изменения транзакции отменены. Проверьте свободное место и откройте раздел заново.",
@@ -630,9 +665,7 @@ def create_router(store, api, products, synchronizer):
                 text, markup = "Выберите действие в меню.", main_menu()
             await display(message, text, markup)
         except (APIError, ValidationError, Conflict, ValueError) as error:
-            await message.answer(
-                "❗ " + escaped(error.code if isinstance(error, APIError) else str(error), 800)
-            )
+            await message.answer("❗ " + error_text(error))
         except sqlite3.Error:
             await message.answer(
                 "❗ Не удалось сохранить локальные данные. Изменения транзакции отменены. Проверьте свободное место и откройте раздел заново.",

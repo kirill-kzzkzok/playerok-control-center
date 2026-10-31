@@ -2130,3 +2130,36 @@ Final pre-release boundary regression: test auto_agreements_lease_red.xml proved
 Automatic agreements final (31.10.2026): **938 passed in295.89s**,0 failures/errors/skips (data/auto_agreements_full_complete.xml). Final targeted78 passed41.86s (auto_agreements_final_targeted.xml);18 new cases cover the separate permit, native HTTP/final-version/lease fence, duplicate workers, lost ACK/expiry/reopen/automatic FSM continuation, strict scopes, churn and read-only diagnostic inspection. Earlier937-pass snapshot preceded final lease fault fix; red→green evidence retained. Ruff196 files, pip check, offline selfcheck108 imports/all migrations/schema22/backup-reopen/PNG pass. Working DB read-only clone22→22 preserves all existing table counts/integrity/FK/reopen; no new migration or dependency.237 candidate files secret/JWT scan clean, private paths ignored.
 
 Local .env now has PLAYEROK_AUTO_ACCEPT_AGREEMENTS=true by explicit owner instruction; all other .env values verified unchanged. PLAYEROK_WRITES_ENABLED=false, automation/gift-payment/gift-refund flagsfalse. New-install template/defaultfalse. Working DB/session not modified; no real server acceptances/listing mutations/customer sends/payments/refunds performed. Native signature/current account/final request boundary were tested with production SafeAccount + mock HTTP, not live acceptance. README explains restart, automatic flow, optional viewing, uncertainty, persistent limits and API's lack of version-CAS. No changes to SOCKS, Gifts or financial business logic. Scope complete: commit/push and stop.
+
+
+## Full Telegram UX redesign — started31.10.2026
+Clean HEAD c8ffed3. Source-only backup: data\backups\ux-source-20261031T022509Z. Five phases: A inventory/callback/FSM mapping; B five-entry home/more and products/orders/chats; C gifts/automation/promotions/settings/stats/tools; D shared human statuses/errors/context back/old callback compatibility; E Dispatcher/full regressions/SQLite/secrets/docs/commit/push. Backend/API/Outbox/Inventory/Gifts/payments/proxy/auth/.env must remain unchanged. No live writes/messages/payments or permission changes. Source-generated complete route/FSM/button inventory in UX_REDESIGN.md; assign every existing function to a new location before deleting any visible entry.
+
+
+### UX redesign — A / B checkpoint
+- Сохранена исходная карта маршрутов/FSM и распределение функций в UX_REDESIGN.md. ТЗ добавлено к локальному PROJECT_SPEC.md без удаления прежней спецификации.
+- Реализуются пять разделов, вложенные инструменты, компактная карточка товара и её три подменю, компактная карточка заказа с сохранённым подробным экраном, переписка без ID на каждой строке.
+- Изменения пока НЕ прошли финальную проверку; backend, .env, рабочая БД и сессии не менялись. Следующий шаг: панели Gifts/автовыдачи/продвижения, затем Dispatcher-регрессии.
+
+
+### UX redesign — C / D checkpoint
+- Подарки разделены на товары, историю и настройки; аварийная остановка видна при наличии активных настроек. Пакетный прогресс компактный, доказательства и сверка доступны глубже.
+- Автовыдача показывает сохранённую готовность и отдельно выбранные правки; продвижение явно обозначено как расчёт без оплаты. Параметры продвижения разделены на интервалы, ночь и бюджет.
+- Настройки, отчёты, профиль и инструменты получили вложенную навигацию. Добавлен только presentation-слой статусов/ошибок; внутренние значения и бизнес-сервисы не менялись.
+- Первичный полный прогон: 913 passed / 25 failed, преимущественно ожидания прежних технических надписей/расположения кнопок; расхождения проверяются по смыслу и новым путям. Целевые UX/фильтры: 22 passed. Финальный прогон ещё предстоит; успех не заявлен.
+
+
+### UX redesign — E checkpoint (release checks in progress)
+- Последние целевые проверки: 160 passed (Gifts, transport, профиль, настройки, UX); 17 passed (пагинация диалога + новые UX-сценарии).
+- Полный прогон 951 теста дал 949 passed и 2 устаревших проверки кнопки пагинации по индексу строки. Тесты исправлены: находят именно callback страницы, сохраняют проверки cursor/restart/stale. Финальный чистый полный прогон выполняется отдельно после последней правки.
+- Список Gifts теперь имеет пагинацию и доступ ко всем привязкам, история сразу показывает заказы; основной экран автовыдачи явно показывает глобальные допуски. Эти изменения не включают никаких разрешений.
+- Ruff check/format, pip check и offline selfcheck (110 модулей, схема 1–22, backup/reopen) проверены. Рабочая БД, .env, session, API/workers/денежные сервисы и транспорт не менялись; исходные функции панелей не удалены.
+
+
+### UX redesign — завершено (2026-10-31)
+- Итог: пять постоянных корневых разделов, условное внимание, вложенные товары/заказы/переписки/Gifts, иерархия «Ещё», компактные статусы, сохранённые фильтры и контекстные возвраты. Карта всех старых функций и текущих путей — UX_REDESIGN.md.
+- Подтверждённый UX-дефект отображения: складская выдача предлагалась при пустом запасе или недопустимых флагах сделки. Кнопка теперь использует прежний deliverable + текущий доступный остаток; проверка исполнения не менялась. Регрессии: пустой склад, проблема, серверная автовыдача и SENT не показывают выдачу.
+- Финальный отдельный полный pytest: **955 passed in 190.97s**. Ruff check passed; Ruff format --check: 200 files; pip check clean. Offline selfcheck OK: 110 импортов, временная схема 1–22, backup/reopen, 0 внешних запросов.
+- Сканирование сигнатур секретов: 236 исходников/документов, 0 находок; .env/PROJECT_SPEC/session/SQLite не отслеживаются. Все исходные квалифицированные функции панелей сохранены. Backend, денежные сервисы/workers, схема, зависимости, прокси/Telethon и runtime-конфигурация не менялись.
+- Live-операций не было. Telegram-клиент владельца, настоящий маршрут сети и live-доставка этим этапом не подтверждаются; для проверки нового меню достаточно перезапуска и /start без подтверждения опасных действий.
+- Этап закончен. Следующий аудит/фаза не запускается.

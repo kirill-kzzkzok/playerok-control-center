@@ -182,9 +182,17 @@ async def test_item_order_and_policy_share_actual_readiness(rig, condition, expe
     }
     for action in ("item:item", "order:order", "auto:item:item"):
         await ui.click(action)
-        assert "Автоматизация: " + expected in session.calls[-1].text
-        assert "Автодействия: выключены" not in session.calls[-1].text
-        assert "Действующий режим: Уникальный запас" in session.calls[-1].text
+        text = session.calls[-1].text
+        assert expected.lower() in text.lower()
+        assert "Автодействия: выключены" not in text
+        if action.startswith("auto:"):
+            assert "Со склада" in text
+        # Full reasons and stock remain available from the nested delivery screen.
+        if action.startswith("item:"):
+            await ui.click("iv:delivery:item")
+            assert (
+                expected.lower() in session.calls[-1].text.lower() and "Со склада" in session.calls[-1].text
+            )
 
 
 async def test_stock_resume_does_not_reenable_after_last_unit_reserved_during_api_check(rig):

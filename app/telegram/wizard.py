@@ -753,7 +753,7 @@ class Wizard:
             ident = await method(draft["id"], owner, draft["revision"])
             await state.clear()
             return (
-                f"Операция в очереди (QUEUED): <code>{ident}</code>. Результат придёт отдельным сообщением; лот пока не считается созданным.",
+                "⏳ Ожидает выполнения. Результат придёт отдельным сообщением; товар пока не считается созданным.",
                 keyboard([[("Открыть результат", "result:show:" + ident)]]),
             )
         else:

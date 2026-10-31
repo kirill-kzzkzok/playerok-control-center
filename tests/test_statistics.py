@@ -190,9 +190,19 @@ async def test_dispatcher_statistics_access_callbacks_and_escaping(store, monkey
         for action in ["stats:1", "st:2:time", "st:7:average", "st:30:promotion", "st:0:comparison"]:
             await ui.click(action)
             sent = session.calls[-1]
-            assert sent.__api_method__ == "sendPhoto"
-            assert len(sent.caption) < 1024
-            assert "прибыль не подтверждены" in sent.caption
+            if action.startswith("stats:"):
+                assert sent.__api_method__ == "sendMessage"
+                assert "полнота магазина не подтверждена" in sent.text
+                await ui.click("sr:1")
+                assert any(
+                    b.callback_data == "st:1:overview"
+                    for row in session.calls[-1].reply_markup.inline_keyboard
+                    for b in row
+                )
+            else:
+                assert sent.__api_method__ == "sendPhoto"
+                assert len(sent.caption) < 1024
+                assert "прибыль не подтверждены" in sent.caption
         await ui.click("sd:0:details")
         assert "Период: всё время" in session.calls[-1].text
         assert "статусы текущие" in session.calls[-1].text

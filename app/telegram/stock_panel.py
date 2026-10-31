@@ -29,9 +29,7 @@ class StockPanel:
         return (
             "📚 <b>Склад · "
             + escaped(item.get("name") or ident, 150)
-            + "</b>\nID: <code>"
-            + escaped(ident, 100)
-            + "</code>\n"
+            + "</b>\n"
             + "\n".join(f"{LABELS[s]}: {n}" for s, n in counts.items())
             + "\nСодержимое единиц скрыто. Выданные и карантинные значения повторно не используются."
             + note,

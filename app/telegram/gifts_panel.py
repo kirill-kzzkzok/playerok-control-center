@@ -12,6 +12,7 @@ from app.gifts.mtproto import GiftFailure, PersonalGiftSender
 from app.gifts.service import GiftService
 from app.gifts.settings import GiftSettings
 from app.telegram.keyboards import keyboard
+from app.telegram.presentation import item_label, order_label, status
 
 
 class GiftsPanel:
@@ -54,30 +55,60 @@ class GiftsPanel:
             await state.clear()
             v = self.store.setting("gifts:connection", {})
             b = self.store.setting("gifts:balance", {})
+            enabled = self.store.rows("SELECT 1 FROM gift_listings WHERE enabled=1 LIMIT 1")
+            stopped = self.store.setting("gifts:stopped", True)
+            active = bool(
+                s.settings.payment_enabled
+                and not stopped
+                and enabled
+                and getattr(s.api.account, "writes_enabled", False)
+                and getattr(s.api.account, "automation_enabled", False)
+            )
+            rows = [
+                [("📦 Товары с подарками", "gft:bindings")],
+                [("🛒 История выдачи", "gft:history")],
+                [("⚙️ Настроить", "gft:settings")],
+            ]
+            if not stopped or enabled:
+                rows.insert(0, [("⛔ Остановить выдачу", "gft:stop")])
+            return (
+                "🎁 <b>Telegram-подарки</b>\n"
+                + "Аккаунт: "
+                + ("проверен ранее" if v.get("status") == "OK" else "нужна проверка")
+                + "\nБаланс по последней проверке: "
+                + str(b.get("stars", "неизвестен"))
+                + " ⭐"
+                + "\nПроверено: "
+                + escape(b.get("at") or "ещё не проверялось")
+                + "\nАвтовыдача: "
+                + ("разрешена для включённых товаров" if active else "выключена"),
+                keyboard(rows, back=("⬅️ Мой магазин", "home")),
+            )
+        if command == "history":
+            await state.clear()
+            return await self._callback("gft:list:all:0", owner, state)
+        if command == "settings":
+            await state.clear()
             order, day = s.limits()
             return (
-                (
-                    "🎁 <b>Telegram-подарки с личного аккаунта</b>\n"
-                    f"Подключение (последняя проверка): {escape(v.get('status', 'не проверено'))}\n"
-                    f"Баланс: {b.get('stars', 'не проверен')} ⭐ · {escape(b.get('at', 'нет даты'))}\n"
-                    f"Защитные лимиты: {order} ⭐ / заказ, {day} ⭐ / сутки UTC\n"
-                    f"Платёжный допуск .env: {'разрешён' if s.settings.payment_enabled else 'выключен'}\n"
-                    f"Общая остановка: {'да' if self.store.setting('gifts:stopped', True) else 'нет'}\n"
-                    "Выдача только после PAID, из точного поля получения. Каждый лот включается отдельно.\n"
-                    f"Автовозвраты: {'разрешены; только допустимый PAID и окончательный отказ username' if s.settings.refund_enabled else 'выключены; ручное решение'}.\n"
-                    "Авторизация аккаунта: локально python -m app.gifts.auth."
-                ),
+                "⚙️ <b>Настройки подарков</b>\nЛимит заказа: "
+                + str(order)
+                + " ⭐\nЛимит суток: "
+                + str(day)
+                + " ⭐"
+                + "\nПлатёжный допуск: "
+                + ("включён" if s.settings.payment_enabled else "выключен")
+                + "\nАвтовозврат: "
+                + ("разрешён с проверками" if s.settings.refund_enabled else "выключен"),
                 keyboard(
                     [
-                        [("🔄 Подключение / баланс / каталог", "gft:refresh")],
-                        [("📚 Каталог", "gft:catalog"), ("📦 Привязанные лоты", "gft:bindings")],
-                        [("➕ Выбрать лот", "items"), ("💰 Лимиты", "gft:limits")],
-                        [("📋 Проверить описание", "gft:description")],
-                        [("✅ Успешные", "gft:list:success:0"), ("⚠️ Ошибки", "gft:list:failed:0")],
-                        [("↩️ Ожидают возврата", "gft:list:refund:0"), ("Возвращены", "gft:list:refunded:0")],
-                        [("❓ UNCERTAIN", "gft:list:uncertain:0")],
-                        [("⛔ Экстренно остановить покупки", "gft:stop")],
-                    ]
+                        [("🔄 Проверить подключение и баланс", "gft:refresh")],
+                        [("Каталог подарков", "gft:catalog")],
+                        [("Лимиты расходов", "gft:limits")],
+                        [("Проверить метку в описании", "gft:description")],
+                        [("⛔ Остановить выдачу", "gft:stop")],
+                    ],
+                    back=("⬅️ Подарки", "gft:home"),
                 ),
             )
         if command == "refresh":
@@ -107,25 +138,45 @@ class GiftsPanel:
                 [[("🔄 Проверить Telegram", "gft:refresh"), ("Назад", "gft:home")]]
             )
         if command == "bindings":
-            rows = self.store.rows("SELECT * FROM gift_listings ORDER BY item_id LIMIT 40")
-            return "🎁 Привязанные лоты (до 40)", keyboard(
-                [
-                    [
-                        (
-                            r["gift_code"] + " · " + ("включён" if r["enabled"] else "остановлен"),
-                            "gft:item:" + r["item_id"],
-                        )
-                    ]
-                    for r in rows
-                ]
-                + [[("Назад", "gft:home")]]
+            page = int(parts[2]) if len(parts) == 3 else 0
+            if not 0 <= page <= 100000:
+                raise Conflict("Страница недоступна")
+            rows = self.store.rows(
+                "SELECT * FROM gift_listings ORDER BY item_id LIMIT 11 OFFSET ?", (page * 10,)
             )
+            buttons = [
+                [
+                    (
+                        (
+                            item_label(self.store, r["item_id"])[:30]
+                            + " · "
+                            + str(len(json.loads(r["bundle"])))
+                            + " 🎁 · "
+                            + str(r["approved_stars"])
+                            + " ⭐"
+                        )[:64],
+                        "gft:item:" + r["item_id"],
+                    )
+                ]
+                for r in rows[:10]
+            ]
+            nav = []
+            if page:
+                nav.append(("← Назад", f"gft:bindings:{page - 1}"))
+            if len(rows) > 10:
+                nav.append(("Далее →", f"gft:bindings:{page + 1}"))
+            if nav:
+                buttons.append(nav)
+            buttons.append([("➕ Выбрать товар", "items")])
+            return "🎁 <b>Товары с подарками</b>\n" + (
+                "Выберите товар для настройки." if rows else "Привязок пока нет. Выберите подходящий товар."
+            ), keyboard(buttons, back=("⬅️ Подарки", "gft:home"))
         if command == "stop":
             s.stop(owner)
             await state.clear()
             return (
                 "Новые покупки остановлены. Уже отправленный запрос отменить невозможно. Проверьте UNCERTAIN. Лоты потребуется включить заново.",
-                keyboard([[("Операции UNCERTAIN", "gft:list:uncertain:0"), ("Назад", "gft:home")]]),
+                keyboard([[("Требуют проверки", "gft:list:uncertain:0"), ("Назад", "gft:home")]]),
             )
         if command in {"limits", "description"}:
             await state.clear()
@@ -145,7 +196,9 @@ class GiftsPanel:
         if command == "list":
             group, page = parts[2], int(parts[3])
             predicates = {
+                "all": "1=1",
                 "success": "state='SUCCEEDED'",
+                "progress": "state NOT IN ('SUCCEEDED','BLOCKED','INVALID_RECIPIENT','UNCERTAIN')",
                 "failed": "state IN ('BLOCKED','INVALID_RECIPIENT')",
                 "refund": "refund_state IN ('MANUAL','QUEUED','SPENDING','FAILED','UNCERTAIN')",
                 "refunded": "refund_state='CONFIRMED'",
@@ -157,17 +210,43 @@ class GiftsPanel:
                 f"SELECT order_id,state,refund_state FROM gift_jobs WHERE {predicates[group]} ORDER BY created_at DESC LIMIT 11 OFFSET ?",
                 (page * 10,),
             )
-            rows = [[(j["order_id"] + " · " + j["state"], "gft:job:" + j["order_id"])] for j in jobs[:10]]
+            rows = [
+                [
+                    (
+                        (order_label(self.store, j["order_id"])[:30] + " · " + status(j["state"]))[:64],
+                        "gft:job:" + j["order_id"],
+                    )
+                ]
+                for j in jobs[:10]
+            ]
             if len(jobs) > 10:
                 rows.append([("Далее", f"gft:list:{group}:{page + 1}")])
             if page:
                 rows.append([("Назад", f"gft:list:{group}:{page - 1}")])
-            return "🎁 Заказы: " + group + ("\nПока пусто" if not jobs else ""), keyboard(
-                rows + [[("К подаркам", "gft:home")]]
-            )
-        if command in {"job", "reconcile", "refundcheck"}:
+            if group == "all":
+                rows += [
+                    [("Доставлено", "gft:list:success:0"), ("В процессе", "gft:list:progress:0")],
+                    [
+                        ("Требует проверки", "gft:list:uncertain:0"),
+                        ("Остановлено / частично", "gft:list:failed:0"),
+                    ],
+                    [
+                        ("Ожидают возврата", "gft:list:refund:0"),
+                        ("Возврат подтверждён", "gft:list:refunded:0"),
+                    ],
+                ]
+            return "🎁 " + {
+                "all": "История выдачи",
+                "success": "Доставлено",
+                "progress": "В процессе",
+                "failed": "Заблокировано / частичная выдача",
+                "refund": "Ожидают возврата",
+                "refunded": "Возврат подтверждён",
+                "uncertain": "Требует проверки",
+            }[group] + ("\nПока пусто" if not jobs else ""), keyboard(rows + [[("К подаркам", "gft:home")]])
+        if command in {"job", "details", "reconcile", "refundcheck"}:
             ident = parts[2]
-            if command != "job":
+            if command not in {"job", "details"}:
                 try:
                     async with asyncio.timeout(30):
                         if command == "reconcile":
@@ -181,7 +260,7 @@ class GiftsPanel:
             j = s.job(ident)
             text = (
                 f"🎁 Заказ <code>{escape(ident)}</code>\nПодарок: {escape(j['gift_code'])}\n"
-                f"Выдача: {j['state']}\nВозврат: {j['refund_state']}\n"
+                f"Выдача: {status(j['state'])}\nВозврат: {j['refund_state']}\n"
                 f"Расход (intent): {j['stars'] if j['stars'] is not None else 'не начат'} ⭐\n"
                 f"Причина: {escape(j['error_code'] or 'нет')}\n"
                 "Получатель скрыт в общем журнале. Нет автоматического повтора UNCERTAIN."
@@ -236,7 +315,33 @@ class GiftsPanel:
             if j["refund_state"] in {"MANUAL", "UNCERTAIN", "FAILED"} and not j["spent_at"]:
                 rows.append([("🔎 Проверить возврат на сервере", "gft:refundcheck:" + ident)])
             rows.append([("К подаркам", "gft:home")])
-            return text, keyboard(rows)
+            if command == "job":
+                text = (
+                    "📦 <b>Подарочный заказ</b>\n"
+                    + status(j["state"])
+                    + f"\nПрогресс: {done}/{len(steps)} · подтверждено {confirmed} ⭐"
+                )
+                for g in steps:
+                    icon = (
+                        "✅"
+                        if g["state"] == "SUCCEEDED"
+                        else "❓"
+                        if g["state"] == "UNCERTAIN"
+                        else "⛔"
+                        if g["state"] == "BLOCKED"
+                        else "⏳"
+                    )
+                    text += f"\n{icon} {escape(g['code'])} {g['position'] + 1}/{len(steps)} · {status(g['state'])}"
+                if done and done < len(steps):
+                    text += "\n⚠️ Частичная выдача. Полный возврат и отметка выполнения запрещены."
+                if j["error_code"]:
+                    text += "\n" + escape(gift_reason(j["error_code"]))
+                rows = [
+                    [("Открыть заказ", "order:" + ident)],
+                    [("⋯ История и решение проблемы", "gft:details:" + ident)],
+                ]
+            return text, keyboard(rows, back=("⬅️ История подарков", "gft:history"))
+
         if command == "confirmbind":
             p = (await state.get_data()).get("gift_bind")
             if not p or p["nonce"] != parts[2]:

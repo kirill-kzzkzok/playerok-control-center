@@ -9,10 +9,11 @@ from app.playerok.adapter import APIError
 from app.services.automation import Automation
 from app.services.catalog import ORDER_FILTERS, order_page
 from app.services.finance import checked_time
-from app.services.order_management import OrderManagement, order_snapshot
+from app.services.order_management import OrderManagement, deliverable, order_snapshot
 from app.services.products import ValidationError
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
+from app.telegram.presentation import MODES, status
 
 
 class OrdersPanel:
@@ -59,7 +60,7 @@ class OrdersPanel:
         rows = [
             [
                 (
-                    f"{value['amount'] or '?'} ₽ · {value['status']} · {value.get('name') or value['id']}"[
+                    f"{value['amount'] or '?'} ₽ · {status(value['status'], 'order')} · {value.get('name') or value['id']}"[
                         :60
                     ],
                     "order:" + value["id"],
@@ -77,12 +78,14 @@ class OrdersPanel:
         rows.extend(
             [
                 [("🔎 Поиск", "od:search"), ("Фильтры", "orderfilters")],
-                [("Сбросить поиск", "orders"), ("🔄 Сверить", "sync")],
+                [("Все", "orderpage:0:ALL"), ("Оплаченные", "orderpage:0:PAID")],
+                [("Требуют внимания", "orderpage:0:PROBLEM")],
+                [("Сбросить поиск", "od:reset")],
             ]
         )
-        return text, keyboard(rows)
+        return text, keyboard(rows, back=("⬅️ Мой магазин", "home"))
 
-    async def card(self, owner, ident):
+    async def card(self, owner, ident, *, details=False):
         cached = False
         try:
             order = await self.service.fresh(owner, ident)
@@ -131,10 +134,16 @@ class OrdersPanel:
         rows = []
         chat = (order.get("chat") or {}).get("id")
         if chat:
-            rows.append([("💬 Диалог", "chat:" + chat), ("✉️ Написать", "reply:" + chat)])
+            rows.append([("💬 Диалог", "chat:" + chat), ("✉️ Написать", "compose:" + chat)])
         if not cached and order["status"] == "PAID":
-            rows.append([("✅ Я выполнил заказ", "ff:start:" + ident)])
-            if not operation and not gifts and not gift_listing:
+            rows.append([("✅ Подтвердить выполнение", "ff:start:" + ident)])
+            can_deliver = False
+            try:
+                deliverable(order, ident, self.service.api.account.id)
+                can_deliver = stock.get("AVAILABLE", 0) > 0
+            except ValidationError:
+                pass
+            if can_deliver and not operation and not gifts and not gift_listing:
                 rows.append([("📦 Выдать из запаса", "od:prepare:" + ident)])
             if not gifts and not gift_listing:
                 rows.append([("➕ Добавить уникальные коды", "od:stock:" + ident)])
@@ -152,6 +161,48 @@ class OrdersPanel:
         if annotation["problem"]:
             rows.append([("Снять локальную отметку", "od:clear:" + ident)])
         rows.append([("🔄 Проверить статус", "order:" + ident), ("🛒 К списку", "orders")])
+        if not details:
+            text = (
+                "🛒 <b>"
+                + escaped(item.get("name") or "Заказ", 200)
+                + "</b>"
+                + "\nСумма: "
+                + escaped(item.get("price", "?"), 40)
+                + " ₽"
+                + "\nПокупатель: "
+                + escaped(user.get("username") or "не указан", 80)
+                + "\nСтатус: "
+                + status(order["status"], "order")
+            )
+            if operation:
+                text += "\nВыдача: " + status(operation[0]["status"])
+            elif gifts:
+                text += "\nПодарки: " + status(gifts[0]["state"])
+            else:
+                text += "\nВыдача: подтверждённых данных нет"
+            if not gifts and not gift_listing:
+                readiness = Automation(self.store, self.service.api).readiness(item["id"])
+                text += "\nАвтовыдача: " + readiness["status"] + " · " + MODES[readiness["mode"]]
+            if cached:
+                text += "\n⚠️ Сохранённые данные. Связь с Playerok не подтверждена."
+            if order.get("has_problem") or annotation["problem"]:
+                text += "\n⚠️ Требует внимания — откройте подробности."
+            # Keep availability from the existing guarded action list, never infer permission from UI state.
+            rows = [
+                [
+                    button
+                    for button in row
+                    if (
+                        button[1].startswith(("reply:", "compose:"))
+                        or button[1].startswith("ff:start:")
+                        or button[1].startswith("od:prepare:")
+                    )
+                ]
+                for row in rows
+            ]
+            rows = [row for row in rows if row]
+            rows += [[("⋯ Подробнее", "od:details:" + ident)], [("⬅️ К заказам", "orders")]]
+            return text, keyboard(rows, home=False)
         markup = keyboard(rows)
         markup.inline_keyboard.insert(
             -1,
@@ -219,6 +270,9 @@ class OrdersPanel:
     async def callback(self, action, owner, state):
         self.service.owner(owner)
         if action == "orders":
+            data = await state.get_data()
+            return await self.listing(state, selected=data.get("order_filter", "ALL"))
+        if action == "od:reset":
             await state.clear()
             return await self.listing(state)
         if action.startswith("orderpage:"):
@@ -247,6 +301,9 @@ class OrdersPanel:
                 []
             )
         ident = parts[2]
+        if command == "details":
+            await state.clear()
+            return await self.card(owner, ident, details=True)
         if command == "entry":
             rows = self.store.rows("SELECT order_id,note FROM order_history WHERE id=?", (int(ident),))
             if not rows:

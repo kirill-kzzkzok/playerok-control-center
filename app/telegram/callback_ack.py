@@ -38,8 +38,14 @@ def navigation(action):
     # confirmation, payment, refund, send, resume or operation reconciliation.
     return action in {
         "home",
+        "more",
+        "tools",
+        "attention",
         "profile",
         "profile:check",
+        "profile:details",
+        "gft:history",
+        "gft:settings",
         "diagnostics",
         "settings",
         "items",
@@ -57,6 +63,14 @@ def navigation(action):
     } or action.startswith(
         (
             "item:",
+            "iv:",
+            "tools:",
+            "sr:",
+            "gft:details:",
+            "gft:bindings:",
+            "chatmore:",
+            "compose:",
+            "od:details:",
             "order:",
             "chat:",
             "stats:",

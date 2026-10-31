@@ -7,6 +7,7 @@ from app.services.delivery_chains import DeliveryChains
 from app.services.products import ValidationError
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
+from app.telegram.presentation import automation_summary, item_label
 
 FIELDS = {"text": "Данные постоянной выдачи", "greeting": "Приветствие", "after": "Сообщение после выдачи"}
 
@@ -19,24 +20,29 @@ class AutomationPanel:
         self.service.orders.owner(owner)
         await state.clear()
         rows = self.store.rows(
-            "SELECT item_id,revision FROM delivery_policies ORDER BY updated_at DESC LIMIT 20"
+            "SELECT item_id,revision FROM delivery_policies ORDER BY updated_at DESC LIMIT 6"
         )
         buttons = [
-            [(row["item_id"][:42] + " · v" + str(row["revision"]), "auto:item:" + row["item_id"])]
-            for row in rows
+            [(item_label(self.store, row["item_id"])[:55], "auto:item:" + row["item_id"])] for row in rows
         ]
         buttons.extend(
             [
                 [("📦 Выбрать товар", "items")],
-                [("🚀 Продвижение · dry-run", "promotions")],
-                [("Все политики выдачи", "aq:list:policies:0"), ("Цепочки выдачи", "aq:list:chains:0")],
-                [("Регистрация будущих заказов", "aq:list:enrollment:0")],
-                [("⛔ Выключить все политики выдачи", "auto:stop")],
+                [("Все товары с настройками", "aq:list:policies:0")],
+                [("Проблемы выдачи", "attention"), ("Дополнительные инструменты", "tools:delivery")],
+                [("⛔ Остановить автовыдачу", "auto:stop")],
             ]
         )
         return (
-            "⚡ <b>Автоматизация</b>\nЗдесь сохраняются политики и выполняются dry-run проверки. Можно подтвердить запуск отдельного заказа либо отдельно включить будущие продажи; для исполнения нужны разрешающие флаги в локальной конфигурации.\nАвтоподнятие: только расчёт, платные операции запрещены. Автовывод запрещён.\nВыберите товар в списке или откройте его карточку.",
-            keyboard(buttons),
+            "⚡ <b>Автовыдача</b>\n"
+            + (
+                "Глобальные разрешения включены. Готовность зависит от товара."
+                if getattr(self.service.api.account, "writes_enabled", False)
+                and getattr(self.service.api.account, "automation_enabled", False)
+                else "Глобальные разрешения выключены — отправки не запускаются."
+            )
+            + "\nВыберите товар. Проверка без отправки доступна в его настройках.",
+            keyboard(buttons, back=("⬅️ Ещё", "more")),
         )
 
     async def show(self, data, state):
@@ -80,10 +86,33 @@ class AutomationPanel:
                 [("📚 Склад", "stock:view:" + data["id"])],
                 [("Будущие заказы автоматически", f"ap:{nonce}:toggle:auto_enroll")],
                 [("💾 Сохранить политику", f"ap:{nonce}:save")],
-                [("🔎 Dry-run оплаченных заказов", f"ap:{nonce}:orders")],
+                [("🔎 Проверка без отправки оплаченных заказов", f"ap:{nonce}:orders")],
             ]
         )
-        return text, keyboard(rows)
+        if not data.get("advanced"):
+            text = "⚡ <b>Настройка выдачи</b>\n" + automation_summary(
+                self.store, self.service.api, data["id"]
+            )
+            text += (
+                "\nВыбрано: "
+                + modes[values["mode"]]
+                + (" · включение запрошено" if values["enabled"] else " · выключено")
+            )
+            text += "\nИзменения применяются после сохранения."
+            _, saved = self.service.get(data["id"])
+            if asdict(saved) != values:
+                text += " Есть несохранённые изменения."
+            rows = [
+                rows[0],
+                rows[1],
+                [("📚 Склад", "stock:view:" + data["id"])],
+                [("Дополнительные параметры", f"ap:{nonce}:advanced")],
+                [("💾 Сохранить", f"ap:{nonce}:save")],
+                [("🔎 Проверить без отправки", f"ap:{nonce}:orders")],
+            ]
+        else:
+            rows.append([("⬅️ Основные настройки", f"ap:{nonce}:basic")])
+        return text, keyboard(rows, back=("⬅️ К выдаче товара", "iv:delivery:" + data["id"]))
 
     async def callback(self, action, owner, state):
         self.service.orders.owner(owner)
@@ -105,7 +134,9 @@ class AutomationPanel:
         if len(parts) not in {3, 4} or parts[1] != data.get("nonce"):
             raise Conflict("Настройки устарели. Откройте товар заново")
         command, values = parts[2], data["values"]
-        if command == "mode" and len(parts) == 4 and parts[3] in {"manual", "text", "stock"}:
+        if command in {"advanced", "basic"}:
+            data["advanced"] = command == "advanced"
+        elif command == "mode" and len(parts) == 4 and parts[3] in {"manual", "text", "stock"}:
             values["mode"] = parts[3]
             if parts[3] == "manual":
                 values["enabled"] = False
@@ -151,7 +182,7 @@ class AutomationPanel:
             data["nonce"] = secrets.token_hex(6)
             await state.update_data(automation=data)
             return (
-                "Выберите заказ для dry-run. Проверка читает API, не резервирует код и не создаёт отправки.",
+                "Выберите заказ для проверки без отправки. Проверка читает API, не резервирует код и не создаёт отправки.",
                 keyboard(
                     [
                         [(order["id"], f"ap:{data['nonce']}:simulate:{index}")]
@@ -164,7 +195,7 @@ class AutomationPanel:
             if not 0 <= index < len(data.get("orders", [])):
                 raise ValidationError("Заказ недоступен")
             result = await self.service.simulate(owner, data["orders"][index])
-            text = "🔎 <b>Dry-run</b>\nВыдача по условиям: " + (
+            text = "🔎 <b>Проверка без отправки</b>\nВыдача по условиям: " + (
                 "допустима" if result["would_deliver"] else "заблокирована"
             )
             text += "\nПричины: " + escaped("; ".join(result["reasons"]) or "нет", 1000)

@@ -18,6 +18,16 @@ def page(ident, cursor=None):
     }
 
 
+def page_button(markup, direction):
+    return next(
+        button
+        for row in markup.inline_keyboard
+        for button in row
+        if (button.callback_data or "").startswith("chatpage:")
+        and button.callback_data.endswith(":" + direction)
+    )
+
+
 async def test_chat_pagination_survives_storage_restart_and_rejects_old_callback(tmp_path):
     store = Store(tmp_path / "chat.sqlite")
     try:
@@ -26,7 +36,7 @@ async def test_chat_pagination_survives_storage_restart_and_rejects_old_callback
         panel = ChatPanel(store, api)
         text, markup = await panel.show("chat:chat-id", state)
         assert "&lt;buyer&gt;" in text and len(text) < 4096
-        older = markup.inline_keyboard[1][0].callback_data
+        older = page_button(markup, "older").callback_data
         state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=1, chat_id=2, user_id=2))
         text, _ = await ChatPanel(store, api).show(older, state)
         assert "страница 2" in text
@@ -63,10 +73,10 @@ async def test_navigation_back_to_newer_page_accepts_known_forward_cursor(tmp_pa
         )
         panel = ChatPanel(store, api)
         _, markup = await panel.show("chat:chat-id", state)
-        _, markup = await panel.show(markup.inline_keyboard[1][0].callback_data, state)
-        text, markup = await panel.show(markup.inline_keyboard[1][0].callback_data, state)
+        _, markup = await panel.show(page_button(markup, "older").callback_data, state)
+        text, markup = await panel.show(page_button(markup, "newer").callback_data, state)
         assert "страница 1" in text
-        assert markup.inline_keyboard[1][0].text == "Старее →"
+        assert page_button(markup, "older").text == "Старее →"
         assert api.call.call_args.kwargs["after_cursor"] is None
     finally:
         store.close()

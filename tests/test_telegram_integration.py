@@ -529,7 +529,7 @@ async def test_automation_router_edits_local_policy_without_enabling_runtime(tmp
         nonce = (await state.get_data())["automation"]["nonce"]
         ui.dp = dispatcher(store, api)
         await ui.click(f"ap:{nonce}:save")
-        assert "Сохранение политики не запускает отправки" in session.calls[-1].text
+        assert "Изменения применяются после сохранения" in session.calls[-1].text
         assert store.rows("SELECT revision FROM delivery_policies") == [{"revision": 1}]
         assert not store.rows("SELECT * FROM outbox")
         await ui.click("auto:stop")
@@ -560,7 +560,7 @@ async def test_promotions_settings_router_has_no_paid_execution(tmp_path):
         ui.dp = dispatcher(store, api)
         await ui.click(f"pp:{nonce}:save")
         assert store.rows("SELECT revision FROM promotion_policy") == [{"revision": 1}]
-        assert "Платное исполнение отсутствует" in session.calls[-1].text
+        assert "Деньги не списываются" in session.calls[-1].text
         await ui.click("promo:stop")
         assert store.rows("SELECT revision FROM promotion_policy") == [{"revision": 2}]
         assert not store.rows("SELECT * FROM promotion_expenses")

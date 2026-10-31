@@ -130,9 +130,7 @@ async def test_settings_dispatcher_toggle_restart_stale_callback_and_foreign_acc
         buttons = [
             button.callback_data for row in session.calls[-1].reply_markup.inline_keyboard for button in row
         ]
-        assert {"sp:connections", "sp:security", "sp:notifications", "promotions", "providers"} <= set(
-            buttons
-        )
+        assert {"sp:connections", "sp:security", "sp:notifications", "ar:menu", "providers"} <= set(buttons)
         await ui.click("sp:notifications")
         await ui.click("sp:notify:0:messages:0")
         assert not NotificationPreferences(store).enabled(7, "message")
