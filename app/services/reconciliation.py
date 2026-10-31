@@ -189,6 +189,17 @@ class Reconciliation:
                 if not self.store.setting(intent_key(ident), {}).get("started_at"):
                     # The invariant writes intent BEFORE any paid request. A lost lease cannot cross this guard.
                     finish_expense(db, ident, "FAILED")
+                    # Proven never-sent premium publication: the intent gate was never
+                    # crossed, so the launch can be safely released for a fresh attempt.
+                    if action["kind"] == "premium_publish" and json.loads(action["payload"]).get("launch_id"):
+                        db.execute(
+                            "UPDATE drafts SET state='DRAFT',revision=revision+1 WHERE id=? AND state='QUEUED'",
+                            (json.loads(action["payload"])["launch_id"],),
+                        )
+                        db.execute(
+                            "DELETE FROM settings WHERE key=?",
+                            ("launch:prepared:" + action["target"],),
+                        )
             if decision == "CONFIRM_MESSAGE":
                 self.require_unclaimed_message(db, ident, evidence["message_id"])
             if action["kind"] == "delivery" and status == "SUCCEEDED":

@@ -324,6 +324,59 @@ async def test_stop_uncertain_publish_never_releases_the_launch(setup):
     assert again == ident
 
 
+async def test_stop_uncertain_premium_without_started_at_releases_proven_never_sent(setup):
+    store, _, service = setup
+    from app.services.paid_promotions import intent_key
+
+    # A PREMIUM launch publication became UNCERTAIN; the payment intent exists but
+    # was never started (no started_at) — the send provably never began.
+    store.draft(1, {"launch_target": "item", "account_id": "seller", "mode": "manual"})
+    draft_id = store.rows("SELECT id FROM drafts")[0]["id"]
+    store.execute("UPDATE drafts SET state='QUEUED' WHERE id=?", (draft_id,))
+    ident = store.enqueue(
+        "launch:" + draft_id + ":0",
+        "premium_publish",
+        "item",
+        {"priority_id": "premium", "price": 100, "launch_id": draft_id, "quote_id": "premium"},
+    )
+    action = store.claim()
+    store.finish(ident, action["lease_token"], "UNCERTAIN", error="NETWORK_ERROR")
+    store.set_setting(intent_key(ident), {"operation_id": ident, "pending": True})
+    store.set_setting("launch:prepared:item", {"id": draft_id, "owner": 1, "revision": 0, "operation": ident})
+    expected = signature(store.rows("SELECT * FROM outbox WHERE id=?", (ident,))[0])
+    await service.resolve(1, ident, expected, "STOP_UNCERTAIN", "Оплата не начиналась, остановлено")
+    # Proven never-sent: the launch is released for a fresh owner attempt.
+    assert store.get_draft(draft_id, 1)["state"] == "DRAFT"
+    assert not store.setting("launch:prepared:item")
+
+
+async def test_stop_uncertain_premium_with_started_at_never_releases(setup):
+    store, _, service = setup
+    from app.services.paid_promotions import intent_key
+
+    # The payment intent WAS started: the request may have reached the server.
+    store.draft(1, {"launch_target": "item", "account_id": "seller", "mode": "manual"})
+    draft_id = store.rows("SELECT id FROM drafts")[0]["id"]
+    store.execute("UPDATE drafts SET state='QUEUED' WHERE id=?", (draft_id,))
+    ident = store.enqueue(
+        "launch:" + draft_id + ":0",
+        "premium_publish",
+        "item",
+        {"priority_id": "premium", "price": 100, "launch_id": draft_id, "quote_id": "premium"},
+    )
+    action = store.claim()
+    store.finish(ident, action["lease_token"], "UNCERTAIN", error="NETWORK_ERROR")
+    store.set_setting(
+        intent_key(ident), {"operation_id": ident, "started_at": "2026-11-01T00:00:00+00:00", "pending": True}
+    )
+    store.set_setting("launch:prepared:item", {"id": draft_id, "owner": 1, "revision": 0, "operation": ident})
+    expected = signature(store.rows("SELECT * FROM outbox WHERE id=?", (ident,))[0])
+    await service.resolve(1, ident, expected, "STOP_UNCERTAIN", "Оплата могла начаться, остановлено")
+    # Unknown external result NEVER becomes permission to retry: the launch stays blocked.
+    assert store.get_draft(draft_id, 1)["state"] == "QUEUED"
+    assert store.setting("launch:prepared:item")["operation"] == ident
+
+
 def test_upgrade_backfills_existing_unknown_operation_once_without_exposing_payload(tmp_path):
     path = tmp_path / "upgrade.sqlite"
     store = Store(path)

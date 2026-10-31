@@ -2,6 +2,7 @@
 
 import json
 from copy import deepcopy
+from dataclasses import asdict
 
 import pytest
 from aiogram import Bot
@@ -297,6 +298,79 @@ async def test_failed_preparation_disarms_gift_listing_it_just_armed(launch):
     assert not r.remote.payments and r.api.item["status"] == "DRAFT"
 
 
+async def test_failed_premium_promotion_launch_revokes_only_its_own_permissions(launch):
+    r = launch
+    budget = {"per_operation": 50, "daily": 100, "monthly": 1000, "max_operations_per_item": 20}
+    # Open lot A's draft FIRST (it snapshots the default policy), then lot B's
+    # configured() saves the global budget, then refresh A's draft payload copy.
+    r.api.item2 = {**r.api.item, "id": "item2", "status": "DRAFT"}
+    original_call = r.api.call
+
+    async def call_two(method, **kwargs):
+        if method == "get_item" and kwargs.get("id") == "item2":
+            return deepcopy(r.api.item2)
+        if method == "get_my_items":
+            return {"items": [deepcopy(r.api.item2)], "page_info": {}}
+        return await original_call(method, **kwargs)
+
+    r.api.call = call_two
+    ident_a = await r.launch.open(7, "item2", {"delivery": "text", "delivery_data": "a-secret"})
+    r.api.call = original_call
+
+    # Lot B: an independent PREMIUM launch with paid promotion succeeds; its
+    # permissions must survive the failed attempt on lot A.
+    ident_b, revision_b = await configured(
+        r, mode="text", publication="PREMIUM", quote_id="premium", promotion=True, promotion_policy=budget
+    )
+    op_b = await r.launch.queue(7, ident_b, revision_b)
+    await r.worker.once()
+    assert r.store.rows("SELECT status FROM outbox WHERE id=?", (op_b,))[0]["status"] == "SUCCEEDED"
+    approval_b = r.store.setting("promotions:approved:item")
+    target_b = r.store.rows("SELECT disposition FROM promotion_targets WHERE item_id='item'")
+    assert approval_b and target_b == [{"disposition": "include"}]
+
+    # Lot A's launch fails at the paid.queue stage — AFTER approve/target/arm
+    # created fresh permissions for A.
+    r.api.call = call_two
+    draft_a = r.launch.load(7, ident_a)
+    value_a = draft_a["payload"]
+    # Draft A was opened before the budget existed: sync its policy copy with the
+    # live global policy (as the launch UI does after saving budget/schedule).
+    from app.services.promotion_settings import PromotionSettings as _PS
+
+    _, live_policy, _ = _PS(r.store, r.api).get()
+    value_a["promotion_policy"] = asdict(live_policy)
+    value_a.update(publication="PREMIUM", quote_id="premium", promotion=True)
+    value_a["ready"] = await r.launch.check(7, value_a)
+    r.store.update_draft(ident_a, 7, draft_a["revision"], value_a)
+    revision_a = r.launch.load(7, ident_a)["revision"]
+
+    from app.services import paid_promotions as P
+
+    original_queue = P.PaidPromotions.queue
+
+    async def failing_queue(self, owner, preview, key, **kwargs):
+        raise RuntimeError("injected failure before enqueue")
+
+    P.PaidPromotions.queue = failing_queue
+    try:
+        with pytest.raises(RuntimeError):
+            await r.launch.queue(7, ident_a, revision_a)
+    finally:
+        P.PaidPromotions.queue = original_queue
+    r.api.call = original_call
+
+    # Lot A's own fresh permissions are revoked; lot B's survive untouched.
+    assert not r.store.setting("promotions:approved:item2")
+    assert r.store.setting("promotions:approved:item") == approval_b
+    assert r.store.rows("SELECT disposition FROM promotion_targets WHERE item_id='item'") == [
+        {"disposition": "include"}
+    ]
+    assert not r.store.rows("SELECT 1 FROM promotion_targets WHERE item_id='item2'")
+    # Lot A's draft is released and retryable.
+    assert r.store.get_draft(ident_a, 7)["state"] == "DRAFT"
+
+
 async def test_launch_policy_change_does_not_touch_other_lots_approvals(launch):
     r = launch
 
@@ -377,6 +451,62 @@ async def test_empty_stock_blocks_launch_before_any_operation(launch):
     assert not r.publications and r.api.item["status"] == "DRAFT"
 
 
+async def test_pre_existing_policy_survives_failed_manual_launch(launch):
+    r = launch
+    # Scenario A: an owner-configured enabled text policy exists; a MANUAL launch
+    # conflicts with it — the failed launch must not touch the pre-existing policy.
+    r.store.execute(
+        'INSERT INTO delivery_policies VALUES(\'item\',1,7,\'{"enabled": true, "mode": "text",'
+        ' "text": "x", "greeting": "", "after": "", "mark_sent": false, "auto_enroll": true}\','
+        " '2026-10-31T00:00:00+00:00')"
+    )
+    r.store.set_setting("delivery:item:enabled", True)
+    ident = await r.launch.open(7, "item", {"delivery": "manual"})
+    draft = r.launch.load(7, ident)
+    value = draft["payload"]
+    value["ready"] = await r.launch.check(7, value)
+    r.store.update_draft(ident, 7, draft["revision"], value)
+    revision = r.launch.load(7, ident)["revision"]
+    with pytest.raises(Conflict):
+        await r.launch.queue(7, ident, revision)
+    policy = r.store.rows("SELECT payload FROM delivery_policies WHERE item_id='item'")[0]
+    assert json.loads(policy["payload"])["enabled"] is True
+    assert r.store.setting("delivery:item:enabled") is True
+    # Scenario E: another lot's automation is never touched by this failure.
+    r.store.execute(
+        'INSERT INTO delivery_policies VALUES(\'other\',1,7,\'{"enabled": true, "mode": "text",'
+        ' "text": "y", "greeting": "", "after": "", "mark_sent": false, "auto_enroll": true}\','
+        " '2026-10-31T00:00:00+00:00')"
+    )
+    other = r.store.rows("SELECT payload FROM delivery_policies WHERE item_id='other'")[0]
+    assert json.loads(other["payload"])["enabled"] is True
+
+
+async def test_launch_created_policy_is_gone_after_failed_preparation(launch):
+    r = launch
+    # Scenario B (text variant): the launch itself creates+enables the policy, then
+    # the preparation fails BEFORE enqueue — the policy the launch created is removed.
+    original_call = r.api.call
+
+    async def failing(method, **kwargs):
+        if method == "get_item_priority_statuses":
+            raise RuntimeError("injected after policy save")
+        return await original_call(method, **kwargs)
+
+    # text mode: queue() saves a policy; break the quotes/preview stage after it.
+    ident2, revision2 = await configured(r, mode="text")
+    assert not r.store.rows("SELECT 1 FROM delivery_policies WHERE item_id='item'")
+    r.api.call = failing
+    try:
+        with pytest.raises(RuntimeError):
+            await r.launch.queue(7, ident2, revision2)
+    finally:
+        r.api.call = original_call
+    # The policy was created by THIS launch (none existed before): it is removed.
+    assert not r.store.rows("SELECT 1 FROM delivery_policies WHERE item_id='item'")
+    assert r.store.get_draft(ident2, 7)["state"] == "DRAFT"
+
+
 async def test_second_attempt_failure_releases_even_after_dead_prior_operation(launch):
     r = launch
     # Attempt 1: launch fails terminally; release bumps the draft revision.
@@ -403,12 +533,14 @@ async def test_second_attempt_failure_releases_even_after_dead_prior_operation(l
     with pytest.raises(Conflict):
         await r.launch.queue(7, ident, revision2)
     # The stale dead operation of revision 1 must NOT keep attempt 2 stuck:
-    # the draft returns to DRAFT, the marker is gone, no live automation remains.
+    # the draft returns to DRAFT, the marker is gone. The delivery policy was
+    # PRE-EXISTING owner configuration (not created by this launch), so the
+    # rollback must leave it exactly as it was — still enabled.
     after = r.store.get_draft(ident, 7)
     assert after["state"] == "DRAFT", after
     assert not r.store.setting("launch:prepared:item")
     policy = r.store.rows("SELECT payload FROM delivery_policies WHERE item_id='item'")[0]
-    assert not json.loads(policy["payload"])["enabled"]
+    assert json.loads(policy["payload"])["enabled"] is True
 
 
 async def test_queued_draft_screen_links_the_real_operation(launch):
@@ -434,6 +566,52 @@ async def test_queued_draft_screen_links_the_real_operation(launch):
         assert not r.store.rows(
             "SELECT 1 FROM outbox WHERE operation_key LIKE ?", (launch_prefix(ident + "ff"),)
         )
+    finally:
+        await bot.session.close()
+
+
+async def test_dispatcher_premium_budget_schedule_saved_globally_before_launch(launch):
+    """RED for defect 1: fresh install (zero global limits) — the launch wizard must
+    actually save the PREMIUM budget/schedule to the global policy, not only to the
+    draft, so check() does not reject values the owner just entered."""
+    r = launch
+    r.quotes = [
+        {"id": "free", "type": "DEFAULT", "price": 0, "period": 7},
+        {"id": "premium", "type": "PREMIUM", "price": 10, "period": 7},
+    ]
+    r.premium = True
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    ui = Interaction(bot, dispatcher(r.store, r.api))
+    state = FSMContext(SQLiteStorage(r.store), StorageKey(bot_id=123, chat_id=7, user_id=7))
+    try:
+        await ui.click("launch:item:item")
+        nonce = (await state.get_data())["launch"]["nonce"]
+        await ui.click(f"ln:{nonce}:mode:text")
+        nonce = (await state.get_data())["launch"]["nonce"]
+        await ui.click(f"ln:{nonce}:edit:data")
+        ui.dp = dispatcher(r.store, r.api)
+        await ui.message("Secret delivery text")
+        nonce = (await state.get_data())["launch"]["nonce"]
+        await ui.click(f"ln:{nonce}:quotes")
+        nonce = (await state.get_data())["launch"]["nonce"]
+        # Pick the PREMIUM quote.
+        premium_index = next(i for i, q in enumerate(r.quotes) if q["type"] == "PREMIUM")
+        await ui.click(f"ln:{nonce}:quote:{premium_index}")
+        nonce = (await state.get_data())["launch"]["nonce"]
+        await ui.click(f"ln:{nonce}:edit:budget")
+        ui.dp = dispatcher(r.store, r.api)
+        await ui.message("50 100 1000 20")
+        nonce = (await state.get_data())["launch"]["nonce"]
+        await ui.click(f"ln:{nonce}:edit:schedule")
+        ui.dp = dispatcher(r.store, r.api)
+        await ui.message("3600 600")
+        nonce = (await state.get_data())["launch"]["nonce"]
+        await ui.click(f"ln:{nonce}:check")
+        assert "готова" in session.calls[-1].text, session.calls[-1].text
+        nonce = (await state.get_data())["launch"]["nonce"]
+        await ui.click(f"ln:{nonce}:commit")
+        assert len(r.store.rows("SELECT * FROM outbox WHERE kind='premium_publish'")) == 1
     finally:
         await bot.session.close()
 

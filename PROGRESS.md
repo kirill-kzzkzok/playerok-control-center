@@ -2295,3 +2295,21 @@ Clean HEAD c8ffed3. Source-only backup: data\backups\ux-source-20261031T022509Z.
 - B11 (gift_refund readback) и B-оговорки (UNAUTHORIZED/RATE_LIMITED на read — зависание без release, безопасная сторона) — оценены: refund UNCERTAIN журналируется отдельно, launch не освобождается (fail-safe). Правки не требуются.
 - C: изоляция политик подтверждена корректной (включение A не активирует B; требуется approval каждого лота; сбои A не трогают B).
 - Прогоны: listing 23/23, paid+reconciliation 55/55, agreements 41/41; ruff/format/compile PASS. Полный pytest финальный запущен.
+
+
+### Целевой MVP-этап (после 91e8c36) — 2026-11-01
+- Д1 (UX PREMIUM-бюджета) ПОДТВЕРЖДЁН RED-тестом через реальный Dispatcher (fresh install, нулевые лимиты → вечный Conflict «Общие настройки изменились»). Исправлено: ввод budget/schedule в launch-мастере теперь сохраняет глобальную политику через PromotionSettings.save (CAS) и синхронизирует драфт; показывается предупреждение о глобальности. Тест test_dispatcher_premium_budget_schedule_saved_globally_before_launch (DRAFT→PREMIUM→бюджет→расписание→check→commit→premium_publish).
+- Д2 (платные разрешения после сорванного запуска) ПОДТВЕРЖДЁН пробой: сбой на paid.queue после approve/target/arm оставлял approval+authority+targets → планировщик ставил premium_bump без подтверждения. Исправлено provenance-снапшотом: rollback снимает только созданные запуском разрешения (approval/authority/target), чужие (лота B) не трогает. Тест test_failed_premium_promotion_launch_revokes_only_its_own_permissions (два лота, B выживает).
+- Д3 (откат чужой автовыдачи) ПОДТВЕРЖДЁН пробой: ручной запуск с Conflict гасил существовавшую policy.enabled. Исправлено снапшот-восстановлением по ревизиям (CAS): чужое состояние выживает, созданное запуском — удаляется. Тесты test_pre_existing_policy_survives_failed_manual_launch (A+E), test_launch_created_policy_is_gone_after_failed_preparation (B). Старый тест test_second_attempt... переписан под правильный контракт (чужая политика выживает).
+- Д4 (восстановление завишего premium): доказуемо-never-sent путь = intent без started_at (intent пишется до мутации атомарно). STOP для premium_publish без started_at теперь освобождает запуск; со started_at — остаётся заблокирован. Тесты test_stop_uncertain_premium_without/with_started_at (инвариант «unknown never becomes permission» сохранён).
+- Д5 (проверки): agreements-обёртки (B8/B9) уже в 91e8c36 — пере-верифицированы; gift-цепочка (первый PAID после PREMIUM-публикации, повторный заказ, Stars, получатель, UNCERTAIN) покрыта существующими 79+ тестами gifts; изоляция лотов — новыми тестами.
+- Целевые группы: listing 27/27, reconciliation+paid+gifts+ui 158/158; ruff/format PASS. Полный pytest финальный в процессе.
+
+
+### Финальная фиксация MVP-этапа 2026-11-01
+- Self-review (ревьюер субагент упёрся в лимит вывода; вопросы проверены вручную):
+  (г) intent.started_at пишется атомарно ДО executor.mutate (paid_promotions.py:311-359) — «нет started_at» доказуемо = «мутация не начиналась». Освобождение корректно.
+  (а) Race снапшот→rollback: исправлено точным CAS — rollback трогает строку ТОЛЬКО если текущая ревизия == записанной запуском (launch_written); чужая более новая ревизия не перезаписывается.
+  (б) gift_listings-восстановление покрывает все значимые колонки (см. UPDATE).
+  (в) saved_global_notice одноразовый: сбрасывается при показе.
+- Тесты: 27/27 launch, 51/51 launch+reconciliation, 57/57 rec+paid, 84/84 3-файловая комбинация; ruff/format/compile PASS. Финальный полный pytest запущен.

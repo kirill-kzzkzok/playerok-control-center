@@ -3,7 +3,7 @@
 import hashlib
 from dataclasses import asdict
 
-from app.database.store import Conflict, Store, encode, now
+from app.database.store import Conflict, encode, now
 from app.services.automation import Automation, DeliveryPolicy, message_text
 from app.services.finance import money
 from app.services.inventory import Inventory
@@ -240,6 +240,25 @@ class ListingLaunch:
                 {"id": ident, "owner": owner, "revision": revision, "operation": None, "at": now()},
             )
         item = value["launch_target"]
+        paid_before = None
+        # Tracks the EXACT row revisions this launch wrote (delivery policy / gift
+        # listing). The rollback restores only rows still at a launch-written
+        # revision: anything newer belongs to a concurrent owner action and is
+        # never overwritten (lost-update protection).
+        launch_written = {"delivery_policy": None, "gift_listing": None}
+        # Snapshot of the delivery state BEFORE this launch modifies it. The rollback
+        # restores exactly this: a pre-existing owner-configured policy must survive
+        # a failed launch that never created it.
+        delivery_before = {
+            "policy": self.store.rows("SELECT * FROM delivery_policies WHERE item_id=?", (item,))[0]
+            if self.store.rows("SELECT 1 FROM delivery_policies WHERE item_id=?", (item,))
+            else None,
+            "enabled_setting": self.store.setting(f"delivery:{item}:enabled"),
+            "gift_listing": self.store.rows("SELECT * FROM gift_listings WHERE item_id=?", (item,))[0]
+            if self.store.rows("SELECT 1 FROM gift_listings WHERE item_id=?", (item,))
+            else None,
+            "listing_options": self.store.setting("gifts:listing_options:" + item),
+        }
         try:
             if value["publication"] == "PREMIUM" and value["promotion"]:
                 # Only the schedule enable flag may be written, and only against the
@@ -278,6 +297,7 @@ class ListingLaunch:
                     },
                 )
                 delivery_revision = s.listing(item)["revision"]
+                launch_written["gift_listing"] = delivery_revision
             elif value["mode"] in {"text", "stock"}:
                 if value["mode"] == "stock":
                     inventory = Inventory(self.store, self.api)
@@ -297,6 +317,7 @@ class ListingLaunch:
                 delivery_revision = await self.automation.save(
                     owner, item, version, asdict(policy), future_confirmed=True
                 )
+                launch_written["delivery_policy"] = delivery_revision
             else:
                 delivery_revision = 0
                 if (
@@ -311,9 +332,21 @@ class ListingLaunch:
                 if money(preview["amount"]) != money(fresh["quote"]["price"]):
                     raise Conflict("Цена PREMIUM изменилась при подготовке. Подтвердите новое превью")
                 if value["promotion"]:
+                    # Provenance snapshot: what existed BEFORE this launch touched the
+                    # paid-permission state. The rollback removes only what we created.
+                    pre_existing = {
+                        "approval": self.store.setting("promotions:approved:" + item) or None,
+                        "authority": self.store.setting("promotions:paid_authority") or None,
+                        "target": self.store.rows(
+                            "SELECT disposition FROM promotion_targets WHERE item_id=?", (item,)
+                        )[0]["disposition"]
+                        if self.store.rows("SELECT 1 FROM promotion_targets WHERE item_id=?", (item,))
+                        else None,
+                    }
                     await paid.approve(owner, preview, prepublication=True)
                     await paid.settings.target(owner, item, "include")
                     paid.arm(owner, preview["policy_revision"])
+                    paid_before = pre_existing
                 launch = {
                     "id": ident,
                     "owner": owner,
@@ -360,7 +393,118 @@ class ListingLaunch:
                 if not db.execute(
                     "SELECT 1 FROM outbox WHERE operation_key=?", (launch_key(ident, revision),)
                 ).fetchone():
-                    Store.release_launch(db, ident, item, {"launch_id": ident}, "PERMANENT_FAILED")
+                    # Preparation never enqueued the publication: restore the draft and
+                    # drop the marker; delivery/paid state is restored from the
+                    # pre-launch snapshots below (NOT blind release_launch disabling,
+                    # which would also kill pre-existing owner configuration).
+                    db.execute(
+                        "UPDATE drafts SET state='DRAFT',revision=revision+1 WHERE id=? AND state='QUEUED'",
+                        (ident,),
+                    )
+                    db.execute("DELETE FROM settings WHERE key=?", ("launch:prepared:" + item,))
+                    # Restore the delivery state EXACTLY as it was before this launch:
+                    # a failed launch must not disable a pre-existing owner policy.
+                    # CAS by launch-written revision: if the current revision is NEWER
+                    # than what this launch wrote, a concurrent owner action owns the
+                    # row and is never overwritten.
+                    before = delivery_before
+                    current_policy = db.execute(
+                        "SELECT revision FROM delivery_policies WHERE item_id=?", (item,)
+                    ).fetchone()
+                    launch_policy_rev = launch_written["delivery_policy"]
+                    if (
+                        launch_policy_rev is not None
+                        and current_policy
+                        and current_policy["revision"] == launch_policy_rev
+                    ):
+                        if before["policy"] is None:
+                            db.execute("DELETE FROM delivery_policies WHERE item_id=?", (item,))
+                        else:
+                            snap = before["policy"]
+                            db.execute(
+                                "UPDATE delivery_policies SET revision=revision+1,actor=?,payload=?,updated_at=? "
+                                "WHERE item_id=?",
+                                (owner, snap["payload"], snap["updated_at"], item),
+                            )
+                    if self.store.setting(f"delivery:{item}:enabled") != before["enabled_setting"]:
+                        if before["enabled_setting"] is None:
+                            db.execute("DELETE FROM settings WHERE key=?", (f"delivery:{item}:enabled",))
+                        else:
+                            db.execute(
+                                "INSERT INTO settings(key,value) VALUES(?,?) "
+                                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                                (f"delivery:{item}:enabled", encode(before["enabled_setting"])),
+                            )
+                    current_listing = db.execute(
+                        "SELECT revision,enabled FROM gift_listings WHERE item_id=?", (item,)
+                    ).fetchone()
+                    launch_listing_rev = launch_written["gift_listing"]
+                    if (
+                        launch_listing_rev is not None
+                        and current_listing
+                        and current_listing["revision"] == launch_listing_rev
+                    ):
+                        if before["gift_listing"] is None:
+                            db.execute("DELETE FROM gift_listings WHERE item_id=?", (item,))
+                        else:
+                            snap = before["gift_listing"]
+                            db.execute(
+                                "UPDATE gift_listings SET revision=revision+1,gift_code=?,gift_id=?,"
+                                "approved_stars=?,description_sha256=?,category_id=?,obtaining_type_id=?,"
+                                "username_field_id=?,bundle=?,enabled=?,auto_fulfill=?,armed_at=? "
+                                "WHERE item_id=?",
+                                (
+                                    snap["gift_code"],
+                                    snap["gift_id"],
+                                    snap["approved_stars"],
+                                    snap["description_sha256"],
+                                    snap["category_id"],
+                                    snap["obtaining_type_id"],
+                                    snap["username_field_id"],
+                                    snap["bundle"],
+                                    snap["enabled"],
+                                    snap["auto_fulfill"],
+                                    snap["armed_at"],
+                                    item,
+                                ),
+                            )
+                    if before["listing_options"] is not None:
+                        current_options = self.store.setting("gifts:listing_options:" + item)
+                        if current_options != before["listing_options"]:
+                            db.execute(
+                                "INSERT INTO settings(key,value) VALUES(?,?) "
+                                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                                ("gifts:listing_options:" + item, encode(before["listing_options"])),
+                            )
+                    if paid_before is not None:
+                        # Undo ONLY the paid permissions this launch created; anything
+                        # the owner had before stays untouched (other lots keep working).
+                        before = paid_before
+                        now_approval = db.execute(
+                            "SELECT value FROM settings WHERE key=?", ("promotions:approved:" + item,)
+                        ).fetchone()
+                        if before["approval"] is None and now_approval is not None:
+                            db.execute("DELETE FROM settings WHERE key=?", ("promotions:approved:" + item,))
+                        elif before["approval"] is not None:
+                            db.execute(
+                                "UPDATE settings SET value=? WHERE key=?",
+                                (encode(before["approval"]), "promotions:approved:" + item),
+                            )
+                        current_authority = self.store.setting("promotions:paid_authority") or None
+                        if before["authority"] is None and current_authority is not None:
+                            db.execute("DELETE FROM settings WHERE key='promotions:paid_authority'")
+                        elif before["authority"] is not None:
+                            db.execute(
+                                "UPDATE settings SET value=? WHERE key='promotions:paid_authority'",
+                                (encode(before["authority"]),),
+                            )
+                        if before["target"] is None:
+                            db.execute("DELETE FROM promotion_targets WHERE item_id=?", (item,))
+                        else:
+                            db.execute(
+                                "UPDATE promotion_targets SET disposition=? WHERE item_id=?",
+                                (before["target"], item),
+                            )
             raise
 
     def guard(self, action):

@@ -1,6 +1,7 @@
 """Durable setup within the product wizard, before the final publication confirmation."""
 
 import secrets
+from dataclasses import asdict
 
 from app.database.store import Conflict
 from app.gifts.core import gift_name
@@ -313,7 +314,7 @@ class LaunchPanel:
             parts = text.split()
             if len(parts) != (4 if field == "budget" else 2):
                 raise ValidationError("Неверное количество параметров")
-            policy = value["promotion_policy"]
+            policy = dict(value["promotion_policy"])
             if field == "budget":
                 policy.update(
                     per_operation=parts[0],
@@ -324,8 +325,35 @@ class LaunchPanel:
             else:
                 policy.update(mode="time", interval_seconds=int(parts[0]), cooldown_seconds=int(parts[1]))
             PromotionPolicy(**policy)
+            # The budget and schedule are GLOBAL promotion settings shared by all
+            # lots: save them through the policy store (revision CAS) instead of
+            # only the draft, so check() can never reject freshly entered values.
+            from app.services.promotion_settings import PromotionSettings
+
+            settings = PromotionSettings(self.store, self.api)
+            revision, current, selection = settings.get()
+            try:
+                settings.save(message.from_user.id, revision, policy, selection)
+            except Conflict:
+                raise Conflict(
+                    "Общие настройки продвижения изменились в другом экране. "
+                    "Откройте лимиты заново и повторите ввод"
+                ) from None
+            # Re-read after the save: the draft carries the authoritative copy.
+            _, saved, _ = settings.get()
+            value["promotion_policy"] = asdict(saved)
+            if asdict(saved) != asdict(current):
+                self.saved_global_notice = (
+                    "⚠️ Лимиты и расписание продвижения общие для всех товаров. "
+                    "Действующие разрешения других лотов потребуют повторного подтверждения."
+                )
         else:
             raise Conflict("Поле настройки устарело")
         value.pop("ready", None)
         self.store.update_draft(draft["id"], message.from_user.id, draft["revision"], value)
-        return await self.show(message.from_user.id, state, draft["id"])
+        text, markup = await self.show(message.from_user.id, state, draft["id"])
+        notice = getattr(self, "saved_global_notice", None)
+        if notice:
+            self.saved_global_notice = None
+            text = text + "\n\n" + notice
+        return text, markup
