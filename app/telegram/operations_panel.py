@@ -95,6 +95,8 @@ class OperationsPanel:
                     "chain_message",
                     "mark_read",
                     "fulfill",
+                    "premium_publish",
+                    "premium_bump",
                 }:
                     rows.append([("🔎 Сверить успешный результат", "ops:confirm:" + ident)])
                 rows.append([("⛔ Остановить без повтора", "ops:stop:" + ident)])
@@ -104,7 +106,7 @@ class OperationsPanel:
             raise Conflict("Операция уже разрешена или действие недоступно")
         data = {"id": ident, "signature": signature(row), "decision": "STOP_UNCERTAIN"}
         if command == "confirm":
-            if row["kind"] in {"mark_read", "fulfill"}:
+            if row["kind"] in {"mark_read", "fulfill", "premium_publish", "premium_bump"}:
                 data["evidence"] = await self.service.evidence(owner, ident)
                 data["decision"] = "CONFIRM_READ_STATE"
             elif row["kind"] in {"reply", "delivery", "delivery_text", "chain_message"}:

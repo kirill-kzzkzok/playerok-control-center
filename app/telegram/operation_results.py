@@ -18,6 +18,8 @@ TITLES = {
     "gift_notice": "Уведомление по подарку",
     "create": "Создание лота",
     "publish": "Публикация",
+    "premium_publish": "Публикация PREMIUM",
+    "premium_bump": "Платное поднятие PREMIUM",
     "edit": "Изменение лота",
     "edit_fields": "Изменение характеристик",
     "discount": "Цена и скидка",
@@ -94,6 +96,9 @@ class OperationResults:
                 base = result.get("raw_price")
                 if base is not None:
                     text += "\nБазовая цена: " + escaped(base, 40) + " ₽"
+        if kind in {"premium_publish", "premium_bump"} and status == "SUCCEEDED":
+            text += "\nПодтверждено списание: " + escaped(result.get("paid_rub"), 40) + " ₽"
+            text += "\nПлатёж: <code>" + escaped(result.get("payment_id"), 100) + "</code>"
         if kind.startswith("gift_"):
             job = self.store.rows(
                 "SELECT state,refund_state FROM gift_jobs WHERE order_id=?", (row["target"],)

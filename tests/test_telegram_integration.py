@@ -560,7 +560,7 @@ async def test_promotions_settings_router_has_no_paid_execution(tmp_path):
         ui.dp = dispatcher(store, api)
         await ui.click(f"pp:{nonce}:save")
         assert store.rows("SELECT revision FROM promotion_policy") == [{"revision": 1}]
-        assert "Деньги не списываются" in session.calls[-1].text
+        assert "деньги не списываются" in session.calls[-1].text
         await ui.click("promo:stop")
         assert store.rows("SELECT revision FROM promotion_policy") == [{"revision": 2}]
         assert not store.rows("SELECT * FROM promotion_expenses")

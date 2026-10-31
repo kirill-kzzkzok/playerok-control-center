@@ -4,14 +4,14 @@ import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from app.database.store import now
+from app.database.store import encode, now
 from app.playerok.adapter import APIError, validate_page
 from app.services.products import ValidationError, priority_price_basis
 from app.services.promotion_settings import PromotionSettings
 
 
 class PromotionWorker:
-    """Bounded periodic read-only evaluator, with persistent discovery and leases."""
+    """Bounded evaluator; explicit current authority may queue paid work through Outbox."""
 
     def __init__(self, store, api, *, per_cycle=4):
         self.store, self.api, self.settings = store, api, PromotionSettings(store, api)
@@ -99,6 +99,7 @@ class PromotionWorker:
                 break
             ident, token = claimed
             error = None
+            paid_attempt = False
             interval = (
                 policy.check_seconds if policy.mode == "position" else min(policy.interval_seconds, 300)
             )
@@ -118,6 +119,17 @@ class PromotionWorker:
                         if len(choices) != 1:
                             raise ValidationError("Однозначная стоимость текущего типа размещения недоступна")
                         result = await self.settings.evaluate(actor, ident, choices[0]["id"])
+                        from app.services.paid_promotions import PaidPromotions
+
+                        paid = PaidPromotions(self.store, self.api)
+                        approval = self.store.setting("promotions:approved:" + ident, {})
+                        authority = self.store.setting("promotions:paid_authority", {})
+                        if result["would_allow"] and authority.get("revision") == revision and approval:
+                            paid_attempt = True
+                            preview = await paid.preview(actor, ident, approval["quote_id"])
+                            await paid.queue(
+                                actor, preview, f"promotion:auto:{ident}:{revision}:{token}", automatic=True
+                            )
                         if result["would_allow"] and policy.mode == "time":
                             local_hour = datetime.now(ZoneInfo("Europe/Moscow")).hour
                             start, end = policy.night_start_hour, policy.night_end_hour
@@ -129,6 +141,25 @@ class PromotionWorker:
                             interval = policy.night_interval_seconds if night else policy.interval_seconds
             except (APIError, ValueError, KeyError, TypeError) as caught:
                 error = caught.code if isinstance(caught, APIError) else "PROMOTION_CHECK_UNAVAILABLE"
+                if paid_attempt:
+                    self.store.execute(
+                        "INSERT OR IGNORE INTO inbox(key,kind,payload,received_at,processed_at) VALUES(?,'promotion_guard',?,?,?)",
+                        (
+                            f"promotion_guard:paid:{revision}:{ident}:{error}",
+                            encode(
+                                {
+                                    "item_id": ident,
+                                    "revision": revision,
+                                    "paid_schedule_block": True,
+                                    "reasons": [
+                                        caught.code if isinstance(caught, APIError) else str(caught)[:400]
+                                    ],
+                                }
+                            ),
+                            now(),
+                            now(),
+                        ),
+                    )
                 failures = (
                     self.store.rows("SELECT failures FROM promotion_schedule WHERE item_id=?", (ident,))[0][
                         "failures"
@@ -145,7 +176,13 @@ class PromotionWorker:
             processed += 1
         self.store.set_setting(
             "promotions:health",
-            {"status": "DRY_RUN", "at": now(), "processed": processed, "paid_operations": 0},
+            {
+                "status": "SCHEDULED"
+                if self.store.setting("promotions:paid_authority", {}).get("revision") == revision
+                else "DRY_RUN",
+                "at": now(),
+                "processed": processed,
+            },
         )
         return processed
 

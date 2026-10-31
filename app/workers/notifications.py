@@ -91,6 +91,12 @@ class Notifications:
                     + escaped("; ".join(payload["reasons"]), 800)
                     + "\nПроверка была dry-run; списаний не было."
                 )
+                if payload.get("paid_schedule_block"):
+                    text = (
+                        "⛔ <b>Платное поднятие остановлено</b>\n"
+                        + escaped("; ".join(payload["reasons"]), 800)
+                        + "\nНовое действие не поставлено в очередь. Проверьте тариф и разрешения."
+                    )
                 markup = keyboard([[("Настройки продвижения", "promotions")]])
             elif event["kind"] == "enrollment_blocked":
                 text = (

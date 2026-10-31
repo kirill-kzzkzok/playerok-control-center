@@ -35,7 +35,7 @@ class PromotionSettings:
                 (revision + 1, actor, encode(asdict(policy)), selection, now()),
             )
             db.execute(
-                "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'PROMOTION_POLICY','*','DRY_RUN_ONLY',?)",
+                "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'PROMOTION_POLICY','*','SETTINGS_SAVED_NO_PAYMENT',?)",
                 (actor, now()),
             )
         return revision + 1
@@ -43,6 +43,7 @@ class PromotionSettings:
     def stop(self, actor):
         revision, policy, selection = self.get()
         self.save(actor, revision, {**asdict(policy), "enabled": False}, selection)
+        self.store.set_setting("promotions:paid_authority", {})
 
     async def target(self, actor, ident, disposition):
         await self.access.item(actor, ident)
@@ -113,7 +114,7 @@ class PromotionSettings:
             source=observations[0]["checked_at"],
             position=position,
             position_scope="priority_position; не доказательство общего места в поиске",
-            paid_execution_available=False,
+            paid_execution_available=True,
         )
         budget_reasons = {
             "лимит на одну операцию",

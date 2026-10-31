@@ -177,9 +177,19 @@ class Store:
                     (target,),
                 ).fetchone():
                     raise Conflict("Для заказа есть незавершённая выдача или отметка выполнения")
-            if kind in {"create", "publish", "edit", "edit_fields", "discount", "delete", "agreements"}:
+            if kind in {
+                "create",
+                "publish",
+                "edit",
+                "edit_fields",
+                "discount",
+                "delete",
+                "agreements",
+                "premium_publish",
+                "premium_bump",
+            }:
                 blocked = connection.execute(
-                    "SELECT id FROM outbox WHERE target=? AND kind IN ('create','publish','edit','edit_fields','discount','delete','agreements') "
+                    "SELECT id FROM outbox WHERE target=? AND kind IN ('create','publish','edit','edit_fields','discount','delete','agreements','premium_publish','premium_bump') "
                     "AND status IN ('PENDING','PROCESSING','RETRYABLE_FAILED','UNCERTAIN') LIMIT 1",
                     (target,),
                 ).fetchone()
@@ -214,6 +224,8 @@ class Store:
                 "gift_send",
                 "gift_refund",
                 "gift_notice",
+                "premium_publish",
+                "premium_bump",
             }:
                 connection.execute(
                     "INSERT OR IGNORE INTO operation_receipts(operation_id,owner_id) SELECT id,? FROM outbox WHERE operation_key=? AND EXISTS(SELECT 1 FROM administrators WHERE user_id=?)",
@@ -259,6 +271,18 @@ class Store:
                 raise Conflict("Lease операции потерян")
             # Delivery state and external outcome must commit together.
             row = db.execute("SELECT operation_key,kind,target FROM outbox WHERE id=?", (ident,)).fetchone()
+            if row["kind"] in {"premium_publish", "premium_bump"}:
+                from app.services.paid_promotions import finish_expense
+
+                finish_expense(
+                    db,
+                    ident,
+                    "SUCCEEDED"
+                    if status == "SUCCEEDED"
+                    else "UNCERTAIN"
+                    if status == "UNCERTAIN"
+                    else "FAILED",
+                )
             if row["kind"] in {"gift_send", "gift_refund"}:
                 from app.gifts.outcomes import finish
 
@@ -304,6 +328,10 @@ class Store:
                 (time.time(),),
             )
             for row in affected:
+                if row["kind"] in {"premium_publish", "premium_bump"}:
+                    from app.services.paid_promotions import finish_expense
+
+                    finish_expense(db, row["id"], "UNCERTAIN")
                 if row["kind"] in {"gift_send", "gift_refund"}:
                     from app.gifts.outcomes import recover
 

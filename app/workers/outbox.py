@@ -70,6 +70,10 @@ class Executor:
             or (rows[0]["lease_until"] or 0) <= time.time()
         ):
             raise ValidationError("Lease операции истёк или потерян; отправка запрещена")
+        if action["kind"] in {"premium_publish", "premium_bump"}:
+            from app.services.paid_promotions import PaidPromotions
+
+            PaidPromotions(self.store, self.api).guard(action)
         if action["payload"].get("chain_id"):
             DeliveryChains(self.store, self.api).dispatchable(action)
         if action["payload"].get("auto_reply"):
@@ -173,6 +177,10 @@ class Executor:
 
     async def __call__(self, action):
         kind, target, payload = action["kind"], action["target"], action["payload"]
+        if kind in {"premium_publish", "premium_bump"}:
+            from app.services.paid_promotions import PaidPromotions
+
+            return await PaidPromotions(self.store, self.api).execute(self, action)
         if kind == "gift_send":
             from app.gifts.core import GiftValidationError
             from app.gifts.mtproto import GiftFailure

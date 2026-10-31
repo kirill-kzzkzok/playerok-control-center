@@ -138,8 +138,9 @@ class ItemPanel:
             text = title + "\nДругие действия"
             rows = [
                 [("Финансовый расчёт", "finance:" + ident)],
-                [("Продвижение — проверка", "promo:item:" + ident)],
+                [("Продвижение", "promo:item:" + ident)],
                 [("Стоимость размещения", "quote:" + ident)],
+                [("⭐ PREMIUM / платное поднятие", "payp:item:" + ident)],
                 [("Подробности", "iv:details:" + ident)],
             ]
             if item.get("status") == "DRAFT":

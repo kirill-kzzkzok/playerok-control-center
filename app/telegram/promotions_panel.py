@@ -33,7 +33,7 @@ class PromotionsPanel:
         await state.set_state(None)
         await state.set_data({"promotion": data})
         nonce, values = data["nonce"], data["values"]
-        text = f"🚀 <b>Продвижение — проверка</b>\nПолитика: {'включена для проверки' if values['enabled'] else 'выключена'}\nРежим: {'по времени' if values['mode'] == 'time' else 'по позиции'}\nВыбор: {'все подходящие кроме исключённых' if data['selection'] == 'all' else 'только выбранные'}\nНочь: {'включена' if values['night_enabled'] else 'выключена'} · {values['night_start_hour']:02d}:00–{values['night_end_hour']:02d}:00 МСК\nПлатное исполнение отсутствует. Сохранение и проверка ничего не покупают."
+        text = f"🚀 <b>Продвижение — проверка</b>\nПолитика: {'включена для проверки' if values['enabled'] else 'выключена'}\nРежим: {'по времени' if values['mode'] == 'time' else 'по позиции'}\nВыбор: {'все подходящие кроме исключённых' if data['selection'] == 'all' else 'только выбранные'}\nНочь: {'включена' if values['night_enabled'] else 'выключена'} · {values['night_start_hour']:02d}:00–{values['night_end_hour']:02d}:00 МСК\nСохранение и проверка ничего не покупают. Разрешение расходов — отдельным действием."
         rows = [
             [("Переключить политику", f"pp:{nonce}:toggle:enabled"), ("Режим", f"pp:{nonce}:mode")],
             [("Ночной режим", f"pp:{nonce}:toggle:night_enabled"), ("Выбор лотов", f"pp:{nonce}:selection")],
@@ -57,15 +57,21 @@ class PromotionsPanel:
         )
         if not data.get("advanced"):
             text = (
-                "🚀 <b>Продвижение — проверка</b>\nСейчас доступен только расчёт. Деньги не списываются.\nПроверки: "
+                "🚀 <b>Продвижение — проверка</b>\nРежим проверки: деньги не списываются. Платное расписание включается отдельно.\nПроверки: "
                 + ("включены" if values["enabled"] else "выключены")
             )
             rows = [
                 [("Выбрать товар и проверить", "items")],
+                [("💳 Разрешить платное расписание", "payp:arm")],
                 [("Настройки расчёта", f"pp:{nonce}:advanced")],
                 [("История проверок", "tools:promotion")],
-                [("⛔ Остановить проверки", "promo:stop")],
+                [("⛔ Остановить продвижение", "promo:stop")],
             ]
+            if (
+                self.service.store.setting("promotions:paid_authority", {}).get("revision")
+                == data["revision"]
+            ):
+                text = "🚀 <b>Продвижение</b>\nПлатное расписание разрешено для подтверждённых тарифов.\nЛимиты и проверки применяются перед каждой операцией."
         else:
             group = data.get("group", "general")
             groups = {
@@ -141,6 +147,7 @@ class PromotionsPanel:
                         ("Исключить", f"pi:{nonce}:target:exclude"),
                     ],
                     [("По общему правилу", f"pi:{nonce}:target:default")],
+                    [("⭐ PREMIUM / платное поднятие", "payp:item:" + parts[2])],
                     [("Настройки продвижения", "promotions")],
                 ]
             )
@@ -167,7 +174,7 @@ class PromotionsPanel:
                 result["position_scope"], 200
             ) + (
                 "\nПолитика локально выключена по лимиту." if result.get("policy_auto_disabled") else ""
-            ) + "\nСписано: 0 ₽. Платное исполнение недоступно.", keyboard(
+            ) + "\nСписано: 0 ₽. Платное действие требует отдельного подтверждения.", keyboard(
                 [[("Лот", "promo:item:" + view["id"])]]
             )
         view = data.get("promotion", {})

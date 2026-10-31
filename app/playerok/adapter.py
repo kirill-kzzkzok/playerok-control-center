@@ -118,6 +118,7 @@ class SafeAccount(Account):
                 "updateItem",
                 "removeItem",
                 "publishItem",
+                "increaseItemPriorityStatus",
                 "createChatMessage",
                 "uploadChatImageIntoTemporaryStore",
                 "markChatAsRead",
@@ -204,6 +205,42 @@ class SafeAccount(Account):
         if operation == "viewer" and not body["data"].get("viewer"):
             raise APIError("SESSION_EXPIRED")
         return response
+
+    def _placement(
+        self, operation, item_id, priority_status_id, transaction_provider_id, payment_method_id=None
+    ):
+        from playerokapi.parser import my_item
+
+        provider = getattr(transaction_provider_id, "name", transaction_provider_id)
+        if provider != "LOCAL" or payment_method_id is not None:
+            raise APIError("PLACEMENT_LOCAL_BALANCE_ONLY")
+        inputs = {
+            "itemId": item_id,
+            "priorityStatuses": [priority_status_id],
+            "transactionProviderId": "LOCAL",
+        }
+        if operation == "increaseItemPriorityStatus":
+            inputs["transactionProviderData"] = {"paymentMethodId": None}
+        payload = {"operationName": operation, "query": QUERIES[operation], "variables": {"input": inputs}}
+        raw = self.request("post", self.base_url + "/graphql", {}, payload).json()["data"].get(operation)
+        if not isinstance(raw, dict) or raw.get("id") != item_id:
+            raise APIError("PLACEMENT_RESULT_UNKNOWN", uncertain=True)
+        # Upstream Account returns Item and discards statusPayment. Keep MyItem's payment evidence.
+        return my_item(raw)
+
+    def publish_item(self, item_id, priority_status_id, transaction_provider_id="LOCAL"):
+        return self._placement("publishItem", item_id, priority_status_id, transaction_provider_id)
+
+    def increase_item_priority_status(
+        self, item_id, priority_status_id, payment_method_id=None, transaction_provider_id="LOCAL"
+    ):
+        return self._placement(
+            "increaseItemPriorityStatus",
+            item_id,
+            priority_status_id,
+            transaction_provider_id,
+            payment_method_id,
+        )
 
     def accept_game_category_agreement(self, agreement_id):
         if not self.id or not self._is_initiated:

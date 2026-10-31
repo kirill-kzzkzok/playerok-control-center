@@ -36,6 +36,7 @@ from app.telegram.operation_results import OperationResults
 from app.telegram.operations_panel import OperationsPanel
 from app.telegram.order_finance_panel import OrderFinancePanel
 from app.telegram.orders_panel import OrdersPanel
+from app.telegram.paid_promotions_panel import PaidPromotionsPanel
 from app.telegram.presentation import context_back, error_text
 from app.telegram.profile_panel import ProfilePanel
 from app.telegram.promotions_panel import PromotionsPanel
@@ -74,6 +75,7 @@ def create_router(store, api, products, synchronizer):
     automation_panel = AutomationPanel(store, api)
     auto_replies_panel = AutoRepliesPanel(store, api)
     promotions_panel = PromotionsPanel(store, api)
+    paid_promotions = PaidPromotionsPanel(store, api)
     automation_queue = AutomationQueue(store, api)
     statistics_panel = StatisticsPanel(store)
     settings_panel = SettingsPanel(store, api)
@@ -206,6 +208,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await automation_queue.callback(action, owner, state)
             elif action.startswith("ar:"):
                 text, markup = await auto_replies_panel.callback(action, owner, state, message)
+            elif action.startswith("payp:"):
+                text, markup = await paid_promotions.callback(action, owner, state)
             elif action == "promotions" or action.startswith(("promo:", "pp:", "pi:")):
                 text, markup = await promotions_panel.callback(action, owner, state)
             elif action == "automation" or action.startswith(("auto:", "ap:")):

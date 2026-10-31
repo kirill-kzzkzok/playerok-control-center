@@ -48,6 +48,11 @@ class Reconciliation:
         action = self.action(actor, ident, uncertain=True)
         kind, target = action["kind"], action["target"]
         payload = json.loads(action["payload"])
+        if kind in {"premium_publish", "premium_bump"}:
+            from app.services.paid_promotions import PaidPromotions
+
+            receipt = await PaidPromotions(self.store, self.api).reconcile(action)
+            return {"decision": "CONFIRM_READ_STATE", **receipt, "checked_at": now()}
         if kind == "fulfill":
             from app.services.fulfillment import Fulfillment
 
@@ -161,6 +166,20 @@ class Reconciliation:
             current = db.execute("SELECT * FROM outbox WHERE id=?", (ident,)).fetchone()
             if not current or current["status"] != "UNCERTAIN" or signature(dict(current)) != expected:
                 raise Conflict("Операция уже разрешена другим действием")
+            if action["kind"] in {"premium_publish", "premium_bump"} and status == "SUCCEEDED":
+                from app.services.paid_promotions import finish_expense, intent_key
+
+                intent = self.store.setting(intent_key(ident), {})
+                self.store.set_setting(
+                    intent_key(ident), {**intent, "receipt_id": evidence["payment_id"], "pending": False}
+                )
+                finish_expense(db, ident, "SUCCEEDED")
+            if action["kind"] in {"premium_publish", "premium_bump"} and decision == "STOP_UNCERTAIN":
+                from app.services.paid_promotions import finish_expense, intent_key
+
+                if not self.store.setting(intent_key(ident), {}).get("started_at"):
+                    # The invariant writes intent BEFORE any paid request. A lost lease cannot cross this guard.
+                    finish_expense(db, ident, "FAILED")
             if decision == "CONFIRM_MESSAGE":
                 self.require_unclaimed_message(db, ident, evidence["message_id"])
             if action["kind"] == "delivery" and status == "SUCCEEDED":

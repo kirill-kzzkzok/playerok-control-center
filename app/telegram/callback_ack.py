@@ -55,6 +55,7 @@ def navigation(action):
         "drafts",
         "automation",
         "promotions",
+        "promo:stop",
         "quickreplies",
         "gft:home",
         "gft:stop",
@@ -63,6 +64,7 @@ def navigation(action):
     } or action.startswith(
         (
             "item:",
+            "payp:item:",
             "iv:",
             "tools:",
             "sr:",

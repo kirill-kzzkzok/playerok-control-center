@@ -94,7 +94,7 @@ async def test_real_quote_dry_run_never_charges_and_journals_separate_evaluation
     store, _, _, service = setup
     service.save(1, 0, asdict(active()), "all")
     result = await service.evaluate(1, "item", "premium")
-    assert result["would_allow"] and not result["charged"] and not result["paid_execution_available"]
+    assert result["would_allow"] and not result["charged"] and result["paid_execution_available"]
     assert len(store.rows("SELECT * FROM promotion_evaluations")) == 1
     assert not store.rows("SELECT * FROM promotion_expenses")
     assert not store.rows("SELECT * FROM outbox")
