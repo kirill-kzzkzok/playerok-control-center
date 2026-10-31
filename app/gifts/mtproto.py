@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from telethon import TelegramClient, errors, functions, types
 
 from app.gifts.core import telegram_username
+from app.localvpn import mtproto_proxy, require_proxy
 from app.security.instance import InstanceLock
 from app.security.logging import event
 
@@ -42,6 +43,7 @@ class PreparedGift:
     stars: int
     form_id: int
     invoice: object = field(repr=False)
+    route_generation: int | None = None
 
 
 class PersonalGiftSender:
@@ -54,6 +56,8 @@ class PersonalGiftSender:
 
     async def connect(self):
         async with self.lock:
+            if self.settings.telegram_transport == "localvpn":
+                require_proxy()
             if self.closed:
                 raise GiftFailure("SESSION_CLOSED")
             if self.me is not None and getattr(self.client, "is_connected", lambda: True)():
@@ -77,6 +81,7 @@ class PersonalGiftSender:
                     flood_sleep_threshold=0,
                     raise_last_call_error=True,
                     base_logger=logger,
+                    proxy=mtproto_proxy(self.settings.telegram_transport),
                 )
             await self.client.connect()
             if not await self.client.is_user_authorized():
@@ -201,7 +206,10 @@ class PersonalGiftSender:
             or sum(p.amount for p in form.invoice.prices) != approved_stars
         ):
             raise GiftFailure("PAYMENT_FORM_MISMATCH")
-        return PreparedGift(recipient, gift_id, gift.stars, form.form_id, invoice)
+        generation = (
+            require_proxy().state["generation"] if self.settings.telegram_transport == "localvpn" else None
+        )
+        return PreparedGift(recipient, gift_id, gift.stars, form.form_id, invoice, generation)
 
     async def check_quantities(self, gifts):
         from collections import Counter
@@ -225,6 +233,10 @@ class PersonalGiftSender:
             raise GiftFailure("GIFT_PAYMENTS_DISABLED")
         if self.closed or self.me is None:
             raise GiftFailure("SESSION_CLOSED")
+        if self.settings.telegram_transport == "localvpn":
+            proxy = require_proxy()
+            if await proxy.confirm() != prepared.route_generation:
+                raise GiftFailure("PROXY_ROUTE_CHANGED")
         result = await self.client(
             functions.payments.SendStarsFormRequest(
                 form_id=prepared.form_id,

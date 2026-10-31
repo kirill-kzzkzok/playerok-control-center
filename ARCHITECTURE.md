@@ -920,3 +920,14 @@ is released only after disconnect. Shop event handler failures cannot interrupt 
 worker transitions. Existing Outbox/intents/UNKNOWN/refund/stock contracts remain in place;
 no new subsystem or migration was introduced. Evidence and residual transaction boundaries:
 GIFT_SAFETY_AUDIT.md.
+
+## Dedicated localVPN Playerok tunnel (31.10.2026)
+
+app.localvpn owns a private JSON-over-pipes Go service, independent runtime/mutex/Job
+and1080 engine, reading the existing catalogue only in Go. New NetworkSettings defaults
+to localvpn; worker/legacy/direct require explicit mode and cannot act as fallback.
+aiogram's common ProxyConnector includes downloads; Telethon/auth share SOCKS rdns.
+Readiness/generation fences gift admission and final paid dispatch without changing
+Outbox/receipt/UNKNOWN semantics. Service EOF/Job ownership controls crash cleanup.
+Callback ACK precedes per-owner FSM isolation, with bounded timeout and conservative
+mutating-action admission. Full contracts/evidence/Go file list: LOCALVPN_INTEGRATION.md.

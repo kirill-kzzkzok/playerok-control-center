@@ -3,8 +3,6 @@
 import json
 from pathlib import Path
 
-import httpx
-
 from app.config import Config
 from app.playerok.adapter import APIError, Playerok, SafeAccount
 from app.playerok.thread_calls import close_calls
@@ -12,34 +10,31 @@ from app.playerok.thread_calls import close_calls
 
 async def diagnose(config):
     result = {"owner_allowlist_configured": bool(config.owner_ids), "writes_enabled": config.writes_enabled}
-    async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
-        for label, base in [("direct", "https://api.telegram.org"), ("worker", config.telegram_proxy)]:
-            if not base:
-                continue
-            checks = {}
-            for method in ["GET", "POST"]:
-                try:
-                    response = await client.request(method, base + "/bot" + config.telegram_token + "/getMe")
-                    try:
-                        body = response.json()
-                    except ValueError:
-                        body = {}
-                    checks[method] = {
-                        "http": response.status_code,
-                        "telegram_ok": body.get("ok") is True,
-                        "identity_present": bool((body.get("result") or {}).get("id")),
-                    }
-                except httpx.HTTPError as error:
-                    checks[method] = {"error_type": type(error).__name__}
-            try:
-                response = await client.get(base + "/bot000000:invalid/getMe")
-                checks["invalid_token"] = {
-                    "http": response.status_code,
-                    "correct_error": response.status_code in (401, 404),
-                }
-            except httpx.HTTPError as error:
-                checks["invalid_token"] = {"error_type": type(error).__name__}
-            result[label] = checks
+    from contextlib import AsyncExitStack
+
+    from aiogram import Bot
+    from aiogram.client.telegram import TelegramAPIServer
+
+    from app.localvpn import SOCKS_URL, NetworkSettings, PlayerokProxy
+    from app.telegram.transport import TelegramNetworkSession
+
+    mode = getattr(config, "telegram_transport", "legacy")
+    worker = mode == "worker" or (mode == "legacy" and config.use_proxy)
+    kwargs = {"api": TelegramAPIServer.from_base(config.telegram_proxy)} if worker else {}
+    if mode == "localvpn":
+        kwargs.update(proxy=SOCKS_URL, localvpn=True)
+    async with AsyncExitStack() as stack:
+        if mode == "localvpn":
+            await stack.enter_async_context(PlayerokProxy(NetworkSettings.load()))
+        session = TelegramNetworkSession(timeout=15, **kwargs)
+        bot = Bot(config.telegram_token, session=session)
+        try:
+            await bot.get_me()
+        except Exception as error:  # noqa: BLE001 -- diagnostics exports only a safe class name
+            result["telegram_error"] = type(error).__name__
+        finally:
+            await session.close()
+        result["telegram"] = session.results
     account = SafeAccount(config.playerok_header)
     api = Playerok(account)
     try:

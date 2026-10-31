@@ -6,7 +6,6 @@ from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.fsm.storage.memory import SimpleEventIsolation
 from aiogram.fsm.strategy import FSMStrategy
@@ -15,6 +14,7 @@ from app.config import Config, ConfigurationError
 from app.database.store import Store
 from app.gifts.settings import GiftSettings
 from app.gifts.worker import GiftWorker
+from app.localvpn import SOCKS_URL, NetworkSettings, PlayerokProxy, ProxyUnavailable
 from app.playerok.adapter import Playerok, SafeAccount
 from app.playerok.thread_calls import begin_close_calls, close_calls
 from app.security.access import OwnerMiddleware
@@ -24,9 +24,11 @@ from app.services.interface_cleanup import InterfaceCleanup
 from app.services.orders import Orders
 from app.services.playerok_connection import PlayerokConnection
 from app.services.products import Products
+from app.telegram.callback_ack import install_callback_ack
 from app.telegram.panel_tracking import PanelTracking
 from app.telegram.router import create_router
 from app.telegram.storage import SQLiteStorage
+from app.telegram.transport import TelegramNetworkSession as AiohttpSession
 from app.workers.auto_replies import AutoReplyWorker
 from app.workers.cleanup import UploadCleanup
 from app.workers.delivery_chains import ChainWorker
@@ -52,15 +54,31 @@ async def outbox_loop(worker, stop):
                 continue
 
 
-async def run(config):
+async def run(config, *, network_diagnostics=False):
+    if getattr(config, "telegram_transport", "legacy") == "localvpn":
+        async with PlayerokProxy(NetworkSettings.load()):
+            return await run_connected(config, network_diagnostics=network_diagnostics)
+    return await run_connected(config, network_diagnostics=network_diagnostics)
+
+
+async def run_connected(config, *, network_diagnostics=False):
     event("INFO", "Запуск Playerok Control Center")
     store = Store(config.database_path)
     account = SafeAccount(config.playerok_header, writes_enabled=config.writes_enabled)
     account.automation_enabled = config.automation_enabled
     api = Playerok(account)
-    session = AiohttpSession(timeout=35)
-    if config.use_proxy:
-        session.api = TelegramAPIServer.from_base(config.telegram_proxy)
+    mode = getattr(config, "telegram_transport", "legacy")
+    worker = mode == "worker" or (mode == "legacy" and config.use_proxy)
+    session_args = {"api": TelegramAPIServer.from_base(config.telegram_proxy)} if worker else {}
+    if mode == "localvpn":
+        session_args.update(proxy=SOCKS_URL, localvpn=True)
+    session = AiohttpSession(timeout=35, diagnostics=network_diagnostics, **session_args)
+    event(
+        "CHECK",
+        "Telegram Bot API: "
+        + ("SOCKS5 127.0.0.1:1080" if mode == "localvpn" else "Cloudflare Worker" if worker else "Direct"),
+    )
+    event("CHECK", "getUpdates / answerCallbackQuery: NOT TESTED — ожидаются реальные запросы")
     bot = Bot(config.telegram_token, session=session, default=DefaultBotProperties(parse_mode="HTML"))
     session.middleware(PanelTracking(store))
     tasks = []
@@ -100,6 +118,7 @@ async def run(config):
             events_isolation=SimpleEventIsolation(),
         )
         middleware = OwnerMiddleware(config.owner_ids, store, config.first_start_claim)
+        install_callback_ack(dispatcher, middleware)
         dispatcher.message.outer_middleware(middleware)
         dispatcher.callback_query.outer_middleware(middleware)
         dispatcher.include_router(create_router(store, api, products, sync))
@@ -192,9 +211,12 @@ def main():
         configure_logging([config.telegram_token, config.playerok_header, GiftSettings.load().api_hash])
         config.require_owner()
         with InstanceLock(str(config.database_path) + ".lock"):
-            asyncio.run(run(config))
+            asyncio.run(run(config, network_diagnostics="--telegram-network-diagnostics" in sys.argv))
     except KeyboardInterrupt:
         return 0
+    except ProxyUnavailable:
+        logger.error("Playerok Proxy не готов. Проверьте localVPN и порт1080. Прямое подключение запрещено.")
+        return 1
     except (ConfigurationError, RuntimeError) as error:
         logger.error("%s", str(error) if isinstance(error, ConfigurationError) else type(error).__name__)
         return 1

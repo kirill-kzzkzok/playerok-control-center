@@ -1073,3 +1073,13 @@ Console/bundles final (31.10.2026):860 passed79.33s (data/bundle_full_final.xml)
 - Safe native Playerok viewer reads on private DB clone: HTTP200/200, fresh account/binding verified. This proves read connectivity only. No real gifts, refunds, buyer messages or listing changes. Personal session absent; no MTProto live or paid acceptance.
 
 Verdict: **NOT READY** for immediate paid testing until owner-local authorization and read-only personal preflight, followed by explicit one-payment permission. Full findings and remaining P2/live gates: GIFT_SAFETY_AUDIT.md.
+
+## localVPN + Telegram transport integration — 31.10.2026
+
+Full pytest920 passed160.82s,0 failed/errors/skips; localvpn_full_final.xml. Targeted24 passed14.78s; localvpn_network_final.xml. Includes real Dispatcher main menu/restart/ACK/send/edit timeouts, SOCKS remote DNS for API/files, Telethon/auth factory/session preservation, route generation and lost paid ACK mock, no replay/refund. Initial fixture errors/method mismatch and actual SOCKS ProxyError propagation were exposed and fixed; no hidden xfails. Telethon error-mapping interoperability cases pass.
+
+Go full tests/vet/new EXE build pass. accepted/tombstone/corrupt catalogue/password change/foreign port/bounded recovery tests and false STOPPED reproduction fixed. Real own-process crash/recovery/duplicate/stop and Python crash Job cleanup passed; other existing engine PIDs preserved.
+
+Ruff193 files, pip check, source and isolated wheel selfcheck106 imports/schema22 pass. Clone of current working DB22→22 preserves every existing table count/integrity/FK/reopen; first migration-check script used a wrong inventory table name and was corrected to enumerated schema tables (not a production migration error). No new migrations.234 repository candidates + logs + changed Go files credential scan clean; all financial flags false.
+
+Real SOCKS live proof: read-only getMe multipart65КБ +20s polling; owner temporary-DB Dispatcher26 valid ACKs,7 photos,18 edits,28 completed polls,send/getFile/download/delete. Last pending poll disconnected only during deliberate shutdown. Read-only unauthenticated MTProto MemorySession getConfig passed. No actual personal-session authorization, buyer message, gift payment/delivery/refund/SENT. Exact scope/artifacts/manual gates: LOCALVPN_INTEGRATION.md.

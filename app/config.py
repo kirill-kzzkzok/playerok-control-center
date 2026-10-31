@@ -21,12 +21,16 @@ class Config:
     first_start_claim: bool = False
     realtime_enabled: bool = True
     automation_enabled: bool = False
+    telegram_transport: str = "legacy"
 
     @classmethod
     def load(cls, path: str = ".env"):
         import os
 
         values = {**dotenv_values(path, interpolate=False), **os.environ}
+        from app.localvpn import NetworkSettings
+
+        network = NetworkSettings.load(path)
         token = values.get("TELEGRAM_BOT_TOKEN", "") or ""
         header = values.get("PLAYEROK_HEADER_STRING", "") or ""
         if not re.fullmatch(r"\d+:[A-Za-z0-9_-]{20,}", token):
@@ -45,7 +49,9 @@ class Config:
             ) from None
         proxy = (values.get("TELEGRAM_API_PROXY_URL") or "").rstrip("/")
         use_proxy = values.get("TELEGRAM_USE_PROXY", "false").lower() == "true"
-        if use_proxy and (not proxy.startswith("https://") or "@" in proxy):
+        if (network.mode == "worker" or (network.mode == "legacy" and use_proxy)) and (
+            not proxy.startswith("https://") or "@" in proxy
+        ):
             raise ConfigurationError("Прокси должен использовать HTTPS без credentials в URL")
         if values.get("PAID_OPERATIONS_ENABLED", "false").lower() == "true":
             raise ConfigurationError("Платные операции в этой сборке запрещены")
@@ -60,6 +66,7 @@ class Config:
             values.get("FIRST_START_CLAIM", "false").lower() == "true",
             values.get("PLAYEROK_REALTIME_ENABLED", "true").lower() == "true",
             values.get("PLAYEROK_AUTOMATION_ENABLED", "false").lower() == "true",
+            network.mode,
         )
 
     def require_owner(self):

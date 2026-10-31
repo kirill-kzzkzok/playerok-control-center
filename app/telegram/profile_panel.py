@@ -2,11 +2,12 @@ import asyncio
 from decimal import Decimal, InvalidOperation
 
 import httpx
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.types import BufferedInputFile
 
 from app.playerok.adapter import safe_media_url
 from app.rendering.cards import profile_card
+from app.security.logging import event
 from app.services.finance import checked_time
 from app.services.playerok_connection import REASONS, PlayerokConnection
 from app.telegram.formatting import escaped
@@ -112,7 +113,11 @@ class ProfilePanel:
                         return await message.answer(text, reply_markup=markup)
                     raise
             if status["status"] == "CONNECTED" and connection.viewer:
-                await self.photo(message, connection.viewer)
+                try:
+                    async with asyncio.timeout(8):
+                        await self.photo(message, connection.viewer)
+                except (TelegramNetworkError, TimeoutError):
+                    event("WARNING", "Картинка профиля: результат отправки неизвестен; повтора нет", level=30)
             return await message.answer(text, reply_markup=markup)
         viewer = await self.api.call("get")
         return await self.photo(message, viewer)

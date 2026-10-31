@@ -206,6 +206,8 @@ async def test_actual_shutdown_drains_call_before_closing_resources(tmp_path, mo
         shutdown_started.set()
 
     dispatcher = SimpleNamespace(
+        fsm=Mock(),
+        update=SimpleNamespace(outer_middleware=Mock()),
         message=SimpleNamespace(outer_middleware=Mock()),
         callback_query=SimpleNamespace(outer_middleware=Mock()),
         include_router=Mock(),

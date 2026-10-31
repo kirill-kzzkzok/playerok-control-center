@@ -12,6 +12,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import BufferedInputFile
 
 from app.database.store import Conflict
+from app.localvpn import active_proxy
 from app.playerok.adapter import APIError
 from app.services.automation import Automation
 from app.services.discounts import discount_plan
@@ -19,6 +20,7 @@ from app.services.products import ValidationError, listing_price, listing_text, 
 from app.telegram.auto_replies_panel import AutoRepliesPanel
 from app.telegram.automation_panel import AutomationPanel
 from app.telegram.automation_queue import AutomationQueue
+from app.telegram.callback_ack import ACTION_MAX_WAIT, acknowledge, navigation
 from app.telegram.chat_panel import ChatPanel
 from app.telegram.drafts_panel import DraftsPanel
 from app.telegram.finance_panel import FinancePanel
@@ -93,11 +95,23 @@ def create_router(store, api, products, synchronizer):
         )
 
     @router.callback_query()
-    async def callback(query, state):
-        await query.answer()
+    async def callback(query, state, callback_ack=None):
+        import time
+
+        ack = callback_ack if callback_ack is not None else await acknowledge(query)
         action = query.data or ""
         owner = query.from_user.id
         message = query.message
+        if message is None or not hasattr(message, "answer"):
+            return
+        if not navigation(action) and (
+            ack["status"] != "ok" or time.monotonic() - ack["checked_at"] > ACTION_MAX_WAIT
+        ):
+            return await message.answer(
+                "Нажатие не подтверждено или ожидало слишком долго. Действие не выполнено. "
+                "Откройте экран заново; для ранее запущенной операции сначала проверьте её результат.",
+                reply_markup=main_menu(),
+            )
         preserve = bool(
             store.rows(
                 "SELECT 1 FROM notifications WHERE owner_id=? AND telegram_message_id=? "
@@ -459,6 +473,16 @@ def create_router(store, api, products, synchronizer):
                         escape(f"{a['kind']}: {a['status']} · {a['error_code'] or ''}") for a in actions
                     )
                 )
+                proxy = active_proxy.get()
+                if proxy is not None:
+                    status = proxy.state
+                    text += "\n\nPlayerok Proxy · SOCKS5 127.0.0.1:1080\n" + escaped(
+                        {
+                            key: status.get(key)
+                            for key in ("state", "serverId", "lastCheck", "error", "telegramAvailable")
+                        },
+                        700,
+                    )
                 workers = store.rows(
                     "SELECT key,value FROM settings WHERE key LIKE 'runtime:worker:%' ORDER BY key"
                 )

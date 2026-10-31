@@ -15,10 +15,12 @@
 3. Запустить `start.bat` или `.venv\Scripts\python.exe -m app`.
 4. Открыть бота и отправить `/start`. По прямому указанию владельца в текущем `.env` включён `FIRST_START_CLAIM=true`: первый `/start` **в личном чате** атомарно закрепляет владельца в БД. После этого остальные пользователи не получают доступ. Для новых установок безопасное значение шаблона — `false`; предпочтителен явный `OWNER_IDS`.
 
-Для работы через предоставленный Worker: `TELEGRAM_USE_PROXY=true`.
-`TELEGRAM_API_PROXY_URL` должен указывать HTTPS-базу Telegram Bot API без `/botTOKEN`.
-GET/POST `getMe` и корректный отказ неверному токену проверены отдельно.
-Работа polling и передачи файлов должна проверяться независимо от `getMe`.
+По умолчанию Telegram Bot API и личный MTProto используют отдельный localVPN SOCKS5
+`127.0.0.1:1080`. `start.bat` поднимает и проверяет собственный Playerok-сервис;
+Chrome/Codex и их туннели не требуются. [Настройка, сборка и диагностика](LOCALVPN_INTEGRATION.md).
+При отказе SOCKS прямого fallback нет. Старый Bot API Worker доступен явным
+`TELEGRAM_TRANSPORT=worker` с HTTPS `TELEGRAM_API_PROXY_URL` без `/botTOKEN`.
+Polling, callback, фото и скачивание подтверждены отдельной owner-only живой проверкой.
 
 Проверка подключений: `.venv\Scripts\python.exe -m app.diagnostics`.
 Тесты: `.venv\Scripts\python.exe -m pytest -q`.

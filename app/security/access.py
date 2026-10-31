@@ -10,6 +10,23 @@ class OwnerMiddleware(BaseMiddleware):
         self.store = store
         self.first_start_claim = first_start_claim
 
+    def authorized(self, event):
+        user = getattr(event, "from_user", None)
+        message = event.message if isinstance(event, CallbackQuery) else event
+        chat = getattr(message, "chat", None)
+        return bool(
+            user
+            and chat
+            and chat.type == "private"
+            and (
+                user.id in self.owners
+                or (
+                    self.store
+                    and self.store.rows("SELECT user_id FROM administrators WHERE user_id=?", (user.id,))
+                )
+            )
+        )
+
     async def __call__(self, handler, event, data):
         user = getattr(event, "from_user", None)
         message = event.message if isinstance(event, CallbackQuery) else event

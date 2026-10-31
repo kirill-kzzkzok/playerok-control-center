@@ -16,6 +16,7 @@ from app.gifts.core import (
     gift_codes,
 )
 from app.gifts.mtproto import GiftFailure, InvalidRecipient
+from app.localvpn import active_proxy
 from app.security.logging import event
 from app.services.order_management import deliverable, sale
 from app.services.orders import Orders
@@ -214,6 +215,10 @@ class GiftService:
     def runtime(self):
         return (
             self.settings.payment_enabled
+            and (
+                self.settings.telegram_transport != "localvpn"
+                or (active_proxy.get() is not None and active_proxy.get().ready)
+            )
             and getattr(self.api.account, "writes_enabled", False)
             and getattr(self.api.account, "automation_enabled", False)
             and not self.store.setting("gifts:stopped", True)
