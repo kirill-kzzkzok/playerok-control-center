@@ -1,0 +1,54 @@
+{
+  "mode": "ISOLATED_MOCK_PLAYEROK_REAL_MTPROTO",
+  "playerok_real_mutations": 0,
+  "buyer_real_messages": 0,
+  "payment_attempts": 1,
+  "status": "LIVE_SUCCESS",
+  "recipient_id": 822906320,
+  "payer_confirmed": true,
+  "heart_stars": 15,
+  "balance_before": 50,
+  "gift_job": "SUCCEEDED",
+  "gift_steps": [
+    "SUCCEEDED"
+  ],
+  "stars_confirmed": 15,
+  "receipt": {
+    "message_id": 16998,
+    "recipient_id": 822906320,
+    "gift_id": "5170145012310081615",
+    "date": "2026-11-01T01:35:11+00:00",
+    "reference": "PCC-757824094da443d79ad36508922af358"
+  },
+  "mock_buyer_notices": 1,
+  "mock_notice_text": "Все отправлено, спасибо за покупку!",
+  "outbox": [
+    {
+      "kind": "create",
+      "status": "SUCCEEDED"
+    },
+    {
+      "kind": "publish",
+      "status": "SUCCEEDED"
+    },
+    {
+      "kind": "gift_send",
+      "status": "SUCCEEDED"
+    },
+    {
+      "kind": "gift_notice",
+      "status": "SUCCEEDED"
+    },
+    {
+      "kind": "fulfill",
+      "status": "SUCCEEDED"
+    }
+  ],
+  "balance_after": 35,
+  "repeat_worker_executed": false,
+  "recipient_username": "@kzzkzok",
+  "proof_scope": "Real Telegram Heart only. Playerok order/publication/notice/fulfillment are synthetic and isolated.",
+  "journal_path": "data/final-heart-acceptance-20261101.sqlite3",
+  "working_playerok_database_written": false,
+  "real_playerok_sale": false
+}

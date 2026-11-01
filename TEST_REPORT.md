@@ -1127,3 +1127,11 @@ Local .env now has PLAYEROK_AUTO_ACCEPT_AGREEMENTS=true by explicit owner instru
 
 ### Итог проверки выбора подарочного черновика
 Полный pytest: **1261 passed in 233.50s**. Ruff check и format --check: PASS (206 файлов); pip check: PASS; проверка изменённых файлов на локальные секреты: 0 находок. Миграций и изменений бизнес-сервисов нет. Все проверки локальные, через временные SQLite/Dispatcher и контролируемые API; визуальная live-проверка Telegram владельцем после перезапуска ещё нужна. Реальные записи/выдачи/платежи не выполнялись.
+
+## Финальная приёмка takeover 2026-11-01
+- Reproduced RED для release/revision/CAS/prepare/kill switch/budgets/cross-lot authority/coarse server time/UI. Неуспешные прогоны сохранены в игнорируемом data/, их причины описаны в PROGRESS.md и FINAL_ACCEPTANCE_REPORT.md.
+- Первый полный прогон8failed/1351passed, exit1; после исправлений полный1365passed, exit0,244.50s. Последняя дополнительная диагностика session + toolscope прогнаны целевыми tests; заключительный полный прогон отражён в следующей контрольной записи.
+- Offline selfcheck:114applicationmodules imported, migrations1..22, temporary WAL/integrity/backup/restore, externalrequests0; exit0. Ruffcheck/formatcheck/compileall/pipcheck exit0.
+- Read-only Playerok подтвердил точную схему поля OBTAINING_DATA/requiredfalse и аккаунт, mutations0.
+- RealMTProto Heart: единственная разрешённая попытка15Stars, receipt16998, правильныйrecipient/gift/reference, баланс50→35; productionjob/stepSUCCEEDED. Playerok полностьюmock, сообщенийреальнымпокупателям0; повторworkerпослеDBreopenfalse. LIVE_HEART_ACCEPTANCE_20261101.json — отдельное liveсвидетельство; screenshotsTelegramнеполучены.
+- Exact secretvalues scan токена/api_hash/cookies по268исходникам/документам/логам не нашёл вхождений. Рабочие.env/SQLite/session исключены изGit. HTMLгалерея13экранов+3историческихBEFORE — толькоofflineproductionрендеры.

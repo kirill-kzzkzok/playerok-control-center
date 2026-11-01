@@ -945,3 +945,8 @@ Dispatcher FSM isolation after restart. Unknown results are reconciled by read-o
 server-no-pending proof, never reset/retried. Existing settings hold version-hash journal
 and churn budget; no schema migration or new delivery/payment architecture. Optional
 terms inspector bypasses acceptance and uses fresh read-only schema snapshots.
+
+## Takeover: границы полномочий и первого запуска (2026-11-01)
+ListingLaunch PREPARE обновляет только наблюдения (каталог/баланс/проверенный payer); управление расписанием и денежная authority фиксируются вместе с локальной выдачей/расходом/Outbox/маркером. Scoped `promotions:launch_authority:<item>` связывает account/policy revision/launch revision; не включает расходы других лотов. Ранее явно подтверждённый глобальный arm остаётся отдельным полномочием. Release удаляет только grant своего запуска, а delivery:<item>:enabled выключает только после успешного CAS соответствующей policy revision.
+`gifts:stop_revision` — монотонное локальное поколение STOP. Возобновление подтверждается отдельно, перечитывает сессию и сравнивает поколение внутри транзакции после сетевых чтений. Arm товара не отменяет глобальный STOP.
+Для впервые созданного приложением DRAFT серверная created_at используется как enrollment cutoff только при совпадающей успешной create-квитанции, владельце/привязке, отсутствии прошлых публикаций/заказов. Фактическое время решения сохраняется отдельно в launch marker. Старые записи без доказательств не получают ретроактивного разрешения. Схема SQLite не меняется, миграция не требуется.
