@@ -44,12 +44,26 @@ class GiftService:
             raise GiftFailure("GIFT_ORDER_NOT_FOUND")
         return rows[0]
 
-    async def inspect_item(self, owner, item_id, *, preview_code=None):
+    async def inspect_item(self, owner, item_id, *, preview_code=None, order_id=None, paid_order=None):
         self.owner(owner)
         s = self.settings
         if not (s.category_id and s.obtaining_type_id and s.buyer_username_field_id):
             raise GiftValidationError("Настройте точные ID категории, способа «Подарок» и поля username")
-        item = await self.api.call("get_item", id=item_id)
+        from app.services.logical_products import LogicalProducts
+
+        binding = LogicalProducts(self.store, self.api).listing(item_id)
+        if binding and binding["source_order_id"]:
+            if order_id != binding["source_order_id"]:
+                raise Conflict("Снимок доступен только для своей оплаченной сделки")
+            fresh = (
+                paid_order
+                if paid_order is not None
+                else await self.api.call("get_delivery_deal", deal_id=order_id)
+            )
+            deliverable(fresh, order_id, self.api.account.id)
+            item = fresh.get("item") or {}
+        else:
+            item = await self.api.call("get_item", id=item_id)
         if (
             item.get("id") != item_id
             or not self.api.account.id
@@ -483,14 +497,20 @@ class GiftService:
         return j, l
 
     async def fresh_order(self, job):
-        order = await self.api.call("get_deal", deal_id=job["order_id"])
+        from app.services.logical_products import LogicalProducts
+
+        binding = LogicalProducts(self.store, self.api).listing(job["item_id"])
+        method = "get_delivery_deal" if binding and binding["source_order_id"] else "get_deal"
+        order = await self.api.call(method, deal_id=job["order_id"])
         deliverable(order, job["order_id"], self.api.account.id)
         if order["item"]["id"] != job["item_id"]:
             raise GiftFailure("ORDER_ITEM_CHANGED")
         Orders(self.store).ingest(order)
         l = self.listing(job["item_id"])
         try:
-            data = await self.inspect_item(l["owner_id"], job["item_id"])
+            data = await self.inspect_item(
+                l["owner_id"], job["item_id"], order_id=job["order_id"], paid_order=order
+            )
             from app.services.logical_products import LogicalProducts
 
             logical = LogicalProducts(self.store, self.api).listing(job["item_id"])

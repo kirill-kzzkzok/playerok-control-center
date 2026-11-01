@@ -75,15 +75,23 @@ class Orders:
                     )
             if added and status == "PAID":
                 gift = db.execute(
-                    "SELECT 1 FROM gift_listings WHERE item_id=? AND enabled=1", (item["id"],)
+                    "SELECT enabled FROM gift_listings WHERE item_id=?", (item["id"],)
                 ).fetchone()
                 policy = db.execute(
                     "SELECT payload FROM delivery_policies WHERE item_id=?", (item["id"],)
                 ).fetchone()
                 mode = (
-                    "подарки"
+                    ("Telegram-подарки" if gift[0] else "Telegram-подарки — выдача выключена")
                     if gift
-                    else (json.loads(policy[0]).get("mode", "manual") if policy else "manual")
+                    else (
+                        {
+                            "manual": "Ручная выдача",
+                            "stock": "Уникальные данные со склада",
+                            "text": "Постоянный текст",
+                        }.get(json.loads(policy[0]).get("mode"), "Способ выдачи не подтверждён")
+                        if policy
+                        else "Привязка не найдена — ожидается сверка"
+                    )
                 )
                 event(
                     "ORDER",

@@ -11,6 +11,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from urllib.parse import urlsplit
+from uuid import UUID
 
 import httpx
 
@@ -340,6 +341,42 @@ class SafeAccount(Account):
 
         return fulfillment_request(self, "get", f"/deals/{deal_id}/fulfillment-report/requirement")
 
+    def get_delivery_deal(self, deal_id):
+        """Read the full purchased Item through its deal, never a public-ID guess.
+
+        RegularItem is the pinned item fragment already used by this client.
+        stockType is present on the public item contract and must be requested
+        here too: a partial obtaining type must not weaken field fingerprints.
+        """
+        from playerokapi.parser import item_deal
+
+        try:
+            ident = str(UUID(deal_id))
+        except (ValueError, TypeError, AttributeError):
+            raise APIError("INVALID_DEAL_ID") from None
+        fragments = "fragment " + QUERIES["updateItem"].split("fragment ", 1)[1]
+        fragments = fragments.replace(
+            "fragment GameCategoryObtainingType on GameCategoryObtainingType {",
+            "fragment GameCategoryObtainingType on GameCategoryObtainingType {\n  stockType",
+        )
+        query = (
+            "query deal($showForbiddenImage: Boolean) { deal(id: " + json.dumps(ident) + ") { "
+            "id status direction hasProblem isAutomated createdAt chat { id } user { id } "
+            "obtainingFields { ...GameCategoryDataFieldWithValue } "
+            "item { ...RegularItem __typename } } }\n" + fragments
+        )
+        response = self.request(
+            "get",
+            self.base_url + "/graphql",
+            {},
+            {
+                "operationName": "deal",
+                "query": query,
+                "variables": json.dumps({"showForbiddenImage": True}),
+            },
+        )
+        return item_deal(response.json()["data"]["deal"])
+
     def get_fulfillment_providers(self):
         from app.playerok.fulfillment_transport import fulfillment_request
 
@@ -403,6 +440,7 @@ class Playerok:
             "get_item_priority_statuses",
             "get_deals",
             "get_deal",
+            "get_delivery_deal",
             "get_chats",
             "get_chat",
             "get_chat_messages",
@@ -450,6 +488,7 @@ class Playerok:
                     "get_game_category",
                     "get_item",
                     "get_deal",
+                    "get_delivery_deal",
                     "get_chat",
                 } and not normalized.get("id"):
                     raise APIError("UPSTREAM_INCOMPLETE_RESPONSE")

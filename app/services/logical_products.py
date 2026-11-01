@@ -104,7 +104,7 @@ class LogicalProducts:
 
     def listing(self, item_id):
         rows = self.store.rows(
-            "SELECT p.*,l.item_id,l.config_revision,l.description_sha256,l.server_status,l.verified_at,l.operation_id "
+            "SELECT p.*,l.item_id,l.config_revision,l.description_sha256,l.server_status,l.verified_at,l.operation_id,l.source_order_id "
             "FROM logical_listings l JOIN logical_products p ON p.id=l.product_id WHERE l.item_id=?",
             (item_id,),
         )
@@ -596,7 +596,17 @@ class LogicalProducts:
         if changed != 1:
             raise Conflict("Право включения изменилось; повторите проверку")
 
-    async def adopt(self, owner, product_id, item, complete_snapshot, *, paid_order=None):
+    async def adopt(
+        self,
+        owner,
+        product_id,
+        item,
+        complete_snapshot,
+        *,
+        paid_order=None,
+        source_order_id=None,
+        snapshot_item_ids=(),
+    ):
         """Called only with a completed account scan; never discover or spend here."""
         product = self.product(product_id, owner)
         self.authority(owner, product["account_id"], writes=True)
@@ -609,12 +619,19 @@ class LogicalProducts:
             or item.get("deleted_at")
         ):
             raise Conflict("Перевыставленный товар не совпадает с подтверждёнными параметрами")
+        if source_order_id and (
+            not paid_order
+            or paid_order.get("id") != source_order_id
+            or product["handler"] != "telegram_gifts"
+        ):
+            raise Conflict("Снимок сделки не разрешает этот способ выдачи")
         active = []
         for observed in complete_snapshot:
             if (observed.get("user") or {}).get("id") != product["account_id"]:
                 raise Conflict("Каталог содержит товар другого аккаунта")
             if (
-                observed.get("status") == "APPROVED"
+                observed.get("id") not in snapshot_item_ids
+                and observed.get("status") == "APPROVED"
                 and not observed.get("deleted_at")
                 and marker(observed.get("description")) == product["code"]
             ):
@@ -627,7 +644,9 @@ class LogicalProducts:
                 paid_order.get("created_at"), product["armed_at"]
             ):
                 raise Conflict("Оплаченный заказ не подтверждает новое объявление этой настройки")
-        if (item.get("status") == "APPROVED" and set(active) != {item["id"]}) or len(set(active)) > 1:
+        if (not source_order_id and item.get("status") == "APPROVED" and set(active) != {item["id"]}) or len(
+            set(active)
+        ) > 1:
             raise Conflict("Обнаружены активные копии кода или полнота каталога не подтверждена")
         existing = self.listing(item["id"])
         if existing:
@@ -663,6 +682,16 @@ class LogicalProducts:
             ):
                 raise Conflict("Наследование остановлено во время проверки")
             self.authority(owner, product["account_id"], writes=True)
+            if source_order_id:
+                from app.services.order_management import deliverable
+
+                row = db.execute("SELECT payload FROM orders WHERE id=?", (source_order_id,)).fetchone()
+                if not row:
+                    raise Conflict("Сделка не найдена")
+                local_order = json.loads(row[0])
+                deliverable(local_order, source_order_id, product["account_id"])
+                if (local_order.get("item") or {}).get("id") != item["id"]:
+                    raise Conflict("Снимок относится к другой сделке")
             source = product["stock_item_id"]
             if product["handler"] == "telegram_gifts":
                 sources = db.execute(
@@ -710,7 +739,7 @@ class LogicalProducts:
                     (item["id"], old["revision"], owner, old["payload"], product["armed_at"]),
                 )
             db.execute(
-                "INSERT INTO logical_listings(item_id,product_id,config_revision,description_sha256,server_status,verified_at) VALUES(?,?,?,?,?,?)",
+                "INSERT INTO logical_listings(item_id,product_id,config_revision,description_sha256,server_status,verified_at,source_order_id) VALUES(?,?,?,?,?,?,?)",
                 (
                     item["id"],
                     product_id,
@@ -718,6 +747,7 @@ class LogicalProducts:
                     digest(item["description"]),
                     item["status"],
                     now(),
+                    source_order_id,
                 ),
             )
             db.execute(
@@ -780,6 +810,8 @@ class LogicalProducts:
         ):
             raise Conflict("Постоянная привязка не готова или выдача остановлена")
         if order_id:
+            if binding["source_order_id"] and binding["source_order_id"] != order_id:
+                raise Conflict("Снимок товара принадлежит другой сделке")
             scopes = self.store.rows("SELECT * FROM logical_order_scopes WHERE order_id=?", (order_id,))
             if not scopes or any(
                 scope["product_id"] != binding["id"]
@@ -808,6 +840,8 @@ class LogicalProducts:
         product = self.require_delivery(item_id, handler)
         if product is None:
             return
+        if product["source_order_id"] and product["source_order_id"] != order_id:
+            raise Conflict("Снимок товара принадлежит другой сделке")
         row = db.execute("SELECT payload,status,item_id FROM orders WHERE id=?", (order_id,)).fetchone()
         if (
             not row

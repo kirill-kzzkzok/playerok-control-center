@@ -61,6 +61,8 @@ async def test_prechange_backup_reopens_wal_preserves_gifts_stock_policies_and_l
     }.items():
         for column in columns:
             r.store.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+    r.store.execute("DROP INDEX logical_listing_order_snapshot")
+    r.store.execute("ALTER TABLE logical_listings DROP COLUMN source_order_id")
     r.store.execute("DROP TABLE chat_message_versions")
     r.store.execute("DELETE FROM schema_migrations WHERE version>=25")
     path = tmp_path / "prechange-copy.sqlite"

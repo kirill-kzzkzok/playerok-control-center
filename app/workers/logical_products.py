@@ -11,6 +11,7 @@ from app.security.logging import event
 from app.services.automation import future_order
 from app.services.logical_products import LogicalProducts, critical, marker
 from app.services.order_management import deliverable
+from app.services.orders import Orders
 from app.workers.pagination import PageScanner
 from playerokapi.enums import ItemStatuses
 
@@ -98,7 +99,7 @@ class LogicalProductWorker:
         # A newly relisted item may already be SOLD before the next active-list
         # scan. Fresh PAID deals supply candidate IDs; the marker never supplies
         # ownership or payment authority by itself.
-        paid_items = {}
+        paid_items, snapshot_orders = {}, {}
         cursor = self.store.setting(key + ":paid_cursor", "")
         pending_orders = self.store.rows(
             "SELECT o.id,o.item_id,o.payload FROM orders o WHERE o.status='PAID' AND o.id>? "
@@ -115,13 +116,32 @@ class LogicalProductWorker:
                 deliverable(deal, row["id"], account)
                 if (deal.get("item") or {}).get("id") != row["item_id"]:
                     raise Conflict("Предмет сделки изменился")
-                observed = await self.api.call("get_item", id=row["item_id"])
+                try:
+                    observed = await self.api.call("get_item", id=row["item_id"])
+                except APIError as error:
+                    if error.code != "HTTP_404":
+                        raise
+                    # Playerok deal.item can be a purchased snapshot whose ID
+                    # is not a public item route. Read its full, exact deal.
+                    deal = await self.api.call("get_delivery_deal", deal_id=row["id"])
+                    deliverable(deal, row["id"], account)
+                    observed = deal.get("item") or {}
+                    if observed.get("id") != row["item_id"]:
+                        raise Conflict("Снимок относится к другому предмету сделки")
+                    Orders(self.store).ingest(deal)
+                    snapshot_orders[row["item_id"]] = row["id"]
                 if observed.get("id") != row["item_id"] or (observed.get("user") or {}).get("id") != account:
                     raise Conflict("Владелец оплаченного объявления не подтверждён")
                 paid_items[row["item_id"]] = deal
                 if not any(item["id"] == row["item_id"] for item in snapshot):
                     snapshot.append(observed)
             except ValueError:
+                continue
+            except APIError as error:
+                self.store.audit(None, "DEAL_ITEM_READ", row["id"], error.code)
+                event(
+                    "WARNING", "Не удалось проверить товар сделки: " + error.code, order=row["id"], level=30
+                )
                 continue
         if len(pending_orders) < 20:
             self.store.set_setting(key + ":paid_cursor", "")
@@ -147,14 +167,28 @@ class LogicalProductWorker:
             if malformed:
                 self.problem(product, "CATALOG_MARKER_INVALID")
                 continue
-            if sum(item.get("status") == "APPROVED" for item in candidates) > 1:
+            if (
+                sum(
+                    item["id"] not in snapshot_orders and item.get("status") == "APPROVED"
+                    for item in candidates
+                )
+                > 1
+            ):
                 self.problem(product, "DUPLICATE_ACTIVE_MARKER")
                 continue
             for item in candidates:
                 try:
                     # A separate fresh read confirms the selected object after
                     # the catalog scan; existing aliases are also rechecked.
-                    fresh = await self.api.call("get_item", id=item["id"])
+                    source_order = snapshot_orders.get(item["id"])
+                    if source_order:
+                        current_deal = await self.api.call("get_delivery_deal", deal_id=source_order)
+                        deliverable(current_deal, source_order, account)
+                        fresh = current_deal.get("item") or {}
+                        Orders(self.store).ingest(current_deal)
+                        paid_items[item["id"]] = current_deal
+                    else:
+                        fresh = await self.api.call("get_item", id=item["id"])
                     if (
                         fresh.get("id") != item["id"]
                         or fresh.get("status") != item.get("status")
@@ -169,11 +203,15 @@ class LogicalProductWorker:
                         fresh,
                         snapshot,
                         paid_order=paid_items.get(item["id"]),
+                        source_order_id=source_order,
+                        snapshot_item_ids=frozenset(snapshot_orders),
                     )
                 except (ValueError, Conflict):
                     self.problem(product, "RELIST_CONFIRMATION_REQUIRED")
                     continue
                 adopted += int(self.service.listing(item["id"]) is not None)
+                if source_order:
+                    event("ORDER", "Привязка сделки подтверждена: Telegram-подарки", order=source_order)
         self.store.set_setting(
             key + ":completed", {"at": now(), "generation": generation, "adopted": adopted}
         )
