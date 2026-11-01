@@ -80,5 +80,5 @@ def test_stale_and_naive_quotes_rejected():
 
 
 def test_source_time_is_displayed_in_moscow_with_day_boundary():
-    assert checked_time("2026-10-29T22:30:00+00:00") == "30.10.2026 01:30 МСК"
+    assert checked_time("2026-10-29T22:30:00+00:00") == "30.10.2026 в 01:30"
     assert checked_time("2026-10-29T22:30:00") == "время не подтверждено"

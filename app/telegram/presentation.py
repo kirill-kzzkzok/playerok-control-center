@@ -164,7 +164,7 @@ def local_time(value, *, clock=False):
         moment = datetime.fromisoformat(value)
         if moment.tzinfo is None:
             return "дата не указана"
-        return moment.astimezone(MOSCOW).strftime("%H:%M" if clock else "%d.%m.%Y · %H:%M")
+        return moment.astimezone(MOSCOW).strftime("%H:%M" if clock else "%d.%m.%Y в %H:%M")
     except (ValueError, TypeError, AttributeError):
         return "дата не указана"
 

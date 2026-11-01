@@ -116,9 +116,12 @@ class ListingsPanel:
                 [
                     [("Активные", "itemfilter:APPROVED"), ("Архив и прочие", "itemfilter:ARCHIVE")],
                     [("🔎 Поиск", "il:search"), ("Фильтры", "itemfilters")],
-                    [("💾 Черновики Playerok", "itemfilter:DRAFT")]
+                    [("💾 Черновики на Playerok", "itemfilter:DRAFT")]
                     if gift_picker
-                    else [("💾 Мои черновики", "drafts"), ("Черновики Playerok", "itemfilter:DRAFT")],
+                    else [
+                        ("💾 Локальные черновики", "drafts"),
+                        ("Черновики на Playerok", "itemfilter:DRAFT"),
+                    ],
                 ]
             )
         # Save only after the whole response/buttons validate; errors leave retryable cursor.

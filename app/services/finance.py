@@ -170,7 +170,7 @@ def checked_time(checked_at):
         value = datetime.fromisoformat(checked_at)
         if value.tzinfo is None:
             return "время не подтверждено"
-        return value.astimezone(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y %H:%M МСК")
+        return value.astimezone(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y в %H:%M")
     except (ValueError, TypeError):
         return "время не подтверждено"
 

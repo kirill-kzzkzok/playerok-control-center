@@ -1,10 +1,14 @@
+import json
+import logging
 import secrets
-from decimal import ROUND_CEILING, Decimal
+from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from html import escape
+
+from aiogram.exceptions import TelegramAPIError
 
 from app.database.store import now
 from app.playerok.adapter import APIError
-from app.services.finance import money, selected_fee_multiplier
+from app.services.finance import FeeRule, money, selected_fee_multiplier
 from app.services.financial_quotes import save_quote
 from app.services.products import priority_price_basis
 from app.services.withdrawals import (
@@ -38,7 +42,7 @@ class FinancePanel:
             raise ValueError("Владение товаром не подтверждено")
         return item
 
-    async def item(self, owner, ident):
+    async def item(self, owner, ident, *, details=False):
         item = await self.read_owned(ident)
         payload = {
             "price": item["price"],
@@ -71,12 +75,13 @@ class FinancePanel:
         chosen = self.store.setting(self.preference_key(owner))
         if chosen:
             payload["withdrawal"] = await withdrawal_snapshot(self.api, chosen["provider"]["id"])
-        placement = None
-        if item.get("status") == "DRAFT" and item.get("raw_price") is not None:
+        placement, quotes = None, []
+        if item.get("raw_price") is not None:
             try:
                 quotes = await self.products.priority_preview(ident, priority_price_basis(item))
             except APIError:
                 quotes = []
+        if item.get("status") == "DRAFT" and quotes:
             preferred = self.store.setting(f"finance:{owner}:placement:{ident}")
             chosen = (
                 next((q for q in quotes if q.get("id") == preferred), None)
@@ -140,7 +145,12 @@ class FinancePanel:
                 if batch.net is not None:
                     text += f"\nПри объединении {count} таких продаж: на руки ≈ {batch.net} ₽ суммарно."
         text += "\nИсторическая прибыль по завершённым заказам учитывается отдельно."
+        if not details:
+            text = self.compact(owner, ident, item, payload, result, quotes)
         rows = [
+            [("Подробности", "fin:details:" + ident)]
+            if not details
+            else [("К краткому расчёту", "finance:" + ident)],
             [("⚙️ Параметры расчёта", "fin:options:" + ident)],
             [("🔄 Обновить расчёт", "finance:" + ident)],
         ]
@@ -148,7 +158,94 @@ class FinancePanel:
             rows.insert(0, [("💳 Выбрать способ получения денег", "providers")])
         return text, keyboard(rows, back=("⬅️ Товар", "item:" + ident))
 
+    def compact(self, owner, ident, item, payload, result, quotes):
+        def rub(value, missing="не получена"):
+            return str(value) + " ₽" if value is not None else missing
+
+        lines = [
+            "💰 <b>" + escape(item.get("name") or "Товар") + "</b>",
+            "Прогноз будущей продажи · оценка",
+            "Цена: " + rub(result.sale),
+            "Комиссия Playerok: " + rub(result.platform_fee),
+            "Себестоимость: " + rub(result.cost, "не задана"),
+        ]
+        snapshot = payload.get("withdrawal") or {}
+        provider = snapshot.get("provider") or {}
+        name = "СБП" if provider.get("id") == "SBP" else provider.get("name") or "вывода"
+        fee, approximate_part = result.withdrawal_fee, False
+        if provider.get("id") == "SBP" and result.after_platform is not None and fee is None:
+            quote = estimate_withdrawal(result.after_platform, snapshot)
+            if quote.minimum_amount and 0 <= result.after_platform < quote.minimum_amount:
+                try:
+                    rate = Decimal(str(provider.get("fee")))
+                    if rate.is_finite() and 0 <= rate <= 100:
+                        fee = FeeRule(
+                            rate,
+                            Decimal(0),
+                            snapshot["source"],
+                            snapshot["checked_at"],
+                            "SBP percentage only",
+                            estimated=True,
+                            net_floor_cents=True,
+                        ).charge(result.after_platform)
+                        approximate_part = True
+                except (ValueError, InvalidOperation, KeyError):
+                    fee = None
+        lines.append(
+            "Оценка комиссии "
+            + escape(name)
+            + ": "
+            + (
+                "≈ " + rub(fee)
+                if fee is not None
+                else "выберите способ"
+                if not provider
+                else "обновите условия"
+            )
+        )
+        if result.after_withdrawal is not None:
+            lines.append("На руки после вывода: " + rub(result.after_withdrawal))
+        premium = [q for q in quotes if q.get("type") == "PREMIUM" and q.get("price") is not None]
+        priority = item.get("priority")
+        premium_status = (
+            "включён"
+            if priority == "PREMIUM"
+            else "не включён"
+            if priority == "DEFAULT"
+            else "статус не подтверждён"
+        )
+        tariffs = sorted({money(q["price"]) for q in premium})
+        tariff = " / ".join(rub(v) for v in tariffs) if tariffs else "не получен"
+        lines.append("PREMIUM: " + premium_status + " · новый тариф: " + tariff)
+        confirmed = Decimal(0)
+        for row in self.store.rows(
+            "SELECT e.amount,o.result FROM promotion_expenses e JOIN outbox o ON o.operation_key=e.operation_key WHERE e.item_id=? AND e.status='SUCCEEDED' AND o.status='SUCCEEDED' AND o.kind IN ('premium_publish','premium_bump')",
+            (ident,),
+        ):
+            receipt = json.loads(row["result"] or "null") or {}
+            if (
+                receipt.get("payment_id")
+                and receipt.get("paid_rub") is not None
+                and money(receipt["paid_rub"]) == money(row["amount"])
+            ):
+                confirmed += money(row["amount"])
+        if confirmed:
+            lines.append("Ранее оплачено PREMIUM/поднятий: " + rub(confirmed) + " разово")
+        if result.profit is not None and not result.estimated:
+            lines.append("Чистая прибыль: " + rub(result.profit))
+        elif result.after_platform is not None and result.cost is not None:
+            lines.append("Прибыль до дополнительных расходов: " + rub(result.after_platform - result.cost))
+        else:
+            lines.append("Для прибыли укажите себестоимость и проверьте комиссию")
+        if approximate_part:
+            lines.append(
+                "Ниже минимума вывода: это процентная часть; фактическая комиссия зависит от суммы и минимальной комиссии."
+            )
+        return "\n".join(lines)
+
     async def callback(self, action, owner, state):
+        if action.startswith("fin:details:"):
+            return await self.item(owner, action.split(":", 2)[2], details=True)
         if action.startswith("fin:options:"):
             ident = action.split(":", 2)[2]
             await self.read_owned(ident)
@@ -312,6 +409,13 @@ class FinancePanel:
             # Read ownership before storing a product-specific preference.
             await self.read_owned(ident)
             self.store.set_setting(f"finance:{owner}:cost:{ident}", str(amount))
+            if getattr(getattr(message, "chat", None), "type", None) == "private":
+                try:
+                    await message.delete()
+                except (TelegramAPIError, TimeoutError) as error:
+                    logging.getLogger(__name__).debug(
+                        "Cost input deletion not confirmed: %s", type(error).__name__
+                    )
             await state.clear()
             return await self.item(owner, ident)
         raise ValueError("Финансовый сценарий устарел")

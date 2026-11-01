@@ -40,7 +40,7 @@ from app.telegram.operations_panel import OperationsPanel
 from app.telegram.order_finance_panel import OrderFinancePanel
 from app.telegram.orders_panel import OrdersPanel
 from app.telegram.paid_promotions_panel import PaidPromotionsPanel
-from app.telegram.presentation import error_text
+from app.telegram.presentation import error_text, local_time
 from app.telegram.profile_panel import ProfilePanel
 from app.telegram.promotions_panel import PromotionsPanel
 from app.telegram.replies_panel import RepliesPanel
@@ -411,7 +411,9 @@ def create_router(store, api, products, synchronizer):
                 text, markup = (
                     "Пришлите одно новое изображение. После подтверждения оно заменит все текущие фотографии."
                     if kind == "editphoto"
-                    else "Введите новое значение. Затем будет подтверждение.",
+                    else "Сейчас на Playerok:\n<blockquote>"
+                    + escaped(item.get("description") if kind == "editdesc" else item.get("name"), 2800)
+                    + "</blockquote>\nВведите новое значение. Затем будет подтверждение.",
                     keyboard([]),
                 )
             elif action.startswith(("delete:", "publish:")):
@@ -597,7 +599,7 @@ def create_router(store, api, products, synchronizer):
                             + ": "
                             + str(value.get("state"))
                             + " · "
-                            + str(value.get("updated_at"))
+                            + local_time(value.get("updated_at"))
                             + " · сбоев: "
                             + str(value.get("failures_total", 0)),
                             180,

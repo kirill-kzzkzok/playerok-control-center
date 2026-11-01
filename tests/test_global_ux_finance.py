@@ -99,7 +99,9 @@ async def test_per_sale_forecast_quote_matches_display(ux):
     quote = json.loads(row["payload"])
     assert quote["inputs"]["placement"] == "10.00"
     assert quote["result"]["profit"] is not None
-    assert quote["result"]["profit"] + " ₽" in text
+    assert "Прибыль до дополнительных расходов: 1795.00 ₽" in text
+    details, _ = await panel.item(7, "item", details=True)
+    assert quote["result"]["profit"] + " ₽" in details
 
 
 async def test_close_then_start_creates_one_new_panel(ux):
@@ -259,8 +261,8 @@ async def test_item_uses_exact_obtaining_fee_without_unrelated_schema_requests(u
     api.item.pop("fee_multiplier")
     api.item.update(category={"id": "category"}, obtaining_type={"id": "specific", "fee_multiplier": "0.25"})
     text, _ = await FinancePanel(ux.store, api, Products(ux.store, api)).item(7, "item")
-    assert "После комиссии площадки: 1500.00 ₽" in text
-    assert api.calls == ["get_item"]
+    assert "Комиссия Playerok: 500.00 ₽" in text
+    assert api.calls == ["get_item", "get_item_priority_statuses"]
 
 
 async def test_global_withdrawal_profile_item_back_flow_uses_fresh_method(ux):

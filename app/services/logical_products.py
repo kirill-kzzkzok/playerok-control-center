@@ -188,12 +188,20 @@ class LogicalProducts:
                 imported += 1
         return imported
 
-    async def prepare(self, owner, item_id, handler, config):
+    async def prepare_legacy_description(self, owner, item_id):
+        existing = self.listing(item_id)
+        if not existing or existing["state"] != "LEGACY" or existing["handler"] != "telegram_gifts":
+            raise Conflict("Перенос недоступен. Обновите карточку привязки")
+        return await self.prepare(owner, item_id, existing["handler"], {}, migrate_legacy=True)
+
+    async def prepare(self, owner, item_id, handler, config, *, migrate_legacy=False):
         account = self.authority(owner)
         item = await self.api.call("get_item", id=item_id)
         baseline = critical(item)
         if item.get("id") != item_id or baseline["account"] != account:
             raise Conflict("Товар принадлежит другому аккаунту")
+        if item.get("is_editable") is False:
+            raise Conflict("Playerok запрещает редактирование этого товара")
         if item.get("deleted_at") or item.get("status") not in {"DRAFT", "APPROVED"}:
             raise ValueError("Привязка доступна для опубликованного товара или серверного черновика")
         existing = self.listing(item_id)
@@ -201,9 +209,23 @@ class LogicalProducts:
             raise Conflict("Сначала остановите выдачу товара")
         if existing:
             self.assert_editable_intents(existing["id"])
-        gifts = self.gift_service() if handler == "telegram_gifts" else None
-        config = configuration(handler, config, max_count=gifts.settings.max_gifts if gifts else 5)
-        if handler == "telegram_gifts":
+        if migrate_legacy:
+            if not existing or existing["state"] != "LEGACY" or handler != "telegram_gifts":
+                raise Conflict("Старая привязка изменилась. Обновите карточку")
+            # Description-only migration preserves the already approved snapshot.
+            # No MTProto, price reconfirmation, spending permission or automatic arm.
+            config = json.loads(existing["config"])
+            if (
+                gift_code_from_description(
+                    item.get("description", ""), max_count=max(5, len(config.get("bundle", [])))
+                )
+                != config["code"]
+            ):
+                raise Conflict("Метка подарка не совпадает со старой привязкой")
+        gifts = self.gift_service() if handler == "telegram_gifts" and not migrate_legacy else None
+        if not migrate_legacy:
+            config = configuration(handler, config, max_count=gifts.settings.max_gifts if gifts else 5)
+        if handler == "telegram_gifts" and not migrate_legacy:
             inspected = await gifts.inspect_item(owner, item_id, preview_code=config["code"])
             if critical(inspected["item"]) != baseline or inspected["item"].get("description") != item.get(
                 "description"

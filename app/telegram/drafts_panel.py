@@ -25,7 +25,7 @@ class DraftsPanel:
         result = draft_page(self.store, owner, page, selected, search)
         await state.set_state(None)
         await state.set_data({"draft_list_filter": selected, "draft_list_search": search})
-        text = f"💾 <b>Черновики · {DRAFT_FILTERS[selected][0]}</b>\nСтраница {result['page'] + 1}/{result['pages']} · Всего: {result['total']}"
+        text = f"💾 <b>Локальные черновики · {DRAFT_FILTERS[selected][0]}</b>\nСтраница {result['page'] + 1}/{result['pages']} · Всего: {result['total']}"
         if search:
             text += "\nПоиск: " + escaped(search, 500)
         if not result["rows"]:

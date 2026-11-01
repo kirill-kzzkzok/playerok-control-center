@@ -88,7 +88,7 @@ async def test_provider_selection_amount_and_restart_never_withdraw(setup):
     quotes = store.rows("SELECT * FROM financial_quotes")
     assert len(quotes) == 1 and json.loads(quotes[0]["payload"])["kind"] == "ESTIMATE_ONLY"
     await panel.callback("fin:refresh", 7, state)
-    assert set(api.calls) <= {"get_transaction_providers", "get_item"}
+    assert set(api.calls) <= {"get_transaction_providers", "get_item", "get_item_priority_statuses"}
 
 
 async def test_local_cost_for_sold_item_does_not_require_market_editability(setup):
@@ -98,7 +98,7 @@ async def test_local_cost_for_sold_item_does_not_require_market_editability(setu
     assert store.setting("finance:7:cost:item") == "500.25"
     assert "500.25" in text
     assert "Прибыль:" not in text  # promotion expense and withdrawal are unknown
-    assert set(api.calls) == {"get_item"}
+    assert set(api.calls) == {"get_item", "get_item_priority_statuses"}
     assert not store.rows("SELECT * FROM outbox")
 
 

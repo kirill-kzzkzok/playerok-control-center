@@ -75,6 +75,7 @@ class LogicalProductsPanel:
                 text += f"\nТекст выдачи сохранён: {len(config.get('text', ''))} символов; содержимое скрыто"
             if product["state"] == "LEGACY":
                 text += "\nНужен перенос старой привязки: код ещё не добавлен в Playerok. Действующая история сохранена."
+                rows.append([("Обновить описание на Playerok", prefix + "migrate")])
             elif product["state"] == "PENDING":
                 operation = self.store.rows(
                     "SELECT status FROM outbox WHERE id=?", (product["operation_id"],)
@@ -159,6 +160,11 @@ class LogicalProductsPanel:
         command, value = parts[2], parts[3] if len(parts) == 4 else None
         prefix = "lp:" + view["nonce"] + ":"
         product = self.service.product(view["product"], owner) if view.get("product") else None
+        if command == "migrate":
+            prepared = await self.service.prepare_legacy_description(owner, view["item"])
+            view["nonce"] = secrets.token_hex(6)
+            await state.update_data(logical_view=view, logical_prepared=prepared)
+            return self.preview(prepared, view)
         if command == "configure":
             if product and product["enabled"]:
                 raise Conflict("Сначала остановите выдачу товара. Уже начатые операции не будут повторяться")

@@ -41,7 +41,7 @@ def test_profile_uses_parser_contract_and_separates_balances_and_directions():
     assert "Объявлений: 10 · завершено: 2" in text
     assert "Продаж: 25 · завершено: 20" in text
     assert "Покупок: 3 · завершено: 1" in text
-    assert "01.01.2020 03:00 МСК" in text
+    assert "01.01.2020 в 03:00" in text
     assert len(text) < 1024
     assert "нет данных" in profile_caption({})
     assert "None" not in profile_caption({"profile": {"rating": None}})

@@ -172,7 +172,8 @@ class PromotionsPanel:
             text = "💰 <b>Сохранённые расходы продвижения</b>\n" + (
                 "\n".join(
                     escaped(
-                        f"{row['created_at']} · {row['amount']} ₽ · {row['status']} · {row['item_id']}", 160
+                        f"{local_time(row['created_at'])} · {row['amount']} ₽ · {row['status']} · {row['item_id']}",
+                        160,
                     )
                     for row in rows
                 )

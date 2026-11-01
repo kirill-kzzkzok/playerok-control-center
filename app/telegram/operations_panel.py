@@ -5,7 +5,7 @@ from app.database.store import Conflict
 from app.services.reconciliation import Reconciliation, signature
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
-from app.telegram.presentation import operation_name
+from app.telegram.presentation import local_time, operation_name
 from app.telegram.presentation import status as status_label
 
 
@@ -92,7 +92,7 @@ class OperationsPanel:
             uploads = self.store.rows(
                 "SELECT position,status FROM chat_uploads WHERE operation_id=? ORDER BY position", (ident,)
             )
-            text = f"🧾 <b>Операция</b>\nID: <code>{escaped(ident, 100)}</code>\nТип: {escaped(row['kind'], 60)}\nСтатус: {escaped(row['status'], 60)}\nЦель: {escaped(row['target'], 100)}\nСоздана: {escaped(row['created_at'], 60)}\nПопыток: {row['attempts']}\nОшибка: {escaped(row['error_code'] or '—', 100)}"
+            text = f"🧾 <b>Операция</b>\nID: <code>{escaped(ident, 100)}</code>\nТип: {escaped(row['kind'], 60)}\nСтатус: {escaped(row['status'], 60)}\nЦель: {escaped(row['target'], 100)}\nСоздана: {local_time(row['created_at'])}\nПопыток: {row['attempts']}\nОшибка: {escaped(row['error_code'] or '—', 100)}"
             if (
                 row["started_at"] is None
                 and row["status"] == "PERMANENT_FAILED"
@@ -117,7 +117,7 @@ class OperationsPanel:
                 text += "\nПовтор остановлен владельцем; внешний результат остался неизвестен."
             if resolutions:
                 resolution = resolutions[0]
-                text += f"\n\nРешение владельца {resolution['actor']}: {resolution['decision']}\n{escaped(resolution['reason'], 600)}\n{escaped(resolution['resolved_at'], 60)}"
+                text += f"\n\nРешение владельца {resolution['actor']}: {resolution['decision']}\n{escaped(resolution['reason'], 600)}\n{local_time(resolution['resolved_at'])}"
             rows = []
             if (
                 row["started_at"] is None

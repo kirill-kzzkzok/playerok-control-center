@@ -14,6 +14,7 @@ from app.gifts.service import GiftService
 from app.gifts.settings import GiftSettings
 from app.playerok.adapter import APIError
 from app.security.logging import event
+from app.services.finance import checked_time
 from app.services.playerok_connection import REASONS
 from app.telegram.keyboards import keyboard
 from app.telegram.presentation import item_label, order_label, status
@@ -189,7 +190,7 @@ class GiftsPanel:
                 lines.append(
                     f"{escape(gift_name(code))} · "
                     + (
-                        f"{v['stars']} ⭐ · {'доступен' if v['available'] else 'недоступен'} · {escape(v['checked_at'])}"
+                        f"{v['stars']} ⭐ · {'доступен' if v['available'] else 'недоступен'} · {checked_time(v['checked_at'])}"
                         if v
                         else f"снимок {seed} ⭐; актуальная цена не проверена"
                     )
@@ -358,7 +359,7 @@ class GiftsPanel:
                 if g["message_id"]:
                     text += f"\nСерверное подтверждение: сообщение {g['message_id']}"
                 if g["spent_at"]:
-                    text += "\nПлатёжное намерение: " + escape(g["spent_at"])
+                    text += "\nПлатёжное намерение: " + checked_time(g["spent_at"])
             rows = [[("Открыть заказ", "order:" + ident)]]
             for g in steps:
                 if g["operation_id"]:

@@ -269,8 +269,16 @@ class Wizard:
                 "Обязательное поле" if field["required"] else "Необязательное: введите − для пропуска"
             )
             if payload.get("edit_target") or payload.get("return_preview"):
+                current_value = payload["fields"].get(field["key"], "")
+                text += "\nТекущее значение: " + (
+                    "сохранено, содержимое скрыто"
+                    if field.get("data_field") or field.get("comment")
+                    else escaped(current_value, 600)
+                    if current_value != ""
+                    else "не задано"
+                )
                 try:
-                    validate_field(field, payload["fields"].get(field["key"], ""))
+                    validate_field(field, current_value)
                 except ValidationError:
                     pass
                 else:
@@ -434,6 +442,8 @@ class Wizard:
         await state.update_data(choices=choices)
         if step not in {"game", "preview", "agreements_wait"}:
             rows.append([("⬅️ Назад", f"w:{nonce}:back")])
+        if step in {"name", "description", "price"} and payload.get(step) is not None:
+            text += "\nСохранённое значение: " + escaped(payload[step], 2300)
         if payload.get("return_preview") and step != "preview":
             rows.append([("Вернуться к превью", f"w:{nonce}:preview_return")])
         rows.append([("💾 Сохранить и выйти", "home"), ("❌ Отмена", "cancel_wizard")])
