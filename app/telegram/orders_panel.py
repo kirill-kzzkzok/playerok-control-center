@@ -13,7 +13,7 @@ from app.services.order_management import OrderManagement, deliverable, order_sn
 from app.services.products import ValidationError
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
-from app.telegram.presentation import MODES, status
+from app.telegram.presentation import MODES, history_event, local_time, status
 
 
 class OrdersPanel:
@@ -32,7 +32,7 @@ class OrdersPanel:
         )
         buttons = []
         for row in rows[:10]:
-            name = (json.loads(row["payload"]).get("item") or {}).get("name") or row["id"]
+            name = (json.loads(row["payload"]).get("item") or {}).get("name") or "Товар без названия"
             buttons.append([(str(name)[:45] + " · проверить выдачу", "order:" + row["id"])])
             buttons.append([("Подтверждение выполнения", "ff:start:" + row["id"])])
         nav = []
@@ -43,7 +43,7 @@ class OrdersPanel:
         if nav:
             buttons.append(nav)
         return "📦 <b>Выдано — ожидает подтверждения</b>\n" + (
-            "Отправка подтверждена, но серверный статус заказа ещё PAID. Проверьте результат и способ Fulfillment. Авто-SENT подарков требует отдельного разрешения и подтверждения доставки."
+            "Отправка подтверждена. Проверьте результат и подтвердите выполнение на Playerok. Покупатель пока не подтвердил получение."
             if rows
             else "Таких заказов нет."
         ), keyboard(buttons)
@@ -60,7 +60,7 @@ class OrdersPanel:
         rows = [
             [
                 (
-                    f"{value['amount'] or '?'} ₽ · {status(value['status'], 'order')} · {value.get('name') or value['id']}"[
+                    f"{value['amount'] or '?'} ₽ · {status(value['status'], 'order')} · {value.get('name') or 'Товар без названия'}"[
                         :60
                     ],
                     "order:" + value["id"],
@@ -115,7 +115,7 @@ class OrdersPanel:
             f"🛒 <b>Заказ</b>\nID: <code>{escaped(ident, 100)}</code>\n"
             f"Покупатель: {escaped(user.get('username') or 'не указан', 100)}\n"
             f"Товар: {escaped(item.get('name') or item['id'], 250)}\nСумма: {escaped(item.get('price', '?'), 40)} ₽\n"
-            f"Статус Playerok: {escaped(order['status'], 50)}\nСоздан: {checked_time(order.get('created_at'))}\n"
+            f"Статус Playerok: {status(order['status'], 'order')}\nСоздан: {local_time(order.get('created_at'))}\n"
             f"Проблема Playerok: {'да' if order.get('has_problem') else 'нет' if order.get('has_problem') is False else 'не подтверждено'}\n"
             f"Локальная отметка: {'проблема' if annotation['problem'] else 'нет'}\n"
             f"{Automation(self.store, self.service.api).status_text(item['id'])}\n"
@@ -127,10 +127,10 @@ class OrdersPanel:
         if annotation["note"]:
             text += "\nЗаметка: " + escaped(annotation["note"], 500)
         if operation:
-            text += "\nВыдача: " + escaped(operation[0]["status"], 50)
+            text += "\nВыдача: " + status(operation[0]["status"])
         if gifts:
-            text += f"\nПодарочная выдача: {gifts[0]['state']} · возврат: {gifts[0]['refund_state']}"
-        text += "\n\nSENT означает отметку продавца о выполнении. Окончательное подтверждение — действие покупателя."
+            text += f"\nПодарочная выдача: {status(gifts[0]['state'])} · возврат: {status(gifts[0]['refund_state'])}"
+        text += "\n\nОтметку об отправке ставит продавец. Получение подтверждает покупатель."
         rows = []
         chat = (order.get("chat") or {}).get("id")
         if chat:
@@ -154,7 +154,7 @@ class OrdersPanel:
         rows.extend(
             [
                 [("📝 История", f"od:history:{ident}:0"), ("Заметка", "od:note:" + ident)],
-                [("❗ Локальная проблема", "od:problem:" + ident)],
+                [("❗ Отметить проблему", "od:problem:" + ident)],
                 [("🧾 Себестоимость и прибыль", "pf:card:" + ident)],
             ]
         )
@@ -179,10 +179,11 @@ class OrdersPanel:
             elif gifts:
                 text += "\nПодарки: " + status(gifts[0]["state"])
             else:
-                text += "\nВыдача: подтверждённых данных нет"
+                text += "\nВыдача: " + ("вручную" if not gift_listing else "подарок ожидает обработки")
             if not gifts and not gift_listing:
                 readiness = Automation(self.store, self.service.api).readiness(item["id"])
-                text += "\nАвтовыдача: " + readiness["status"] + " · " + MODES[readiness["mode"]]
+                if readiness["mode"] != "manual":
+                    text += "\nАвтовыдача: " + readiness["status"] + " · " + MODES[readiness["mode"]]
             if cached:
                 text += "\n⚠️ Сохранённые данные. Связь с Playerok не подтверждена."
             if order.get("has_problem") or annotation["problem"]:
@@ -201,7 +202,11 @@ class OrdersPanel:
                 for row in rows
             ]
             rows = [row for row in rows if row]
-            rows += [[("⋯ Подробнее", "od:details:" + ident)], [("⬅️ К заказам", "orders")]]
+            rows += [
+                [("📜 История заказа", "od:history:" + ident + ":0")],
+                [("⋯ Подробнее", "od:details:" + ident)],
+                [("⬅️ К заказам", "orders")],
+            ]
             return text, keyboard(rows, home=False)
         markup = keyboard(rows)
         markup.inline_keyboard.insert(
@@ -231,22 +236,26 @@ class OrdersPanel:
             "SELECT * FROM order_history WHERE order_id=? ORDER BY id DESC LIMIT 7 OFFSET ?",
             (ident, page * 6),
         )
-        blocks = ["📝 <b>История заказа</b> · " + str(page + 1), "<b>Локальный журнал</b>"]
-        for event in events[:6]:
-            blocks.append(
-                f"{checked_time(event['created_at'])} · {escaped(event['source'], 50)}\n{escaped(event['old_status'] or '—', 30)} → {escaped(event['new_status'], 30)}\n{escaped(event['note'], 220)}"
-                + (
-                    f"\nПроблема ({'локально' if event['source'] == 'LOCAL_NOTE' else 'Playerok'}): {'да' if event['problem'] else 'нет'}"
-                    if event["problem"] is not None
-                    else ""
+        blocks = ["📜 <b>История заказа</b>"]
+        for row in events[:6]:
+            event = dict(row)
+            block = f"{local_time(event['created_at'])} — {history_event(event)}"
+            if event["source"] == "LOCAL_NOTE" and event["note"]:
+                block += "\n" + escaped(event["note"], 220)
+            if event["problem"]:
+                block += (
+                    "\n⚠️ Проблема (локально): да — отметка продавца"
+                    if event["source"] == "LOCAL_NOTE"
+                    else "\n⚠️ Площадка отметила проблему с заказом"
                 )
-                + (f"\nВладелец: {event['actor']}" if event["actor"] is not None else "")
-            )
-        blocks.append("<b>События Playerok (последний сохранённый снимок)</b>")
-        for event in logs[page * 6 : (page + 1) * 6]:
-            blocks.append(
-                f"{checked_time(event.get('created_at'))} · {escaped(event.get('event') or 'неизвестное событие', 60)}"
-            )
+            blocks.append(block)
+        if logs[page * 6 : (page + 1) * 6]:
+            blocks.append("<b>События площадки</b>")
+        for entry in logs[page * 6 : (page + 1) * 6]:
+            # The event enum has no stable public translation contract. Do not invent an action.
+            blocks.append(f"{local_time(entry.get('created_at'))} — Обновлены данные заказа")
+        if len(blocks) == 1:
+            blocks.append("История пока пуста.")
         navigation = []
         if page:
             navigation.append(("← Назад", f"od:history:{ident}:{page - 1}"))
@@ -258,8 +267,33 @@ class OrdersPanel:
             if len(event["note"]) > 150
         ]
         return "\n\n".join(blocks), keyboard(
-            ([navigation] if navigation else []) + details + [[("К заказу", "order:" + ident)]]
+            ([navigation] if navigation else [])
+            + details
+            + [[("Технический журнал", f"od:historyraw:{ident}:{page}")], [("К заказу", "order:" + ident)]]
         )
+
+    def history_raw(self, owner, ident, page):
+        self.service.owner(owner)
+        if not 0 <= page <= 1_000_000:
+            raise ValueError("Некорректная страница истории")
+        values = self.store.rows(
+            "SELECT source,old_status,new_status,created_at FROM order_history WHERE order_id=? ORDER BY id DESC LIMIT 6 OFFSET ?",
+            (ident, page * 6),
+        )
+        text = "🛠 <b>Технический журнал заказа</b>\nID: <code>" + escaped(ident, 100) + "</code>"
+        for value in values:
+            text += "\n\n" + local_time(value["created_at"]) + " · источник: " + escaped(value["source"], 60)
+            text += (
+                "\nСостояние: "
+                + escaped(value["old_status"] or "—", 60)
+                + " → "
+                + escaped(value["new_status"], 60)
+            )
+        order = self.store.rows("SELECT payload FROM orders WHERE id=?", (ident,))
+        logs = json.loads(order[0]["payload"]).get("logs") or [] if order else []
+        for entry in logs[page * 6 : (page + 1) * 6]:
+            text += "\n\nСобытие площадки: " + escaped(entry.get("event") or "не указано", 120)
+        return text, keyboard([], back=("⬅️ История заказа", f"od:history:{ident}:{page}"))
 
     async def confirm(self, state, pending, text):
         nonce = secrets.token_hex(8)
@@ -301,6 +335,10 @@ class OrdersPanel:
                 []
             )
         ident = parts[2]
+        if command == "historyraw":
+            if len(parts) != 4:
+                raise ValidationError("Кнопка истории устарела")
+            return self.history_raw(owner, ident, int(parts[3]))
         if command == "details":
             await state.clear()
             return await self.card(owner, ident, details=True)

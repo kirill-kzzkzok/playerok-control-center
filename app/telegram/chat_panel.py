@@ -6,6 +6,7 @@ from app.services.attachments import Attachments
 from app.services.products import ValidationError
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
+from app.telegram.presentation import local_time
 
 
 class ChatPanel:
@@ -51,11 +52,22 @@ class ChatPanel:
                 )
         view.update(next=following, nonce=secrets.token_hex(6), media=media)
         await state.update_data(chat_view=view)
+        peer_name = self.store.setting("ui:chat:" + ident + ":name")
+        if not peer_name or peer_name == "Собеседник не указан":
+            peers = {
+                (entry.get("user") or {}).get("username")
+                for entry in messages
+                if (entry.get("user") or {}).get("id")
+                and (entry.get("user") or {}).get("id")
+                != getattr(getattr(self.api, "account", None), "id", None)
+                and (entry.get("user") or {}).get("username")
+            }
+            peer_name = next(iter(peers)) if len(peers) == 1 else "собеседником"
         blocks = []
         for message in reversed(messages):
             user = message.get("user") or {}
             author = escaped(user.get("username") or "Событие", 60)
-            date = escaped(message.get("created_at") or "", 32)
+            date = local_time(message.get("created_at"))
             text = "[сообщение удалено]" if message.get("deleted_at") else message.get("text") or "[событие]"
             images = message.get("images") or []
             attachment = f"\n📷 Изображений: {len(images)}" if images else ""
@@ -73,7 +85,7 @@ class ChatPanel:
             rows.append([("📷 Открыть фотографии", f"chatmedia:{view['nonce']}:0")])
         rows.append([("⋯ Ещё", "chatmore:" + ident)])
         return (
-            f"💬 <b>Диалог · страница {view['index'] + 1}</b>\n\n"
+            f"💬 <b>Переписка с {escaped(peer_name, 80)}</b>\nстраница {view['index'] + 1}\n\n"
             + ("\n\n".join(blocks) if blocks else "Сообщений нет."),
             keyboard(rows, back=("⬅️ К сообщениям", "chats")),
         )

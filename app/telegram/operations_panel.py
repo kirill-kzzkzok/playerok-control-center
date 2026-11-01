@@ -5,6 +5,8 @@ from app.database.store import Conflict
 from app.services.reconciliation import Reconciliation, signature
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
+from app.telegram.presentation import operation_name
+from app.telegram.presentation import status as status_label
 
 
 class OperationsPanel:
@@ -27,7 +29,12 @@ class OperationsPanel:
                 (page * 12,),
             )
             rows = [
-                [(f"{value['kind']} · {value['status']} · {value['id'][:8]}", "ops:show:" + value["id"])]
+                [
+                    (
+                        f"{operation_name(value['kind'])} · {status_label(value['status'])}",
+                        "ops:show:" + value["id"],
+                    )
+                ]
                 for value in values[:12]
             ]
             navigation = []

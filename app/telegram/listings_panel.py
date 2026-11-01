@@ -1,12 +1,12 @@
 import json
 import secrets
-from datetime import UTC, datetime
 
 from app.playerok.adapter import validate_page
 from app.services.item_filters import checked_filters, matches_item
 from app.services.products import ValidationError
 from app.telegram.item_category_picker import ItemCategoryPicker
 from app.telegram.keyboards import keyboard
+from app.telegram.presentation import chat_peer, local_time, short_title
 from playerokapi.enums import ItemStatuses
 
 
@@ -57,34 +57,40 @@ class ListingsPanel:
         # An empty page with continuation still offers Next; it does not mean EOF.
         rows = [[("➕ Создать товар", "create")]] if kind == "items" else []
         for value in values:
-            user = value.get("user") or {}
-            label = value.get("name") or user.get("username") or value["id"]
+            label = (
+                value.get("name") or "Товар без названия"
+                if kind == "items"
+                else chat_peer(value, getattr(getattr(self.api, "account", None), "id", None))
+            )
             if kind == "items":
                 if self.store is not None and isinstance(value.get("name"), str):
                     self.store.set_setting("ui:item:" + value["id"] + ":name", value["name"][:200])
                 label = f"{label} · {value.get('price', '?')} ₽"
             elif value.get("unread_messages_counter"):
                 label = f"🔵 {value['unread_messages_counter']} · {label}"
-            if kind == "chats" and self.store is not None:
-                cached = self.store.rows(
-                    "SELECT payload FROM chat_messages WHERE chat_id=? ORDER BY created_at DESC,id DESC LIMIT 1",
-                    (value["id"],),
-                )
-                if cached:
-                    last = json.loads(cached[0]["payload"])
+            if kind == "chats":
+                if self.store is not None:
+                    self.store.set_setting(
+                        "ui:chat:" + value["id"] + ":name",
+                        chat_peer(value, getattr(getattr(self.api, "account", None), "id", None)),
+                    )
+                last = value.get("last_message") or {}
+                if not last and self.store is not None:
+                    cached = self.store.rows(
+                        "SELECT payload FROM chat_messages WHERE chat_id=? ORDER BY created_at DESC,id DESC LIMIT 1",
+                        (value["id"],),
+                    )
+                    last = json.loads(cached[0]["payload"]) if cached else {}
+                if last:
                     snippet = (
                         "Фото" if last.get("images") and not last.get("text") else last.get("text") or ""
                     )
                     if last.get("deleted_at"):
                         snippet = "Сообщение удалено"
-                    stamp = ""
-                    try:
-                        date = datetime.fromisoformat(last.get("created_at") or "")
-                        if date.tzinfo is not None:
-                            stamp = date.astimezone(UTC).strftime(" · %H:%M UTC")
-                    except (ValueError, TypeError):
-                        pass
-                    label = label[:22] + " · " + " ".join(snippet.split())[:20] + stamp
+                    stamp = local_time(last.get("created_at"), clock=True)
+                    label = short_title(label, 25) + " · " + short_title(snippet, 20, "Событие")
+                    if stamp != "дата не указана":
+                        label += " · " + stamp
             callback = f"{prefix}:{value['id']}"
             if len(callback.encode("utf-8")) > 64:
                 raise ValidationError("Идентификатор записи не помещается в кнопку Telegram")

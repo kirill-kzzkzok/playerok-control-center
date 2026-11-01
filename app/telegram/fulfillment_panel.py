@@ -66,7 +66,7 @@ class FulfillmentPanel:
             )
         values = form["values"]
         mode = {
-            "legacy": "Отметка SENT без отчёта",
+            "legacy": "Подтверждение отправки без отчёта",
             "draft": "Черновой отчёт исполнения",
             "fields": "Отчёт с данными исполнения",
         }[form["mode"]]
@@ -83,7 +83,7 @@ class FulfillmentPanel:
                 escape(label) + ": " + escape(values[name]) for name, label in labels.items()
             )
             text += "\nПоставщик: " + escape(form["provider_name"])
-        text += "\n\nПродавец отмечает исполнение SENT. Покупатель подтверждает получение. Перед записью сделка и требования будут проверены заново. Денежные операции не выполняются."
+        text += "\n\nПродавец отмечает отправку. Покупатель отдельно подтверждает получение. Перед записью сделка и требования будут проверены заново. Денежные операции не выполняются."
         return text, keyboard([[("✅ Отметить выполнение", f"ff:{nonce}:submit")]])
 
     async def callback(self, action, owner, state):

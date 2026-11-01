@@ -135,7 +135,7 @@ async def test_delivered_waiting_screen_requires_successful_receipt_and_stock_st
     action = store.claim()
     store.finish(action["id"], action["lease_token"], "SUCCEEDED", result={"message_id": "receipt"})
     await ui.click("delivered:0")
-    assert "серверный статус заказа ещё PAID" in session.calls[-1].text
+    assert "Покупатель пока не подтвердил получение" in session.calls[-1].text
     assert any(
         b.callback_data == "ff:start:order"
         for row in session.calls[-1].reply_markup.inline_keyboard

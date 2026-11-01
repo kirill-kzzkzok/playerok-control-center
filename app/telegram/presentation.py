@@ -1,6 +1,7 @@
 """Presentation-only vocabulary. Internal API and database values remain unchanged."""
 
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from app.telegram.formatting import escaped
 
@@ -34,7 +35,7 @@ COMMON = {
 ORDER = {
     **COMMON,
     "PAID": "Оплачен",
-    "SENT": "Продавец отметил выполнение",
+    "SENT": "Продавец отметил отправку",
     "CONFIRMED": "Получение подтверждено",
     "CONFIRMED_AUTOMATICALLY": "Завершён площадкой",
     "ROLLED_BACK": "Возврат подтверждён",
@@ -88,15 +89,44 @@ def automation_summary(store, api, ident):
     from app.services.automation import Automation
 
     value = Automation(store, api).readiness(ident)
-    return f"Выдача: {value['status'].lower()} · {MODES[value['mode']]}" + (
-        "\n" + escaped("; ".join(value["reasons"]), 650) if value["reasons"] else ""
-    )
+    text = f"Выдача: {value['status'].lower()} · {MODES[value['mode']]}"
+    if not value["revision"]:
+        return text + "\nВыберите способ и сохраните настройки. Отправки пока не разрешены."
+    reasons = []
+    if value["mode"] == "stock":
+        text += f"\nДоступно: {value['counts']['AVAILABLE']} · в резерве: {value['counts']['RESERVED']}"
+    for reason in value["reasons"]:
+        if reason == "глобальные записи выключены" or reason == "глобальная автоматика выключена":
+            if "Отправки выключены в настройках подключения" not in reasons:
+                reasons.append("Отправки выключены в настройках подключения")
+        else:
+            reasons.append(reason.replace("политика", "настройка"))
+    if reasons:
+        text += "\n" + escaped("; ".join(reasons), 650)
+    return text
 
 
 def error_text(error):
+    from app.gifts.core import gift_reason
+    from app.gifts.mtproto import GiftFailure
     from app.playerok.adapter import APIError
     from app.services.playerok_connection import REASONS
 
+    if isinstance(error, GiftFailure):
+        reasons = {
+            "SESSION_UNAUTHORIZED": "Личный Telegram не авторизован. Выполните локальную авторизацию и проверьте подключение заново.",
+            "SESSION_NOT_CONFIGURED": "Личный Telegram ещё не настроен. Выполните локальную авторизацию аккаунта.",
+            "SESSION_CLOSED": "Соединение личного Telegram закрыто. Проверьте подключение в настройках подарков.",
+            "PERSONAL_ACCOUNT_CHANGED": "Подключён другой личный Telegram-аккаунт. Покупки остановлены; проверьте исходную сессию.",
+            "PERSONAL_ACCOUNT_REQUIRED": "Нужен личный Telegram-аккаунт пользователя. Проверьте выбранную сессию.",
+            "CATALOG_UNAVAILABLE": "Telegram не подтвердил каталог подарков. Повторите проверку подключения без покупки.",
+            "BALANCE_UNAVAILABLE": "Telegram не подтвердил баланс Stars. Повторите проверку подключения без покупки.",
+            "GIFT_PAYMENTS_DISABLED": "Покупки подарков выключены в настройках подключения.",
+            "DELIVERY_NOT_CONFIRMED": "Доставка не подтверждена. Откройте сверку операции; повторная покупка заблокирована.",
+            "PAYMENT_NOT_CONFIRMED": "Результат платежа не подтверждён. Нужна сверка, повтор запрещён.",
+            "PROXY_ROUTE_CHANGED": "Маршрут Telegram изменился. Нужна проверка операции; повторная покупка запрещена.",
+        }
+        return escaped(reasons.get(error.code, gift_reason(error.code)), 800)
     if isinstance(error, APIError):
         if error.code == "WRITES_DISABLED":
             return "Записи Playerok выключены или аккаунт не подтверждён. Проверьте разрешение записей и подключение в профиле."
@@ -165,3 +195,81 @@ def item_label(store, ident):
 def order_label(store, ident):
     rows = store.rows("SELECT json_extract(payload,'$.item.name') AS name FROM orders WHERE id=?", (ident,))
     return str(rows[0]["name"] or "Заказ")[:60] if rows else "Заказ"
+
+
+MOSCOW = ZoneInfo("Europe/Moscow")
+
+
+def local_time(value, *, clock=False):
+    """Only timezone-aware source times are evidence of a moment."""
+    try:
+        moment = datetime.fromisoformat(value)
+        if moment.tzinfo is None:
+            return "дата не указана"
+        return moment.astimezone(MOSCOW).strftime("%H:%M" if clock else "%d.%m.%Y · %H:%M")
+    except (ValueError, TypeError, AttributeError):
+        return "дата не указана"
+
+
+def short_title(value, limit=60, fallback="Без названия"):
+    text = " ".join(str(value or "").split()) or fallback
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def chat_peer(value, account_id=None):
+    """Chat.users is the API's participant collection; never guess from a UUID."""
+    users = value.get("users") or []
+    peers = [user for user in users if isinstance(user, dict) and user.get("id") != account_id]
+    if len(peers) == 1:
+        peer = peers[0]
+        return peer.get("username") or peer.get("name") or "Собеседник не указан"
+    user = value.get("user") or {}
+    if not peers and isinstance(user, dict):
+        return user.get("username") or user.get("name") or "Собеседник не указан"
+    return "Собеседник не указан"
+
+
+def history_event(event):
+    source = event.get("source")
+    if source == "LOCAL_NOTE":
+        return "📝 Заметка продавца"
+    if source == "DELIVERY_RESERVED":
+        return "📦 Товар подготовлен к выдаче"
+    if source == "API_STATE":
+        names = {
+            "PAID": "💳 Оплата подтверждена",
+            "SENT": "📦 Продавец отметил отправку",
+            "CONFIRMED": "✅ Покупатель подтвердил получение",
+            "CONFIRMED_AUTOMATICALLY": "✅ Заказ завершён площадкой",
+            "ROLLED_BACK": "↩️ Возврат подтверждён",
+            "PENDING": "🛒 Заказ ожидает оплаты",
+            "FAILED": "⚠️ Заказ не выполнен",
+        }
+        return names.get(event.get("new_status"), "Обновлён статус заказа")
+    return "Обновлены данные заказа"
+
+
+OPERATIONS = {
+    "create": "Создание товара",
+    "edit": "Изменение товара",
+    "edit_fields": "Характеристики товара",
+    "discount": "Цена и скидка",
+    "delete": "Удаление товара",
+    "publish": "Публикация",
+    "premium_publish": "Премиум-публикация",
+    "premium_bump": "Платное поднятие",
+    "gift_send": "Отправка подарка",
+    "gift_refund": "Возврат заказа",
+    "gift_notice": "Уведомление о подарке",
+    "delivery": "Выдача со склада",
+    "delivery_text": "Выдача текста",
+    "chain_message": "Сообщение по заказу",
+    "reply": "Ответ покупателю",
+    "mark_read": "Отметка прочтения",
+    "fulfill": "Подтверждение выполнения",
+    "agreements": "Условия продавца",
+}
+
+
+def operation_name(value):
+    return OPERATIONS.get(value, "Действие магазина")

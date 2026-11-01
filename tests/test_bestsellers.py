@@ -115,6 +115,8 @@ async def test_dispatcher_ranks_counts_before_revenue_and_exposes_unknown_withou
         await ui.click(f"sd:{days}:category_counts")
         assert "&lt;Game&gt;" in session.calls[-1].text
         assert "Заказов: 5 · 1004.00 ₽ · без суммы: 2" in session.calls[-1].text
+        # Rankings are grouped under the actual seller-facing top-products menu.
+        await ui.click(f"sr:{days}:top")
         buttons = {
             button.callback_data for row in session.calls[-1].reply_markup.inline_keyboard for button in row
         }

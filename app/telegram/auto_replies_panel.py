@@ -5,31 +5,46 @@ from app.services.auto_replies import AutoReplies, phrase
 from app.services.replies import reply_text
 from app.telegram.formatting import escaped, html_pages
 from app.telegram.keyboards import keyboard
+from app.telegram.presentation import local_time, status
 
 
 class AutoRepliesPanel:
     def __init__(self, store, api):
         self.store, self.service = store, AutoReplies(store, api)
 
-    def menu(self, owner):
+    def blocked_reason(self):
+        account = self.service.api.account
+        if not getattr(account, "writes_enabled", False):
+            return "Отправка выключена: записи Playerok не разрешены."
+        if not getattr(account, "automation_enabled", False):
+            return "Отправка выключена: автоматизация не разрешена."
+        if getattr(account, "connection_verified", True) is not True:
+            return "Отправка остановлена: подтвердите подключение в профиле."
+        return ""
+
+    def menu(self, owner, *, listing=False):
         rules = self.service.rules(owner)
-        rows = [
-            [(("🟢 " if rule["enabled"] else "⚪ ") + rule["trigger_text"][:40], "ar:show:" + rule["id"])]
-            for rule in rules
-        ]
-        rows += [
-            [("Новое правило", "ar:new"), ("Выключить все", "ar:stop")],
-            [("Журнал обработки", "ar:history:0")],
-            [("Ручные шаблоны", "quickreplies"), ("Настройки", "settings")],
-        ]
-        return (
-            (
-                "💬 <b>Автоответы по точной фразе</b>\nПробелы и регистр не учитываются; нет шаблонов regex или генерации текста."
-                "\nТолько будущие свежие текстовые сообщения обычного покупателя в личном чате. Не история, не вложения, не служебные события."
-                "\nПравила выключены при создании. Нужны оба локальных runtime-флага writes и automation; сохранение правила их не включает."
-                "\nПеред отправкой сверяются диалог, сообщение и актуальная версия правила. Неизвестный результат не повторяется."
-            ),
-            keyboard(rows),
+        if listing:
+            rows = [
+                [(("🟢 " if rule["enabled"] else "⚪ ") + rule["trigger_text"][:40], "ar:show:" + rule["id"])]
+                for rule in rules
+            ]
+            rows += [[("➕ Добавить автоответ", "ar:new")]]
+            return "💬 <b>Мои автоответы</b>" + ("\nПравил пока нет." if not rules else ""), keyboard(
+                rows, back=("⬅️ Автоответы", "ar:menu")
+            )
+        text = "💬 <b>Автоответы</b>\nБот отвечает покупателям на заданные фразы."
+        text += f"\nПравил: {len(rules)} · Включено: {sum(bool(r['enabled']) for r in rules)}"
+        reason = self.blocked_reason()
+        if reason:
+            text += "\n⚠️ " + reason
+        return text, keyboard(
+            [
+                [("➕ Добавить автоответ", "ar:new")],
+                [("📋 Мои автоответы", "ar:list")],
+                [("⚙️ Настройки", "ar:settings"), ("История ответов", "ar:history:0")],
+            ],
+            back=("⬅️ Настройки", "settings"),
         )
 
     def card(self, owner, ident):
@@ -37,21 +52,22 @@ class AutoRepliesPanel:
         if not rule:
             raise Conflict("Правило недоступно")
         text = (
-            "💬 <b>Правило автоответа</b>\nФраза: "
+            "💬 <b>Автоответ</b>\nЕсли покупатель напишет:\n«"
             + escaped(rule["trigger_text"], 800)
-            + "\nОтвет:\n"
+            + "»\nБот ответит:\n«"
             + escaped(rule["response_text"], 2200)
-            + f"\nПауза в чате: {rule['cooldown']} с · лимит в сутки по Москве: {rule['daily_limit']}"
-            + f"\nСтатус: {'включено для будущих сообщений' if rule['enabled'] else 'выключено'} · версия {rule['revision']}"
-            + "\nЛимиты считают и неопределённые/неуспешные попытки. Данные выдачи в автоответах не используйте."
+            + f"»\nСтатус: {'🟢 Включён' if rule['enabled'] else '⚪ Выключен'}"
         )
+        if rule["enabled"] and self.blocked_reason():
+            text += "\n⚠️ " + self.blocked_reason()
         rows = [
             [("Выключить" if rule["enabled"] else "Включить для будущих сообщений", "ar:toggle:" + ident)],
-            [("Редактировать (с выключением)", "ar:edit:" + ident)],
+            [("✏️ Изменить", "ar:edit:" + ident)],
         ]
         if not rule["enabled"]:
             rows.append([("Удалить правило", "ar:delete:" + ident)])
-        rows.append([("Список правил", "ar:menu")])
+        rows.append([("Лимиты и условия", "ar:details:" + ident)])
+        rows.append([("⬅️ Мои автоответы", "ar:list")])
         return text, keyboard(rows)
 
     async def confirm(self, state, pending, text, message=None):
@@ -78,7 +94,7 @@ class AutoRepliesPanel:
                 (self.service.account(), page * 8),
             )
             text = f"💬 <b>Журнал автоответов · {page + 1}</b>\n" + "\n".join(
-                escaped(row["message_id"], 70) + " · " + escaped(row["operation_status"] or row["status"], 30)
+                local_time(row["created_at"]) + " · " + status(row["operation_status"] or row["status"])
                 for row in rows[:8]
             )
             buttons = [
@@ -95,6 +111,21 @@ class AutoRepliesPanel:
                 buttons.append(navigation)
             buttons.append([("Правила", "ar:menu")])
             return text + ("\nНет записей." if not rows else ""), keyboard(buttons)
+        if action == "ar:list":
+            await state.clear()
+            return self.menu(owner, listing=True)
+        if action == "ar:settings":
+            return (
+                "⚙️ <b>Настройки автоответов</b>\nТочное совпадение фразы, без учёта регистра и лишних пробелов.\nПауза и суточный лимит задаются в каждом правиле.\nОтправка только на новые сообщения; неопределённый результат не повторяется.",
+                keyboard(
+                    [
+                        [("⛔ Выключить все", "ar:stop")],
+                        [("Ручные быстрые ответы", "quickreplies")],
+                        [("Подключение и разрешения", "profile")],
+                    ],
+                    back=("⬅️ Автоответы", "ar:menu"),
+                ),
+            )
         if action == "ar:menu":
             await state.clear()
             return self.menu(owner)
@@ -147,6 +178,11 @@ class AutoRepliesPanel:
         rule = self.service.get(owner, ident)
         if not rule:
             raise Conflict("Правило недоступно")
+        if command == "details":
+            return (
+                f"⚙️ <b>Условия автоответа</b>\nПауза в чате: {rule['cooldown']} с\nМаксимум попыток в сутки: {rule['daily_limit']}\nЛимит учитывает неуспешные и неопределённые попытки.\nИзменение выключает правило до нового подтверждения.",
+                keyboard([[("Изменить", "ar:edit:" + ident)]], back=("⬅️ К автоответу", "ar:show:" + ident)),
+            )
         if command == "show":
             await state.clear()
             return self.card(owner, ident)
@@ -165,7 +201,7 @@ class AutoRepliesPanel:
                 pending,
                 self.card(owner, ident)[0]
                 + (
-                    "\n\nРазрешаю автоматическую отправку этого ответа только на новые сообщения после включения. Прежние сообщения не обрабатываются. Runtime-флаги не изменятся."
+                    "\n\nРазрешаю автоматическую отправку этого ответа только на новые сообщения после включения. Прежние сообщения не обрабатываются. Общие разрешения бота не изменятся."
                     if pending["armed"]
                     else "\n\nВыключить правило и заблокировать ещё не отправленные автоответы?"
                 ),

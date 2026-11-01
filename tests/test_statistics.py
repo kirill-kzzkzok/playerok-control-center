@@ -194,6 +194,7 @@ async def test_dispatcher_statistics_access_callbacks_and_escaping(store, monkey
                 assert sent.__api_method__ == "sendMessage"
                 assert "полнота магазина не подтверждена" in sent.text
                 await ui.click("sr:1")
+                await ui.click("sr:1:charts")
                 assert any(
                     b.callback_data == "st:1:overview"
                     for row in session.calls[-1].reply_markup.inline_keyboard

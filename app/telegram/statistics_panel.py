@@ -34,29 +34,56 @@ class StatisticsPanel:
             ]
         ]
         if not details and not expanded:
-            rows += [[("Графики и отчёты", f"sr:{days}")]]
-            return keyboard(rows, back=("⬅️ Ещё", "more"))
-        rows.extend([[(label, f"st:{days}:{view}")] for view, label in VIEWS.items()])
-        if not details:
-            rows.append([("Подробности и покрытие", f"sd:{days}:details")])
-        rows.append([("Топ по заказам", f"sd:{days}:bestsellers"), ("Топ по выручке", f"sd:{days}:items")])
-        rows.append(
-            [
-                ("Категории · заказы", f"sd:{days}:category_counts"),
-                ("Категории · выручка", f"sd:{days}:categories"),
+            rows += [
+                [("📈 Графики", f"sr:{days}:charts"), ("🏆 Лучшие товары", f"sr:{days}:top")],
+                [("💰 Финансы", f"sr:{days}:finance"), ("📋 Подробный отчёт", f"sd:{days}:details")],
             ]
-        )
-        rows.append([("Поступления и расходы по транзакциям", f"sd:{days}:transactions")])
-        rows.append([("Прибыль по учтённым заказам", f"sd:{days}:profit")])
-        rows.append([("Сверенные комиссии продажи", f"sd:{days}:settlements")])
+            return keyboard(rows, back=("⬅️ Ещё", "more"))
+        # Historical deep links remain valid; detailed reports return to this summary.
+        rows += [
+            [("Графики", f"sr:{days}:charts"), ("Лучшие товары", f"sr:{days}:top")],
+            [("Финансы", f"sr:{days}:finance"), ("Как рассчитывается", f"sd:{days}:details")],
+        ]
         return keyboard(rows, back=("⬅️ К статистике", f"stats:{days}"))
 
     async def handle(self, action, message, *, owner=None):
         parts = action.split(":")
         days = int(parts[1])
         if parts[0] == "sr":
+            group = parts[2] if len(parts) == 3 else "reports"
+            groups = {
+                "charts": ("📈 Графики", [[(label, f"st:{days}:{view}")] for view, label in VIEWS.items()]),
+                "top": (
+                    "🏆 Лучшие товары",
+                    [
+                        [("По заказам", f"sd:{days}:bestsellers"), ("По выручке", f"sd:{days}:items")],
+                        [
+                            ("Категории · заказы", f"sd:{days}:category_counts"),
+                            ("Категории · выручка", f"sd:{days}:categories"),
+                        ],
+                    ],
+                ),
+                "finance": (
+                    "💰 Финансы",
+                    [
+                        [("Поступления и расходы", f"sd:{days}:transactions")],
+                        [("Себестоимость и прибыль", f"sd:{days}:profit")],
+                        [("Комиссии продаж", f"sd:{days}:settlements")],
+                    ],
+                ),
+                "reports": (
+                    "📊 Графики и отчёты",
+                    [
+                        [("Графики", f"sr:{days}:charts"), ("Лучшие товары", f"sr:{days}:top")],
+                        [("Финансы", f"sr:{days}:finance"), ("Как рассчитывается", f"sd:{days}:details")],
+                    ],
+                ),
+            }
+            if group not in groups:
+                raise ValueError("Раздел статистики недоступен. Откройте статистику заново")
+            title, rows = groups[group]
             return await message.answer(
-                "📊 <b>Графики и отчёты</b>", reply_markup=self.markup(days, expanded=True)
+                "<b>" + title + "</b>", reply_markup=keyboard(rows, back=("⬅️ К статистике", f"stats:{days}"))
             )
         stats = await asyncio.to_thread(statistics, self.store, days)
         view = parts[2] if len(parts) == 3 else "overview"
@@ -194,9 +221,11 @@ class StatisticsPanel:
         if parts[0] == "stats":
             text = (
                 f"📊 <b>Статистика · {'всё время' if days == 0 else str(days) + ' дн.'}</b>"
-                + f"\nЗаказов: {stats['orders']} · оплаченных: {stats['paid']}"
-                + f"\nИзвестная выручка до комиссий: {stats['revenue']} ₽"
-                + "\nПо сохранённой истории; полнота магазина не подтверждена."
+                + f"\n🛒 Оплаченных заказов: {stats['paid']}"
+                + f"\n💰 Выручка до комиссий: {stats['revenue']} ₽"
+                + f"\n📈 Средний чек: {str(stats['average']) + ' ₽' if stats['average'] is not None else 'нет данных'}"
+                + "\nПрибыль: пока не рассчитана → Финансы"
+                + "\nПо сохранённым данным Playerok; полнота магазина не подтверждена."
                 + (
                     f"\nНеизвестных сумм: {stats['unknown_paid_amounts']}"
                     if stats["unknown_paid_amounts"]

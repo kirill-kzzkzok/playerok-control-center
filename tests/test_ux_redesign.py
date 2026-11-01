@@ -367,7 +367,7 @@ async def test_chat_list_uses_real_cached_snippet_and_time(ux):
     await r.ui.click("chat:chat")
     await r.ui.click("chats")
     shown = r.session.calls[-1]
-    assert "00:00 UTC" in buttons(shown)["chat:chat"]
+    assert "03:00" in buttons(shown)["chat:chat"]  # Moscow presentation
     assert "<hello>" in buttons(shown)["chat:chat"]
     assert "сохранённой истории" in shown.text
     assert not r.store.rows("SELECT * FROM outbox")
