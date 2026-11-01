@@ -345,19 +345,21 @@ async def test_failed_premium_promotion_launch_revokes_only_its_own_permissions(
     r.store.update_draft(ident_a, 7, draft_a["revision"], value_a)
     revision_a = r.launch.load(7, ident_a)["revision"]
 
-    from app.services import paid_promotions as P
+    from app.database.store import Store as _Store
 
-    original_queue = P.PaidPromotions.queue
+    original_enqueue = _Store.enqueue
 
-    async def failing_queue(self, owner, preview, key, **kwargs):
-        raise RuntimeError("injected failure before enqueue")
+    def failing_enqueue(self, key, kind, target, payload, db=None, actor=None):
+        # The LAST write of the COMMIT transaction: premium permissions are already
+        # staged in this transaction and must roll back together with it.
+        raise RuntimeError("injected failure at the enqueue boundary")
 
-    P.PaidPromotions.queue = failing_queue
+    _Store.enqueue = failing_enqueue
     try:
         with pytest.raises(RuntimeError):
             await r.launch.queue(7, ident_a, revision_a)
     finally:
-        P.PaidPromotions.queue = original_queue
+        _Store.enqueue = original_enqueue
     r.api.call = original_call
 
     # Lot A's own fresh permissions are revoked; lot B's survive untouched.
@@ -602,16 +604,80 @@ async def test_dispatcher_premium_budget_schedule_saved_globally_before_launch(l
         await ui.click(f"ln:{nonce}:edit:budget")
         ui.dp = dispatcher(r.store, r.api)
         await ui.message("50 100 1000 20")
+        # D5: the global change requires an explicit confirmation BEFORE saving.
+        assert "ОБЩИХ" in session.calls[-1].text
+        await ui.click("ln:policy:apply")
+        # The apply refreshed the draft (revision bump): re-open the launch screen,
+        # which issues a fresh nonce, then continue with the schedule.
+        await ui.click("launch:open:" + (await state.get_data())["launch"]["id"])
         nonce = (await state.get_data())["launch"]["nonce"]
         await ui.click(f"ln:{nonce}:edit:schedule")
         ui.dp = dispatcher(r.store, r.api)
         await ui.message("3600 600")
+        assert "ОБЩИХ" in session.calls[-1].text
+        await ui.click("ln:policy:apply")
+        await ui.click("launch:open:" + (await state.get_data())["launch"]["id"])
         nonce = (await state.get_data())["launch"]["nonce"]
         await ui.click(f"ln:{nonce}:check")
         assert "готова" in session.calls[-1].text, session.calls[-1].text
         nonce = (await state.get_data())["launch"]["nonce"]
         await ui.click(f"ln:{nonce}:commit")
         assert len(r.store.rows("SELECT * FROM outbox WHERE kind='premium_publish'")) == 1
+    finally:
+        await bot.session.close()
+
+
+async def test_global_budget_proposal_decline_leaves_policy_untouched(launch):
+    """D5: declining the global-change confirmation must not write the policy and
+    must not damage the launch draft payload."""
+    r = launch
+    r.quotes = [
+        {"id": "free", "type": "DEFAULT", "price": 0, "period": 7},
+        {"id": "premium", "type": "PREMIUM", "price": 10, "period": 7},
+    ]
+    from dataclasses import asdict
+
+    from app.services.promotion_settings import PromotionSettings
+    from app.services.promotions import PromotionPolicy
+
+    ps = PromotionSettings(r.store, r.api)
+    rev, pol, sel = ps.get()
+    budget = {"per_operation": 50, "daily": 100, "monthly": 1000, "max_operations_per_item": 20}
+    full = asdict(PromotionPolicy(**{**asdict(pol), **budget}))
+    ps.save(7, rev, full, sel)
+    policy_before = ps.get()[1]
+
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    ui = Interaction(bot, dispatcher(r.store, r.api))
+    state = FSMContext(SQLiteStorage(r.store), StorageKey(bot_id=123, chat_id=7, user_id=7))
+    try:
+        await ui.click("launch:item:item")
+        nonce = (await state.get_data())["launch"]["nonce"]
+        await ui.click(f"ln:{nonce}:mode:text")
+        nonce = (await state.get_data())["launch"]["nonce"]
+        await ui.click(f"ln:{nonce}:edit:data")
+        ui.dp = dispatcher(r.store, r.api)
+        await ui.message("Secret delivery text")
+        nonce = (await state.get_data())["launch"]["nonce"]
+        await ui.click(f"ln:{nonce}:quotes")
+        nonce = (await state.get_data())["launch"]["nonce"]
+        premium_index = next(i for i, q in enumerate(r.quotes) if q["type"] == "PREMIUM")
+        await ui.click(f"ln:{nonce}:quote:{premium_index}")
+        nonce = (await state.get_data())["launch"]["nonce"]
+        await ui.click(f"ln:{nonce}:edit:schedule")
+        ui.dp = dispatcher(r.store, r.api)
+        await ui.message("7200 900")
+        assert "ОБЩИХ" in session.calls[-1].text
+        # Decline: the policy and the proposal are dropped; nothing is written.
+        draft_id = (await state.get_data())["launch"]["id"]
+        await ui.click("launch:open:" + draft_id)
+        after = ps.get()[1]
+        assert asdict(after) == asdict(policy_before)
+        assert not (await state.get_data()).get("launch_policy_proposal")
+        # The draft payload (delivery data) survived the declined proposal.
+        payload = r.store.get_draft(draft_id, 7)["payload"]
+        assert payload["data"] == "Secret delivery text"
     finally:
         await bot.session.close()
 

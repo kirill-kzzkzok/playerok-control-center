@@ -1,12 +1,26 @@
-"""Prepare existing delivery services on a server DRAFT before queuing publication."""
+"""PREPARE (read-only checks) then a single atomic COMMIT for a listing launch.
+
+Design (PROGRESS.md, "STOP-THE-PATCH-CASCADE"):
+- Stage 1 PREPARE: only reads (server/Playerok); no local writes.
+- Stage 2 COMMIT: one BEGIN IMMEDIATE transaction holding EVERY local write:
+  delivery configuration, paid permissions, the Outbox operation, the durable
+  marker, the DRAFT->QUEUED CAS. Partial local state cannot survive a failure:
+  SQLite rolls the whole transaction back. This removes the snapshot/rollback
+  machinery and its recurring defect class entirely.
+- The only PREPARE-stage local write is the promotion schedule enable flag
+  (non-spending: every paid operation still needs approval + authority), which
+  the premium preview must observe for consistent revision checks. The stock
+  import moved INTO the commit transaction (idempotent by fingerprint).
+"""
 
 import hashlib
+import json
 from dataclasses import asdict
 
 from app.database.store import Conflict, encode, now
 from app.services.automation import Automation, DeliveryPolicy, message_text
 from app.services.finance import money
-from app.services.inventory import Inventory
+from app.services.inventory import Inventory, stock_values
 from app.services.paid_promotions import PaidPromotions
 from app.services.products import Products, ValidationError, priority_price_basis
 from app.services.promotion_settings import PromotionSettings
@@ -223,47 +237,21 @@ class ListingLaunch:
         value = draft["payload"]
         if draft["revision"] != revision or draft["state"] != "DRAFT" or not value.get("ready"):
             raise Conflict("Настройки изменились. Проверьте готовность заново")
+        item = value["launch_target"]
+
+        # ---------- Stage 1: PREPARE (read-only checks; local writes only for
+        # the non-spending schedule enable flag, which the premium preview must
+        # see to keep revision checks consistent) ----------
         fresh = await self.check(owner, value)
         if digest(fresh) != digest(value["ready"]):
             raise Conflict("Товар, тариф или подарок изменились. Подтвердите новое превью")
-        with self.store.transaction() as db:
-            if (
-                db.execute(
-                    "UPDATE drafts SET state='QUEUED' WHERE id=? AND revision=? AND state='DRAFT'",
-                    (ident, revision),
-                ).rowcount
-                != 1
-            ):
-                raise Conflict("Запуск уже подтверждён или настройки изменились")
-            self.store.set_setting(
-                "launch:prepared:" + value["launch_target"],
-                {"id": ident, "owner": owner, "revision": revision, "operation": None, "at": now()},
-            )
-        item = value["launch_target"]
-        paid_before = None
-        # Tracks the EXACT row revisions this launch wrote (delivery policy / gift
-        # listing). The rollback restores only rows still at a launch-written
-        # revision: anything newer belongs to a concurrent owner action and is
-        # never overwritten (lost-update protection).
-        launch_written = {"delivery_policy": None, "gift_listing": None}
-        # Snapshot of the delivery state BEFORE this launch modifies it. The rollback
-        # restores exactly this: a pre-existing owner-configured policy must survive
-        # a failed launch that never created it.
-        delivery_before = {
-            "policy": self.store.rows("SELECT * FROM delivery_policies WHERE item_id=?", (item,))[0]
-            if self.store.rows("SELECT 1 FROM delivery_policies WHERE item_id=?", (item,))
-            else None,
-            "enabled_setting": self.store.setting(f"delivery:{item}:enabled"),
-            "gift_listing": self.store.rows("SELECT * FROM gift_listings WHERE item_id=?", (item,))[0]
-            if self.store.rows("SELECT 1 FROM gift_listings WHERE item_id=?", (item,))
-            else None,
-            "listing_options": self.store.setting("gifts:listing_options:" + item),
-        }
-        try:
-            if value["publication"] == "PREMIUM" and value["promotion"]:
-                # Only the schedule enable flag may be written, and only against the
-                # exact revision confirmed in the readiness digest: other lots' limits,
-                # schedule and selections are never touched by this launch.
+        premium_preview = None
+        if value["publication"] == "PREMIUM":
+            if value["promotion"]:
+                # The schedule enable flag is a LOCAL, non-spending write: flip it in
+                # PREPARE so the premium preview (and its policy_revision) is taken
+                # against the post-enable policy. Enabling the schedule never spends
+                # by itself: every paid operation still requires approval+authority.
                 settings = PromotionSettings(self.store, self.api)
                 p_revision, existing, selection = settings.get()
                 if asdict(existing) != {**value["promotion_policy"], "enabled": existing.enabled}:
@@ -272,240 +260,219 @@ class ListingLaunch:
                     settings.save(
                         owner, p_revision, {**value["promotion_policy"], "enabled": True}, selection
                     )
+            paid = PaidPromotions(self.store, self.api)
+            premium_preview = await paid.preview(owner, item, fresh["quote"]["id"])
+            if money(premium_preview["amount"]) != money(fresh["quote"]["price"]):
+                raise Conflict("Цена PREMIUM изменилась при подготовке. Подтвердите новое превью")
+
+        # ---------- Stage 2: COMMIT (single atomic transaction, no awaits) ----------
+        with self.store.transaction() as db:
+            # CAS: this revision is never queued twice.
+            if (
+                db.execute(
+                    "UPDATE drafts SET state='QUEUED' WHERE id=? AND revision=? AND state='DRAFT'",
+                    (ident, revision),
+                ).rowcount
+                != 1
+            ):
+                raise Conflict("Запуск уже подтверждён или настройки изменились")
+            delivery_revision = 0
             if value["mode"] == "gifts":
-                s = self.gifts
-                await s.bind(
-                    owner,
-                    item,
-                    ", ".join(g["code"] for g in fresh["bundle"]),
-                    expected_bundle=fresh["bundle"],
-                )
-                await s.arm(
-                    owner,
-                    item,
-                    s.listing(item)["revision"],
-                    auto_fulfill=value["auto_complete"],
-                    prepublication=True,
-                )
-                self.store.set_setting(
-                    "gifts:listing_options:" + item,
-                    {
-                        "order": value["order_limit"],
-                        "day": value["day_limit"],
-                        "refund": value["refund"],
-                        "after": value["after"],
-                    },
-                )
-                delivery_revision = s.listing(item)["revision"]
-                launch_written["gift_listing"] = delivery_revision
+                delivery_revision = self._commit_gift_listing(db, owner, item, value, fresh)
             elif value["mode"] in {"text", "stock"}:
-                if value["mode"] == "stock":
-                    inventory = Inventory(self.store, self.api)
-                    await inventory.import_values(
-                        owner, item, value["data"], inventory.preview(item, value["data"]), "DRAFT"
-                    )
-                version, _ = self.automation.get(item)
-                policy = DeliveryPolicy(
-                    True,
-                    value["mode"],
-                    value["data"] if value["mode"] == "text" else "",
-                    value["greeting"],
-                    value["after"],
-                    value["auto_complete"],
-                    True,
-                )
-                delivery_revision = await self.automation.save(
-                    owner, item, version, asdict(policy), future_confirmed=True
-                )
-                launch_written["delivery_policy"] = delivery_revision
+                delivery_revision = self._commit_text_delivery(db, owner, item, value)
             else:
-                delivery_revision = 0
-                if (
-                    self.gifts.listing(item)
-                    and self.gifts.listing(item)["enabled"]
-                    or self.automation.get(item)[1].enabled
-                ):
+                row = db.execute("SELECT enabled FROM gift_listings WHERE item_id=?", (item,)).fetchone()
+                policy = db.execute(
+                    "SELECT payload FROM delivery_policies WHERE item_id=?", (item,)
+                ).fetchone()
+                if (row and row["enabled"]) or (policy and json.loads(policy["payload"]).get("enabled")):
                     raise Conflict("Для ручного режима сначала остановите существующую выдачу товара")
             if value["publication"] == "PREMIUM":
-                paid = PaidPromotions(self.store, self.api)
-                preview = await paid.preview(owner, item, fresh["quote"]["id"])
-                if money(preview["amount"]) != money(fresh["quote"]["price"]):
-                    raise Conflict("Цена PREMIUM изменилась при подготовке. Подтвердите новое превью")
-                if value["promotion"]:
-                    # Provenance snapshot: what existed BEFORE this launch touched the
-                    # paid-permission state. The rollback removes only what we created.
-                    pre_existing = {
-                        "approval": self.store.setting("promotions:approved:" + item) or None,
-                        "authority": self.store.setting("promotions:paid_authority") or None,
-                        "target": self.store.rows(
-                            "SELECT disposition FROM promotion_targets WHERE item_id=?", (item,)
-                        )[0]["disposition"]
-                        if self.store.rows("SELECT 1 FROM promotion_targets WHERE item_id=?", (item,))
-                        else None,
-                    }
-                    await paid.approve(owner, preview, prepublication=True)
-                    await paid.settings.target(owner, item, "include")
-                    paid.arm(owner, preview["policy_revision"])
-                    paid_before = pre_existing
-                launch = {
-                    "id": ident,
-                    "owner": owner,
-                    "revision": revision,
-                    "delivery_revision": delivery_revision,
-                    "at": now(),
-                }
-                operation = await paid.queue(owner, preview, launch_key(ident, revision), launch=launch)
+                operation = self._commit_premium_local(
+                    db, owner, item, value, fresh, premium_preview, ident, revision, delivery_revision
+                )
             else:
-                with self.store.transaction() as db:
-                    operation = self.store.enqueue(
-                        launch_key(ident, revision),
-                        "publish",
-                        item,
-                        {
-                            "priority_id": fresh["quote"]["id"],
-                            "price": fresh["item"]["price"],
-                            "raw_price": priority_price_basis(fresh["item"]),
-                            "launch_id": ident,
-                            "launch_revision": revision,
-                        },
-                        db,
-                        actor=owner,
-                    )
-                    self.store.set_setting(
-                        "launch:prepared:" + item,
-                        {
-                            "id": ident,
-                            "owner": owner,
-                            "revision": revision,
-                            "operation": operation,
-                            "delivery_revision": delivery_revision,
-                            "at": now(),
-                        },
-                    )
+                operation = self.store.enqueue(
+                    launch_key(ident, revision),
+                    "publish",
+                    item,
+                    {
+                        "priority_id": fresh["quote"]["id"],
+                        "price": fresh["item"]["price"],
+                        "raw_price": priority_price_basis(fresh["item"]),
+                        "launch_id": ident,
+                        "launch_revision": revision,
+                        "delivery_revision": delivery_revision,
+                    },
+                    db,
+                    actor=owner,
+                )
+                self.store.set_setting(
+                    "launch:prepared:" + item,
+                    {
+                        "id": ident,
+                        "owner": owner,
+                        "revision": revision,
+                        "operation": operation,
+                        "delivery_revision": delivery_revision,
+                        "at": now(),
+                    },
+                )
             return operation
-        except BaseException:
-            # Never re-open a draft after a publication operation may already exist.
-            # Match ONLY this revision's operation: older revisions' dead operations
-            # must not keep the new attempt stuck in QUEUED forever. A revision is
-            # never queued twice (draft CAS), so an existing key means THIS attempt
-            # enqueued it and owns the outcome.
-            with self.store.transaction() as db:
-                if not db.execute(
-                    "SELECT 1 FROM outbox WHERE operation_key=?", (launch_key(ident, revision),)
-                ).fetchone():
-                    # Preparation never enqueued the publication: restore the draft and
-                    # drop the marker; delivery/paid state is restored from the
-                    # pre-launch snapshots below (NOT blind release_launch disabling,
-                    # which would also kill pre-existing owner configuration).
-                    db.execute(
-                        "UPDATE drafts SET state='DRAFT',revision=revision+1 WHERE id=? AND state='QUEUED'",
-                        (ident,),
-                    )
-                    db.execute("DELETE FROM settings WHERE key=?", ("launch:prepared:" + item,))
-                    # Restore the delivery state EXACTLY as it was before this launch:
-                    # a failed launch must not disable a pre-existing owner policy.
-                    # CAS by launch-written revision: if the current revision is NEWER
-                    # than what this launch wrote, a concurrent owner action owns the
-                    # row and is never overwritten.
-                    before = delivery_before
-                    current_policy = db.execute(
-                        "SELECT revision FROM delivery_policies WHERE item_id=?", (item,)
-                    ).fetchone()
-                    launch_policy_rev = launch_written["delivery_policy"]
-                    if (
-                        launch_policy_rev is not None
-                        and current_policy
-                        and current_policy["revision"] == launch_policy_rev
-                    ):
-                        if before["policy"] is None:
-                            db.execute("DELETE FROM delivery_policies WHERE item_id=?", (item,))
-                        else:
-                            snap = before["policy"]
-                            db.execute(
-                                "UPDATE delivery_policies SET revision=revision+1,actor=?,payload=?,updated_at=? "
-                                "WHERE item_id=?",
-                                (owner, snap["payload"], snap["updated_at"], item),
-                            )
-                    if self.store.setting(f"delivery:{item}:enabled") != before["enabled_setting"]:
-                        if before["enabled_setting"] is None:
-                            db.execute("DELETE FROM settings WHERE key=?", (f"delivery:{item}:enabled",))
-                        else:
-                            db.execute(
-                                "INSERT INTO settings(key,value) VALUES(?,?) "
-                                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                                (f"delivery:{item}:enabled", encode(before["enabled_setting"])),
-                            )
-                    current_listing = db.execute(
-                        "SELECT revision,enabled FROM gift_listings WHERE item_id=?", (item,)
-                    ).fetchone()
-                    launch_listing_rev = launch_written["gift_listing"]
-                    if (
-                        launch_listing_rev is not None
-                        and current_listing
-                        and current_listing["revision"] == launch_listing_rev
-                    ):
-                        if before["gift_listing"] is None:
-                            db.execute("DELETE FROM gift_listings WHERE item_id=?", (item,))
-                        else:
-                            snap = before["gift_listing"]
-                            db.execute(
-                                "UPDATE gift_listings SET revision=revision+1,gift_code=?,gift_id=?,"
-                                "approved_stars=?,description_sha256=?,category_id=?,obtaining_type_id=?,"
-                                "username_field_id=?,bundle=?,enabled=?,auto_fulfill=?,armed_at=? "
-                                "WHERE item_id=?",
-                                (
-                                    snap["gift_code"],
-                                    snap["gift_id"],
-                                    snap["approved_stars"],
-                                    snap["description_sha256"],
-                                    snap["category_id"],
-                                    snap["obtaining_type_id"],
-                                    snap["username_field_id"],
-                                    snap["bundle"],
-                                    snap["enabled"],
-                                    snap["auto_fulfill"],
-                                    snap["armed_at"],
-                                    item,
-                                ),
-                            )
-                    if before["listing_options"] is not None:
-                        current_options = self.store.setting("gifts:listing_options:" + item)
-                        if current_options != before["listing_options"]:
-                            db.execute(
-                                "INSERT INTO settings(key,value) VALUES(?,?) "
-                                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                                ("gifts:listing_options:" + item, encode(before["listing_options"])),
-                            )
-                    if paid_before is not None:
-                        # Undo ONLY the paid permissions this launch created; anything
-                        # the owner had before stays untouched (other lots keep working).
-                        before = paid_before
-                        now_approval = db.execute(
-                            "SELECT value FROM settings WHERE key=?", ("promotions:approved:" + item,)
-                        ).fetchone()
-                        if before["approval"] is None and now_approval is not None:
-                            db.execute("DELETE FROM settings WHERE key=?", ("promotions:approved:" + item,))
-                        elif before["approval"] is not None:
-                            db.execute(
-                                "UPDATE settings SET value=? WHERE key=?",
-                                (encode(before["approval"]), "promotions:approved:" + item),
-                            )
-                        current_authority = self.store.setting("promotions:paid_authority") or None
-                        if before["authority"] is None and current_authority is not None:
-                            db.execute("DELETE FROM settings WHERE key='promotions:paid_authority'")
-                        elif before["authority"] is not None:
-                            db.execute(
-                                "UPDATE settings SET value=? WHERE key='promotions:paid_authority'",
-                                (encode(before["authority"]),),
-                            )
-                        if before["target"] is None:
-                            db.execute("DELETE FROM promotion_targets WHERE item_id=?", (item,))
-                        else:
-                            db.execute(
-                                "UPDATE promotion_targets SET disposition=? WHERE item_id=?",
-                                (before["target"], item),
-                            )
-            raise
+
+    def _commit_gift_listing(self, db, owner, item, value, fresh):
+        """Synchronous gift bind + arm inside the commit transaction, from PREPARE
+        data only (the bundle was network-verified in check()). Returns the armed
+        listing revision."""
+        existing = db.execute(
+            "SELECT revision,enabled,description_sha256,gift_code FROM gift_listings WHERE item_id=?",
+            (item,),
+        ).fetchone()
+        if existing and existing["enabled"]:
+            raise Conflict("Сначала остановите выдачу этого лота")
+        from app.gifts.core import gift_code_from_description
+        from app.gifts.service import description_hash
+
+        inspect_hash = description_hash(fresh["item"]["description"])
+        confirmed_code = gift_code_from_description(fresh["item"]["description"])
+        if existing and existing["description_sha256"] != inspect_hash:
+            raise Conflict("Привязка изменилась; подтвердите её заново")
+        if existing and existing["gift_code"] != confirmed_code:
+            raise Conflict("Подтверждённый код не совпадает с последней строкой описания")
+        bundle = fresh["bundle"]
+        db.execute(
+            "INSERT INTO gift_listings(item_id,owner_id,gift_code,gift_id,approved_stars,description_sha256,"
+            "category_id,obtaining_type_id,username_field_id) VALUES(?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(item_id) DO UPDATE SET gift_code=excluded.gift_code,gift_id=excluded.gift_id,"
+            "approved_stars=excluded.approved_stars,description_sha256=excluded.description_sha256,"
+            "category_id=excluded.category_id,obtaining_type_id=excluded.obtaining_type_id,"
+            "username_field_id=excluded.username_field_id,revision=revision+1,enabled=0,armed_at=NULL",
+            (
+                item,
+                owner,
+                confirmed_code,
+                bundle[0]["gift_id"],
+                sum(g["stars"] for g in bundle),
+                inspect_hash,
+                self.gifts.settings.category_id,
+                self.gifts.settings.obtaining_type_id,
+                self.gifts.settings.buyer_username_field_id,
+            ),
+        )
+        db.execute("UPDATE gift_listings SET bundle=? WHERE item_id=?", (encode(bundle), item))
+        policy = db.execute("SELECT payload FROM delivery_policies WHERE item_id=?", (item,)).fetchone()
+        if policy and json.loads(policy["payload"]).get("enabled"):
+            raise Conflict("Для лота уже действует складская/текстовая выдача или незавершённая цепочка")
+        db.execute(
+            "UPDATE gift_listings SET enabled=1,auto_fulfill=?,armed_at=?,revision=revision+1 WHERE item_id=?",
+            (int(value["auto_complete"]), now(), item),
+        )
+        db.execute(
+            "INSERT INTO settings VALUES('gifts:stopped','false') ON CONFLICT(key) DO UPDATE SET value='false'"
+        )
+        self.store.set_setting(
+            "gifts:listing_options:" + item,
+            {
+                "order": value["order_limit"],
+                "day": value["day_limit"],
+                "refund": value["refund"],
+                "after": value["after"],
+            },
+        )
+        return db.execute("SELECT revision FROM gift_listings WHERE item_id=?", (item,)).fetchone()[
+            "revision"
+        ]
+
+    def _commit_text_delivery(self, db, owner, item, value):
+        """Synchronous delivery-policy write inside the commit transaction."""
+        row = db.execute("SELECT revision FROM delivery_policies WHERE item_id=?", (item,)).fetchone()
+        version = row["revision"] if row else 0
+        policy = DeliveryPolicy(
+            True,
+            value["mode"],
+            value["data"] if value["mode"] == "text" else "",
+            value["greeting"],
+            value["after"],
+            value["auto_complete"],
+            True,
+        )
+        db.execute(
+            "INSERT INTO delivery_policies(item_id,revision,actor,payload,updated_at) VALUES(?,?,?,?,?) "
+            "ON CONFLICT(item_id) DO UPDATE SET revision=excluded.revision,actor=excluded.actor,"
+            "payload=excluded.payload,updated_at=excluded.updated_at",
+            (item, version + 1, owner, encode(asdict(policy)), now()),
+        )
+        db.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (f"delivery:{item}:enabled", encode(True)),
+        )
+        if value["mode"] == "stock":
+            # Idempotent stock import (fingerprint INSERT OR IGNORE), synchronous.
+            for unit in stock_values(value["data"])[0]:
+                db.execute(
+                    "INSERT OR IGNORE INTO inventory(item_id,secret,fingerprint) VALUES(?,?,?)",
+                    (item, unit, hashlib.sha256(unit.encode()).hexdigest()),
+                )
+        return version + 1
+
+    def _commit_premium_local(
+        self, db, owner, item, value, fresh, preview, ident, revision, delivery_revision
+    ):
+        """Synchronous premium permission + reservation commit from the PREPARE
+        preview (all network checks already done)."""
+        if value["promotion"]:
+            db.execute(
+                "INSERT INTO settings(key,value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                ("promotions:approved:" + item, encode(preview)),
+            )
+            db.execute(
+                "INSERT INTO audit_log(actor,action,target,outcome,created_at) "
+                "VALUES(?,'APPROVE_PREMIUM_TARIFF',?,'EXPLICIT_OWNER_PERMISSION',?)",
+                (owner, item, now()),
+            )
+            db.execute(
+                "INSERT INTO promotion_targets(item_id,disposition,actor,updated_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(item_id) DO UPDATE SET disposition=excluded.disposition,"
+                "actor=excluded.actor,updated_at=excluded.updated_at",
+                (item, "include", owner, now()),
+            )
+            revision_row = db.execute("SELECT revision FROM promotion_policy WHERE id=1").fetchone()
+            policy_revision = revision_row["revision"] if revision_row else 0
+            db.execute(
+                "INSERT INTO settings(key,value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (
+                    "promotions:paid_authority",
+                    encode({"account_id": self.api.account.id, "revision": policy_revision, "actor": owner}),
+                ),
+            )
+        launch = {
+            "id": ident,
+            "owner": owner,
+            "revision": revision,
+            "delivery_revision": delivery_revision,
+            "at": now(),
+        }
+        key = launch_key(ident, revision)
+        again = db.execute("SELECT id FROM outbox WHERE operation_key=?", (key,)).fetchone()
+        if again:
+            return again[0]
+        payload = {
+            **preview,
+            "actor": owner,
+            "automatic": False,
+            "launch_id": ident,
+            "launch_revision": revision,
+        }
+        op = self.store.enqueue(key, "premium_publish", item, payload, db, actor=owner)
+        self.store.set_setting("launch:prepared:" + item, {**launch, "operation": op})
+        db.execute(
+            "INSERT INTO promotion_expenses VALUES(?,?,?,'RESERVED',?)",
+            (key, item, preview["amount"], now()),
+        )
+        return op
 
     def guard(self, action):
         value = action["payload"]

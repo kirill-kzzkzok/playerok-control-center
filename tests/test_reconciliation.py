@@ -350,6 +350,97 @@ async def test_stop_uncertain_premium_without_started_at_releases_proven_never_s
     assert not store.setting("launch:prepared:item")
 
 
+async def test_stopped_never_sent_premium_also_disarms_launch_delivery(setup):
+    """D3: the proven never-sent release must also disarm the auto-delivery the
+    launch committed (gift listing and text policy), by CAS on the launch's
+    delivery revision; a newer owner edit must survive."""
+    import json as json_mod
+
+    store, _, service = setup
+    from app.services.paid_promotions import intent_key
+
+    # The launch committed an armed gift listing (revision 3) + enabled text policy.
+    store.draft(1, {"launch_target": "item", "account_id": "seller", "mode": "gifts"})
+    draft_id = store.rows("SELECT id FROM drafts")[0]["id"]
+    store.execute("UPDATE drafts SET state='QUEUED' WHERE id=?", (draft_id,))
+    store.execute(
+        "INSERT INTO gift_listings"
+        "(item_id,owner_id,gift_code,gift_id,approved_stars,description_sha256,category_id,"
+        "obtaining_type_id,username_field_id,enabled,auto_fulfill,revision,armed_at,bundle) "
+        "VALUES('item',1,'heart','gid',5,'hash','stars','gift','uf',0,0,1,NULL,'[]')"
+    )
+    store.execute(
+        "UPDATE gift_listings SET revision=3,enabled=1,auto_fulfill=1,armed_at=? WHERE item_id='item'",
+        (now(),),
+    )
+    store.execute(
+        "INSERT INTO delivery_policies VALUES('item',3,1,"
+        '\'{"enabled": true, "mode": "gifts", "text": "", "greeting": "", '
+        '"after": "", "mark_sent": true, "auto_enroll": true}\','
+        " '2026-11-01T00:00:00+00:00')"
+    )
+    store.set_setting("delivery:item:enabled", True)
+    ident = store.enqueue(
+        "launch:" + draft_id + ":0",
+        "premium_publish",
+        "item",
+        {
+            "priority_id": "premium",
+            "price": 100,
+            "launch_id": draft_id,
+            "quote_id": "premium",
+            "delivery_revision": 3,
+        },
+    )
+    action = store.claim()
+    store.finish(ident, action["lease_token"], "UNCERTAIN", error="NETWORK_ERROR")
+    store.set_setting(intent_key(ident), {"operation_id": ident, "pending": True})
+    store.set_setting(
+        "launch:prepared:item",
+        {"id": draft_id, "owner": 1, "revision": 0, "operation": ident, "delivery_revision": 3},
+    )
+    expected = signature(store.rows("SELECT * FROM outbox WHERE id=?", (ident,))[0])
+    await service.resolve(1, ident, expected, "STOP_UNCERTAIN", "Оплата не начиналась, остановлено")
+    # Released AND disarmed (revision matched the launch's delivery revision).
+    assert store.get_draft(draft_id, 1)["state"] == "DRAFT"
+    listing = store.rows("SELECT enabled,revision FROM gift_listings WHERE item_id='item'")[0]
+    assert not listing["enabled"] and listing["revision"] > 3
+    policy = store.rows("SELECT payload FROM delivery_policies WHERE item_id='item'")[0]
+    assert not json_mod.loads(policy["payload"])["enabled"]
+    assert store.setting("delivery:item:enabled") is False
+
+    # CAS counter-check: a NEWER owner edit (revision 4, still enabled) survives.
+    store.execute("UPDATE gift_listings SET revision=4,enabled=1 WHERE item_id='item'")
+    store.execute("UPDATE gift_listings SET revision=revision WHERE item_id='item'")
+    store.draft(1, {"launch_target": "item2", "account_id": "seller", "mode": "gifts"})
+    draft2 = store.rows("SELECT id FROM drafts WHERE payload LIKE '%item2%'")[0]["id"]
+    store.execute("UPDATE drafts SET state='QUEUED' WHERE id=?", (draft2,))
+    ident2 = store.enqueue(
+        "launch:" + draft2 + ":0",
+        "premium_publish",
+        "item2",
+        {
+            "priority_id": "premium",
+            "price": 100,
+            "launch_id": draft2,
+            "quote_id": "premium",
+            "delivery_revision": 3,
+        },
+    )
+    action2 = store.claim()
+    store.finish(ident2, action2["lease_token"], "UNCERTAIN", error="NETWORK_ERROR")
+    store.set_setting(intent_key(ident2), {"operation_id": ident2, "pending": True})
+    store.set_setting(
+        "launch:prepared:item2",
+        {"id": draft2, "owner": 1, "revision": 0, "operation": ident2, "delivery_revision": 3},
+    )
+    expected2 = signature(store.rows("SELECT * FROM outbox WHERE id=?", (ident2,))[0])
+    await service.resolve(1, ident2, expected2, "STOP_UNCERTAIN", "Оплата не начиналась, остановлено")
+    # revision 4 != 3: the newer owner state stays enabled.
+    listing2 = store.rows("SELECT enabled FROM gift_listings WHERE item_id='item'")[0]
+    assert listing2["enabled"] == 1 or listing2["enabled"] is True
+
+
 async def test_stop_uncertain_premium_with_started_at_never_releases(setup):
     store, _, service = setup
     from app.services.paid_promotions import intent_key

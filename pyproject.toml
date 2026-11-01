@@ -37,3 +37,4 @@ exclude = ["playerokapi", ".vendor", ".venv"]
 [tool.ruff.lint.per-file-ignores]
 # The imported pytest fixture and the launch() fixture parameter share the name on purpose.
 "tests/test_listing_launch.py" = ["F811"]
+"tests/test_launch_fault_matrix.py" = ["F811"]

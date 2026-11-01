@@ -2313,3 +2313,47 @@ Clean HEAD c8ffed3. Source-only backup: data\backups\ux-source-20261031T022509Z.
   (б) gift_listings-восстановление покрывает все значимые колонки (см. UPDATE).
   (в) saved_global_notice одноразовый: сбрасывается при показе.
 - Тесты: 27/27 launch, 51/51 launch+reconciliation, 57/57 rec+paid, 84/84 3-файловая комбинация; ruff/format/compile PASS. Финальный полный pytest запущен.
+
+
+## STOP-THE-PATCH-CASCADE аудит (база 7463c45) — дизайн до кода, 2026-11-01
+
+### Границы фиксации запуска (пять стадий)
+1. ПОДГОТОВКА (check/preview/inspect/refresh/viewer) — только чтения, внешние запросы допустимы, локальных записей НЕТ.
+2. ЛОКАЛЬНАЯ ФИКСАЦИЯ — одна транзакция BEGIN IMMEDIATE: draft→QUEUED (CAS), выдача (policy/listing/options), платные разрешения (approved/authority/target), Outbox-операция, маркер. Без await внутри.
+3. ИЗВЕСТНОЕ ИСКЛЮЧЕНИЕ: импорт склада до транзакции — идемпотентен по fingerprint, инертен без enabled-политики (подтверждено аудитом A).
+4. ВНЕШНЯЯ МУТАЦИЯ — только worker по Outbox (guard/preflight повторяют все проверки).
+5. ПОДТВЕРЖДЕНИЕ — readback/квитанция; неизвестность никогда не повторяется вслепую.
+
+### Таблица точек изменения
+| Точка | Данные | Внешний эффект | Возможный сбой | Правильное состояние после сбоя |
+|---|---|---|---|---|
+| check() в queue | нет (чтения) | read-only API | сеть/валидация | ничего не записано, драфт DRAFT |
+| подготовка preview/inspect | нет (чтения) | read-only API | сеть | ничего не записано |
+| импорт склада (stock) | inventory AVAILABLE | нет | дубликат fingerprint | строки остаются, идемпотентны, выдача без enabled невозможна |
+| COMMIT-транзакция | drafts, delivery_policies, gift_listings, settings, promotion_targets, outbox, promotion_expenses | НЕТ (только локально) | любая ошибка | атомарный откат SQLite: ничего не зафиксировано |
+| enqueue внутри COMMIT | outbox строка | постановка в очередь | конфликт по target | откат всей транзакции |
+| worker mutate | — | публикация/оплата | сеть/timeout | UNCERTAIN, повтор запрещён, сверка |
+| finish(PERMANENT_FAILED) | release_launch | нет | — | release только доказуемо-локальных отказов |
+
+### Решение по D1–D5
+D1/D2/D4 — первопричина: многошаговые локальные записи с ручным восстановлением. Устраняется архитектурно: queue() делится на PREPARE (только чтения) и COMMIT (одна транзакция). Все snapshot-переменные (paid_before, delivery_before, launch_written) и ~120 строк ручного rollback УДАЛЯЮТСЯ. Частичное состояние становится невозможным по построению.
+D3 — STOP_UNCERTAIN premium без started_at: добавить CAS-гашение выданной запуском автовыдачи (по delivery_revision из маркера) при освобождении.
+D5 — бюджет/расписание: подтверждение ДО сохранения (предложение в FSM → экран с GLOBAL-предупреждением → кнопка сохранить → CAS-сохранение).
+Инварианты I1–I5 покрываются fault-injection матрицей по границам стадий.
+
+
+### STOP-THE-PATCH-CASCADE — реализация 2026-11-01
+- D1/D2/D4 закрыты АРХИТЕКТУРНО: ListingLaunch.queue() разделён на PREPARE (только чтения: check, premium preview, bundle re-verify, policy sync check) и COMMIT (одна транзакция BEGIN IMMEDIATE: draft CAS → выдача → платные разрешения → Outbox → маркер). Вложенные сервисные транзакции (bind/arm/save/approve/target/queue) присоединяются через SAVEPOINT-вложенность в Store.transaction(). ВЕСЬ ручной rollback удалён: paid_before, delivery_before, launch_written, ~120 строк восстановления. Частичное локальное состояние невозможно по построению.
+- Store.transaction(): внешняя = BEGIN IMMEDIATE/COMMIT/ROLLBACK; вложенная = SAVEPOINT/RELEASE/ROLLBACK TO. Проверено прямым тестом: внутренний откат — только внутреннего; внешний откат — всего.
+- D3: STOP_UNCERTAIN premium без started_at теперь гасит автовыдачу запуска при освобождении (CAS по delivery_revision из payload/маркера; чужая более новая ревизия не трогается).
+- D5: бюджет/расписание через мастера теперь требуют ЯВНОГО подтверждения глобального изменения (FSM: ввод → экран «ОБЩИХ настроек» с последствиями → «Сохранить» (CAS по revision) или «Отмена» → синхронизация драфта).
+- Fault-injection матрица (tests/test_launch_fault_matrix.py): инъекции P1 (PREPARE), P2 (preview), C1 (COMMIT после delivery), W (COMMIT после approve) — все оставляют DRAFT, нулевые approval/targets/expenses/operations, автовыдача погашена.
+- Регрессия: полный pytest 1296 passed (было 1292); ruff check/format PASS. Независимые ревьюеры A/B запущены.
+
+
+### Ревью B — находки закрыты архитектурно 2026-11-01
+- P0-1 (дедлок store.lock⇄api.lock + interleaving): COMMIT переписан на ПОЛНОСТЬЮ синхронный — сетевых вызовов внутри транзакции больше нет (bind/arm/approve/target/queue заменены прямыми SQL-записями с CAS из PREPARE-данных: _commit_gift_listing, _commit_text_delivery, _commit_premium_local). PREPARE держит все чтения (check/preview/хеш-проверки) ДО транзакции. Savepoint-вложенность Store.transaction() сохранена как общая утилита, но queue() её больше не использует.
+- P0-2 (release_launch без CAS): гашение gift_listings/delivery_policies теперь по CAS delivery_revision из payload (publish-payload дополнен delivery_revision); legacy-payload без revision — консервативное гашение. Чужая более новая ревизия выживает.
+- Stale docstring: исправлен (schedule-enable — единственный PREPARE-write; импорт склада — ВНУТРИ COMMIT).
+- Инъекционные точки тестов обновлены на реальную границу (Store.enqueue — последняя запись COMMIT).
+- Прогоны: listing+matrix 30/30, смежные 158/158, ruff/format PASS. Финальный полный pytest запущен.

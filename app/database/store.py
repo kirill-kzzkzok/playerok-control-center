@@ -1,3 +1,4 @@
+import itertools
 import json
 import sqlite3
 import threading
@@ -36,6 +37,7 @@ class Store:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
+        self._savepoint = iter(itertools.count())
         self.db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None, timeout=10)
         self.db.create_function("server_time", 1, server_time, deterministic=True)
         self.db.row_factory = sqlite3.Row
@@ -65,7 +67,21 @@ class Store:
 
     @contextmanager
     def transaction(self):
+        """Outer call: BEGIN IMMEDIATE .. COMMIT/ROLLBACK. Nested call (a transaction
+        opened while this connection already holds one): SAVEPOINT/RELEASE/ROLLBACK,
+        so service-level transactions compose into one atomic unit without changes."""
         with self.lock:
+            if self.db.in_transaction:
+                name = f"sp_{next(self._savepoint)}"
+                self.db.execute(f"SAVEPOINT {name}")
+                try:
+                    yield self.db
+                    self.db.execute(f"RELEASE SAVEPOINT {name}")
+                except BaseException:
+                    self.db.execute(f"ROLLBACK TO SAVEPOINT {name}")
+                    self.db.execute(f"RELEASE SAVEPOINT {name}")
+                    raise
+                return
             self.db.execute("BEGIN IMMEDIATE")
             try:
                 yield self.db
@@ -283,25 +299,34 @@ class Store:
             "UPDATE drafts SET state='DRAFT',revision=revision+1 WHERE id=? AND state='QUEUED'",
             (launch_id,),
         )
-        db.execute("DELETE FROM settings WHERE key=?", ("launch:prepared:" + target,))
-        # The failed launch must not leave live auto-delivery behind: it would keep
-        # spending on a still-unpublished item or arm a plain publish silently.
-        db.execute(
-            "UPDATE gift_listings SET enabled=0,revision=revision+1 WHERE item_id=? AND enabled=1", (target,)
-        )
-        if db.execute(
-            "SELECT 1 FROM delivery_policies WHERE item_id=? AND json_extract(payload,'$.enabled')=1",
-            (target,),
-        ).fetchone():
+        # CAS on the launch's own delivery revision: only rows still at the revision
+        # the launch committed are disarmed. A newer owner edit (independently
+        # re-armed delivery) survives untouched - no lost owner update.
+        delivery_revision = payload.get("delivery_revision")
+        if delivery_revision is not None:
+            db.execute(
+                "UPDATE gift_listings SET enabled=0,revision=revision+1 "
+                "WHERE item_id=? AND enabled=1 AND revision=?",
+                (target, delivery_revision),
+            )
             db.execute(
                 "UPDATE delivery_policies SET payload=json_set(payload,'$.enabled',0),"
-                "revision=revision+1,updated_at=? WHERE item_id=?",
-                (now(), target),
+                "revision=revision+1,updated_at=? "
+                "WHERE item_id=? AND json_extract(payload,'$.enabled')=1 AND revision=?",
+                (now(), target, delivery_revision),
             )
             db.execute(
                 "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (f"delivery:{target}:enabled", "false"),
             )
+        else:
+            # No delivery revision recorded (legacy payloads): disarm conservatively,
+            # the draft release is still safe because the item was never published.
+            db.execute(
+                "UPDATE gift_listings SET enabled=0,revision=revision+1 WHERE item_id=? AND enabled=1",
+                (target,),
+            )
+        db.execute("DELETE FROM settings WHERE key=?", ("launch:prepared:" + target,))
 
     def finish(self, ident, token, status, result=None, error=None):
         if status not in {"SUCCEEDED", "RETRYABLE_FAILED", "UNCERTAIN", "PERMANENT_FAILED"}:

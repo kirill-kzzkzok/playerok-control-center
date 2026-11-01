@@ -191,15 +191,66 @@ class Reconciliation:
                     finish_expense(db, ident, "FAILED")
                     # Proven never-sent premium publication: the intent gate was never
                     # crossed, so the launch can be safely released for a fresh attempt.
-                    if action["kind"] == "premium_publish" and json.loads(action["payload"]).get("launch_id"):
+                    payload = (
+                        json.loads(action["payload"])
+                        if isinstance(action["payload"], str)
+                        else action["payload"]
+                    )
+                    launch_id = (payload or {}).get("launch_id")
+                    if action["kind"] == "premium_publish" and launch_id:
                         db.execute(
                             "UPDATE drafts SET state='DRAFT',revision=revision+1 WHERE id=? AND state='QUEUED'",
-                            (json.loads(action["payload"])["launch_id"],),
+                            (launch_id,),
                         )
                         db.execute(
                             "DELETE FROM settings WHERE key=?",
                             ("launch:prepared:" + action["target"],),
                         )
+                        # The release must also disarm the auto-delivery this launch
+                        # committed (CAS: only rows still at the launch's delivery
+                        # revision are touched; a newer owner edit survives untouched).
+                        target = action["target"]
+                        marker = self.store.setting("launch:prepared:" + target) or {}
+                        delivery_revision = payload.get("delivery_revision") or marker.get(
+                            "delivery_revision"
+                        )
+                        listing = db.execute(
+                            "SELECT revision,enabled FROM gift_listings WHERE item_id=?", (target,)
+                        ).fetchone()
+                        if (
+                            listing
+                            and listing["enabled"]
+                            and delivery_revision is not None
+                            and listing["revision"] == delivery_revision
+                        ):
+                            db.execute(
+                                "UPDATE gift_listings SET enabled=0,revision=revision+1 WHERE item_id=?",
+                                (target,),
+                            )
+                        policy_row = db.execute(
+                            "SELECT revision,payload FROM delivery_policies WHERE item_id=?", (target,)
+                        ).fetchone()
+                        if policy_row:
+                            try:
+                                enabled = json.loads(policy_row["payload"]).get("enabled")
+                            except ValueError:
+                                enabled = None
+                            if (
+                                enabled
+                                and delivery_revision is not None
+                                and policy_row["revision"] == delivery_revision
+                            ):
+                                db.execute(
+                                    "UPDATE delivery_policies SET "
+                                    "payload=json_set(payload,'$.enabled',0),"
+                                    "revision=revision+1,updated_at=? WHERE item_id=?",
+                                    (now(), target),
+                                )
+                                db.execute(
+                                    "INSERT INTO settings(key,value) VALUES(?,?) "
+                                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                                    (f"delivery:{target}:enabled", "false"),
+                                )
             if decision == "CONFIRM_MESSAGE":
                 self.require_unclaimed_message(db, ident, evidence["message_id"])
             if action["kind"] == "delivery" and status == "SUCCEEDED":
