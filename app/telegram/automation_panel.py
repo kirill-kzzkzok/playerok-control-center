@@ -4,10 +4,11 @@ from dataclasses import asdict
 from app.database.store import Conflict
 from app.services.automation import Automation, DeliveryPolicy, message_text
 from app.services.delivery_chains import DeliveryChains
+from app.services.logical_products import LogicalProducts
 from app.services.products import ValidationError
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
-from app.telegram.presentation import automation_summary, item_label
+from app.telegram.presentation import automation_summary, item_label, order_label
 
 FIELDS = {"text": "Данные постоянной выдачи", "greeting": "Приветствие", "after": "Сообщение после выдачи"}
 
@@ -126,11 +127,43 @@ class AutomationPanel:
                 keyboard([[("Автоматизация", "automation")]]),
             )
         parts = action.split(":")
+        if len(parts) == 3 and parts[:2] == ["auto", "check"]:
+            await self.service.item(owner, parts[2])
+            product = LogicalProducts(self.store, self.service.api).listing(parts[2])
+            if not product or product["handler"] not in {"fixed_text", "unique_stock"}:
+                raise ValidationError("Проверка доступна для текстовой или складской выдачи товара")
+            revision, policy = self.service.get(parts[2])
+            data = {
+                "id": parts[2],
+                "revision": revision,
+                "values": asdict(policy),
+                "nonce": secrets.token_hex(6),
+                "logical_check": True,
+            }
+            await state.clear()
+            await state.set_data({"automation": data})
+            return await self.callback(f"ap:{data['nonce']}:orders", owner, state)
         if len(parts) == 3 and parts[:2] == ["auto", "item"]:
+            if LogicalProducts(self.store, self.service.api).listing(parts[2]):
+                from app.telegram.logical_products_panel import LogicalProductsPanel
+
+                return await LogicalProductsPanel(self.store, self.service.api).card(owner, parts[2], state)
             await self.service.item(owner, parts[2])
             revision, policy = self.service.get(parts[2])
             return await self.show({"id": parts[2], "revision": revision, "values": asdict(policy)}, state)
         data = (await state.get_data()).get("automation", {})
+        if (
+            data.get("id")
+            and LogicalProducts(self.store, self.service.api).listing(data["id"])
+            and not (
+                data.get("logical_check")
+                and len(parts) in {3, 4}
+                and parts[2] in {"orders", "simulate", "plan", "start_chain"}
+            )
+        ):
+            from app.telegram.logical_products_panel import LogicalProductsPanel
+
+            return await LogicalProductsPanel(self.store, self.service.api).card(owner, data["id"], state)
         if len(parts) not in {3, 4} or parts[1] != data.get("nonce"):
             raise Conflict("Настройки устарели. Откройте товар заново")
         command, values = parts[2], data["values"]
@@ -185,9 +218,10 @@ class AutomationPanel:
                 "Выберите заказ для проверки без отправки. Проверка читает API, не резервирует код и не создаёт отправки.",
                 keyboard(
                     [
-                        [(order["id"], f"ap:{data['nonce']}:simulate:{index}")]
+                        [(order_label(self.store, order["id"]), f"ap:{data['nonce']}:simulate:{index}")]
                         for index, order in enumerate(orders)
-                    ]
+                    ],
+                    back=("К выдаче товара", "lp:item:" + data["id"]) if data.get("logical_check") else None,
                 ),
             )
         elif command == "simulate" and len(parts) == 4:
@@ -210,7 +244,15 @@ class AutomationPanel:
                     if result["would_deliver"]
                     else []
                 )
-                + [[("К политике", "auto:item:" + data["id"])]]
+                + [[("Открыть заказ", "order:" + data["selected_order"])]]
+                + [
+                    [
+                        (
+                            "К настройке выдачи",
+                            ("lp:item:" if data.get("logical_check") else "auto:item:") + data["id"],
+                        )
+                    ]
+                ]
             )
         elif command == "plan" and data.get("selected_order"):
             if not self.service.api.account.writes_enabled or not getattr(
@@ -240,6 +282,12 @@ class AutomationPanel:
     async def message(self, message, state):
         self.service.orders.owner(message.from_user.id)
         data = (await state.get_data())["automation"]
+        if LogicalProducts(self.store, self.service.api).listing(data["id"]):
+            from app.telegram.logical_products_panel import LogicalProductsPanel
+
+            return await LogicalProductsPanel(self.store, self.service.api).card(
+                message.from_user.id, data["id"], state
+            )
         field = data.get("field")
         if field not in FIELDS:
             raise ValidationError("Шаг ввода устарел")

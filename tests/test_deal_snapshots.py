@@ -111,6 +111,17 @@ async def test_snapshot_unknown_payment_blocks_next_step_and_replay_after_restar
     assert not r.store.rows("SELECT * FROM outbox WHERE kind='gift_refund'")
 
 
+async def test_private_order_snapshot_is_not_offered_as_a_public_gift_product(case):
+    from tests.test_ux_redesign import buttons
+
+    r = case
+    await LogicalProductWorker(r.store, r.api).once()
+    await r.ui.click("gft:bindings")
+    visible = buttons(r.session.last_panel)
+    assert "gft:item:lot" in visible
+    assert "gft:item:deal-item-copy" not in visible
+
+
 @pytest.mark.parametrize("change", ["cancel", "stop"])
 async def test_snapshot_rechecks_status_and_stop_before_next_gift(case, change):
     r = case

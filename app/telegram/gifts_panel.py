@@ -76,6 +76,25 @@ class GiftsPanel:
         s.owner(owner)
         parts = action.split(":")
         command = parts[1]
+        # Permanent products own their execution policy. Old panels must never
+        # arm/rebind just the gift projection and leave the product stopped.
+        if command in {"item", "bind", "enable", "arm", "off", "confirmbind"}:
+            from app.services.logical_products import LogicalProducts
+            from app.telegram.logical_products_panel import LogicalProductsPanel
+
+            pending = (await state.get_data()).get("gift_bind") or {}
+            ident = pending.get("item") if command == "confirmbind" else parts[2]
+            logical = LogicalProducts(self.store, s.api)
+            product = logical.listing(ident) if ident else None
+            if product:
+                if command in {"arm", "confirmbind"}:
+                    await state.clear()
+                    raise Conflict(
+                        "Старое подтверждение больше не действует. Откройте товар → Выдача и подтвердите настройку заново"
+                    )
+                if command == "off":
+                    logical.stop(owner, product["id"])
+                return await LogicalProductsPanel(self.store, s.api).card(owner, ident, state)
         if command == "home":
             await state.clear()
             v = self.store.setting("gifts:connection", {})
@@ -203,7 +222,10 @@ class GiftsPanel:
             if not 0 <= page <= 100000:
                 raise Conflict("Страница недоступна")
             rows = self.store.rows(
-                "SELECT * FROM gift_listings ORDER BY item_id LIMIT 11 OFFSET ?", (page * 10,)
+                "SELECT g.* FROM gift_listings g WHERE NOT EXISTS "
+                "(SELECT 1 FROM logical_listings l WHERE l.item_id=g.item_id AND l.source_order_id IS NOT NULL) "
+                "ORDER BY g.item_id LIMIT 11 OFFSET ?",
+                (page * 10,),
             )
             buttons = [
                 [

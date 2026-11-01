@@ -55,6 +55,7 @@ def safe_route(action):
             "gft:list:",
             "payp:item:",
             "auto:item:",
+            "auto:check:",
             "ops:list:",
             "ops:show:",
             "result:show:",

@@ -3,6 +3,7 @@ from urllib.parse import quote
 
 from app.services.attachments import Attachments
 from app.services.automation import Automation
+from app.services.logical_products import LogicalProducts
 from app.services.products import ValidationError
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
@@ -76,6 +77,7 @@ class ItemPanel:
         if section not in {"card", "edit", "delivery", "other", "details"}:
             raise ValidationError("Экран устарел. Откройте товар заново")
         binding = gifts.service.listing(ident)
+        product = LogicalProducts(self.store, self.api).listing(ident)
         policy = self.store.rows("SELECT 1 FROM delivery_policies WHERE item_id=?", (ident,))
         gift_applicable = binding or (
             (item.get("category") or {}).get("id") == gifts.service.settings.category_id
@@ -92,6 +94,17 @@ class ItemPanel:
                     else "не настроена"
                 )
             )
+            if product and product["state"] != "LEGACY":
+                if product["state"] != "VERIFIED":
+                    delivery = "не готова — подтвердите привязку товара"
+                elif product["handler"] == "manual":
+                    delivery = "вручную"
+                elif not product["enabled"]:
+                    delivery = "остановлена"
+                elif binding:
+                    delivery = gifts.summary(ident).splitlines()[0].split(": ", 1)[-1].lower()
+                else:
+                    delivery = Automation(self.store, self.api).readiness(ident)["status"].lower()
             text = (
                 title
                 + f"\nЦена: {escaped(item.get('price'), 40)} ₽"
@@ -122,7 +135,13 @@ class ItemPanel:
                 + "\n"
                 + (gifts.summary(ident) if binding else automation_summary(self.store, self.api, ident))
             )
-            if binding:
+            if product:
+                rows = []
+                if product["handler"] == "unique_stock":
+                    rows.append([("📚 Склад", "stock:view:" + ident)])
+                if product["handler"] in {"fixed_text", "unique_stock"}:
+                    rows.append([("🔎 Проверить без отправки", "auto:check:" + ident)])
+            elif binding:
                 rows = [[("🎁 Настроить подарки", "gft:item:" + ident)]]
                 # Do not advertise competing fulfillment while a gift binding is active.
                 if not binding["enabled"]:
@@ -136,7 +155,7 @@ class ItemPanel:
                     rows.append([("🎁 Настроить подарки", "gft:item:" + ident)])
             for draft in stock.service.prepared(owner, ident):
                 rows.append([("📥 Перенести запас из мастера", "stock:transfer:" + draft)])
-            rows.insert(0, [("🔗 Постоянный код и выдача товара", "lp:item:" + ident)])
+            rows.insert(0, [("⚡ Настроить выдачу товара", "lp:item:" + ident)])
         elif section == "other":
             text = title + "\nДругие действия"
             rows = [
