@@ -122,6 +122,16 @@ async def test_private_order_snapshot_is_not_offered_as_a_public_gift_product(ca
     assert "gft:item:deal-item-copy" not in visible
 
 
+async def test_unlinked_paid_snapshot_is_not_presented_as_intentional_manual_delivery(case):
+    r = case
+    # The normalized paid record can contain the marker before its alias scan.
+    Orders(r.store).ingest(r.full)
+    await r.ui.click("order:snapshot-paid")
+    assert "Выдача: вручную" not in r.session.last_panel.text
+    assert "сверк" in r.session.last_panel.text.lower()
+    assert not r.api.remote.payments
+
+
 @pytest.mark.parametrize("change", ["cancel", "stop"])
 async def test_snapshot_rechecks_status_and_stop_before_next_gift(case, change):
     r = case

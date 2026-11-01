@@ -279,8 +279,9 @@ class Store:
             row = db.execute(
                 "SELECT * FROM outbox WHERE status IN ('PENDING','RETRYABLE_FAILED') AND retry_at<=?"
                 + filters
-                + " ORDER BY created_at LIMIT 1",
-                args,
+                + " ORDER BY CASE WHEN created_at<=? THEN 0 "
+                "WHEN kind IN ('gift_send','delivery','delivery_text','chain_message') THEN 1 ELSE 2 END,created_at,id LIMIT 1",
+                [*args, datetime.fromtimestamp(time.time() - 120, UTC).isoformat()],
             ).fetchone()
             if row is None:
                 return None

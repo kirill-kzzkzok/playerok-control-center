@@ -207,7 +207,11 @@ class Synchronizer(PageScanner):
                 if time.monotonic() >= next_full:
                     await self.once()
                     failures = failures + 1 if self.health["status"] == "ERROR" else 0
-                    next_full = time.monotonic() + min(900, 60 * 2 ** min(failures, 4)) + random.uniform(0, 5)
+                    next_full = (
+                        time.monotonic()
+                        + (min(900, 60 * 2 ** min(failures, 4)) if failures else 30)
+                        + random.uniform(0, 5)
+                    )
                 processed = await self.process_requests()
                 if processed == 8:
                     self.wake.set()

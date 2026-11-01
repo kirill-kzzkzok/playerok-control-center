@@ -179,7 +179,14 @@ class OrdersPanel:
             elif gifts:
                 text += "\nПодарки: " + status(gifts[0]["state"])
             else:
-                text += "\nВыдача: " + ("вручную" if not gift_listing else "подарок ожидает обработки")
+                revision, policy = Automation(self.store, self.service.api).get(item["id"])
+                text += "\nВыдача: " + (
+                    "подарок ожидает обработки"
+                    if gift_listing
+                    else "вручную"
+                    if revision and policy.mode == "manual"
+                    else "способ ещё не подтверждён — ожидается сверка"
+                )
             if not gifts and not gift_listing:
                 readiness = Automation(self.store, self.service.api).readiness(item["id"])
                 if readiness["mode"] != "manual":

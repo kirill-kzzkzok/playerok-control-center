@@ -8,6 +8,7 @@ from app.services.finance import checked_time
 from app.services.order_finance import profit_statistics, settlement_statistics
 from app.services.statistics import (
     confirm_offer_group,
+    delivery_statistics,
     grouped_statistics,
     offer_identities,
     offer_suggestions,
@@ -43,6 +44,7 @@ class StatisticsPanel:
             rows += [
                 [("📈 Графики", f"sr:{days}:charts"), ("🏆 Лучшие товары", f"sr:{days}:top")],
                 [("💰 Финансы", f"sr:{days}:finance"), ("📋 Подробный отчёт", f"sd:{days}:details")],
+                [("⏱ Скорость выдачи", f"sr:{days}:delivery")],
             ]
             return keyboard(rows, back=("⬅️ Ещё", "more"))
         # Historical deep links remain valid; detailed reports return to this summary.
@@ -55,6 +57,32 @@ class StatisticsPanel:
     async def handle(self, action, message, *, owner=None, state=None):
         parts = action.split(":")
         days = int(parts[1])
+        if len(parts) == 3 and parts[0] == "sr" and parts[2] == "delivery":
+            values = delivery_statistics(self.store, days)
+            text = "⏱ <b>Скорость подтверждённой выдачи</b>\nПо локальным наблюдениям; не гарантия срока."
+            for key, label in (
+                ("observed", "От обнаружения оплаты"),
+                ("preparation", "Подготовка до платежа"),
+                ("confirmation", "От начала платежа до подтверждения"),
+                ("server_paid", "От серверного времени оплаты"),
+            ):
+                value = values[key]
+                text += (
+                    "\n"
+                    + label
+                    + ": "
+                    + (
+                        f"p50 {value['p50']} с · p95 {value['p95']} с · p99 {value['p99']} с · {value['samples']} заказов"
+                        if value["samples"]
+                        else "нет подтверждённых измерений"
+                    )
+                )
+            text += (
+                "\nСоздание заказа не подменяет момент оплаты. Частичные и неизвестные доставки исключены."
+            )
+            return await message.answer(
+                text, reply_markup=keyboard([], back=("К статистике", f"stats:{days}"))
+            )
         if parts[0] == "sg":
             account = self.store.setting("playerok:account_id")
             if not account:

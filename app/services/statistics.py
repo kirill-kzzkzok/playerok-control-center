@@ -18,6 +18,46 @@ def parsed_time(value):
         return None
 
 
+def delivery_statistics(store, days=0):
+    """Local observation durations, never created_at masquerading as paid_at."""
+    series = {key: [] for key in ("observed", "server_paid", "preparation", "confirmation")}
+    completed = 0
+    cutoff = datetime.now(UTC) - timedelta(days=days) if days else None
+    for job in store.rows(
+        "SELECT g.*,i.received_at FROM gift_jobs g JOIN inbox i ON i.key='order:'||g.order_id||':PAID' WHERE g.state='SUCCEEDED' AND g.receipt IS NOT NULL"
+    ):
+        observed, finished = parsed_time(job["received_at"]), parsed_time(job["updated_at"])
+        if not observed or not finished or finished < observed or cutoff and finished < cutoff:
+            continue
+        steps = store.rows(
+            "SELECT spent_at,receipt,state FROM gift_steps WHERE order_id=? ORDER BY position",
+            (job["order_id"],),
+        )
+        if not steps or any(s["state"] != "SUCCEEDED" or not s["receipt"] for s in steps):
+            continue
+        completed += 1
+        series["observed"].append((finished - observed).total_seconds())
+        started = parsed_time(steps[0]["spent_at"])
+        if started and observed <= started <= finished:
+            series["preparation"].append((started - observed).total_seconds())
+            series["confirmation"].append((finished - started).total_seconds())
+        # The current Playerok deal contract has no independently verified
+        # payment timestamp. Do not silently substitute order creation time.
+
+    def summary(values):
+        values = sorted(values)
+        if not values:
+            return {"samples": 0, "p50": None, "p95": None, "p99": None}
+        from math import ceil
+
+        return {
+            "samples": len(values),
+            **{f"p{p}": round(values[max(0, ceil(len(values) * p / 100) - 1)], 3) for p in (50, 95, 99)},
+        }
+
+    return {"completed": completed, **{key: summary(values) for key, values in series.items()}}
+
+
 def amount_or_none(value):
     try:
         return money(value) if value is not None else None

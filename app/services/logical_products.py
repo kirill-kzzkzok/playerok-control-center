@@ -823,6 +823,10 @@ class LogicalProducts:
                 if (local_order.get("item") or {}).get("id") != item["id"]:
                     raise Conflict("Снимок относится к другой сделке")
             source = product["stock_item_id"]
+            source_cost = self.store.setting(f"finance:{owner}:cost:{source}")
+            target_cost = self.store.setting(f"finance:{owner}:cost:{item['id']}")
+            if source_cost is not None and target_cost is None:
+                self.store.set_setting(f"finance:{owner}:cost:{item['id']}", source_cost)
             if product["handler"] == "telegram_gifts":
                 sources = db.execute(
                     "SELECT l.item_id FROM logical_listings l JOIN gift_listings g ON g.item_id=l.item_id "
