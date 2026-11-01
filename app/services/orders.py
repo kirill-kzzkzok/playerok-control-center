@@ -180,6 +180,26 @@ class Orders:
                 raise Conflict("Для заказа настроена подарочная выдача; складское резервирование запрещено")
             if not order or order["status"] != "PAID" or not order["chat_id"]:
                 raise Conflict("Выдача разрешена только оплаченной продаже с известным чатом")
+            if db.execute(
+                "SELECT 1 FROM order_annotations WHERE order_id=? AND problem=1", (order_id,)
+            ).fetchone():
+                raise Conflict("Заказ требует решения продавца; резерв не создан")
+            payload = json.loads(order["payload"])
+            if (
+                payload.get("has_problem") is not False
+                or payload.get("is_automated") is not False
+                or payload.get("direction") != "OUT"
+            ):
+                raise Conflict("Нужна подтверждённая продажа без проблемы и серверной выдачи")
+            seller = ((payload.get("item") or {}).get("user") or {}).get("id")
+            account = self.store.setting("playerok:account_id")
+            if account and seller != account:
+                raise Conflict("Продавец заказа не соответствует привязке аккаунта")
+            policy = db.execute(
+                "SELECT payload FROM delivery_policies WHERE item_id=?", (order["item_id"],)
+            ).fetchone()
+            if policy and json.loads(policy[0]).get("mode") != "stock":
+                raise Conflict("Этот способ выдачи не использует уникальный склад")
             LogicalProducts(self.store).pin_order(db, order_id, order["item_id"], "unique_stock")
             scope = stock_scope(self.store, order["item_id"], order_id)
             existing = db.execute(
@@ -228,6 +248,15 @@ class Orders:
                 "INSERT OR IGNORE INTO inbox(key,kind,payload,received_at) VALUES(?,?,?,?)",
                 (key, "message", encode(message), now()),
             ).rowcount
+            previous = db.execute("SELECT payload FROM chat_messages WHERE id=?", (message["id"],)).fetchone()
+            if previous and previous[0] != encode(message):
+                db.execute(
+                    "INSERT INTO chat_message_versions(message_id,payload,observed_at) VALUES(?,?,?)",
+                    (message["id"], previous[0], now()),
+                )
+            if previous and previous[0] != encode(message):
+                db.execute("UPDATE notifications SET rendered_payload=NULL WHERE event_key=?", (key,))
+            db.execute("UPDATE inbox SET payload=? WHERE key=?", (encode(message), key))
             db.execute(
                 "INSERT INTO chat_messages VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
                 (message["id"], chat_id, message.get("created_at"), encode(message)),

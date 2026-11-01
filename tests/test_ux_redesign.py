@@ -336,7 +336,9 @@ async def test_navigation_from_notification_never_edits_evidence(ux):
     from app.services.orders import Orders
 
     Orders(r.store).ingest_message("chat", {"id": "incoming", "text": "Original proof"})
-    r.store.execute("INSERT INTO notifications VALUES('message:incoming',7,1,'SUCCEEDED')")
+    r.store.execute(
+        "INSERT INTO notifications(event_key,owner_id,telegram_message_id,status) VALUES('message:incoming',7,1,'SUCCEEDED')"
+    )
     for action in ("home", "more", "tools", "chat:chat", "iv:other:lot"):
         await r.ui.click(action)
         assert not any(

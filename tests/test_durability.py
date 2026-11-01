@@ -17,6 +17,8 @@ def store(tmp_path):
 
 def order(ident="order1", status="PAID"):
     return {
+        "has_problem": False,
+        "is_automated": False,
         "id": ident,
         "status": status,
         "direction": "OUT",
@@ -84,7 +86,9 @@ def test_restart_after_external_call_quarantines_stock(store):
     service.ingest(order())
     service.add_stock("item1", ["code"])
     service.reserve("order1")
-    action = store.claim(lease_seconds=-1)
+    action = store.claim()
+    store.mark_started(action)
+    store.execute("UPDATE outbox SET lease_until=0")
     new = Store(store.path)
     try:
         assert new.recover() == 1
@@ -101,6 +105,7 @@ async def test_timeout_after_send_never_retries(store):
     calls = []
 
     async def send(action):
+        store.mark_started(action)
         calls.append(action)
         raise APIError("NETWORK_ERROR", uncertain=True)
 

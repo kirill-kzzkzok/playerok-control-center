@@ -158,6 +158,10 @@ class Navigation:
             and markup.model_dump(mode="json") == panel.get("pending_markup")
         )
 
+    async def feedback(self, message, owner, text):
+        # Independent owner feedback; never adopt it or mutate navigation/FSM.
+        return await message.bot.send_message(owner, text)
+
     async def recovery_prompt(self, message, owner):
         key = self.key(message.bot, owner)
         panel = self.store.setting(key, {})
@@ -176,26 +180,10 @@ class Navigation:
             recovery_kind=kind or "text",
         )
         self.store.set_setting(key, panel)
-        ident = panel.get("id")
-        result = None
+        ident, result = panel.get("id"), None
         if ident and not self.protected(owner, ident):
-            try:
-                if panel["recovery_kind"] == "photo":
-                    result = await message.bot.edit_message_caption(
-                        chat_id=owner, message_id=ident, caption=text, reply_markup=markup
-                    )
-                else:
-                    result = await message.bot.edit_message_text(
-                        chat_id=owner, message_id=ident, text=text, reply_markup=markup
-                    )
-            except TelegramBadRequest as error:
-                reason = error.message.lower()
-                # An unacknowledged media edit may have left either message
-                # type on Telegram. Only a definite type rejection permits
-                # trying the other idempotent edit; a timeout never does.
-                if "there is no text" in reason or "there is no caption" in reason:
-                    panel["recovery_kind"] = "photo" if panel["recovery_kind"] == "text" else "text"
-                    self.store.set_setting(key, panel)
+            for attempt in range(2):
+                try:
                     if panel["recovery_kind"] == "photo":
                         result = await message.bot.edit_message_caption(
                             chat_id=owner, message_id=ident, caption=text, reply_markup=markup
@@ -204,10 +192,23 @@ class Navigation:
                         result = await message.bot.edit_message_text(
                             chat_id=owner, message_id=ident, text=text, reply_markup=markup
                         )
-                elif not any(
-                    value in error.message.lower()
-                    for value in ("message to edit not found", "message can't be edited")
-                ):
+                    break
+                except TelegramBadRequest as error:
+                    reason = error.message.lower()
+                    if attempt == 0 and ("there is no text" in reason or "there is no caption" in reason):
+                        panel["recovery_kind"] = "photo" if panel["recovery_kind"] == "text" else "text"
+                        self.store.set_setting(key, panel)
+                        continue
+                    if any(
+                        v in reason
+                        for v in (
+                            "message to edit not found",
+                            "message can't be edited",
+                            "there is no text",
+                            "there is no caption",
+                        )
+                    ):
+                        break
                     raise
         if result is None:
             panel["recovery_kind"] = "text"
@@ -239,6 +240,11 @@ class Navigation:
             # Stopping future spending is safe even from an old or unacknowledged UI.
             return True
         panel = self.store.setting(self.key(message.bot, owner), {})
+        if action.startswith(("reply:", "compose:", "readchat:", "chat:")):
+            from app.services.replies import Replies
+
+            if Replies(self.store).origin(owner, message.message_id, action.split(":", 1)[1]):
+                return True
         if action.startswith("nav:recover:"):
             markup = getattr(message, "reply_markup", None)
             proof = (
@@ -263,7 +269,7 @@ class Navigation:
         ):
             return False
         if panel.get("id") and panel["id"] != message.message_id:
-            return safe_route(action) or action.startswith(("compose:", "ff:start:"))
+            return safe_route(action) or action.startswith("ff:start:")
         return True
 
     async def close(self, bot, owner):
@@ -308,7 +314,7 @@ class Navigation:
                     "Панель: результат отправки неизвестен; автоматического повтора нет. Нажмите кнопку полученного экрана или явно восстановите только меню командой /panel_reset",
                     level=30,
                 )
-                return None
+                return await self.recovery_prompt(message, owner)
             view = deepcopy(proposal or {name: panel.get(name) for name in ("route", "history", "context")})
             view["context"] = {k: v for k, v in (await state.get_data()).items() if k in CONTEXT}
             markup = reply_markup.model_copy(deep=True) if reply_markup else keyboard([], home=False)
@@ -369,17 +375,37 @@ class Navigation:
                     result = message
                 elif any(
                     s in error.message.lower()
-                    for s in ("message to edit not found", "message can't be edited")
+                    for s in (
+                        "message to edit not found",
+                        "message can't be edited",
+                        "there is no text",
+                        "there is no caption",
+                    )
                 ):
                     result = None
-                    if "message to edit not found" in error.message.lower():
-                        ident = None
+                    ident = (
+                        None  # Definite rejection permits a replacement, never a replay of business actions.
+                    )
                 else:
                     raise
             if result is None:
                 if ident:
                     # Deactivate before replacing. A timeout here must not send a replacement.
-                    await bot.edit_message_reply_markup(chat_id=owner, message_id=ident, reply_markup=None)
+                    try:
+                        await bot.edit_message_reply_markup(
+                            chat_id=owner, message_id=ident, reply_markup=None
+                        )
+                    except TelegramBadRequest as error:
+                        if not any(
+                            v in error.message.lower()
+                            for v in (
+                                "message to edit not found",
+                                "message can't be edited",
+                                "message is not modified",
+                            )
+                        ):
+                            raise
+                        ident = None
                 panel["sending"] = True
                 panel.update(
                     pending_markup=markup.model_dump(mode="json"), pending_kind=kind, pending_token=token
@@ -415,7 +441,21 @@ class Navigation:
                 context={k: v for k, v in (await state.get_data()).items() if k in CONTEXT},
             )
             self.store.set_setting(key, panel)
+            self.track_result(owner, panel, markup)
             return result
+
+    def track_result(self, owner, panel, markup):
+        routes = [
+            b.callback_data
+            for row in markup.inline_keyboard
+            for b in row
+            if b.callback_data and b.callback_data.startswith("result:show:")
+        ]
+        if len(routes) == 1:
+            self.store.execute(
+                "UPDATE operation_receipts SET view_message_id=?,view_token=?,rendered_status=NULL WHERE operation_id=? AND owner_id=?",
+                (panel["id"], panel["token"], routes[0].split(":", 2)[2], owner),
+            )
 
 
 class PanelMessage:

@@ -27,3 +27,18 @@ def edit_receipt_matches(target, changes, result):
         if len(set(ids)) != len(ids) or set(ids).intersection(changes.get("remove_attachments", [])):
             return False
     return True
+
+
+def field_receipt_matches(target, observed, attributes, fields, comment):
+    if not isinstance(observed, dict) or observed.get("id") != target:
+        return False
+    actual = observed.get("attributes")
+    if not isinstance(actual, dict) or any(actual.get(key) != value for key, value in attributes.items()):
+        return False
+    if comment is not None and observed.get("comment") != comment:
+        return False
+    values = observed.get("data_fields")
+    if not isinstance(values, list):
+        return False
+    indexed = {value.get("id"): value.get("value") for value in values if isinstance(value, dict)}
+    return all(indexed.get(field.id) == field.value for field in fields)

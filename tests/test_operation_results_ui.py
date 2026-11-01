@@ -121,6 +121,8 @@ async def test_uncertain_operation_and_unknown_telegram_ack_never_offer_replay(r
 async def test_delivered_waiting_screen_requires_successful_receipt_and_stock_state(rig):
     store, _api, session, _bot, ui, _state = rig
     order = {
+        "has_problem": False,
+        "is_automated": False,
         "id": "order",
         "status": "PAID",
         "direction": "OUT",

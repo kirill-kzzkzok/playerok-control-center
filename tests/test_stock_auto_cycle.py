@@ -156,6 +156,13 @@ async def test_poll_discover_reserve_restart_send_receipt_and_fulfillment(tmp_pa
         assert len(api.messages) == (0 if outcome == "crash_before_send" else 1)
         assert not store.rows("SELECT 1 FROM inventory WHERE status='AVAILABLE'")
 
+        if outcome == "crash_before_send":
+            # Durable evidence now proves preflight was interrupted before POST.
+            assert store.rows("SELECT status FROM inventory") == [{"status": "RESERVED"}]
+            assert store.rows("SELECT status FROM outbox") == [{"status": "RETRYABLE_FAILED"}]
+            assert store.rows("SELECT started_at FROM outbox") == [{"started_at": None}]
+            assert not api.mutations
+            return
         if outcome != "success":
             assert store.rows("SELECT status FROM inventory") == [{"status": "QUARANTINED"}]
             assert store.rows("SELECT status FROM outbox") == [{"status": "UNCERTAIN"}]
@@ -197,7 +204,9 @@ def test_two_database_connections_cannot_reserve_last_unit_twice(tmp_path, same_
                     "id": ident,
                     "status": "PAID",
                     "direction": "OUT",
-                    "item": {"id": "item"},
+                    "has_problem": False,
+                    "is_automated": False,
+                    "item": {"id": "item", "user": {"id": "seller"}},
                     "chat": {"id": ident},
                 }
             )

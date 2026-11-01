@@ -177,6 +177,8 @@ async def test_concurrent_message_resolution_cannot_share_one_receipt(setup):
 def delivery(store):
     orders = Orders(store)
     order = {
+        "has_problem": False,
+        "is_automated": False,
         "id": "order",
         "status": "PAID",
         "direction": "OUT",

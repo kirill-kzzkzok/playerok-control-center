@@ -92,7 +92,9 @@ async def test_uncertain_operation_alert_does_not_wait_for_initial_sync_or_repea
 
 async def test_recovered_expired_action_emits_one_persistent_alert(store):
     ident = store.enqueue("lost", "reply", "chat", {"text": "private response"})
-    store.claim(lease_seconds=-1)
+    action = store.claim()
+    store.mark_started(action)
+    store.execute("UPDATE outbox SET lease_until=0")
     assert store.recover() == 1
     assert store.recover() == 0
     events = store.rows("SELECT payload FROM inbox WHERE kind='operation_uncertain'")

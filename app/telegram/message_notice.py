@@ -1,8 +1,16 @@
+from app.services.chat_events import system_event
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 
 
 def message_notice(payload, chat_id, note=""):
+    event = system_event(payload)
+    if event:
+        return "🔔 <b>Событие Playerok</b>\n" + escaped(
+            event, 300
+        ) + "\nОткройте диалог и проверьте актуальную сделку.", keyboard(
+            [[("📖 Диалог", "chat:" + chat_id)]] if chat_id else []
+        )
     user = payload.get("user") or {}
     author = escaped(user.get("username") or "Неизвестный отправитель", 120)
     text = (

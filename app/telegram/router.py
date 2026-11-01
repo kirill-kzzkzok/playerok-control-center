@@ -116,10 +116,10 @@ def create_router(store, api, products, synchronizer):
         key = navigator.key(message.bot, message.from_user.id)
         panel = store.setting(key, {})
         await state.clear()  # Never restore a confirmation from the abandoned UI.
-        if panel.get("sending"):
-            # Explicit owner recovery, not an automatic resend. Unknown old UI
-            # is not deleted or treated as proof of any business operation.
-            store.set_setting(key, {"route": None, "history": [], "abandoned_send": True})
+        if panel.get("sending") or panel.get("editing"):
+            return await navigator.recovery_prompt(message, message.from_user.id)
+        if panel.get("id"):
+            store.set_setting(key, {"route": None, "history": [], "abandoned_id": panel["id"]})
         message, _ = await navigator.enter(message, message.from_user.id, state, "home")
         text, markup = home_panel.home()
         await message.answer(text, reply_markup=markup)
@@ -135,15 +135,15 @@ def create_router(store, api, products, synchronizer):
         if message is None or not hasattr(message, "answer"):
             return
         if not navigator.allowed(message, owner, action):
-            return await query.answer("Экран закрыт или устарел. Откройте /start", show_alert=True)
+            return await navigator.feedback(message, owner, "Экран закрыт или устарел. Откройте /start")
         if not navigation(action) and (
-            ack["status"] != "ok" or time.monotonic() - ack["checked_at"] > ACTION_MAX_WAIT
+            ack["status"] != "ok"
+            or time.monotonic() - ack.get("admitted_at", ack["checked_at"]) > ACTION_MAX_WAIT
         ):
-            message, _ = await navigator.enter(message, owner, state, "input")
-            return await message.answer(
-                "Нажатие не подтверждено или ожидало слишком долго. Действие не выполнено. "
-                "Откройте экран заново; для ранее запущенной операции сначала проверьте её результат.",
-                reply_markup=main_menu(),
+            return await navigator.feedback(
+                message,
+                owner,
+                "Нажатие не подтверждено. Действие не выполнено; текущий экран сохранён. Повторно откройте его после восстановления связи.",
             )
         preserve = bool(
             store.rows(
@@ -447,7 +447,7 @@ def create_router(store, api, products, synchronizer):
                 store.audit(owner, "QUEUE_" + pending["kind"], pending["target"], "PENDING")
                 await state.clear()
                 text, markup = (
-                    "⏳ Ожидает выполнения. Подтверждённый результат придёт отдельным сообщением.",
+                    "⏳ Ожидает выполнения. Этот экран покажет подтверждённый результат; его также можно проверить кнопкой ниже.",
                     keyboard([[("Открыть результат", "result:show:" + ident)]]),
                 )
             elif action in {"orders", "orderfilters"} or action.startswith(("orderpage:", "order:", "od:")):

@@ -77,7 +77,7 @@ class Replies:
         rows = self.store.rows(
             "SELECT n.event_key FROM notifications n JOIN inbox i ON i.key=n.event_key "
             "JOIN chat_messages m ON i.key='message:'||m.id "
-            "WHERE n.owner_id=? AND n.telegram_message_id=? AND m.chat_id=?",
+            "WHERE n.owner_id=? AND n.telegram_message_id=? AND m.chat_id=? AND n.status='SUCCEEDED' AND json_extract(m.payload,'$.deleted_at') IS NULL",
             (owner, telegram_message_id, chat_id),
         )
         return rows[0]["event_key"] if rows else None
@@ -93,7 +93,7 @@ class Replies:
                 kind not in {"reply", "mark_read"}
                 or not db.execute(
                     "SELECT 1 FROM notifications n JOIN chat_messages m ON n.event_key='message:'||m.id "
-                    "WHERE n.owner_id=? AND n.event_key=? AND m.chat_id=? AND n.telegram_message_id IS NOT NULL",
+                    "WHERE n.owner_id=? AND n.event_key=? AND m.chat_id=? AND n.telegram_message_id IS NOT NULL AND n.status='SUCCEEDED' AND json_extract(m.payload,'$.deleted_at') IS NULL",
                     (owner, origin, target),
                 ).fetchone()
             ):

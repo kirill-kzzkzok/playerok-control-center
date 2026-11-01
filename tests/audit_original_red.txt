@@ -1,0 +1,91 @@
+"""RED reproductions for the independent adversarial audit (2026-11-01).
+
+Each test below captures a CONFIRMED or PROBABLE defect found by code reading.
+Production code is NOT modified; these tests are expected to FAIL (RED) on the
+current HEAD dcb7283 — that failure is the audit evidence.
+
+Run: .venv/Scripts/python.exe -m pytest tests/test_audit_red_repro.py -x -q
+"""
+
+import asyncio
+import json
+
+import pytest
+
+from app.database.store import Store
+from app.services.orders import Orders
+from app.telegram.message_notice import message_notice
+from app.telegram.operation_results import OperationResults
+from app.services.replies import Replies
+
+
+@pytest.fixture()
+def store(tmp_path):
+    s = Store(str(tmp_path / "audit.db"))
+    s.set_setting("notifications:initialized", True)
+    return s
+
+
+@pytest.fixture()
+def admin(store):
+    store.execute("INSERT INTO administrators(user_id) VALUES(?)", (700,))
+    return 700
+
+
+def _system_message(message_id, text, chat_id="ch1"):
+    """A Playerok system chat event exactly as parsed by playerokapi:
+    literal template text, user is None."""
+    return {"id": message_id, "text": text, "created_at": "2026-11-01T10:00:00", "user": None, "chat_id": chat_id}
+
+
+# ----------------------------------------------------------------------------
+# DEFECT A (P1): system events (ITEM_PAID etc.) become owner notifications
+# "Неизвестный отправитель" with raw placeholder text.
+# Chain: sync → Orders.ingest_message (no event filter) → inbox kind='message'
+# → Notifications.once → message_notice (author fallback + raw text).
+# ----------------------------------------------------------------------------
+
+def test_system_item_paid_event_is_not_a_user_message(store):
+    """RED: {{ITEM_PAID}} must not be ingestible as a buyer message."""
+    orders = Orders(store)
+    added = orders.ingest_message("ch1", _system_message("m1", "{{ITEM_PAID}}"))
+    assert added, "message ingested"
+    row = store.rows("SELECT kind, payload FROM inbox WHERE key='message:m1'")[0]
+    # Expected: the system event either not ingested as 'message' or filtered.
+    # Actual: kind='message' with raw placeholder -> owner notification noise.
+    assert row["kind"] != "message" or "{{" not in json.loads(row["payload"])["text"], (
+        "system placeholder ingested as ordinary buyer message"
+    )
+
+
+def test_message_notice_renders_placeholder_as_unknown_sender(store):
+    """RED: message_notice renders '{{ITEM_PAID}}' from user=None as
+    'Неизвестный отправитель' — nonsense next to the real order notification."""
+    text, _markup = message_notice(_system_message("m2", "{{ITEM_PAID}}"), "ch1")
+    assert "Неизвестный отправитель" not in text, "system event shown as unknown human sender"
+    assert "{{" not in text, "raw template placeholder leaked to owner UI"
+
+
+# ----------------------------------------------------------------------------
+# DEFECT B (P1): 'Открыть результат' button after reply/mark_read always fails.
+# router.py commit: → '⏳ Ожидает выполнения' + result:show:<id>, but
+# store.py enqueue creates operation_receipts only for a fixed kind set that
+# excludes reply/mark_read; OperationResults.show then raises Conflict.
+# ----------------------------------------------------------------------------
+
+def test_result_show_after_reply_is_available(store, admin):
+    """RED: owner presses 'Открыть результат' for a queued reply — must open."""
+    replies = Replies(store)
+    ident = replies.enqueue(admin, "ui:token1", {"kind": "reply", "target": "ch1", "payload": {"text": "hi"}})
+    results = OperationResults(store)
+    text, _markup = results.show(admin, ident)  # raises Conflict today
+    assert "Ожидает выполнения" in text
+
+
+def test_result_show_after_mark_read_is_available(store, admin):
+    """RED: same for mark_read."""
+    replies = Replies(store)
+    ident = replies.enqueue(admin, "ui:token2", {"kind": "mark_read", "target": "ch1", "payload": {}})
+    results = OperationResults(store)
+    text, _markup = results.show(admin, ident)
+    assert text

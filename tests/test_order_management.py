@@ -150,7 +150,9 @@ async def test_change_or_timeout_after_reservation_quarantines_stock(setup, race
         api.account.error = APIError("NETWORK_ERROR", uncertain=True)
     worker = OutboxWorker(store, Executor(store, api, None))
     await worker.once()
-    assert store.rows("SELECT status FROM inventory")[0]["status"] == "QUARANTINED"
+    assert store.rows("SELECT status FROM inventory")[0]["status"] == (
+        "RESERVED" if race == "rollback" else "QUARANTINED"
+    )
     assert not await worker.once()
     assert len(api.account.calls) == (0 if race == "rollback" else 1)
 
@@ -236,8 +238,11 @@ async def test_stale_paid_event_does_not_notify_after_sent(setup):
     bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=10)))
     await Notifications(store, bot).once()
     assert bot.send_message.await_count == 1
-    assert "SENT" in bot.send_message.call_args.args[1]
+    assert "Продавец отметил отправку" in bot.send_message.call_args.args[1]
+    assert "SENT" not in bot.send_message.call_args.args[1]
     assert "PAID" not in bot.send_message.call_args.args[1]
+    assert "Оплачен" not in bot.send_message.call_args.args[1]
+    assert store.rows("SELECT status FROM orders") == [{"status": "SENT"}]
 
 
 async def test_problem_transition_same_status_notifies_once_and_can_reopen(setup):

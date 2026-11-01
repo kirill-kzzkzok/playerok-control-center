@@ -16,7 +16,7 @@ from app.services.auto_replies import AutoReplies
 from app.services.delivery_chains import DeliveryChains
 from app.services.discounts import discount_plan
 from app.services.fulfillment import Fulfillment
-from app.services.item_receipts import edit_receipt_matches
+from app.services.item_receipts import edit_receipt_matches, field_receipt_matches
 from app.services.order_management import deliverable
 from app.services.orders import Orders
 from app.services.products import (
@@ -153,12 +153,16 @@ class Executor:
                     self.dispatch_guard(action)
 
             scope = (
-                self.api.account.permit(operation, dispatch_guard=guard)
+                self.api.account.permit(
+                    operation, dispatch_guard=guard, dispatch_start=lambda: self.store.mark_started(action)
+                )
                 if isinstance(self.api.account, SafeAccount)
                 else self.api.account.permit(operation)
             )
             with scope:
                 guard()
+                if not isinstance(self.api.account, SafeAccount):
+                    self.store.mark_started(action)
                 try:
                     return plain(getattr(self.api.account, method)(**kwargs))
                 except (APIError, ValidationError):
@@ -372,7 +376,9 @@ class Executor:
             )
             if result.get("id") != target:
                 raise APIError("EDIT_NOT_CONFIRMED", uncertain=True)
-            self.store.execute("UPDATE drafts SET state='UPDATED' WHERE id=?", (draft["id"],))
+            observed = await self.owned_item(target)
+            if not field_receipt_matches(target, observed, attributes, fields, comment):
+                raise APIError("FIELDS_READBACK_NOT_CONFIRMED", uncertain=True)
             return {"remote_id": target}
         if kind == "agreements":
             if payload.get("automatic"):
@@ -662,7 +668,25 @@ class OutboxWorker:
             self.finish(
                 action["id"],
                 action["lease_token"],
-                "UNCERTAIN" if error.uncertain else "PERMANENT_FAILED",
+                "RETRYABLE_FAILED"
+                if action["kind"] in {"delivery", "delivery_text", "chain_message", "reply", "mark_read"}
+                and error.code
+                in {
+                    "NETWORK_ERROR",
+                    "HTTP_503",
+                    "HTTP_502",
+                    "HTTP_504",
+                    "HTTP_500",
+                    "HTTP_429",
+                    "RATE_LIMITED",
+                    "CONNECTION_NOT_VERIFIED",
+                    "SESSION_EXPIRED",
+                    "UNAUTHORIZED_OR_CHALLENGE",
+                }
+                and action["attempts"] < 4
+                else "UNCERTAIN"
+                if error.uncertain
+                else "PERMANENT_FAILED",
                 error=error.code,
             )
         except asyncio.CancelledError:

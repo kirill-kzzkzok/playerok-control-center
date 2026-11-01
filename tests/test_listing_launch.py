@@ -1,6 +1,7 @@
 """Production launch, delivery and Dispatcher; no live HTTP or paid Telegram RPCs."""
 
 import json
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import asdict
 
@@ -43,12 +44,21 @@ def launch(rig):
             return {"items": [deepcopy(r.api.item)], "page_info": {}}
         return await original(method, **kwargs)
 
+    original_permit = r.api.account.permit
+
+    @contextmanager
+    def permit(operation):
+        if operation == "publishItem" and r.failure == "before":
+            raise ValidationError("Read-only publication preflight refused")
+        with original_permit(operation):
+            yield
+
+    r.api.account.permit = permit
+
     def publish(**kwargs):
         binding = r.service.listing("item")
         policy = r.store.rows("SELECT * FROM delivery_policies WHERE item_id='item'")
         r.publications.append({"binding": deepcopy(binding), "policy": deepcopy(policy)})
-        if r.failure == "before":
-            raise APIError("HTTP_400")
         r.api.item["status"] = "APPROVED"
         if r.premium:
             r.api.item["priority"] = "PREMIUM"
@@ -181,7 +191,7 @@ async def test_publication_failure_and_unknown_never_republish(launch, failure):
     with pytest.raises(Conflict):
         await r.launch.queue(7, ident, revision)
     await r.worker.once()
-    assert len(r.publications) == 1
+    assert len(r.publications) == (1 if failure == "lost_ack" else 0)
     if failure == "lost_ack":
         assert r.api.item["status"] == "APPROVED" and r.service.listing("item")["enabled"]
         assert r.service.discover() == 1

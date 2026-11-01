@@ -314,6 +314,8 @@ async def test_explicit_navigation_reset_does_not_restore_money_confirmation(ux)
     await ux.ui.click("stats:7")
     assert ux.store.setting("navigation:123:7")["sending"]
     await ux.ui.message("/panel_reset")
+    recover = next(k for k in buttons(ux.session.last_panel) if k.startswith("nav:recover:"))
+    await ux.ui.click(recover)
     assert not ux.store.setting("navigation:123:7").get("sending")
     assert await ux.state.get_data() == {}
     assert set(buttons(ux.session.last_panel)) == {"items", "orders", "chats", "gft:home", "more"}

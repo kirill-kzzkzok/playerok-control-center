@@ -27,7 +27,9 @@ def origin(store):
     Orders(store).ingest_message(
         "chat", {"id": "incoming", "text": "<question>", "user": {"username": "buyer"}}
     )
-    store.execute("INSERT INTO notifications VALUES('message:incoming',42,99,'SUCCEEDED')")
+    store.execute(
+        "INSERT INTO notifications(event_key,owner_id,telegram_message_id,status) VALUES('message:incoming',42,99,'SUCCEEDED')"
+    )
     return "message:incoming"
 
 
@@ -80,7 +82,7 @@ def test_queue_links_only_verified_owner_chat_and_rolls_back_invalid_link(store)
     assert "origin_event" not in json.loads(store.rows("SELECT payload FROM outbox")[0]["payload"])
 
 
-async def test_notification_edit_after_reply_survives_restart_without_buyer_resend(store):
+async def test_notification_edit_after_reply_survives_restart_without_buyer_resend(store, monkeypatch):
     service = Replies(store)
     service.enqueue(42, "reply", pending(origin(store)))
     finish(store)
@@ -91,7 +93,8 @@ async def test_notification_edit_after_reply_survives_restart_without_buyer_rese
     assert store.rows("SELECT rendered_status FROM notification_actions")[0]["rendered_status"] is None
     await Notifications(store, bot).once()
     assert bot.edit_message_text.await_count == 1  # persisted backoff, no hot retry loop
-    store.execute("UPDATE notification_actions SET retry_after=0")
+    due = store.rows("SELECT retry_after FROM notification_actions")[0]["retry_after"]
+    monkeypatch.setattr("app.workers.notifications.time.time", lambda: due + 1)
     await Notifications(store, bot).once()
     await Notifications(store, bot).once()
     assert bot.edit_message_text.await_count == 2

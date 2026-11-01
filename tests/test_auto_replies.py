@@ -271,7 +271,15 @@ async def test_pending_delivery_in_same_chat_blocks_auto_reply(setup):
     enable(service)
     incoming(store, messages)
     Orders(store).ingest(
-        {"id": "order", "direction": "OUT", "status": "PAID", "item": {"id": "item"}, "chat": {"id": "chat"}}
+        {
+            "has_problem": False,
+            "is_automated": False,
+            "id": "order",
+            "direction": "OUT",
+            "status": "PAID",
+            "item": {"id": "item", "user": {"id": "seller"}},
+            "chat": {"id": "chat"},
+        }
     )
     Orders(store).add_stock("item", ["private code"])
     Orders(store).reserve("order")

@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import time
 from html import escape
@@ -6,11 +7,13 @@ from html import escape
 from aiogram.exceptions import TelegramBadRequest
 
 from app.database.store import encode
+from app.services.chat_events import system_event
 from app.services.notification_preferences import NotificationPreferences
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 from app.telegram.message_notice import message_notice
 from app.telegram.operation_results import OperationResults
+from app.telegram.presentation import status as human_status
 
 
 class Notifications:
@@ -30,7 +33,7 @@ class Notifications:
         if not initialized and self.store.setting("sync:health", {}).get("status") == "OK":
             with self.store.transaction() as db:
                 db.execute(
-                    "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT i.key,a.user_id,'BASELINE' FROM inbox i CROSS JOIN administrators a WHERE i.kind NOT IN ('worker_failed','operation_uncertain','stock_empty','order_problem','promotion_guard','enrollment_blocked','logical_product_blocked')"
+                    "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT i.key,a.user_id,'BASELINE' FROM inbox i CROSS JOIN administrators a WHERE i.kind NOT IN ('worker_failed','operation_uncertain','stock_empty','order_problem','promotion_guard','enrollment_blocked','logical_product_blocked') AND NOT (i.kind='message' AND json_extract(i.payload,'$.user') IS NULL AND json_extract(i.payload,'$.text')='{{DEAL_HAS_PROBLEM}}')"
                 )
                 db.execute(
                     "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -42,7 +45,7 @@ class Notifications:
             "AND EXISTS (SELECT 1 FROM administrators a WHERE NOT EXISTS "
             "(SELECT 1 FROM notifications n WHERE n.event_key=i.key AND n.owner_id=a.user_id)) "
             + (
-                "AND i.kind IN ('worker_failed','operation_uncertain','stock_empty','order_problem','promotion_guard','enrollment_blocked','logical_product_blocked') "
+                "AND (i.kind IN ('worker_failed','operation_uncertain','stock_empty','order_problem','promotion_guard','enrollment_blocked','logical_product_blocked') OR (i.kind='message' AND json_extract(i.payload,'$.user') IS NULL AND json_extract(i.payload,'$.text')='{{DEAL_HAS_PROBLEM}}')) "
                 if not initialized
                 else ""
             )
@@ -54,7 +57,11 @@ class Notifications:
             if event["kind"] == "message":
                 author = payload.get("user") or {}
                 account_id = self.store.setting("playerok:account_id")
-                if account_id and author.get("id") == account_id:
+                if (
+                    payload.get("is_read") is True
+                    or payload.get("deleted_at")
+                    or (account_id and author.get("id") == account_id)
+                ):
                     self.store.execute(
                         "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) "
                         "SELECT ?,user_id,'SKIPPED' FROM administrators",
@@ -63,6 +70,22 @@ class Notifications:
                     continue
                 rows = self.store.rows("SELECT chat_id FROM chat_messages WHERE id=?", (payload["id"],))
                 chat_id = rows[0]["chat_id"] if rows else None
+                event_label = system_event(payload)
+                deal_id = (payload.get("deal") or {}).get("id")
+                if (
+                    event_label
+                    and deal_id
+                    and self.store.rows(
+                        "SELECT 1 FROM inbox WHERE kind='order' AND json_extract(payload,'$.id')=?",
+                        (deal_id,),
+                    )
+                    and payload.get("text") != "{{DEAL_HAS_PROBLEM}}"
+                ):
+                    self.store.execute(
+                        "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT ?,user_id,'SKIPPED' FROM administrators",
+                        (event["key"],),
+                    )
+                    continue
                 text, markup = message_notice(payload, chat_id)
             elif event["kind"] == "order":
                 current = self.store.rows("SELECT status FROM orders WHERE id=?", (payload["id"],))
@@ -73,7 +96,7 @@ class Notifications:
                     )
                     continue
                 item = payload.get("item") or {}
-                text = f"🛒 <b>Заказ</b>\n{escape(item.get('name') or payload['id'])}\nСтатус: {escape(payload['status'])}\nСумма: {item.get('price', '?')} ₽"
+                text = f"🛒 <b>Заказ</b>\n{escape(item.get('name') or payload['id'])}\nСтатус: {escape(human_status(payload['status'], 'order'))}\nСумма: {item.get('price', '?')} ₽"
                 markup = keyboard([[("Открыть заказ", "order:" + payload["id"])]])
             elif event["kind"] == "worker_failed":
                 text = (
@@ -217,18 +240,63 @@ class Notifications:
                     self.store.audit(user, "NOTIFICATION", event["key"], type(error).__name__)
                 else:
                     self.store.execute(
-                        "UPDATE notifications SET status='SUCCEEDED',telegram_message_id=? WHERE event_key=? AND owner_id=?",
-                        (message.message_id, event["key"], user),
+                        "UPDATE notifications SET status='SUCCEEDED',telegram_message_id=?,rendered_payload=? WHERE event_key=? AND owner_id=?",
+                        (
+                            message.message_id,
+                            hashlib.sha256(event["payload"].encode()).hexdigest(),
+                            event["key"],
+                            user,
+                        ),
                     )
 
+    async def refresh_messages(self):
+        rows = self.store.rows(
+            "SELECT n.*,i.payload,m.chat_id FROM notifications n JOIN inbox i ON i.key=n.event_key JOIN chat_messages m ON n.event_key='message:'||m.id WHERE n.status='SUCCEEDED' AND n.telegram_message_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM notification_actions a WHERE a.event_key=n.event_key AND a.owner_id=n.owner_id) AND n.refresh_after<=? LIMIT 100",
+            (time.time(),),
+        )
+        for row in rows:
+            fingerprint = hashlib.sha256(row["payload"].encode()).hexdigest()
+            if fingerprint == row["rendered_payload"]:
+                continue
+            payload = json.loads(row["payload"])
+            text, markup = message_notice(payload, row["chat_id"])
+            if payload.get("deleted_at") or payload.get("is_read") is True:
+                markup = keyboard([[("Диалог", "chat:" + row["chat_id"])]])
+            try:
+                await self.bot.edit_message_text(
+                    text, chat_id=row["owner_id"], message_id=row["telegram_message_id"], reply_markup=markup
+                )
+            except TelegramBadRequest as error:
+                if "message is not modified" not in error.message.lower():
+                    self.store.execute(
+                        "UPDATE notifications SET refresh_after=?,refresh_failures=refresh_failures+1 WHERE event_key=? AND owner_id=?",
+                        (time.time() + 300, row["event_key"], row["owner_id"]),
+                    )
+                    continue
+            except Exception:  # noqa: BLE001 -- only idempotent edits; no new message
+                self.store.execute(
+                    "UPDATE notifications SET refresh_after=?,refresh_failures=refresh_failures+1 WHERE event_key=? AND owner_id=?",
+                    (
+                        time.time() + min(3600, 5 * 2 ** min(row["refresh_failures"] + 1, 10)),
+                        row["event_key"],
+                        row["owner_id"],
+                    ),
+                )
+                continue
+            self.store.execute(
+                "UPDATE notifications SET rendered_payload=?,refresh_after=0,refresh_failures=0 WHERE event_key=? AND owner_id=?",
+                (fingerprint, row["event_key"], row["owner_id"]),
+            )
+
     async def refresh_actions(self):
+        await self.refresh_messages()
         pending = self.store.rows(
-            "SELECT DISTINCT a.event_key,a.owner_id,n.telegram_message_id,i.payload,m.chat_id "
+            "SELECT DISTINCT a.event_key,a.owner_id,n.telegram_message_id,n.rendered_payload,i.payload,m.chat_id "
             "FROM notification_actions a JOIN outbox o ON o.id=a.operation_id "
             "JOIN notifications n ON n.event_key=a.event_key AND n.owner_id=a.owner_id "
             "JOIN inbox i ON i.key=a.event_key JOIN chat_messages m ON i.key='message:'||m.id "
             "WHERE n.telegram_message_id IS NOT NULL "
-            "AND a.retry_after<=? AND (a.rendered_status IS NULL OR a.rendered_status!=o.status) LIMIT 100",
+            "AND a.retry_after<=? AND (a.rendered_status IS NULL OR a.rendered_status!=o.status OR n.rendered_payload IS NULL) LIMIT 100",
             (time.time(),),
         )
         labels = {
@@ -242,11 +310,26 @@ class Notifications:
         for notification in pending:
             actions = self.store.rows(
                 "SELECT a.operation_id,a.failures,o.kind,o.status,o.result FROM notification_actions a "
+                "JOIN outbox o ON o.id=a.operation_id WHERE a.owner_id=? AND a.event_key=? AND a.retry_after<=? AND (a.rendered_status IS NULL OR a.rendered_status!=o.status OR ?=1) "
+                "ORDER BY o.created_at DESC,o.id DESC",
+                (
+                    notification["owner_id"],
+                    notification["event_key"],
+                    time.time(),
+                    int(notification["rendered_payload"] is None),
+                ),
+            )
+            if not actions:
+                continue
+            # Render from the whole event history, not only the dirty/backoff subset.
+            # A late older reply must not undo a newer confirmed read action.
+            history = self.store.rows(
+                "SELECT o.kind,o.status,o.result,o.id AS operation_id FROM notification_actions a "
                 "JOIN outbox o ON o.id=a.operation_id WHERE a.owner_id=? AND a.event_key=? "
                 "ORDER BY o.created_at DESC,o.id DESC",
                 (notification["owner_id"], notification["event_key"]),
             )
-            latest = actions[0]
+            latest = history[0]
             name = "Ответ" if latest["kind"] == "reply" else "Отметка прочитанности"
             note = (
                 f"<b>{name}:</b> {labels[latest['status']]}\nОперация: <code>{latest['operation_id']}</code>"
@@ -262,6 +345,10 @@ class Notifications:
             if latest["status"] == "SUCCEEDED" and result.get("message_id"):
                 note += "\nID ответа: " + escaped(result["message_id"], 100)
             text, markup = message_notice(json.loads(notification["payload"]), notification["chat_id"], note)
+            if any(a["kind"] == "mark_read" and a["status"] == "SUCCEEDED" for a in history):
+                for row in markup.inline_keyboard:
+                    row[:] = [b for b in row if not (b.callback_data or "").startswith("readchat:")]
+                markup.inline_keyboard = [row for row in markup.inline_keyboard if row]
             try:
                 await self.bot.edit_message_text(
                     text,
@@ -291,6 +378,14 @@ class Notifications:
                 self.defer_update(notification, actions, error)
                 continue
             with self.store.transaction() as db:
+                db.execute(
+                    "UPDATE notifications SET rendered_payload=? WHERE event_key=? AND owner_id=?",
+                    (
+                        hashlib.sha256(notification["payload"].encode()).hexdigest(),
+                        notification["event_key"],
+                        notification["owner_id"],
+                    ),
+                )
                 for action in actions:
                     db.execute(
                         "UPDATE notification_actions SET rendered_status=?,retry_after=0,failures=0 WHERE operation_id=?",
@@ -298,12 +393,19 @@ class Notifications:
                     )
 
     def defer_update(self, notification, actions, error):
-        failures = max(action["failures"] for action in actions) + 1
-        delay = max(min(3600, 5 * 2 ** min(failures, 10)), getattr(error, "retry_after", 0))
-        self.store.execute(
-            "UPDATE notification_actions SET retry_after=?,failures=? WHERE event_key=? AND owner_id=?",
-            (time.time() + delay, failures, notification["event_key"], notification["owner_id"]),
-        )
+        for action in actions:
+            failures = action["failures"] + 1
+            delay = max(min(3600, 5 * 2 ** min(failures, 10)), getattr(error, "retry_after", 0))
+            self.store.execute(
+                "UPDATE notification_actions SET retry_after=?,failures=? WHERE operation_id=? AND event_key=? AND owner_id=?",
+                (
+                    time.time() + delay,
+                    failures,
+                    action["operation_id"],
+                    notification["event_key"],
+                    notification["owner_id"],
+                ),
+            )
 
     async def run(self, stop):
         self.store.execute("UPDATE notifications SET status='UNCERTAIN' WHERE status='PROCESSING'")

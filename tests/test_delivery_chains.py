@@ -124,7 +124,7 @@ async def test_greeting_timeout_blocks_secret_and_quarantines_reserved_stock(set
     service.advance("order")
     assert not await worker.once()
     assert api.account.sent == ["hello"]
-    assert store.rows("SELECT status FROM inventory") == [{"status": "QUARANTINED"}]
+    assert store.rows("SELECT status FROM inventory") == [{"status": "RESERVED"}]
     assert store.rows("SELECT status FROM delivery_chains")[0]["status"] == "BLOCKED"
 
 
@@ -139,7 +139,7 @@ async def test_disable_policy_after_queue_prevents_even_first_send(setup):
     service.advance("order")
     assert not api.account.sent
     assert store.rows("SELECT status FROM delivery_chains")[0]["status"] == "CANCELLED"
-    assert store.rows("SELECT status FROM inventory") == [{"status": "QUARANTINED"}]
+    assert store.rows("SELECT status FROM inventory") == [{"status": "RESERVED"}]
 
 
 async def test_return_after_greeting_blocks_delivery(setup):
@@ -154,7 +154,7 @@ async def test_return_after_greeting_blocks_delivery(setup):
     await worker.once()
     service.advance("order")
     assert api.account.sent == ["hello"]
-    assert store.rows("SELECT status FROM inventory") == [{"status": "QUARANTINED"}]
+    assert store.rows("SELECT status FROM inventory") == [{"status": "RESERVED"}]
 
 
 async def test_manual_delivery_cannot_bypass_existing_text_chain(setup):
@@ -277,5 +277,5 @@ async def test_expired_lease_after_external_ack_keeps_late_receipt_without_retry
     assert observations == [{"observed_status": "SUCCEEDED", "result": '{"message_id":"external-ack"}'}]
     assert not await OutboxWorker(store, Executor(store, api, None)).once()
     assert api.account.sent == ["hello"]
-    assert store.rows("SELECT status FROM inventory") == [{"status": "QUARANTINED"}]
+    assert store.rows("SELECT status FROM inventory") == [{"status": "RESERVED"}]
     assert "unique secret" not in str(store.rows("SELECT * FROM outbox_late_results"))

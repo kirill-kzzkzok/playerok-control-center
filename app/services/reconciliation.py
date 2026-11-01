@@ -48,10 +48,61 @@ class Reconciliation:
             raise Conflict("Операция недоступна или уже разрешена")
         return rows[0]
 
+    def retry_checks(self, actor, ident, expected):
+        self.owner(actor)
+        with self.store.transaction() as db:
+            row = db.execute("SELECT * FROM outbox WHERE id=?", (ident,)).fetchone()
+            if (
+                not row
+                or signature(dict(row)) != expected
+                or row["started_at"] is not None
+                or row["status"] != "PERMANENT_FAILED"
+                or row["kind"] not in {"delivery", "delivery_text", "chain_message", "reply", "mark_read"}
+            ):
+                raise Conflict("Повтор запрещён: отправка начиналась или операция изменилась")
+            db.execute(
+                "UPDATE outbox SET status='RETRYABLE_FAILED',attempts=0,retry_at=0,error_code=NULL,lease_token=NULL,lease_until=NULL WHERE id=?",
+                (ident,),
+            )
+            db.execute(
+                "UPDATE delivery_chains SET status='ACTIVE' WHERE order_id=? AND status='BLOCKED' AND NOT EXISTS(SELECT 1 FROM delivery_chain_steps s JOIN outbox o ON o.id=s.operation_id WHERE s.order_id=? AND o.status='UNCERTAIN')",
+                (row["target"], row["target"]),
+            )
+            db.execute(
+                "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'RETRY_PREFLIGHT',?,'NOT_DISPATCHED',?)",
+                (actor, ident, now()),
+            )
+
     async def evidence(self, actor, ident, message_id=None):
         action = self.action(actor, ident, uncertain=True)
         kind, target = action["kind"], action["target"]
         payload = json.loads(action["payload"])
+        if kind == "edit_fields":
+            from types import SimpleNamespace
+
+            from app.services.item_receipts import field_receipt_matches
+            from app.services.products import Products, validate_field
+
+            draft = self.store.get_draft(payload["draft_id"], actor)
+            value = draft["payload"]
+            observed = await self.api.call("get_item", id=target)
+            if observed.get("id") != target or (observed.get("user") or {}).get("id") != self.api.account.id:
+                raise Conflict("Владелец товара не подтверждён")
+            details = await Products(self.store, self.api).schema_details(
+                value["category_id"], value["obtaining_type_id"], auto_agreements=False
+            )
+            attributes, fields, comment = {}, [], None
+            for field in details["form"]:
+                selected = validate_field(field, value["fields"].get(field["key"], ""))
+                if field.get("comment"):
+                    comment = selected
+                elif field.get("data_field"):
+                    fields.append(SimpleNamespace(id=field["key"], value=selected))
+                else:
+                    attributes[field["key"]] = selected
+            if not field_receipt_matches(target, observed, attributes, fields, comment):
+                raise Conflict("Характеристики не подтверждены. Неизвестная запись не повторяется")
+            return {"decision": "CONFIRM_READ_STATE", "remote_id": target, "checked_at": now()}
         if kind in {"premium_publish", "premium_bump"}:
             from app.services.paid_promotions import PaidPromotions
 
@@ -240,6 +291,11 @@ class Reconciliation:
                 "UPDATE outbox SET status=?,result=?,error_code=?,lease_token=NULL,lease_until=NULL WHERE id=?",
                 (status, encode(result), error, ident),
             )
+            if action["kind"] == "edit_fields" and status == "SUCCEEDED":
+                db.execute(
+                    "UPDATE drafts SET state='UPDATED' WHERE id=? AND state='QUEUED'",
+                    (json.loads(action["payload"])["draft_id"],),
+                )
             if action["kind"] == "delivery" and status == "SUCCEEDED":
                 db.execute(
                     "UPDATE inventory SET status='DELIVERED' WHERE id=(SELECT inventory_id FROM reservations WHERE order_id=?) AND status='QUARANTINED'",

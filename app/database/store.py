@@ -228,6 +228,8 @@ class Store:
                 ).fetchone()
                 actor = chain[0] if chain else None
             if actor is not None and kind in {
+                "reply",
+                "mark_read",
                 "create",
                 "publish",
                 "edit",
@@ -251,7 +253,21 @@ class Store:
 
     def claim(self, lease_seconds=60, *, kinds=None, operation_id=None):
         with self.transaction() as db:
-            filters, args = "", []
+            unsafe = db.execute(
+                "SELECT id FROM outbox WHERE status IN ('PENDING','RETRYABLE_FAILED') AND started_at IS NOT NULL"
+            ).fetchall()
+            for row in unsafe:
+                db.execute(
+                    "UPDATE outbox SET status='UNCERTAIN',error_code='DISPATCH_ALREADY_STARTED' WHERE id=?",
+                    (row["id"],),
+                )
+                db.execute(
+                    "UPDATE inventory SET status='QUARANTINED' WHERE status='RESERVED' AND id IN "
+                    "(SELECT r.inventory_id FROM reservations r JOIN outbox o ON o.operation_key='delivery:'||r.order_id WHERE o.id=?)",
+                    (row["id"],),
+                )
+                self.uncertain_event(db, row["id"])
+            filters, args = "", [time.time()]
             if kinds is not None:
                 if not kinds:
                     return None
@@ -261,7 +277,7 @@ class Store:
                 filters += " AND id=?"
                 args.append(operation_id)
             row = db.execute(
-                "SELECT * FROM outbox WHERE status IN ('PENDING','RETRYABLE_FAILED')"
+                "SELECT * FROM outbox WHERE status IN ('PENDING','RETRYABLE_FAILED') AND retry_at<=?"
                 + filters
                 + " ORDER BY created_at LIMIT 1",
                 args,
@@ -286,10 +302,9 @@ class Store:
         except ValueError:
             return
         launch_id = payload.get("launch_id")
-        # Only a proven-local or server-rejected failure releases the launch: local
-        # guards never sent anything, and an HTTP 4xx means the server refused the
-        # request (no publication happened). Anything else — network errors, unknown
-        # results, manual stops — keeps the launch blocked for reconciliation.
+        # finish() fences any potentially dispatched failure to UNCERTAIN first.
+        # Only a proven pre-dispatch failure reaches this release path; an HTTP
+        # error alone is never evidence that a sent mutation had no effect.
         releasable = error in {None, "VALIDATION_FAILED"} or (
             isinstance(error, str) and error.startswith("HTTP_4")
         )
@@ -346,20 +361,68 @@ class Store:
         if matching_marker:
             db.execute("DELETE FROM settings WHERE key=?", ("launch:prepared:" + target,))
 
+    def mark_started(self, action):
+        # This CAS and finish/recover share BEGIN IMMEDIATE: a late thread
+        # cannot POST after a preflight-only retry/stop has won the race.
+        with self.transaction() as db:
+            changed = db.execute(
+                "UPDATE outbox SET started_at=COALESCE(started_at,?) WHERE id=? AND status='PROCESSING' AND lease_token=? AND lease_until>?",
+                (now(), action["id"], action["lease_token"], time.time()),
+            ).rowcount
+            if changed != 1:
+                raise Conflict("Операция остановлена до отправки")
+
     def finish(self, ident, token, status, result=None, error=None):
         if status not in {"SUCCEEDED", "RETRYABLE_FAILED", "UNCERTAIN", "PERMANENT_FAILED"}:
             raise ValueError("Недопустимый результат операции")
         with self.transaction() as db:
+            evidence = db.execute(
+                "SELECT kind,started_at,attempts FROM outbox WHERE id=? AND status='PROCESSING' AND lease_token=?",
+                (ident, token),
+            ).fetchone()
+            if not evidence:
+                raise Conflict("Lease операции потерян")
+            if (
+                evidence["kind"] not in {"gift_send", "gift_refund"}
+                and evidence["started_at"] is not None
+                and status in {"PERMANENT_FAILED", "RETRYABLE_FAILED"}
+            ):
+                status = "UNCERTAIN"
+            if (
+                status == "UNCERTAIN"
+                and error == "PROCESS_CANCELLED"
+                and evidence["started_at"] is None
+                and evidence["kind"] in {"delivery", "delivery_text", "chain_message", "reply", "mark_read"}
+            ):
+                status = "PERMANENT_FAILED"  # Proven no POST; hold reserve for explicit owner recovery.
+            if status == "RETRYABLE_FAILED" and evidence["started_at"] is not None:
+                status = "UNCERTAIN"
+            if status == "RETRYABLE_FAILED":
+                db.execute(
+                    "UPDATE outbox SET retry_at=? WHERE id=?",
+                    (time.time() + min(300, 5 * 2 ** min(evidence["attempts"], 5)), ident),
+                )
             r = db.execute(
                 "UPDATE outbox SET status=?,result=?,error_code=?,lease_until=NULL WHERE id=? AND lease_token=? AND status='PROCESSING'",
                 (status, encode(result), error, ident, token),
             )
             if r.rowcount != 1:
                 raise Conflict("Lease операции потерян")
+            from app.services.operation_outcomes import dispatch_outcome
+
+            db.execute(
+                "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(NULL,'DISPATCH_OUTCOME',?,?,?)",
+                (ident, str(dispatch_outcome(evidence["started_at"], status)), now()),
+            )
             # Delivery state and external outcome must commit together.
             row = db.execute(
-                "SELECT operation_key,kind,target,payload FROM outbox WHERE id=?", (ident,)
+                "SELECT operation_key,kind,target,payload,started_at FROM outbox WHERE id=?", (ident,)
             ).fetchone()
+            if row["kind"] == "edit_fields" and status == "SUCCEEDED":
+                db.execute(
+                    "UPDATE drafts SET state='UPDATED' WHERE id=? AND state='QUEUED'",
+                    (json.loads(row["payload"])["draft_id"],),
+                )
             if row["kind"] == "edit" and json.loads(row["payload"]).get("logical_binding"):
                 from app.services.logical_products import finish_binding
 
@@ -383,7 +446,13 @@ class Store:
                 finish(db, {**dict(row), "id": ident}, status, result, error, store=self)
             if row[0].startswith("delivery:"):
                 order = row[0].removeprefix("delivery:")
-                state = "DELIVERED" if status == "SUCCEEDED" else "QUARANTINED"
+                state = (
+                    "DELIVERED"
+                    if status == "SUCCEEDED"
+                    else "QUARANTINED"
+                    if row["started_at"] is not None or status == "UNCERTAIN"
+                    else "RESERVED"
+                )
                 db.execute(
                     "UPDATE inventory SET status=? WHERE id=(SELECT inventory_id FROM reservations WHERE order_id=?)",
                     (state, order),
@@ -414,7 +483,7 @@ class Store:
     def recover(self):
         with self.transaction() as db:
             affected = db.execute(
-                "SELECT id,operation_key,kind,target FROM outbox WHERE status='PROCESSING' AND lease_until<?",
+                "SELECT id,operation_key,kind,target,started_at,attempts FROM outbox WHERE status='PROCESSING' AND lease_until<?",
                 (time.time(),),
             ).fetchall()
             db.execute(
@@ -422,6 +491,22 @@ class Store:
                 (time.time(),),
             )
             for row in affected:
+                if row["started_at"] is None and row["kind"] in {
+                    "delivery",
+                    "delivery_text",
+                    "chain_message",
+                    "reply",
+                    "mark_read",
+                }:
+                    db.execute(
+                        "UPDATE outbox SET status=?,error_code='PREFLIGHT_INTERRUPTED',retry_at=?,lease_token=NULL,lease_until=NULL WHERE id=?",
+                        (
+                            "RETRYABLE_FAILED" if row["attempts"] < 5 else "PERMANENT_FAILED",
+                            time.time() + 30,
+                            row["id"],
+                        ),
+                    )
+                    continue
                 if row["kind"] in {"premium_publish", "premium_bump"}:
                     from app.services.paid_promotions import finish_expense
 

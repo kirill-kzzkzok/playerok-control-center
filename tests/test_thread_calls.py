@@ -291,9 +291,9 @@ async def test_cancel_during_transport_throttle_blocks_http(tmp_path, monkeypatc
         if reason == "close":
             assert await task
         assert requests == []
-        assert store.rows("SELECT status FROM outbox") == [
-            {"status": "UNCERTAIN" if reason == "cancel" else "PERMANENT_FAILED"}
-        ]
+        assert store.rows("SELECT status,started_at FROM outbox") == [
+            {"status": "PERMANENT_FAILED", "started_at": None}
+        ]  # Transport throttle was interrupted before HTTP; no unknown dispatch.
     finally:
         release.set()
         await drain_calls(api)

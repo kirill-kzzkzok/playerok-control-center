@@ -339,7 +339,7 @@ def game_category_agreement(data: dict) -> "GameCategoryAgreement":
     if not data:
         return None
 
-    return GameCategoryAgreement(
+    agreement = GameCategoryAgreement(
         id=data.get("id"),
         description=data.get("description"),
         icontype=GameCategoryAgreementIconTypes.__members__.get(data.get("iconType")),
@@ -347,6 +347,10 @@ def game_category_agreement(data: dict) -> "GameCategoryAgreement":
         game_category_id=data.get("gameCategoryId"),
         game_category_obtaining_type_id=data.get("gameCategoryObtainingTypeId"),
     )
+
+    # Enum aliases lose the source name; preserve the actual wire discriminator.
+    agreement.icon_type_code = data.get("iconType")
+    return agreement
 
 
 def game_category_agreement_page_info(data: dict) -> "GameCategoryAgreementPageInfo":

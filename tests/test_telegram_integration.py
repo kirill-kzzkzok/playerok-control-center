@@ -264,7 +264,9 @@ async def test_notification_reply_keeps_original_and_updates_after_durable_compl
     try:
         await ui.message("/start")
         Orders(store).ingest_message("chat", {"id": "incoming", "text": "Original question"})
-        store.execute("INSERT INTO notifications VALUES('message:incoming',7,1,'SUCCEEDED')")
+        store.execute(
+            "INSERT INTO notifications(event_key,owner_id,telegram_message_id,status) VALUES('message:incoming',7,1,'SUCCEEDED')"
+        )
         store.set_setting("notifications:initialized", True)
         await ui.click("reply:chat")
         assert session.calls[-1].__api_method__ == "sendMessage"
@@ -456,6 +458,13 @@ async def test_order_notes_search_stock_and_guarded_delivery_ui(tmp_path):
         assert "отключены" in session.calls[-1].text and not store.rows("SELECT * FROM outbox")
         api.account.writes_enabled = True  # mock account only, never the real configuration
         await ui.click("od:apply:" + token)
+        assert not store.rows("SELECT * FROM outbox")  # Local problem still blocks delivery.
+        await ui.click("od:clear:order")
+        token = (await state.get_data())["order_token"]
+        await ui.click("od:apply:" + token)
+        await ui.click("od:prepare:order")
+        token = (await state.get_data())["order_token"]
+        await ui.click("od:apply:" + token)
         await ui.click("od:apply:" + token)
         assert len(store.rows("SELECT * FROM outbox")) == 1
         assert store.rows("SELECT status FROM inventory") == [{"status": "RESERVED"}]
@@ -601,7 +610,16 @@ async def test_queue_router_preserves_confirmation_and_blocks_foreign_access(tmp
     state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
     try:
         await ui.message("/start")
-        Orders(store).ingest({"id": "order", "status": "PAID", "direction": "OUT", "item": {"id": "item"}})
+        Orders(store).ingest(
+            {
+                "has_problem": False,
+                "is_automated": False,
+                "id": "order",
+                "status": "PAID",
+                "direction": "OUT",
+                "item": {"id": "item"},
+            }
+        )
         store.execute("INSERT INTO delivery_chains VALUES('order','item',7,1,'{}','ACTIVE',?)", (now(),))
         store.execute(
             "INSERT INTO delivery_chain_steps(order_id,position,kind,text) VALUES('order',0,'delivery_text','private code')"

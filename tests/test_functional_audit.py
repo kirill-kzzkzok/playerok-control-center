@@ -101,7 +101,7 @@ async def test_manual_delivery_late_order_change_prevents_http(rig, change):
         api.lock.release()
     await task
     assert requests == []
-    assert store.rows("SELECT status FROM inventory") == [{"status": "QUARANTINED"}]
+    assert store.rows("SELECT status FROM inventory") == [{"status": "RESERVED"}]
 
 
 @pytest.mark.parametrize(

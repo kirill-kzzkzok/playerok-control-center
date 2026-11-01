@@ -58,7 +58,9 @@ async def test_actual_write_transport_failure_is_unknown_without_blind_retry(sto
 
 def test_late_response_cannot_overwrite_terminal_decision_and_is_deduplicated(store):
     ident = store.enqueue("test", "reply", "chat", {"text": "secret"})
-    action = store.claim(lease_seconds=-1)
+    action = store.claim()
+    store.mark_started(action)
+    store.execute("UPDATE outbox SET lease_until=0")
     store.recover()
     store.execute(
         "UPDATE outbox SET status='PERMANENT_FAILED',error_code='MANUALLY_STOPPED_UNCERTAIN' WHERE id=?",
@@ -97,7 +99,9 @@ def test_unexpected_finish_conflict_is_not_hidden_as_a_late_response(store, monk
 
 async def test_late_receipt_ui_exposes_id_without_requeue_or_api_call(store):
     ident = store.enqueue("test", "reply", "chat", {"text": "secret"})
-    action = store.claim(lease_seconds=-1)
+    action = store.claim()
+    store.mark_started(action)
+    store.execute("UPDATE outbox SET lease_until=0")
     store.recover()
     OutboxWorker(store, None).finish(ident, action["lease_token"], "SUCCEEDED", {"message_id": "<ack>"})
     api, session = CatalogAPI(), TelegramSession()
@@ -148,16 +152,18 @@ from app.database.store import Store
 from app.services.orders import Orders
 s = Store(sys.argv[1])
 orders = Orders(s)
-orders.ingest({"id":"order","status":"PAID","direction":"OUT","item":{"id":"item"},"chat":{"id":"chat"}})
+orders.ingest({"id":"order","status":"PAID","direction":"OUT","has_problem":False,"is_automated":False,"item":{"id":"item"},"chat":{"id":"chat"}})
 orders.add_stock("item", ["synthetic-stock-code"])
 orders.reserve("order")
-s.claim(lease_seconds=-1)
+action=s.claim()
 if sys.argv[3] == "after_send":
+    s.mark_started(action)
     # A mock external system's durable receipt, independent of the application DB.
     with Path(sys.argv[2]).open("w", encoding="utf-8") as remote:
         remote.write("mock-ack")
         remote.flush()
         os.fsync(remote.fileno())
+s.execute("UPDATE outbox SET lease_until=0")
 os._exit(23)  # No finally, connection close or graceful worker cancellation.
 """
     process = await asyncio.to_thread(
@@ -174,12 +180,18 @@ os._exit(23)  # No finally, connection close or graceful worker cancellation.
         assert reopened.rows("SELECT status FROM outbox") == [{"status": "PROCESSING"}]
         assert reopened.rows("SELECT status FROM inventory") == [{"status": "RESERVED"}]
         assert reopened.recover() == 1
-        assert reopened.rows("SELECT status FROM outbox") == [{"status": "UNCERTAIN"}]
-        assert reopened.rows("SELECT status FROM inventory") == [{"status": "QUARANTINED"}]
+        assert reopened.rows("SELECT status FROM outbox") == [
+            {"status": "UNCERTAIN" if stage == "after_send" else "RETRYABLE_FAILED"}
+        ]
+        assert reopened.rows("SELECT status FROM inventory") == [
+            {"status": "QUARANTINED" if stage == "after_send" else "RESERVED"}
+        ]
         assert len(reopened.rows("SELECT * FROM reservations")) == 1
         assert not await OutboxWorker(reopened, sender).once()
         sender.assert_not_called()
         assert receipt.exists() == (stage == "after_send")
-        assert len(reopened.rows("SELECT * FROM inbox WHERE kind='operation_uncertain'")) == 1
+        assert len(reopened.rows("SELECT * FROM inbox WHERE kind='operation_uncertain'")) == (
+            1 if stage == "after_send" else 0
+        )
     finally:
         reopened.close()

@@ -140,7 +140,12 @@ async def test_ui_response_timeout_is_not_resent_and_navigation_recovers(tmp_pat
             panel = store.setting("navigation:123:7")
             assert panel["sending"]
             await ui.click("diagnostics")
-            assert sum(m.__api_method__ == method for m in session.calls) == 1
+            recovery = session.calls[-1]
+            assert "Восстановить меню" in str(recovery.reply_markup)
+            assert store.setting("navigation:123:7")["sending"]
+            assert (
+                sum(m.__api_method__ == method for m in session.calls) == 2
+            )  # Explicit recovery prompt, not replay of the original screen.
             # Telegram callback independently proves the unacknowledged send exists.
             await ui.click(
                 "more",

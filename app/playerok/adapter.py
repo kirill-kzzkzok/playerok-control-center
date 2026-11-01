@@ -72,23 +72,26 @@ class SafeAccount(Account):
         self._permitted = None
         self._permit_thread = None
         self._dispatch_guard = None
+        self._dispatch_start = None
         self._last_request = 0.0
         self.response_diagnostics = deque(maxlen=16)
 
     @contextmanager
-    def permit(self, operation, dispatch_guard=None):
+    def permit(self, operation, dispatch_guard=None, dispatch_start=None):
         with self._lock:
             if not self.operation_allowed(operation):
                 raise APIError("WRITES_DISABLED")
             self._permitted = operation
             self._permit_thread = threading.get_ident()
             self._dispatch_guard = dispatch_guard
+            self._dispatch_start = dispatch_start
             try:
                 yield
             finally:
                 self._permitted = None
                 self._permit_thread = None
                 self._dispatch_guard = None
+                self._dispatch_start = None
 
     def operation_allowed(self, operation):
         return self.writes_enabled or (
@@ -160,6 +163,8 @@ class SafeAccount(Account):
                 or getattr(self, "verified_account_id", self.id) != self.id
             ):
                 raise APIError("CONNECTION_NOT_VERIFIED")
+            if not read and self._dispatch_start:
+                self._dispatch_start()
             try:
                 if method == "get":
                     response = self.client.get(url, params=payload, headers=request_headers)
@@ -488,14 +493,21 @@ class Playerok:
 
     async def pages(self, method, collection, **kwargs):
         cursor, seen = None, set()
-        while True:
+        started, total = time.monotonic(), 0
+        for _ in range(100):
+            if time.monotonic() - started > 60:
+                raise APIError("PAGINATION_LIMIT_INCOMPLETE")
             page = await self.call(method, after_cursor=cursor, **kwargs)
             entries, next_cursor = validate_page(page, collection, seen)
+            total += len(entries)
+            if total > 10000 or not entries and next_cursor is not None:
+                raise APIError("PAGINATION_LIMIT_INCOMPLETE")
             yield entries
             if next_cursor is None:
-                break
+                return
             cursor = next_cursor
             seen.add(cursor)
+        raise APIError("PAGINATION_LIMIT_INCOMPLETE")
 
 
 def validate_page(page, collection, seen=()):

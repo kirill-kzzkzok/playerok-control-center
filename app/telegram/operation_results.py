@@ -4,6 +4,7 @@ import asyncio
 import json
 from urllib.parse import quote
 
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import InlineKeyboardButton
 
 from app.database.store import Conflict
@@ -13,6 +14,8 @@ from app.telegram.keyboards import keyboard
 from app.telegram.presentation import status as human_status
 
 TITLES = {
+    "reply": "Ответ покупателю",
+    "mark_read": "Отметка прочитанности",
     "gift_send": "Telegram-подарок",
     "gift_refund": "Возврат подарочного заказа",
     "gift_notice": "Уведомление по подарку",
@@ -59,6 +62,11 @@ class OperationResults:
             "PERMANENT_FAILED": "Операция остановлена",
         }[status]
         text = f"🧾 <b>{title}</b>\n{label}"
+        receipt = self.store.rows(
+            "SELECT notice_status FROM operation_receipts WHERE operation_id=? AND owner_id=?", (ident, owner)
+        )[0]
+        if receipt["notice_status"] == "UNCERTAIN":
+            text += "\nУведомление о результате могло прийти без подтверждения Telegram. Здесь показан сохранённый исход; повтор операции не выполняется."
         buttons = []
         if status in {"PENDING", "PROCESSING", "RETRYABLE_FAILED"}:
             text += "\nПостановка в очередь не означает выполнения."
@@ -131,6 +139,8 @@ class OperationResults:
                     [("📦 Лот и доступные действия", "item:" + target)],
                     [("📚 Склад / перенос из мастера", "stock:view:" + target)],
                 ]
+        elif kind in {"reply", "mark_read"}:
+            buttons.append([("Диалог", "chat:" + row["target"])])
         elif kind != "delete":
             buttons.append([("Открыть актуальную карточку", "item:" + row["target"])])
         buttons += [
@@ -182,11 +192,53 @@ class OperationResults:
             "Выберите результат." if rows else "Операций нет."
         ), keyboard(buttons)
 
-    async def notify(self, bot):
+    async def refresh_views(self, bot):
+        if getattr(bot, "id", None) is None:
+            return
         rows = self.store.rows(
-            "SELECT r.operation_id,r.owner_id FROM operation_receipts r JOIN outbox o ON o.id=r.operation_id WHERE r.notice_status='PENDING' AND o.status IN ('SUCCEEDED','UNCERTAIN','PERMANENT_FAILED') LIMIT 20"
+            "SELECT r.*,o.status FROM operation_receipts r JOIN outbox o ON o.id=r.operation_id WHERE r.view_message_id IS NOT NULL AND (r.rendered_status IS NULL OR r.rendered_status!=o.status) LIMIT 50"
         )
         for row in rows:
+            lock = getattr(self.store, "navigation_locks", {}).get((bot.id, row["owner_id"]))
+            if lock is None:
+                lock = asyncio.Lock()
+            async with lock:
+                key = f"navigation:{bot.id}:{row['owner_id']}"
+                panel = self.store.setting(key, {})
+                if (
+                    panel.get("id") != row["view_message_id"]
+                    or panel.get("token") != row["view_token"]
+                    or panel.get("sending")
+                    or panel.get("editing")
+                ):
+                    continue
+                text, markup = self.show(row["owner_id"], row["operation_id"])
+                try:
+                    await bot.edit_message_text(
+                        text, chat_id=row["owner_id"], message_id=row["view_message_id"], reply_markup=markup
+                    )
+                except TelegramBadRequest as error:
+                    if "message is not modified" not in error.message.lower():
+                        continue
+                except Exception:  # noqa: BLE001, S112 -- same known ID only; never resend an unknown notice
+                    continue
+                self.store.execute(
+                    "UPDATE operation_receipts SET rendered_status=?,notice_status=CASE WHEN ? IN ('SUCCEEDED','UNCERTAIN','PERMANENT_FAILED') THEN 'SENT' ELSE notice_status END WHERE operation_id=? AND owner_id=? AND view_token=?",
+                    (row["status"], row["status"], row["operation_id"], row["owner_id"], row["view_token"]),
+                )
+
+    async def notify(self, bot):
+        rows = self.store.rows(
+            "SELECT r.operation_id,r.owner_id,r.view_message_id,r.view_token FROM operation_receipts r JOIN outbox o ON o.id=r.operation_id WHERE r.notice_status='PENDING' AND NOT EXISTS(SELECT 1 FROM notification_actions a WHERE a.operation_id=o.id) AND o.status IN ('SUCCEEDED','UNCERTAIN','PERMANENT_FAILED') LIMIT 20"
+        )
+        for row in rows:
+            panel = self.store.setting(f"navigation:{getattr(bot, 'id', None)}:{row['owner_id']}", {})
+            if (
+                row["view_message_id"] is not None
+                and panel.get("id") == row["view_message_id"]
+                and panel.get("token") == row["view_token"]
+            ):
+                continue
             # Persist admission before Telegram; a lost Telegram ACK must not resend.
             changed = self.store.execute(
                 "UPDATE operation_receipts SET notice_status='PROCESSING' WHERE operation_id=? AND owner_id=? AND notice_status='PENDING'",
@@ -213,3 +265,5 @@ class OperationResults:
                     "UPDATE operation_receipts SET notice_status='SENT',telegram_message_id=? WHERE operation_id=? AND owner_id=?",
                     (message.message_id, row["operation_id"], row["owner_id"]),
                 )
+
+        await self.refresh_views(bot)

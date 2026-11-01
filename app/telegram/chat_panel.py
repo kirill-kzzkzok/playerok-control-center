@@ -68,7 +68,13 @@ class ChatPanel:
             user = message.get("user") or {}
             author = escaped(user.get("username") or "Событие", 60)
             date = local_time(message.get("created_at"))
-            text = "[сообщение удалено]" if message.get("deleted_at") else message.get("text") or "[событие]"
+            from app.services.chat_events import system_event
+
+            text = (
+                "[сообщение удалено]"
+                if message.get("deleted_at")
+                else system_event(message) or message.get("text") or "[событие]"
+            )
             images = message.get("images") or []
             attachment = f"\n📷 Изображений: {len(images)}" if images else ""
             blocks.append(f"<b>{author}</b> · {date}\n{escaped(text, 290)}{attachment}")

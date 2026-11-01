@@ -132,7 +132,12 @@ async def test_worker_alert_bypasses_historical_baseline_and_broken_preferences(
 
 async def test_outbox_ack_then_storage_failure_restart_never_resends(store, monkeypatch):
     ident = store.enqueue("once", "reply", "chat", {"text": "test"})
-    executor = AsyncMock(return_value={"message_id": "ack"})
+
+    async def dispatched(action):
+        store.mark_started(action)
+        return {"message_id": "ack"}
+
+    executor = AsyncMock(side_effect=dispatched)
     finish = store.finish
     calls = 0
     stop = asyncio.Event()

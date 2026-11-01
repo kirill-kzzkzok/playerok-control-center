@@ -62,6 +62,26 @@ class OperationsPanel:
             return "Решение сохранено. Новые запросы отправки не создавались.", keyboard(
                 [[("Операция", "ops:show:" + data["id"])]]
             )
+        if command == "retrychecks":
+            data = (await state.get_data()).get("retry_checks", {})
+            if ident != data.get("nonce"):
+                raise Conflict("Подтверждение устарело")
+            self.service.retry_checks(owner, data["id"], data["signature"])
+            await state.clear()
+            return (
+                "Разрешена новая проверка условий. Резерв сохранён; повтор неизвестной отправки не выполняется.",
+                keyboard([[("Операция", "ops:show:" + data["id"])]]),
+            )
+        if command == "preparechecks":
+            row = self.service.action(owner, ident)
+            if row["started_at"] is not None or row["status"] != "PERMANENT_FAILED":
+                raise Conflict("Исход отправки не позволяет безопасный повтор")
+            nonce = secrets.token_hex(8)
+            await state.set_data({"retry_checks": {"id": ident, "nonce": nonce, "signature": signature(row)}})
+            return (
+                "Внешняя отправка не начиналась. Повторно проверить условия и продолжить только при действующих разрешениях?",
+                keyboard([[("Проверить и продолжить", "ops:retrychecks:" + nonce)]]),
+            )
         row = self.service.action(owner, ident)
         if command == "show":
             await state.clear()
@@ -73,6 +93,12 @@ class OperationsPanel:
                 "SELECT position,status FROM chat_uploads WHERE operation_id=? ORDER BY position", (ident,)
             )
             text = f"🧾 <b>Операция</b>\nID: <code>{escaped(ident, 100)}</code>\nТип: {escaped(row['kind'], 60)}\nСтатус: {escaped(row['status'], 60)}\nЦель: {escaped(row['target'], 100)}\nСоздана: {escaped(row['created_at'], 60)}\nПопыток: {row['attempts']}\nОшибка: {escaped(row['error_code'] or '—', 100)}"
+            if (
+                row["started_at"] is None
+                and row["status"] == "PERMANENT_FAILED"
+                and row["kind"] in {"delivery", "delivery_text", "chain_message", "reply", "mark_read"}
+            ):
+                text += "\nВнешняя отправка не начиналась. Резерв удерживается; доступна повторная проверка условий."
             if uploads:
                 text += "\nВложения: " + ", ".join(
                     f"{upload['position'] + 1}: {upload['status']}" for upload in uploads
@@ -93,6 +119,12 @@ class OperationsPanel:
                 resolution = resolutions[0]
                 text += f"\n\nРешение владельца {resolution['actor']}: {resolution['decision']}\n{escaped(resolution['reason'], 600)}\n{escaped(resolution['resolved_at'], 60)}"
             rows = []
+            if (
+                row["started_at"] is None
+                and row["status"] == "PERMANENT_FAILED"
+                and row["kind"] in {"delivery", "delivery_text", "chain_message", "reply", "mark_read"}
+            ):
+                rows.append([("Повторить безопасную проверку", "ops:preparechecks:" + ident)])
             if row["status"] == "UNCERTAIN":
                 text += "\n\nПовтор запрещён, пока результат не установлен. Отсутствие записи на проверенных страницах не доказывает, что отправки не было."
                 if row["kind"] in {
@@ -101,6 +133,7 @@ class OperationsPanel:
                     "delivery_text",
                     "chain_message",
                     "mark_read",
+                    "edit_fields",
                     "fulfill",
                     "premium_publish",
                     "premium_bump",
@@ -128,7 +161,7 @@ class OperationsPanel:
             raise Conflict("Операция уже разрешена или действие недоступно")
         data = {"id": ident, "signature": signature(row), "decision": "STOP_UNCERTAIN"}
         if command == "confirm":
-            if row["kind"] in {"mark_read", "fulfill", "premium_publish", "premium_bump"}:
+            if row["kind"] in {"edit_fields", "mark_read", "fulfill", "premium_publish", "premium_bump"}:
                 data["evidence"] = await self.service.evidence(owner, ident)
                 data["decision"] = "CONFIRM_READ_STATE"
             elif row["kind"] in {"reply", "delivery", "delivery_text", "chain_message"}:

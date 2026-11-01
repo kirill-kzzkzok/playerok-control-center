@@ -134,7 +134,7 @@ class DeliveryChains:
                 or not json.loads(policy["payload"]).get("enabled")
             )
             steps = db.execute(
-                "SELECT s.*,o.status FROM delivery_chain_steps s LEFT JOIN outbox o ON o.id=s.operation_id WHERE s.order_id=? ORDER BY position",
+                "SELECT s.*,o.status,o.started_at FROM delivery_chain_steps s LEFT JOIN outbox o ON o.id=s.operation_id WHERE s.order_id=? ORDER BY position",
                 (ident,),
             ).fetchall()
             failed = any(step["status"] in {"UNCERTAIN", "PERMANENT_FAILED"} for step in steps)
@@ -143,10 +143,15 @@ class DeliveryChains:
                     "UPDATE delivery_chains SET status=? WHERE order_id=?",
                     ("CANCELLED" if stop else "BLOCKED", ident),
                 )
-                db.execute(
-                    "UPDATE inventory SET status='QUARANTINED' WHERE id=(SELECT inventory_id FROM reservations WHERE order_id=?) AND status='RESERVED'",
-                    (ident,),
-                )
+                if any(
+                    step["kind"] == "delivery"
+                    and (step["started_at"] is not None or step["status"] == "UNCERTAIN")
+                    for step in steps
+                ):
+                    db.execute(
+                        "UPDATE inventory SET status='QUARANTINED' WHERE id=(SELECT inventory_id FROM reservations WHERE order_id=?) AND status='RESERVED'",
+                        (ident,),
+                    )
                 return True
             for step in steps:
                 if step["operation_id"]:

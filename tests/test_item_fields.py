@@ -22,7 +22,8 @@ class FieldsAccount:
     id = "seller"
     writes_enabled = True
 
-    def __init__(self):
+    def __init__(self, api):
+        self.api = api
         self.calls = []
 
     @contextmanager
@@ -32,12 +33,16 @@ class FieldsAccount:
 
     def update_item(self, **kwargs):
         self.calls.append(kwargs)
+        self.api.item["attributes"] = {o.field: o.value for o in kwargs["options"]}
+        self.api.item["data_fields"] = [{"id": v.id, "value": v.value} for v in kwargs["data_fields"]]
+        if kwargs.get("comment") is not None:
+            self.api.item["comment"] = kwargs["comment"]
         return SimpleNamespace(id=kwargs["id"])
 
 
 class FieldsAPI:
     def __init__(self):
-        self.account = FieldsAccount()
+        self.account = FieldsAccount(self)
         self.lock = asyncio.Lock()
         self.item = {
             "id": "item",

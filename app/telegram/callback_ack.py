@@ -1,6 +1,7 @@
 """Bound callback acknowledgement before FSM isolation; never retry UI actions."""
 
 import asyncio
+import re
 import time
 
 from aiogram import BaseMiddleware
@@ -36,12 +37,22 @@ async def acknowledge(query, **kwargs):
 def navigation(action):
     # Explicit read/local-navigation allowlist, never a catch-all prefix for
     # confirmation, payment, refund, send, resume or operation reconciliation.
+    if re.fullmatch(
+        r"(?:w:[^:]+:(?:back|next|choice_page:\d+|preview_page:\d+|preview_return|edit:[a-z_]+|photo_preview:\d+|photos_done|field_keep|field_done|confirm_done|finance_open|finance_method|finance_cost|finance_done|finance_clear_cost|finance_clear_method|finance_refresh)|orderpage:\d+:[A-Z_]+|listnext:(?:items|chats):[^:]+|chatpage:[^:]+:(?:older|newer)|itemfilter:[A-Z_]+|il:(?:search|category|minimum|maximum|PREMIUM|DEFAULT|ALL|reset)|ops:(?:list:[A-Z_]+:\d+|show:[^:]+)|aq:(?:list:[a-z_]+:\d+|chain:[^:]+|target:[^:]+|evaluation:[^:]+)|ar:(?:menu|list|show:[^:]+)|(?:sd|st):\d+:[a-z_]+)",
+        action,
+    ):
+        return True
     return action in {
         "home",
         "more",
         "tools",
         "attention",
         "profile",
+        "providers",
+        "sp:notifications",
+        "sp:connections",
+        "sp:security",
+        "sp:fulfillment",
         "profile:check",
         "profile:details",
         "nav:close",
@@ -66,6 +77,11 @@ def navigation(action):
     } or action.startswith(
         (
             "item:",
+            "draft:",
+            "finance:",
+            "fin:options:",
+            "auto:item:",
+            "stock:view:",
             "lp:item:",
             "nav:back:",
             "nav:recover:",
@@ -80,6 +96,8 @@ def navigation(action):
             "gft:bindings:",
             "chatmore:",
             "compose:",
+            "reply:",
+            "readchat:",
             "od:details:",
             "order:",
             "chat:",
@@ -119,9 +137,19 @@ class CallbackAcknowledgements(BaseMiddleware):
             return None
 
 
+class CallbackAdmission(BaseMiddleware):
+    """Start dispatch-age after FSM isolation, not while queued behind a reader."""
+
+    async def __call__(self, handler, event, data):
+        if data.get("callback_ack") is not None:
+            data["callback_ack"]["admitted_at"] = time.monotonic()
+        return await handler(event, data)
+
+
 def install_callback_ack(dispatcher, access):
     # Public middleware registration API: acknowledge before the per-owner FSM
     # lock, but leave FSM isolation and the normal owner guard intact.
     dispatcher.update.outer_middleware.unregister(dispatcher.fsm)
     dispatcher.update.outer_middleware(CallbackAcknowledgements(access))
     dispatcher.update.outer_middleware(dispatcher.fsm)
+    dispatcher.update.outer_middleware(CallbackAdmission())

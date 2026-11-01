@@ -420,6 +420,7 @@ async def test_expired_paid_step_lease_blocks_whole_package_after_restart(rig):
 
 async def test_live_console_records_only_committed_receipt_and_masked_recipient(rig, caplog):
     import logging
+    import re
 
     from app.security.logging import ConsoleFormatter, SecretFilter
 
@@ -435,7 +436,11 @@ async def test_live_console_records_only_committed_receipt_and_masked_recipient(
     output = "\n".join(rendered)
     assert "bear 1/2 — отправка" in output and "rose 2/2 — доставка подтверждена" in output
     assert output.count("Все подарки доставлены") == 1
-    assert "Realbuyer" not in output and "987" not in output
+    assert "Realbuyer" not in output
+    # A decimal access_hash must not leak; random operation UUIDs may contain
+    # these three digits without representing the sensitive numeric value.
+    assert not re.search(r"(?<![A-Za-z0-9])987(?![A-Za-z0-9])", output)
+    assert all("access_hash" not in record.getMessage() for record in caplog.records)
     assert len(t.payments) == 2
 
 
