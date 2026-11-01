@@ -50,7 +50,11 @@ def matches_item(item, filters):
         return False
     if filters.get("status") and item.get("status") != filters["status"]:
         return False
-    if filters.get("search", "").casefold() not in str(item.get("name") or "").casefold():
+    query = filters.get("search", "").casefold()
+    if (
+        query not in str(item.get("name") or "").casefold()
+        and query != str(item.get("search_code") or "").casefold()
+    ):
         return False
     if filters.get("priority") and item.get("priority") != filters["priority"]:
         return False

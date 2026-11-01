@@ -79,6 +79,7 @@ CONTEXT = {
     "list_cursor",
     "list_number",
     "list_kind",
+    "list_catalog_at",
     "gift_picker",
     "promotion_picker",
 }

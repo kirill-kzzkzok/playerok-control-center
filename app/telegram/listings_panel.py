@@ -1,7 +1,9 @@
 import json
 import secrets
 
-from app.playerok.adapter import validate_page
+from app.database.store import now
+from app.playerok.adapter import APIError, validate_page
+from app.services.finance import quote_fresh
 from app.services.item_filters import checked_filters, matches_item
 from app.services.products import ValidationError
 from app.telegram.item_category_picker import ItemCategoryPicker
@@ -14,6 +16,79 @@ class ListingsPanel:
     def __init__(self, api, store=None):
         self.api, self.store = api, store
         self.category_picker = ItemCategoryPicker(api)
+
+    async def search_page(self, filters, state, cursor):
+        account = getattr(self.api.account, "id", None)
+        if not account:
+            raise ValidationError("Подтвердите аккаунт Playerok перед поиском")
+        key = "ui:catalog:" + account
+        cache = self.store.setting(key, {}) if self.store else {}
+        if not quote_fresh(cache.get("at"), max_age=60):
+            if cursor:
+                raise ValidationError("Снимок каталога устарел. Выполните поиск заново")
+            cache = {"at": now(), "items": [], "cursor": None, "seen": [], "complete": False}
+        if not cache["complete"]:
+            indexed = {item["id"]: item for item in cache["items"]}
+            for _ in range(20):
+                try:
+                    page = await self.api.call(
+                        "get_my_items", count=24, after_cursor=cache["cursor"], statuses=None
+                    )
+                    values, continuation = validate_page(page, "items", cache["seen"])
+                except APIError:
+                    cache["error"] = True
+                    break
+                for value in values:
+                    item = {
+                        k: value.get(k) for k in ("id", "name", "price", "status", "priority", "category")
+                    }
+                    if self.store:
+                        code = self.store.rows(
+                            "SELECT p.code FROM logical_products p JOIN logical_listings l ON l.product_id=p.id WHERE l.item_id=? AND p.account_id=?",
+                            (value["id"], account),
+                        )
+                    else:
+                        code = []
+                    from app.services.logical_products import marker
+
+                    try:
+                        item["search_code"] = (
+                            code[0]["code"] if code else marker(value.get("description") or "")
+                        )
+                    except ValueError:
+                        item["search_code"] = None
+                    indexed[item["id"]] = item
+                cache.update(cursor=continuation, error=False, complete=not continuation)
+                if continuation:
+                    cache["seen"].append(continuation)
+                else:
+                    break
+            cache["items"] = list(indexed.values())
+            if self.store:
+                self.store.set_setting(key, cache)
+        data = await state.get_data()
+        if cursor and (not str(cursor).startswith("catalog:") or data.get("list_catalog_at") != cache["at"]):
+            raise ValidationError("Результаты поиска изменились. Откройте поиск заново")
+        offset = int(cursor.split(":")[1]) if cursor else 0
+        matches = [
+            item
+            for item in cache["items"]
+            if matches_item(item, filters)
+            and (
+                not filters.get("category_id")
+                or (item.get("category") or {}).get("id") == filters["category_id"]
+            )
+        ]
+        await state.update_data(list_catalog_at=cache["at"])
+        next_cursor = f"catalog:{offset + 10}" if len(matches) > offset + 10 else None
+        return (
+            {
+                "items": matches[offset : offset + 10],
+                "page_info": {"has_next_page": bool(next_cursor), "end_cursor": next_cursor},
+            },
+            cache,
+            len(matches),
+        )
 
     async def show(self, kind, state, *, nonce=None, restore=False):
         if kind not in {"items", "chats"}:
@@ -43,19 +118,23 @@ class ListingsPanel:
             )
             status = filters.get("status")
             extra = {"category_id": filters["category_id"]} if filters.get("category_id") else {}
-            page = await self.api.call(
-                "get_my_items",
-                count=10,
-                after_cursor=cursor,
-                statuses=(
-                    [value for value in ItemStatuses if value.name not in {"APPROVED", "DRAFT"}]
-                    if filters.get("archive")
-                    else [ItemStatuses[status]]
-                    if status
-                    else None
-                ),
-                **extra,
-            )
+            search = bool(filters.get("search"))
+            if search:
+                page, search_cache, found = await self.search_page(filters, state, cursor)
+            else:
+                page = await self.api.call(
+                    "get_my_items",
+                    count=10,
+                    after_cursor=cursor,
+                    statuses=(
+                        [value for value in ItemStatuses if value.name not in {"APPROVED", "DRAFT"}]
+                        if filters.get("archive")
+                        else [ItemStatuses[status]]
+                        if status
+                        else None
+                    ),
+                    **extra,
+                )
             title, prefix = "📦 Мои товары", "item"
             if promotion_picker:
                 title, prefix = "🚀 Выберите товар для продвижения", "payp:item"
@@ -141,7 +220,13 @@ class ListingsPanel:
         note = "\nФрагменты — по сохранённой истории." if kind == "chats" else ""
         if gift_picker:
             note = "\nВыберите созданный на Playerok товар, включая серверные черновики. Локальный черновик сначала нужно создать на Playerok через мастер."
-        if kind == "items" and any(v is not None and v != "" for v in filters.values()):
+        if kind == "items" and search:
+            note += f"\nСовпало: {found} по снимку каталога · {local_time(search_cache['at'])}."
+            if not search_cache["complete"]:
+                note += " Поиск не завершён: часть каталога ещё не проверена."
+                rows.append([("Продолжить поиск", "il:scan")])
+            rows.append([("🔄 Обновить каталог", "il:refreshsearch")])
+        elif kind == "items" and any(v is not None and v != "" for v in filters.values()):
             note += f"\nСовпало: {len(values)}. Фильтрация постраничная."
             if not values:
                 note += " По ещё не загруженным страницам поиск не выполнен."
@@ -155,6 +240,10 @@ class ListingsPanel:
         )
 
     async def filter_action(self, action, state):
+        if action in {"il:scan", "il:refreshsearch"}:
+            if action == "il:refreshsearch" and self.store:
+                self.store.set_setting("ui:catalog:" + self.api.account.id, {})
+            return await self.show("items", state)
         if action == "il:pickcategory":
             return await self.category_picker.start(state)
         data = await state.get_data()
@@ -205,6 +294,7 @@ class ListingsPanel:
             if not text or len(text) > 200:
                 raise ValidationError("Название: от 1 до 200 символов")
             filters["search"] = "" if text == "-" else text
+            filters.update(status=None, archive=False)
         elif current == "itemlist:price":
             parts = text.split()
             if len(parts) != 2:

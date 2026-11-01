@@ -66,12 +66,16 @@ async def test_dispatcher_filters_compose_persist_restart_validate_and_reset(tmp
 
     for value in items:
         value["status"] = "APPROVED"
+        value["category"] = {"id": "category-id"}
+    items.append({**items[0], "id": "draft-match", "status": "DRAFT"})
 
     async def call(method, **kwargs):
         calls.append((method, kwargs))
-        for value in items:
-            value["status"] = kwargs["statuses"][0].name if kwargs.get("statuses") else "APPROVED"
-        return {"items": items, "page_info": {"has_next_page": True, "end_cursor": "next"}}
+        selected = {s.name for s in kwargs.get("statuses") or []}
+        return {
+            "items": [item for item in items if not selected or item["status"] in selected],
+            "page_info": {"has_next_page": False},
+        }
 
     api.call = call
     bot = Bot("123:" + "x" * 35, session=session)
@@ -97,29 +101,30 @@ async def test_dispatcher_filters_compose_persist_restart_validate_and_reset(tmp
         assert len(calls) == before
         assert "Минимальная" in session.calls[-1].text
         await ui.message("100 200")
-        assert item_buttons() == {"item:match", "item:ordinary"}
+        assert item_buttons() == {"item:match", "item:ordinary", "item:draft-match"}
         await ui.click("il:PREMIUM")
-        assert item_buttons() == {"item:match"}
-        assert "Совпало: 1" in session.calls[-1].text
-        assert "постраничная" in session.calls[-1].text
+        assert item_buttons() == {"item:match", "item:draft-match"}
+        assert "Совпало: 2" in session.calls[-1].text
+        assert "по снимку каталога" in session.calls[-1].text
+        reads = len(calls)
         await ui.click("il:category")
         await ui.message("category-id")
-        assert calls[-1][1]["category_id"] == "category-id"
+        assert item_buttons() == {"item:match", "item:draft-match"}
+        assert len(calls) == reads
         await ui.click("itemfilter:DRAFT")
-        assert calls[-1][1]["category_id"] == "category-id"
-        assert calls[-1][1]["statuses"][0].name == "DRAFT"
-        assert item_buttons() == {"item:match"}
+        assert len(calls) == reads
+        assert item_buttons() == {"item:draft-match"}
         await dp.storage.close()
         dp = dispatcher(store, api)
         ui = Interaction(bot, dp)
         await ui.click("il:back")
-        assert item_buttons() == {"item:match"}
+        assert item_buttons() == {"item:draft-match"}
         assert calls[-1][1]["after_cursor"] is None
         await ui.click("il:search")
         await ui.message("не существует")
         assert item_buttons() == set()
-        assert "продолжение доступно" in session.calls[-1].text
-        assert "ещё не загруженным" in session.calls[-1].text
+        assert "Совпало: 0" in session.calls[-1].text
+        assert "Поиск не завершён" not in session.calls[-1].text
         before = len(calls)
         await ui.click("il:reset", owner=8)
         assert len(calls) == before
