@@ -20,6 +20,7 @@ class ListingsPanel:
             raise ValidationError("Неизвестный список")
         data = await state.get_data()
         gift_picker = kind == "items" and data.get("gift_picker") is True
+        promotion_picker = kind == "items" and data.get("promotion_picker") is True
         cursor, seen, number = None, [], 1
         if restore and data.get("list_kind") == kind:
             cursor, number = data.get("list_cursor"), data.get("list_number", 1)
@@ -56,6 +57,8 @@ class ListingsPanel:
                 **extra,
             )
             title, prefix = "📦 Мои товары", "item"
+            if promotion_picker:
+                title, prefix = "🚀 Выберите товар для продвижения", "payp:item"
             if gift_picker:
                 title, prefix = "🎁 Выберите товар для подарков", "gft:item"
         else:
@@ -65,7 +68,7 @@ class ListingsPanel:
         if kind == "items":
             values = [item for item in values if matches_item(item, filters)]
         # An empty page with continuation still offers Next; it does not mean EOF.
-        rows = [[("➕ Создать товар", "create")]] if kind == "items" else []
+        rows = [[("➕ Создать товар", "create")]] if kind == "items" and not promotion_picker else []
         for value in values:
             label = (
                 value.get("name") or "Товар без названия"
@@ -141,7 +144,11 @@ class ListingsPanel:
                 note += " По ещё не загруженным страницам поиск не выполнен."
         return f"<b>{title}</b> · страница {number}\n" + ("" if values else empty) + note, keyboard(
             rows,
-            back=("⬅️ Товары с подарками", "gft:bindings") if gift_picker else ("⬅️ Мой магазин", "home"),
+            back=("⬅️ Товары с подарками", "gft:bindings")
+            if gift_picker
+            else ("К автопродвижению", "promotions")
+            if promotion_picker
+            else ("⬅️ Мой магазин", "home"),
         )
 
     async def filter_action(self, action, state):
@@ -156,14 +163,16 @@ class ListingsPanel:
         filters = checked_filters(data.get("item_filters", {}))
         if action == "il:reset":
             await state.clear()
-            if data.get("gift_picker"):
-                await state.set_data({"gift_picker": True})
+            await state.set_data({key: True for key in ("gift_picker", "promotion_picker") if data.get(key)})
             return await self.show("items", state)
         field = action.removeprefix("il:")
         if field in {"PREMIUM", "DEFAULT", "ALL"}:
             filters["priority"] = None if field == "ALL" else field
             await state.set_data(
-                {"item_filters": filters, **({"gift_picker": True} if data.get("gift_picker") else {})}
+                {
+                    "item_filters": filters,
+                    **{key: True for key in ("gift_picker", "promotion_picker") if data.get(key)},
+                }
             )
             return await self.show("items", state)
         prompts = {
@@ -174,7 +183,10 @@ class ListingsPanel:
         if field not in prompts:
             raise ValidationError("Фильтр недоступен")
         await state.set_data(
-            {"item_filters": filters, **({"gift_picker": True} if data.get("gift_picker") else {})}
+            {
+                "item_filters": filters,
+                **{key: True for key in ("gift_picker", "promotion_picker") if data.get(key)},
+            }
         )
         await state.set_state("itemlist:" + field)
         return prompts[field], keyboard([[("Отмена", "itemfilters")]])
@@ -203,7 +215,10 @@ class ListingsPanel:
             raise ValidationError("Ввод фильтра устарел")
         filters = checked_filters(filters)
         await state.set_data(
-            {"item_filters": filters, **({"gift_picker": True} if data.get("gift_picker") else {})}
+            {
+                "item_filters": filters,
+                **{key: True for key in ("gift_picker", "promotion_picker") if data.get(key)},
+            }
         )
         await state.set_state(None)
         return await self.show("items", state)

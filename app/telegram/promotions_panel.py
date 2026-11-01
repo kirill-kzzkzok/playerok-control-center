@@ -47,7 +47,7 @@ class PromotionsPanel:
             [
                 [("💾 Сохранить", f"pp:{nonce}:save")],
                 [("⛔ Выключить", "promo:stop")],
-                [("Выбрать товар и проверить", "items")],
+                [("📦 Товары для продвижения", "promo:catalog")],
                 [
                     ("История расходов", "aq:list:expenses:0"),
                     ("История проверки без оплаты", "aq:list:evaluations:0"),
@@ -95,10 +95,10 @@ class PromotionsPanel:
                 + next_check
             )
             rows = [
-                [("Выбрать товар и проверить", "items")],
+                [("📦 Товары для продвижения", "promo:catalog")],
                 [("💳 Разрешить платное расписание", "payp:arm")],
-                [("Настройки расчёта", f"pp:{nonce}:advanced")],
-                [("История проверок", "tools:promotion")],
+                [("🗓 Расписание и лимиты", f"pp:{nonce}:advanced")],
+                [("История продвижения", "tools:promotion")],
                 [("⛔ Остановить продвижение", "promo:stop")],
             ]
         else:
@@ -125,6 +125,43 @@ class PromotionsPanel:
             rows += [[("💾 Сохранить", f"pp:{nonce}:save")], [("⬅️ Основной экран", f"pp:{nonce}:basic")]]
         return text, keyboard(rows, back=("⬅️ Ещё", "more"))
 
+    def item_view(self, view):
+        nonce, ident = view["nonce"], view["id"]
+        _revision, _policy, selection = self.service.get()
+        selected = self.service.selected(ident, selection)
+        rows = [
+            [
+                (
+                    "Не участвовать" if selected else "Участвовать в расписании",
+                    f"pi:{nonce}:target:" + ("exclude" if selected else "include"),
+                )
+            ],
+            [("🗓 Расписание и лимиты", "promo:settings")],
+            [("Дополнительные параметры", f"pi:{nonce}:more:open")],
+        ]
+        text = (
+            "🚀 <b>Автоподнятие товара</b>\n"
+            + escaped(view.get("name") or "Товар", 100)
+            + ("\nУчастие в расписании: да" if selected else "\nУчастие в расписании: нет")
+            + "\nВыбор товара не разрешает расходы. Для запуска нужны подтверждённый тариф и разрешение расписания."
+        )
+        if view.get("advanced"):
+            text = "⚙️ <b>Дополнительные параметры</b>\nПроверка тарифов ничего не покупает. Наследование отменяет только индивидуальный выбор товара."
+            rows = [
+                [
+                    (
+                        f"Проверить без оплаты · {q.get('type', '?')} · {q.get('price', '?')} ₽",
+                        f"pi:{nonce}:quote:{i}",
+                    )
+                ]
+                for i, q in enumerate(view.get("quote_previews", []))
+            ]
+            rows += [
+                [("Наследовать настройки магазина", f"pi:{nonce}:target:default")],
+                [("К расписанию товара", f"pi:{nonce}:more:close")],
+            ]
+        return text, keyboard(rows, back=("К продвижению товара", "payp:item:" + ident))
+
     async def callback(self, action, owner, state):
         self.service.access.orders.owner(owner)
         parts = action.split(":")
@@ -143,12 +180,18 @@ class PromotionsPanel:
                 else "Записей нет. Оценки проверки без оплаты не считаются расходом."
             )
             return text, keyboard([[("Настройки", "promotions")]])
-        if action in {"promotions", "promo:stop"}:
+        if action in {"promotions", "promo:stop", "promo:settings"}:
             if action == "promo:stop":
                 self.service.stop(owner)
             revision, policy, selection = self.service.get()
             return await self.show(
-                {"revision": revision, "values": asdict(policy), "selection": selection}, state
+                {
+                    "revision": revision,
+                    "values": asdict(policy),
+                    "selection": selection,
+                    "advanced": action == "promo:settings",
+                },
+                state,
             )
         if len(parts) == 3 and parts[:2] == ["promo", "item"]:
             item = await self.service.access.item(owner, parts[2])
@@ -156,38 +199,28 @@ class PromotionsPanel:
                 "get_item_priority_statuses", item_id=parts[2], item_price=priority_price_basis(item)
             )
             nonce = secrets.token_hex(6)
-            data = {"id": parts[2], "nonce": nonce, "quotes": [quote["id"] for quote in quotes]}
+            data = {
+                "id": parts[2],
+                "nonce": nonce,
+                "quotes": [quote["id"] for quote in quotes],
+                "quote_previews": [
+                    {key: quote.get(key) for key in ("type", "price", "period")} for quote in quotes
+                ],
+            }
             await state.set_state(None)
             await state.set_data({"promotion_item": data})
-            revision, _, selection = self.service.get()
-            rows = [
-                [
-                    (
-                        f"{quote.get('type') or quote['id']} · {quote.get('price', '?')} ₽ · проверить",
-                        f"pi:{nonce}:quote:{index}",
-                    )
-                ]
-                for index, quote in enumerate(quotes)
-            ]
-            rows.extend(
-                [
-                    [
-                        ("Участвует в расписании", f"pi:{nonce}:target:include"),
-                        ("Не участвует", f"pi:{nonce}:target:exclude"),
-                    ],
-                    [("Наследовать настройки магазина", f"pi:{nonce}:target:default")],
-                    [("Настройки продвижения", "promotions")],
-                ]
-            )
-            return (
-                f"🚀 <b>Расписание товара</b>\nУчастие: {'включено' if self.service.selected(parts[2], selection) else 'выключено'}\nУчастие в списке не разрешает расходы: для платного запуска нужны подтверждённый тариф и отдельное разрешение расписания.\nВыберите стоимость для проверки без оплаты.",
-                keyboard(rows),
-            )
+            data["name"] = item.get("name") or "Товар"
+            await state.set_data({"promotion_item": data})
+            return self.item_view(data)
         data = await state.get_data()
         if parts[0] == "pi":
             view = data.get("promotion_item", {})
             if len(parts) != 4 or parts[1] != view.get("nonce"):
                 raise Conflict("Проверка товара устарела")
+            if parts[2] == "more":
+                view["advanced"] = parts[3] == "open"
+                await state.update_data(promotion_item=view)
+                return self.item_view(view)
             if parts[2] == "target":
                 await self.service.target(owner, view["id"], parts[3])
                 return await self.callback("promo:item:" + view["id"], owner, state)

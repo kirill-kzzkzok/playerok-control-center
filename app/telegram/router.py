@@ -102,6 +102,9 @@ def create_router(store, api, products, synchronizer):
             if key in data:
                 store.set_setting(f"ui:{message.from_user.id}:{key}", data[key])
         await state.clear()
+        panel = store.setting(navigator.key(message.bot, message.from_user.id), {})
+        if panel.get("sending") or panel.get("editing"):
+            return await navigator.recovery_prompt(message, message.from_user.id)
         message, _ = await navigator.enter(message, message.from_user.id, state, "home")
         text, markup = home_panel.home()
         await message.answer(text, reply_markup=markup)
@@ -114,7 +117,7 @@ def create_router(store, api, products, synchronizer):
         if panel.get("sending"):
             # Explicit owner recovery, not an automatic resend. Unknown old UI
             # is not deleted or treated as proof of any business operation.
-            store.set_setting(key, {"route": "home", "history": [], "abandoned_send": True})
+            store.set_setting(key, {"route": None, "history": [], "abandoned_send": True})
         message, _ = await navigator.enter(message, message.from_user.id, state, "home")
         text, markup = home_panel.home()
         await message.answer(text, reply_markup=markup)
@@ -148,6 +151,9 @@ def create_router(store, api, products, synchronizer):
             )
         )
         try:
+            if action.startswith("nav:recover:"):
+                await navigator.recover(message, owner, state, action.split(":")[-1])
+                action = "home"
             message, action = await navigator.enter(message, owner, state, action)
             if message is None:
                 return
@@ -194,7 +200,7 @@ def create_router(store, api, products, synchronizer):
                         "gft:refundcheck:",
                     )
                 )
-            ) and not store.setting(navigator.key(message.bot, owner), {}).get("restoring"):
+            ) and not message.navigation_restoring:
                 await state.clear()
             if action == "home":
                 await state.clear()
@@ -242,6 +248,11 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await auto_replies_panel.callback(action, owner, state, message)
             elif action.startswith("payp:"):
                 text, markup = await paid_promotions.callback(action, owner, state)
+            elif action == "promo:catalog":
+                if not message.navigation_restoring:
+                    await state.clear()
+                    await state.set_data({"promotion_picker": True})
+                text, markup = await listings_panel.show("items", state, restore=message.navigation_restoring)
             elif action == "promotions" or action.startswith(("promo:", "pp:", "pi:")):
                 text, markup = await promotions_panel.callback(action, owner, state)
             elif action == "automation" or action.startswith(("auto:", "ap:")):
@@ -275,7 +286,7 @@ def create_router(store, api, products, synchronizer):
                     rows = [[("Открыть серверный лот", "item:" + binding[0]["remote_id"])]] if binding else []
                     text, markup = "Состояние: " + escape(draft["state"]), keyboard(rows)
             elif action in {"items", "chats"}:
-                restoring = store.setting(navigator.key(message.bot, owner), {}).get("restoring", False)
+                restoring = message.navigation_restoring
                 if not restoring:
                     await state.clear()
                     filters = (
@@ -321,9 +332,15 @@ def create_router(store, api, products, synchronizer):
                 filters = (await state.get_data()).get("item_filters", {})
                 filters["status"] = None if value in {"ALL", "ARCHIVE"} else value
                 filters["archive"] = value == "ARCHIVE"
-                gift_picker = (await state.get_data()).get("gift_picker", False)
                 await state.set_data(
-                    {"item_filters": filters, **({"gift_picker": True} if gift_picker else {})}
+                    {
+                        "item_filters": filters,
+                        **{
+                            key: True
+                            for key in ("gift_picker", "promotion_picker")
+                            if (await state.get_data()).get(key)
+                        },
+                    }
                 )
                 await state.set_state(None)
                 text, markup = await listings_panel.show("items", state)

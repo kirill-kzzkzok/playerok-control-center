@@ -16,7 +16,7 @@ class ItemCategoryPicker:
         await state.set_data(
             {
                 "item_filters": checked_filters(data.get("item_filters", {})),
-                **({"gift_picker": True} if data.get("gift_picker") else {}),
+                **{key: True for key in ("gift_picker", "promotion_picker") if data.get(key)},
             }
         )
         await state.set_state("itemlist:category_search")
@@ -134,7 +134,10 @@ class ItemCategoryPicker:
         filters["category_id"] = selected["id"]
         filters = checked_filters(filters)
         await state.set_data(
-            {"item_filters": filters, **({"gift_picker": True} if data.get("gift_picker") else {})}
+            {
+                "item_filters": filters,
+                **{key: True for key in ("gift_picker", "promotion_picker") if data.get(key)},
+            }
         )
         await state.set_state(None)
         return None

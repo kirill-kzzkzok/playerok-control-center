@@ -42,6 +42,8 @@ def uncertain(store, kind="reply", target="chat", payload=None):
 async def test_verified_message_resolves_locally_without_sending_and_records_reason(setup):
     store, api, service = setup
     ident, expected = uncertain(store)
+    # Delivery follows the queued operation; fixture construction can cross a second boundary.
+    api.call.return_value["messages"][0]["created_at"] = now()
     await service.resolve(1, ident, expected, "CONFIRM_MESSAGE", "Проверил сообщение на Playerok", "sent")
     row = store.rows("SELECT status,result,error_code FROM outbox")[0]
     assert row["status"] == "SUCCEEDED" and row["error_code"] is None

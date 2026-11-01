@@ -268,3 +268,35 @@ def grouped_statistics(store, owner, account, days=7):
         item_names=names, item_orders=counts, item_unknown_paid=unknown, items=amounts, offer_sources=sources
     )
     return result
+
+
+def offer_suggestions(store, owner, account, days=7):
+    """Candidates only; equality never grants an automatic merge."""
+    import hashlib
+
+    if not account or store.setting("playerok:account_id") != account:
+        return {}
+    identities = offer_identities(store, account)
+    sold = statistics(store, days, account_id=account)["item_orders"]
+    assigned = {
+        ident
+        for group in store.setting(f"analytics:{owner}:{account}:offer_groups", [])
+        for ident in group["members"]
+    }
+    buckets = defaultdict(list)
+    for ident, value in identities.items():
+        if ident in sold and ident not in assigned:
+            identity = value["identity"]
+            buckets[(identity["account"], identity["category"], identity["title"])].append(ident)
+    result = {}
+    for members in buckets.values():
+        if len(members) < 2:
+            continue
+        members.sort()
+        key = hashlib.sha256(json.dumps(members).encode()).hexdigest()[:20]
+        result[key] = {
+            "members": members,
+            "name": identities[members[0]]["name"],
+            "expected": {ident: identities[ident] for ident in members},
+        }
+    return result

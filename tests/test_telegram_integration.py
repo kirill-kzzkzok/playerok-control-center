@@ -26,7 +26,8 @@ class TelegramSession(BaseSession):
         return next(
             method
             for method in reversed(self.calls)
-            if method.__api_method__ in {"sendMessage", "editMessageText", "sendPhoto", "editMessageMedia"}
+            if method.__api_method__
+            in {"sendMessage", "editMessageText", "sendPhoto", "editMessageMedia", "editMessageCaption"}
         )
 
     def __init__(self):
@@ -53,7 +54,7 @@ class TelegramSession(BaseSession):
             )
         if name in {"editMessageReplyMarkup", "deleteMessage"}:
             return True
-        if name in {"sendMessage", "editMessageText", "sendPhoto", "editMessageMedia"}:
+        if name in {"sendMessage", "editMessageText", "sendPhoto", "editMessageMedia", "editMessageCaption"}:
             return Message(
                 message_id=getattr(method, "message_id", None) or len(self.calls),
                 date=datetime.now(UTC),

@@ -67,6 +67,7 @@ def navigation(action):
         (
             "item:",
             "nav:back:",
+            "nav:recover:",
             "nav:close:",
             "replypreview:",
             "ar:preview:",

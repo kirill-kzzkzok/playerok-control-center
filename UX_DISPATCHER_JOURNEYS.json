@@ -1,0 +1,413 @@
+{
+  "mode": "REAL_DISPATCHER_MOCK_TRANSPORT",
+  "journeys": [
+    {
+      "path": [
+        "items"
+      ],
+      "asserted_screen": "Мои товары",
+      "confirmed_back": "home"
+    },
+    {
+      "path": [
+        "items",
+        "item:lot"
+      ],
+      "asserted_screen": "Опубликован",
+      "confirmed_back": "items"
+    },
+    {
+      "path": [
+        "items",
+        "item:lot",
+        "iv:edit:lot"
+      ],
+      "asserted_screen": "Что изменить",
+      "confirmed_back": "item:lot"
+    },
+    {
+      "path": [
+        "items",
+        "item:lot",
+        "iv:delivery:lot"
+      ],
+      "asserted_screen": "выдач",
+      "confirmed_back": "item:lot"
+    },
+    {
+      "path": [
+        "items",
+        "item:lot",
+        "iv:other:lot"
+      ],
+      "asserted_screen": "Другие действия",
+      "confirmed_back": "item:lot"
+    },
+    {
+      "path": [
+        "items",
+        "item:lot",
+        "finance:lot"
+      ],
+      "asserted_screen": "Прогноз будущей продажи",
+      "confirmed_back": "item:lot"
+    },
+    {
+      "path": [
+        "items",
+        "item:lot",
+        "finance:lot",
+        "fin:options:lot"
+      ],
+      "asserted_screen": "Параметры прогноза",
+      "confirmed_back": null
+    },
+    {
+      "path": [
+        "chats",
+        "chat:chat"
+      ],
+      "asserted_screen": "Переписка",
+      "confirmed_back": "chats"
+    },
+    {
+      "path": [
+        "orders",
+        "order:paid"
+      ],
+      "asserted_screen": "Оплачен",
+      "confirmed_back": "orders"
+    },
+    {
+      "path": [
+        "gft:home"
+      ],
+      "asserted_screen": "подарки",
+      "confirmed_back": "home"
+    },
+    {
+      "path": [
+        "gft:home",
+        "gft:bindings"
+      ],
+      "asserted_screen": "Товары",
+      "confirmed_back": "gft:home"
+    },
+    {
+      "path": [
+        "more",
+        "profile"
+      ],
+      "asserted_screen": "Профиль",
+      "confirmed_back": "more"
+    },
+    {
+      "path": [
+        "more",
+        "profile",
+        "providers"
+      ],
+      "asserted_screen": "Способы вывода",
+      "confirmed_back": "profile"
+    },
+    {
+      "path": [
+        "more",
+        "settings"
+      ],
+      "asserted_screen": "Настройки",
+      "confirmed_back": "more"
+    },
+    {
+      "path": [
+        "more",
+        "stats:7"
+      ],
+      "asserted_screen": "Статистика",
+      "confirmed_back": "more"
+    },
+    {
+      "path": [
+        "more",
+        "stats:7",
+        "sr:7:charts"
+      ],
+      "asserted_screen": "Графики",
+      "confirmed_back": "stats:7"
+    },
+    {
+      "path": [
+        "more",
+        "stats:7",
+        "sr:7:top"
+      ],
+      "asserted_screen": "Лучшие товары",
+      "confirmed_back": "stats:7"
+    },
+    {
+      "path": [
+        "more",
+        "stats:7",
+        "sr:7:finance"
+      ],
+      "asserted_screen": "Финансы",
+      "confirmed_back": "stats:7"
+    },
+    {
+      "path": [
+        "more",
+        "tools",
+        "tools:operations"
+      ],
+      "asserted_screen": "История и результаты",
+      "confirmed_back": "tools"
+    },
+    {
+      "path": [
+        "more",
+        "tools",
+        "tools:delivery"
+      ],
+      "asserted_screen": "Выдача и цепочки",
+      "confirmed_back": "tools"
+    },
+    {
+      "path": [
+        "more",
+        "tools",
+        "tools:data"
+      ],
+      "asserted_screen": "Диагностика и данные",
+      "confirmed_back": "tools"
+    },
+    {
+      "path": [
+        "more",
+        "promotions"
+      ],
+      "asserted_screen": "Автопродвижение",
+      "confirmed_back": "more"
+    },
+    {
+      "path": [
+        "more",
+        "promotions",
+        "promo:catalog"
+      ],
+      "asserted_screen": "продвижения",
+      "confirmed_back": "promotions"
+    },
+    {
+      "path": [
+        "more",
+        "promotions",
+        "promo:catalog",
+        "payp:item:lot"
+      ],
+      "asserted_screen": "Продвижение товара",
+      "confirmed_back": "promo:catalog"
+    },
+    {
+      "path": [
+        "more",
+        "promotions",
+        "promo:catalog",
+        "payp:item:lot",
+        "promo:item:lot"
+      ],
+      "asserted_screen": "Автоподнятие товара",
+      "confirmed_back": null
+    }
+  ],
+  "executed_callbacks": [
+    "chat:chat",
+    "chats",
+    "fin:options:lot",
+    "finance:lot",
+    "gft:bindings",
+    "gft:home",
+    "item:lot",
+    "items",
+    "iv:delivery:lot",
+    "iv:edit:lot",
+    "iv:other:lot",
+    "more",
+    "nav:back:050f1d045daf",
+    "nav:back:2610ca6cad3e",
+    "nav:back:32b1f42a13e8",
+    "nav:back:383bcd15abfd",
+    "nav:back:38c366810d1a",
+    "nav:back:3f49d8745586",
+    "nav:back:4d9749e43c1f",
+    "nav:back:6019dfe6521b",
+    "nav:back:7162ca93edfc",
+    "nav:back:7a97e4e17b70",
+    "nav:back:802d0d0e9594",
+    "nav:back:81ff7c70ebc2",
+    "nav:back:8a977ce89071",
+    "nav:back:a5e395854b2a",
+    "nav:back:ac35f8cb8e69",
+    "nav:back:bcf771231dc5",
+    "nav:back:c51f58682051",
+    "nav:back:d2c124c014c4",
+    "nav:back:d79a1d564cd4",
+    "nav:back:d83d397f5b5d",
+    "nav:back:e7a82dccdc87",
+    "nav:back:f6edf4ee782b",
+    "nav:back:fe51a2e4eea7",
+    "order:paid",
+    "orders",
+    "payp:item:lot",
+    "profile",
+    "promo:catalog",
+    "promo:item:lot",
+    "promotions",
+    "providers",
+    "settings",
+    "sr:7:charts",
+    "sr:7:finance",
+    "sr:7:top",
+    "stats:7",
+    "tools",
+    "tools:data",
+    "tools:delivery",
+    "tools:operations"
+  ],
+  "visible_but_not_executed": [
+    "agv:list:0",
+    "aq:list:chains:0",
+    "aq:list:enrollment:0",
+    "aq:list:policies:0",
+    "ar:menu",
+    "auto:item:lot",
+    "automation",
+    "backup",
+    "chatmore:chat",
+    "compose:chat",
+    "create",
+    "delete:lot",
+    "delivered:0",
+    "diagnostics",
+    "discount:lot",
+    "drafts",
+    "editdesc:lot",
+    "editfields:lot",
+    "editname:lot",
+    "editphoto:lot",
+    "ff:start:paid",
+    "fin:allocation:lot",
+    "fin:clearcost:lot",
+    "fin:cost:lot",
+    "fin:placement:lot",
+    "fin:select:SBP",
+    "gft:choose",
+    "gft:history",
+    "gft:settings",
+    "ic:preview",
+    "il:search",
+    "itemfilter:APPROVED",
+    "itemfilter:ARCHIVE",
+    "itemfilter:DRAFT",
+    "itemfilters",
+    "itemmedia:d8f3085b4d9f:0",
+    "iv:details:lot",
+    "nav:back:039abc9c3b5e",
+    "nav:back:0815b7fb47ae",
+    "nav:back:091b8e5a49d6",
+    "nav:back:11c3084de69b",
+    "nav:back:2771d5ba878e",
+    "nav:back:2e24bbdc03c4",
+    "nav:back:3bfe53fbb971",
+    "nav:back:431d8aba9223",
+    "nav:back:46f8a74c1fde",
+    "nav:back:51e7d0c49633",
+    "nav:back:6169fe75a3fe",
+    "nav:back:65e31177b7db",
+    "nav:back:6a3819d5fa5e",
+    "nav:back:6ba66b6f1ab1",
+    "nav:back:7665f5d48950",
+    "nav:back:7789ebd74679",
+    "nav:back:7a8388aa9652",
+    "nav:back:80418bbd7460",
+    "nav:back:82334c2307b3",
+    "nav:back:82477c67d491",
+    "nav:back:86a71187bee1",
+    "nav:back:8afe1afd7b05",
+    "nav:back:8b20ddcbe809",
+    "nav:back:9123cde1eb95",
+    "nav:back:923af62be5e3",
+    "nav:back:94d30c7ebcf6",
+    "nav:back:9ae5166b62ed",
+    "nav:back:9c21138d862d",
+    "nav:back:9d2509fb2906",
+    "nav:back:a10952d71f63",
+    "nav:back:a98939c2b0c7",
+    "nav:back:bb74cdd363b2",
+    "nav:back:bf8ab7e6d24f",
+    "nav:back:c5ee8461c016",
+    "nav:back:ce23ed4de43a",
+    "nav:back:d0af47a7e25b",
+    "nav:back:d0f2d97148fc",
+    "nav:back:dcd57a9688be",
+    "nav:back:e9c68b51fa36",
+    "nav:back:ee46c08ee48f",
+    "nav:back:f2aaa39f7335",
+    "nav:back:f2c2adccc93e",
+    "nav:close:091b8e5a49d6",
+    "nav:close:f6edf4ee782b",
+    "od:details:paid",
+    "od:history:paid:0",
+    "od:reset",
+    "od:search",
+    "ops:list:ALL:0",
+    "ops:list:UNCERTAIN:0",
+    "orderfilters",
+    "orderpage:0:ALL",
+    "orderpage:0:PAID",
+    "orderpage:0:PROBLEM",
+    "payp:arm",
+    "payp:pick:16f377907e76:0",
+    "payp:pick:8e0879e7235d:0",
+    "pi:7ddbddc54ac9:more:open",
+    "pi:7ddbddc54ac9:target:include",
+    "pp:0d9376989f08:advanced",
+    "pp:6de93338e24e:advanced",
+    "pp:dd0d210c24f4:advanced",
+    "pp:f3dbec0301a8:advanced",
+    "profile:check",
+    "profile:details",
+    "promo:settings",
+    "promo:stop",
+    "quickreplies",
+    "readchat:chat",
+    "reply:chat",
+    "result:list:0",
+    "sd:7:bestsellers",
+    "sd:7:categories",
+    "sd:7:category_counts",
+    "sd:7:details",
+    "sd:7:items",
+    "sd:7:profit",
+    "sd:7:settlements",
+    "sd:7:transactions",
+    "sg:7:list",
+    "sp:connections",
+    "sp:fulfillment",
+    "sp:notifications",
+    "sp:security",
+    "st:7:average",
+    "st:7:comparison",
+    "st:7:overview",
+    "st:7:promotion",
+    "st:7:time",
+    "stats:0",
+    "stats:1",
+    "stats:2",
+    "stats:30",
+    "stock:view:lot",
+    "sync",
+    "tools:promotion"
+  ],
+  "outbox_operations": 0,
+  "scope": "Unexecuted callbacks are not certified by this test; money/FSM-specific branches have separate tests."
+}

@@ -6,7 +6,12 @@ from aiogram.types import BufferedInputFile
 from app.rendering.charts import revenue_chart
 from app.services.finance import checked_time
 from app.services.order_finance import profit_statistics, settlement_statistics
-from app.services.statistics import confirm_offer_group, grouped_statistics, offer_identities
+from app.services.statistics import (
+    confirm_offer_group,
+    grouped_statistics,
+    offer_identities,
+    offer_suggestions,
+)
 from app.services.transactions import transaction_statistics
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
@@ -54,6 +59,31 @@ class StatisticsPanel:
             account = self.store.setting("playerok:account_id")
             if not account:
                 raise ValueError("Сначала подтвердите подключённый аккаунт в профиле")
+            if parts[2] == "suggest":
+                suggestion = (
+                    await asyncio.to_thread(offer_suggestions, self.store, owner, account, days)
+                ).get(parts[3])
+                if suggestion is None:
+                    raise ValueError("Предложение изменилось. Обновите рейтинг")
+                nonce = secrets.token_hex(8)
+                await state.set_state(None)
+                await state.set_data(
+                    {
+                        "offer_group": {
+                            "nonce": nonce,
+                            "account": account,
+                            "members": suggestion["members"],
+                            "expected": suggestion["expected"],
+                        }
+                    }
+                )
+                return await message.answer(
+                    f"🔗 Объединить {len(suggestion['members'])} объявления «{escaped(suggestion['name'], 100)}»?\nСовпадают магазин, название и категория. Подтвердите, что это один продукт. Заказы и платежи не изменятся.",
+                    reply_markup=keyboard(
+                        [[("✅ Это один продукт", f"sg:{days}:commit:{nonce}")]],
+                        back=("Отмена", f"sr:{days}:top"),
+                    ),
+                )
             if parts[2] == "sources":
                 grouped = grouped_statistics(self.store, owner, account, days)
                 members = grouped["offer_sources"].get("group:" + parts[3])
@@ -155,6 +185,8 @@ class StatisticsPanel:
             if group not in groups:
                 raise ValueError("Раздел статистики недоступен. Откройте статистику заново")
             title, rows = groups[group]
+            if group == "top":
+                rows = await asyncio.to_thread(self.suggestion_rows, owner, days) + rows
             return await message.answer(
                 "<b>" + title + "</b>", reply_markup=keyboard(rows, back=("⬅️ К статистике", f"stats:{days}"))
             )
@@ -292,6 +324,9 @@ class StatisticsPanel:
                 raise ValueError("Раздел статистики недоступен")
             markup = self.markup(days, details=True)
             if view in {"items", "bestsellers"}:
+                for row in reversed(await asyncio.to_thread(self.suggestion_rows, owner, days)):
+                    markup.inline_keyboard.insert(0, keyboard([row], home=False).inline_keyboard[0])
+            if view in {"items", "bestsellers"}:
                 visible = {key for key, _amount in top} if view == "items" else set(top)
                 for key, members in stats.get("offer_sources", {}).items():
                     if key in visible:
@@ -339,6 +374,18 @@ class StatisticsPanel:
             caption=caption,
             reply_markup=self.markup(days),
         )
+
+    def suggestion_rows(self, owner, days):
+        suggestions = offer_suggestions(self.store, owner, self.store.setting("playerok:account_id"), days)
+        return [
+            [
+                (
+                    "🔗 Объединить «" + value["name"][:32] + f"» ({len(value['members'])})",
+                    f"sg:{days}:suggest:{ident}",
+                )
+            ]
+            for ident, value in sorted(suggestions.items())[:5]
+        ]
 
     async def message(self, message, state):
         data = await state.get_data()

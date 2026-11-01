@@ -223,8 +223,13 @@ async def test_render_production_screen_cards_offline(ux, tmp_path):
         ("16_auto_promotion", "promotions"),
         ("17_profile", "profile"),
         ("18_active_items", "items"),
+        ("19_promotion_catalog", "promo:catalog"),
+        ("20_item_schedule", "promo:item:lot"),
+        ("21_advanced_schedule", "DYNAMIC_PROMOTION_MORE"),
     ]
     for name, route in routes:
+        if route == "DYNAMIC_PROMOTION_MORE":
+            route = next(key for key in buttons(r.session.last_panel) if ":more:" in key)
         await r.ui.click(route)
         method = r.session.last_panel
         assert "❗" not in (method.text or ""), route
