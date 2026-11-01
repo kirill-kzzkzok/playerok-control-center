@@ -76,3 +76,17 @@ async def test_search_failure_does_not_claim_a_complete_empty_catalog(catalog):
     assert "Поиск не завершён" in r.session.last_panel.text
     assert "Ничего не найдено" not in r.session.last_panel.text
     assert not r.store.rows("SELECT * FROM outbox")
+
+
+async def test_problem_filter_uses_confirmed_operation_errors_and_can_be_removed(catalog):
+    r = catalog
+    r.store.enqueue("test-problem", "reply", "match", {"text": "isolated fixture"})
+    r.store.execute("UPDATE outbox SET status='UNCERTAIN' WHERE operation_key='test-problem'")
+    await r.ui.click("itemfilters")
+    assert "il:problems" in buttons(r.session.last_panel)
+    await r.ui.click("il:problems")
+    assert "item:match" in buttons(r.session.last_panel)
+    assert "item:unrelated" not in buttons(r.session.last_panel)
+    assert "неизвест" not in r.session.last_panel.text.lower()
+    await r.ui.click("il:problems")
+    assert (await r.state.get_data())["item_filters"].get("problems") is False

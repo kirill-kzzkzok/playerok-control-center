@@ -14,9 +14,13 @@ def checked_filters(value):
         "category_id",
         "priority",
         "archive",
+        "delivery",
+        "problems",
     }:
         raise ValidationError("Некорректные фильтры товаров")
     status = value.get("status")
+    if any(type(value.get(key, False)) is not bool for key in ("delivery", "problems")):
+        raise ValidationError("Некорректный фильтр выдачи или проблем")
     if not isinstance(value.get("archive", False), bool):
         raise ValidationError("Некорректный режим архива")
     if status and status not in ItemStatuses.__members__:

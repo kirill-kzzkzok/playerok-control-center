@@ -79,6 +79,30 @@ class ListingsPanel:
                 or (item.get("category") or {}).get("id") == filters["category_id"]
             )
         ]
+        if self.store and (filters.get("delivery") or filters.get("problems")):
+            delivery = {
+                row["item_id"]
+                for row in self.store.rows(
+                    "SELECT l.item_id FROM logical_listings l JOIN logical_products p ON p.id=l.product_id WHERE p.account_id=? AND p.handler!='manual' "
+                    "UNION SELECT item_id FROM gift_listings UNION SELECT item_id FROM delivery_policies WHERE json_extract(payload,'$.mode')!='manual'",
+                    (account,),
+                )
+            }
+            problems = {
+                row["item_id"]
+                for row in self.store.rows(
+                    "SELECT l.item_id FROM logical_listings l JOIN logical_products p ON p.id=l.product_id WHERE p.account_id=? AND (p.error_code IS NOT NULL OR p.state='BLOCKED') "
+                    "UNION SELECT item_id FROM gift_jobs WHERE state IN ('BLOCKED','UNCERTAIN','INVALID_RECIPIENT') "
+                    "UNION SELECT target AS item_id FROM outbox WHERE status IN ('UNCERTAIN','PERMANENT_FAILED') AND COALESCE(error_code,'') NOT IN ('MANUALLY_STOPPED','OWNER_STOPPED')",
+                    (account,),
+                )
+            }
+            matches = [
+                item
+                for item in matches
+                if (not filters.get("delivery") or item["id"] in delivery)
+                and (not filters.get("problems") or item["id"] in problems)
+            ]
         await state.update_data(list_catalog_at=cache["at"])
         next_cursor = f"catalog:{offset + 10}" if len(matches) > offset + 10 else None
         return (
@@ -118,7 +142,7 @@ class ListingsPanel:
             )
             status = filters.get("status")
             extra = {"category_id": filters["category_id"]} if filters.get("category_id") else {}
-            search = bool(filters.get("search"))
+            search = bool(filters.get("search") or filters.get("delivery") or filters.get("problems"))
             if search:
                 page, search_cache, found = await self.search_page(filters, state, cursor)
             else:
@@ -243,6 +267,12 @@ class ListingsPanel:
         if action in {"il:scan", "il:refreshsearch"}:
             if action == "il:refreshsearch" and self.store:
                 self.store.set_setting("ui:catalog:" + self.api.account.id, {})
+            return await self.show("items", state)
+        if action in {"il:delivery", "il:problems"}:
+            filters = checked_filters((await state.get_data()).get("item_filters", {}))
+            key = action.split(":")[1]
+            filters.update({key: not filters.get(key, False), "status": None, "archive": False})
+            await state.update_data(item_filters=filters)
             return await self.show("items", state)
         if action == "il:pickcategory":
             return await self.category_picker.start(state)

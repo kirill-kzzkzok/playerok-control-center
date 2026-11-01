@@ -123,7 +123,7 @@ class ItemPanel:
             from app.services.withdrawals import draft_calculation
 
             cost = self.store.setting(f"finance:{owner}:cost:{ident}")
-            quote = draft_calculation(
+            estimate = draft_calculation(
                 {
                     "price": item["price"],
                     "cost": cost,
@@ -133,9 +133,11 @@ class ItemPanel:
                     "fee_checked_at": now(),
                 }
             )
-            text += "\nСебестоимость: " + (str(quote.cost) + " ₽" if quote.cost is not None else "не задана")
-            if quote.after_platform is not None and quote.cost is not None:
-                text += f"\nДо вывода и размещения: ≈ {quote.after_platform - quote.cost} ₽"
+            text += "\nСебестоимость: " + (
+                str(estimate.cost) + " ₽" if estimate.cost is not None else "не задана"
+            )
+            if estimate.after_platform is not None and estimate.cost is not None:
+                text += f"\nДо вывода и размещения: ≈ {estimate.after_platform - estimate.cost} ₽"
             rows = [
                 [("💰 Сколько получу чистыми", "finance:" + ident)],
                 [("✏️ Редактировать", "iv:edit:" + ident)],
