@@ -194,7 +194,6 @@ class PersonalGiftSender:
             gift_id=gift_id,
             hide_name=False,
             include_upgrade=False,
-            message=types.TextWithEntities(reference, []),
         )
         form = await self.client(functions.payments.GetPaymentFormRequest(invoice=invoice))
         if (
@@ -247,7 +246,7 @@ class PersonalGiftSender:
             raise GiftFailure("PAYMENT_NOT_CONFIRMED")
         return result
 
-    def matching_receipt(self, message, job):
+    def _gift_message(self, message, job):
         action = getattr(message, "action", None)
         date = getattr(message, "date", None)
         if (
@@ -263,8 +262,6 @@ class PersonalGiftSender:
             or not isinstance(action.gift, types.StarGift)
             or action.gift.id != int(job["gift_id"])
             or action.refunded
-            or not action.message
-            or action.message.text != job["reference"]
             or not message.id
             or not date
             or date.tzinfo is None
@@ -279,17 +276,45 @@ class PersonalGiftSender:
             "reference": job["reference"],
         }
 
+    def acknowledgement(self, job, result):
+        """Only one gift message in this paid RPC's reply may anchor a new send.
+
+        This is correlation, not delivery proof; independent history must still
+        confirm the exact ID. Missing/ambiguous ACK is never guessed from history.
+        """
+        candidates = set()
+        for update in getattr(getattr(result, "updates", None), "updates", []):
+            message = getattr(update, "message", None)
+            if self._gift_message(message, job) and not getattr(message.action.message, "text", ""):
+                candidates.add(message.id)
+        if len(candidates) != 1:
+            raise GiftFailure("DELIVERY_CORRELATION_UNKNOWN")
+        return candidates.pop()
+
+    def matching_receipt(self, message, job):
+        receipt = self._gift_message(message, job)
+        if not receipt:
+            return None
+        if job.get("receipt_mode", "REFERENCE") == "MESSAGE_ID":
+            if not job.get("ack_message_id") or message.id != job["ack_message_id"]:
+                return None
+            if getattr(message.action.message, "text", ""):
+                return None
+        elif not message.action.message or message.action.message.text != job["reference"]:
+            return None
+        return receipt
+
     async def receipt(self, job, result=None):
         """Independent read, also safe for explicit UNCERTAIN reconciliation. No payment RPC."""
         await self.connect()
         if self.me.id != job["payer_id"]:
             raise GiftFailure("PERSONAL_ACCOUNT_CHANGED")
         peer = types.InputPeerUser(job["recipient_id"], int(job["recipient_access_hash"]))
-        ids = []
-        for update in getattr(getattr(result, "updates", None), "updates", []):
-            message = getattr(update, "message", None)
-            if self.matching_receipt(message, job):
-                ids.append(message.id)
+        # Old reference-bearing sends retain read-only recovery. New blank sends
+        # must have their RPC-derived ID durably saved before entering this method.
+        ids = [job["ack_message_id"]] if job.get("ack_message_id") else []
+        if job.get("receipt_mode") == "MESSAGE_ID" and not ids:
+            raise GiftFailure("DELIVERY_CORRELATION_UNKNOWN")
         messages = (
             await self.client.get_messages(peer, ids=ids)
             if ids

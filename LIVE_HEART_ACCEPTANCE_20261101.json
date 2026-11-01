@@ -50,5 +50,7 @@
   "proof_scope": "Real Telegram Heart only. Playerok order/publication/notice/fulfillment are synthetic and isolated.",
   "journal_path": "data/final-heart-acceptance-20261101.sqlite3",
   "working_playerok_database_written": false,
-  "real_playerok_sale": false
+  "real_playerok_sale": false,
+  "caption_policy_at_test": "LEGACY_REFERENCE_VISIBLE",
+  "empty_caption_live_verified": false
 }

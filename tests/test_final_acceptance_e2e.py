@@ -386,7 +386,7 @@ async def test_real_pipeline_preflight_faults_never_spend_or_announce_success(ac
 
 
 @pytest.mark.parametrize(
-    "fault", ["lost_ack", "history_absent", "wrong_recipient", "wrong_gift", "wrong_reference", "refunded"]
+    "fault", ["lost_ack", "history_absent", "wrong_recipient", "wrong_gift", "unexpected_comment", "refunded"]
 )
 async def test_sent_rpc_without_independent_matching_receipt_blocks_replay(acceptance, fault):
     h = acceptance
@@ -405,8 +405,10 @@ async def test_sent_rpc_without_independent_matching_receipt_blocks_replay(accep
                     m.peer_id.user_id = 77
                 elif fault == "wrong_gift":
                     m.action.gift.id += 1
-                elif fault == "wrong_reference":
-                    m.action.message.text += "-wrong"
+                elif fault == "unexpected_comment":
+                    from telethon import types
+
+                    m.action.message = types.TextWithEntities("unexpected public text", [])
                 elif fault == "refunded":
                     m.action.refunded = True
             return messages

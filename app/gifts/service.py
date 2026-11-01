@@ -594,7 +594,7 @@ class GiftService:
                 (day, remaining - prepared.stars, now(), str(prepared.form_id), now(), j["order_id"]),
             )
             db.execute(
-                "UPDATE gift_steps SET state='SPENDING',recipient_id=?,payer_id=?,form_id=?,spent_at=? WHERE operation_id=? AND state='CHECKING'",
+                "UPDATE gift_steps SET state='SPENDING',receipt_mode='MESSAGE_ID',recipient_id=?,payer_id=?,form_id=?,spent_at=? WHERE operation_id=? AND state='CHECKING'",
                 (recipient.user_id, self.sender.me.id, str(prepared.form_id), now(), action["id"]),
             )
         event(
@@ -613,6 +613,33 @@ class GiftService:
         )
         result = await self.sender.pay(prepared)
         evidence = {**self.job(j["order_id"]), **self.step(action)}
+        acknowledgement = self.sender.acknowledgement(evidence, result)
+        # Save the external RPC correlation before the independent network read.
+        # Losing this write is conservative uncertainty, never permission to pay.
+        with self.store.transaction() as db:
+            claimed = db.execute(
+                "SELECT 1 FROM gift_steps WHERE payer_id=? AND recipient_id=? "
+                "AND (ack_message_id=? OR message_id=?) AND operation_id!=?",
+                (
+                    evidence["payer_id"],
+                    evidence["recipient_id"],
+                    acknowledgement,
+                    acknowledgement,
+                    action["id"],
+                ),
+            ).fetchone()
+            if claimed:
+                raise GiftFailure("DELIVERY_RECEIPT_ALREADY_USED")
+            if (
+                db.execute(
+                    "UPDATE gift_steps SET ack_message_id=? WHERE operation_id=? AND state='SPENDING' "
+                    "AND ack_message_id IS NULL AND receipt_mode='MESSAGE_ID'",
+                    (acknowledgement, action["id"]),
+                ).rowcount
+                != 1
+            ):
+                raise GiftFailure("DELIVERY_CORRELATION_UNKNOWN")
+        evidence["ack_message_id"] = acknowledgement
         receipt = await self.sender.receipt(evidence, result)
         return {"gift_receipt": receipt}
 

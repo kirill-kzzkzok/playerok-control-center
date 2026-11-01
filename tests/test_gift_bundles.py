@@ -149,7 +149,7 @@ async def test_partial_delivery_blocks_later_steps_no_full_refund_or_sent(rig, f
 
 
 @pytest.mark.parametrize("lost_position", [0, 1])
-async def test_lost_ack_blocks_remaining_and_reconciliation_continues_without_resend(rig, lost_position):
+async def test_lost_ack_without_message_id_blocks_remaining_and_never_guesses(rig, lost_position):
     r = rig
     t = await setup(r, "bear, rose, heart")
     t.fail_at = lost_position
@@ -160,12 +160,14 @@ async def test_lost_ack_blocks_remaining_and_reconciliation_continues_without_re
     assert len(t.payments) == lost_position + 1
     t.pay_error = None
     t.fail_at = None
-    await r.service.reconcile(7, "order")
-    assert r.service.steps("order")[lost_position]["state"] == "SUCCEEDED"
+    from app.gifts.mtproto import GiftFailure
+
+    with pytest.raises(GiftFailure, match="DELIVERY_CORRELATION_UNKNOWN"):
+        await r.service.reconcile(7, "order")
+    assert r.service.steps("order")[lost_position]["state"] == "UNCERTAIN"
     assert not r.store.rows("SELECT 1 FROM outbox WHERE kind='gift_notice'")
-    for _ in range(2 - lost_position):
-        await r.worker.once()
-    assert r.service.job("order")["state"] == "SUCCEEDED" and len(t.payments) == 3
+    assert await r.worker.once() is False
+    assert len(t.payments) == lost_position + 1
     assert not r.api.refunds
 
 
@@ -310,6 +312,7 @@ def test_single_gift_migration_preserves_completed_unknown_and_pending(tmp_path)
         assert not store.rows("PRAGMA foreign_key_check")
         assert store.rows("SELECT enabled FROM gift_listings")[0]["enabled"] == 1
         steps = store.rows("SELECT * FROM gift_steps ORDER BY order_id")
+        assert all(g["receipt_mode"] == "REFERENCE" and g["ack_message_id"] is None for g in steps)
         assert len(steps) == 3 and {g["state"] for g in steps} == {"SUCCEEDED", "UNCERTAIN", "PENDING"}
         assert all(g["position"] == 0 and g["code"] == "bear" for g in steps)
         assert store.rows("SELECT COUNT(*) n FROM outbox WHERE status='PENDING'")[0]["n"] == 1

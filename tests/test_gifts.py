@@ -338,7 +338,7 @@ async def test_definitive_username_failure_refund_or_honest_manual_fallback(rig,
     assert len(r.api.refunds) == int(supported)
 
 
-async def test_lost_payment_ack_restart_reconcile_without_second_form_or_refund(rig):
+async def test_lost_payment_ack_restart_cannot_guess_blank_gift_or_repeat(rig):
     r = rig
     await enroll(r)
     r.remote.pay_error = TimeoutError()
@@ -351,8 +351,11 @@ async def test_lost_payment_ack_restart_reconcile_without_second_form_or_refund(
     assert r.store.recover() == 0
     assert r.service.discover() == 0
     assert r.service.job("order")["state"] == "UNCERTAIN"
-    await r.service.reconcile(7, "order")
-    assert r.service.job("order")["state"] == "SUCCEEDED"
+    from app.gifts.mtproto import GiftFailure
+
+    with pytest.raises(GiftFailure, match="DELIVERY_CORRELATION_UNKNOWN"):
+        await r.service.reconcile(7, "order")
+    assert r.service.job("order")["state"] == "UNCERTAIN"
     assert len(r.remote.calls) == count and len(r.remote.payments) == 1
     assert not r.api.refunds
     r.store.close()
@@ -444,7 +447,9 @@ async def test_receiver_privacy_blocks_before_payment(rig):
     assert not r.remote.payments and r.service.job("order")["error_code"] == "RECIPIENT_GIFTS_FORBIDDEN"
 
 
-@pytest.mark.parametrize("defect", ["refunded", "wrong-gift", "wrong-peer", "wrong-reference", "read-failed"])
+@pytest.mark.parametrize(
+    "defect", ["refunded", "wrong-gift", "wrong-peer", "unexpected-comment", "read-failed"]
+)
 async def test_payment_ack_alone_is_not_delivery_evidence(rig, defect):
     r = rig
     await enroll(r)
@@ -462,7 +467,7 @@ async def test_payment_ack_alone_is_not_delivery_evidence(rig, defect):
             elif defect == "wrong-peer":
                 msg.peer_id = types.PeerUser(101)
             else:
-                msg.action.message.text = "unrelated"
+                msg.action.message = types.TextWithEntities("unrelated", [])
         return messages
 
     r.remote.get_messages = bad_read
@@ -551,13 +556,23 @@ async def test_restart_during_recipient_check_retains_blocked_intent(rig):
     assert r.service.discover() == 0
 
 
-async def test_dispatcher_uncertain_read_reconciliation_and_owner_notice(rig):
+@pytest.mark.parametrize("lost_ack", [True, False])
+async def test_dispatcher_uncertain_read_reconciliation_and_owner_notice(rig, lost_ack):
     from app.telegram.operation_results import OperationResults
 
     r = rig
     await enroll(r)
-    r.remote.pay_error = TimeoutError()
+    original_read = r.remote.get_messages
+
+    async def read_timeout(*args, **kwargs):
+        raise TimeoutError()
+
+    if lost_ack:
+        r.remote.pay_error = TimeoutError()
+    else:
+        r.remote.get_messages = read_timeout
     await r.worker.once()
+    r.remote.get_messages = original_read
     session = TelegramSession()
     bot = Bot("123:" + "x" * 35, session=session)
     ui = Interaction(bot, dispatcher(r.store, r.api))
@@ -569,7 +584,13 @@ async def test_dispatcher_uncertain_read_reconciliation_and_owner_notice(rig):
         assert "Realbuyer" not in session.calls[-1].text
         ui.dp = dispatcher(r.store, r.api)
         await ui.click("gft:reconcile:order")
-        assert "Выполнено и подтверждено" in session.calls[-1].text and len(r.remote.payments) == 1
+        if lost_ack:
+            assert "Достоверного подтверждения пока нет" in session.calls[-1].text
+            assert r.service.job("order")["state"] == "UNCERTAIN"
+        else:
+            assert "Выполнено и подтверждено" in session.calls[-1].text
+            assert r.service.job("order")["state"] == "SUCCEEDED"
+        assert len(r.remote.payments) == 1
         await ui.click("gft:stop")
         await ui.click("gft:home", owner=8)
         assert r.store.setting("gifts:stopped") is True
