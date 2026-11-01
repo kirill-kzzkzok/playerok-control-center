@@ -6,7 +6,7 @@ from collections import Counter
 from datetime import UTC, datetime
 
 from app.database.store import Conflict
-from app.gifts.core import gift_code_from_description, gift_name
+from app.gifts.core import gift_code_from_description, gift_codes, gift_name
 from app.gifts.mtproto import GiftFailure
 from app.playerok.adapter import APIError
 from app.services.automation import message_text
@@ -263,33 +263,48 @@ class LogicalProductsPanel:
             if value == "telegram_gifts":
                 config.setdefault("after", config.get("options", {}).get("after", ""))
             await state.update_data(logical_setup={"handler": value, "config": config})
-            if value in {"telegram_gifts", "fixed_text"}:
-                await state.set_state("logical:gift" if value == "telegram_gifts" else "logical:text")
-                text = (
-                    "🎁 Введите пакет, например <code>gift: heart, heart</code>. Порядок и повторы сохраняются."
-                    if value == "telegram_gifts"
-                    else "✉️ Введите постоянный текст выдачи. Содержимое будет скрыто в обычных карточках."
+            if value == "telegram_gifts":
+                await state.set_state("logical:gift")
+                await state.update_data(
+                    logical_gift_selection=list(gift_codes(config["code"])) if config.get("code") else []
                 )
-                rows = (
-                    [[("Посмотреть актуальный каталог", prefix + "catalog")]]
-                    if value == "telegram_gifts"
-                    else []
+                return await self.callback(prefix + "catalog", owner, state)
+            if value == "fixed_text":
+                await state.set_state("logical:text")
+                return (
+                    "✉️ Введите постоянный текст выдачи. Содержимое будет скрыто в обычных карточках.",
+                    keyboard([], back=("Выбрать другой способ", prefix + "configure")),
                 )
-                return text, keyboard(rows, back=("Выбрать другой способ", prefix + "configure"))
             return await self.setup_screen(state)
         if command == "catalog":
             gifts = self.service.gift_service()
             gifts.settings.require_configured()
             await gifts.refresh()
-            catalog = self.store.rows("SELECT code,stars,available FROM gift_catalog ORDER BY code")
-            lines = ["🎁 <b>Актуальный каталог</b>"]
-            lines += [
-                escaped(gift_name(row["code"]), 80)
-                + (f" · {row['stars']} ⭐" if row["available"] else " · недоступен")
-                for row in catalog
-            ]
-            lines.append("Введите нужные коды одним сообщением: gift: heart, heart")
-            return "\n".join(lines), keyboard([], back=("К настройкам", prefix + "setup"))
+            return await self.gift_picker(state, prefix)
+        if command in {"giftpick", "giftundo", "giftclear", "giftdone"}:
+            data = await state.get_data()
+            setup = data.get("logical_setup", {})
+            if setup.get("handler") != "telegram_gifts":
+                raise Conflict("Сначала выберите подарочную выдачу")
+            selected = list(data.get("logical_gift_selection", []))
+            if command == "giftpick":
+                if len(selected) >= self.service.gift_service().settings.max_gifts:
+                    raise Conflict("Достигнуто максимальное количество подарков в заказе")
+                self.service.gift_service().catalog_bundle(value)
+                selected.append(value)
+            elif command == "giftundo":
+                selected = selected[:-1]
+            elif command == "giftclear":
+                selected = []
+            else:
+                if not selected:
+                    raise Conflict("Выберите хотя бы один подарок")
+                setup["config"]["code"] = ", ".join(selected)
+                await state.update_data(logical_setup=setup)
+                await state.set_state(None)
+                return await self.setup_screen(state)
+            await state.update_data(logical_gift_selection=selected)
+            return await self.gift_picker(state, prefix)
         if command == "setup":
             await state.update_data(logical_prepared=None, logical_stock_pending=None)
             await state.set_state(None)
@@ -508,6 +523,28 @@ class LogicalProductsPanel:
             return note + "\n\n" + text, markup
         raise Conflict("Кнопка настройки устарела. Откройте карточку товара")
 
+    async def gift_picker(self, state, prefix):
+        entries = self.store.rows("SELECT code,stars FROM gift_catalog WHERE available=1 ORDER BY code")
+        chosen = (await state.get_data()).get("logical_gift_selection", [])
+        prices = {g["code"]: g["stars"] for g in entries}
+        text = "🎁 <b>Выберите подарки</b>\nКаждое нажатие добавляет один подарок."
+        if chosen:
+            text += "\n" + escaped(", ".join(gift_name(code) for code in chosen), 600)
+            if any(code not in prices for code in chosen):
+                text += "\nВыбранный подарок недоступен. Измените состав."
+            else:
+                text += f"\nКоличество: {len(chosen)} · {sum(prices[code] for code in chosen)} ⭐ по последней проверке"
+        buttons = [
+            (f"{gift_name(g['code'])} · {g['stars']} ⭐", prefix + "giftpick:" + g["code"]) for g in entries
+        ]
+        rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
+        if chosen:
+            rows += [
+                [("Убрать последний", prefix + "giftundo"), ("Очистить", prefix + "giftclear")],
+                [("✅ Сохранить выбор", prefix + "giftdone")],
+            ]
+        return text, keyboard(rows, back=("К настройкам", prefix + "setup"))
+
     async def setup_screen(self, state):
         data = await state.get_data()
         view, setup = data.get("logical_view"), data.get("logical_setup")
@@ -518,7 +555,12 @@ class LogicalProductsPanel:
         text = "⚙️ <b>Настройки выдачи</b>\nСпособ: " + MODES[handler]
         rows = []
         if handler == "telegram_gifts":
-            text += "\nПакет: " + escaped(config.get("code") or "не задан", 180)
+            text += "\nПодарки: " + escaped(
+                ", ".join(gift_name(code) for code in gift_codes(config["code"]))
+                if config.get("code")
+                else "не выбраны",
+                300,
+            )
             text += "\nЗавершение: " + (
                 "автоматически, если допускает Playerok" if config.get("auto_fulfill") else "вручную"
             )

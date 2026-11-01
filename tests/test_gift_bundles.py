@@ -347,7 +347,7 @@ async def test_owner_notice_shows_partial_delivery_without_recipient_or_false_su
         await OperationResults(r.store).notify(bot)
         output = "\n".join(c.text for c in session.calls if hasattr(c, "text"))
         assert "Realbuyer" not in output
-        assert "Доставлено частично" in output and "Медведь" in output and "rose" in output
+        assert "Доставлено частично" in output and "Медведь" in output and "Роза" in output
         assert not r.api.sent
     finally:
         await bot.session.close()

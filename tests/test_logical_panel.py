@@ -176,7 +176,10 @@ async def test_gift_setup_respects_configured_count_limits_and_spends_nothing(gi
 
 
 async def test_explicit_enable_stop_and_confirmed_detach_preserve_listing(panel):
+    from app.database.store import now
+
     r = panel
+    r.store.set_setting("orders:last_complete_sync", now())
     nonce, _ = await choose(r, "fixed_text")
     await r.panel.message(SimpleNamespace(text="delivery", from_user=SimpleNamespace(id=7)), r.state)
     _, markup = await r.panel.callback(f"lp:{nonce}:preview", 7, r.state)

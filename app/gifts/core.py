@@ -21,9 +21,20 @@ SEED_GIFTS: dict[str, tuple[str, int, int]] = {
 
 def gift_name(code):
     """Display labels never participate in ID selection or payment intent."""
-    return {"bear": "🧸 Медведь", "zombie_bear": "🧟 Зомби-медведь"}.get(
-        code, f"{SEED_GIFTS[code][0]} {code}" if code in SEED_GIFTS else code
-    )
+    return {
+        "bear": "🧸 Медведь",
+        "zombie_bear": "🧟 Зомби-медведь",
+        "heart": "💝 Сердце",
+        "present": "🎁 Подарок",
+        "rose": "🌹 Роза",
+        "cake": "🎂 Торт",
+        "bouquet": "💐 Букет",
+        "rocket": "🚀 Ракета",
+        "champagne": "🍾 Шампанское",
+        "trophy": "🏆 Кубок",
+        "ring": "💍 Кольцо",
+        "diamond": "💎 Бриллиант",
+    }.get(code, f"{SEED_GIFTS[code][0]} {code}" if code in SEED_GIFTS else code)
 
 
 TAG = re.compile(r"^gift:\s*(.+?)\s*$", re.IGNORECASE)
