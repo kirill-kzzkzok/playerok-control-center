@@ -478,6 +478,7 @@ class Executor:
                 "add_photos",
                 "replace_attachment_ids",
                 "logical_binding",
+                "expected_description",
             }:
                 raise ValidationError("Изменение содержит неподдерживаемые поля")
             if "price" in changes:
@@ -485,6 +486,23 @@ class Executor:
             for field in ("name", "description"):
                 if field in changes:
                     changes[field] = listing_text(changes[field], field)
+            protected_description = False
+            if "description" in changes and not payload.get("logical_binding"):
+                from app.services.logical_products import LogicalProducts, marked_description, marker
+
+                if (
+                    "expected_description" in payload
+                    and current.get("description") != payload["expected_description"]
+                ):
+                    raise ValidationError("Описание изменилось на Playerok. Откройте редактирование заново")
+                product = LogicalProducts(self.store, self.api).listing(target)
+                if product and product["state"] != "LEGACY":
+                    if marker(current.get("description")) != product["code"]:
+                        raise ValidationError("Постоянный код товара изменился. Сначала проверьте привязку")
+                    changes["description"] = listing_text(
+                        marked_description(changes["description"], product["code"]), "description"
+                    )
+                    protected_description = True
             if "add_photos" in payload:
                 sources = payload["add_photos"]
                 if not isinstance(sources, list) or not 1 <= len(sources) <= 10:
@@ -503,6 +521,13 @@ class Executor:
             result = await self.mutate(action, "updateItem", "update_item", id=target, **changes)
             if not edit_receipt_matches(target, changes, result):
                 raise APIError("EDIT_NOT_CONFIRMED", uncertain=True)
+            if protected_description:
+                try:
+                    observed = await self.owned_item(target)
+                    if not edit_receipt_matches(target, changes, observed):
+                        raise APIError("EDIT_READBACK_UNKNOWN", uncertain=True)
+                except APIError:
+                    raise APIError("EDIT_READBACK_UNKNOWN", uncertain=True) from None
             if payload.get("logical_binding"):
                 try:
                     observed = await self.owned_item(target)

@@ -408,13 +408,26 @@ def create_router(store, api, products, synchronizer):
                             "editphoto": "photos",
                         }[kind],
                         "attachment_ids": [a.get("id") for a in item.get("attachments") or []],
+                        "expected_description": item.get("description"),
                     }
                 )
+                shown_description = item.get("description") or ""
+                if kind == "editdesc":
+                    from app.services.logical_products import LogicalProducts, marker
+
+                    product = LogicalProducts(store, api).listing(ident)
+                    if (
+                        product
+                        and product["state"] != "LEGACY"
+                        and marker(shown_description) == product["code"]
+                    ):
+                        await state.update_data(description_code=product["code"])
+                        shown_description = "\n".join(shown_description.rstrip().splitlines()[:-1]).rstrip()
                 text, markup = (
                     "Пришлите одно новое изображение. После подтверждения оно заменит все текущие фотографии."
                     if kind == "editphoto"
                     else "Сейчас на Playerok:\n<blockquote>"
-                    + escaped(item.get("description") if kind == "editdesc" else item.get("name"), 2800)
+                    + escaped(shown_description if kind == "editdesc" else item.get("name"), 2800)
                     + "</blockquote>\nВведите новое значение. Затем будет подтверждение.",
                     keyboard([]),
                 )
@@ -729,6 +742,13 @@ def create_router(store, api, products, synchronizer):
                     else:
                         value = listing_text(value, data["field"])
                     pending = {"kind": "edit", "target": data["item_id"], "payload": {data["field"]: value}}
+                    if data["field"] == "description":
+                        from app.services.logical_products import marked_description
+
+                        if data.get("description_code"):
+                            value = marked_description(value, data["description_code"])
+                            pending["payload"]["description"] = value
+                        pending["payload"]["expected_description"] = data["expected_description"]
                 nonce = secrets.token_hex(8)
                 await state.set_state(None)
                 await state.set_data({"pending": pending, "confirm_token": nonce})
