@@ -1,10 +1,7 @@
 import json
-import logging
 import secrets
 from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from html import escape
-
-from aiogram.exceptions import TelegramAPIError
 
 from app.database.store import now
 from app.playerok.adapter import APIError
@@ -409,13 +406,6 @@ class FinancePanel:
             # Read ownership before storing a product-specific preference.
             await self.read_owned(ident)
             self.store.set_setting(f"finance:{owner}:cost:{ident}", str(amount))
-            if getattr(getattr(message, "chat", None), "type", None) == "private":
-                try:
-                    await message.delete()
-                except (TelegramAPIError, TimeoutError) as error:
-                    logging.getLogger(__name__).debug(
-                        "Cost input deletion not confirmed: %s", type(error).__name__
-                    )
             await state.clear()
             return await self.item(owner, ident)
         raise ValueError("Финансовый сценарий устарел")

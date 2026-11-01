@@ -9,6 +9,7 @@ from aiogram.types import InputMediaPhoto
 
 from app.database.store import Conflict
 from app.security.logging import event
+from app.telegram.input_cleanup import cleanup_input
 from app.telegram.keyboards import keyboard
 
 
@@ -306,6 +307,7 @@ class Navigation:
         reply_markup=None,
         **kwargs,
     ):
+        await cleanup_input()
         bot, key = message.bot, self.key(message.bot, owner)
         lock = self.store.navigation_locks.setdefault((bot.id, owner), asyncio.Lock())
         async with lock:

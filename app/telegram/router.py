@@ -28,6 +28,7 @@ from app.telegram.formatting import escaped
 from app.telegram.fulfillment_panel import FulfillmentPanel
 from app.telegram.gifts_panel import GiftsPanel
 from app.telegram.home_panel import HomePanel
+from app.telegram.input_cleanup import InputCleanup
 from app.telegram.interface_cleanup_panel import InterfaceCleanupPanel
 from app.telegram.item_panel import ItemPanel
 from app.telegram.keyboards import keyboard, main_menu
@@ -68,6 +69,7 @@ async def display(message, text, markup, edit=False):
 
 def create_router(store, api, products, synchronizer):
     router = Router()
+    router.message.middleware(InputCleanup(store))
     navigator = Navigation(store)
     wizard = Wizard(store, api, products)
     finance = FinancePanel(store, api, products)
