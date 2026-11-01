@@ -138,7 +138,9 @@ class PaidPromotions:
         self.store.set_setting("promotions:approved:" + fresh["item"]["id"], fresh)
         self.store.audit(owner, "APPROVE_PREMIUM_TARIFF", fresh["item"]["id"], "EXPLICIT_OWNER_PERMISSION")
 
-    async def queue(self, owner, value, key, *, automatic=False, launch=None):
+    async def queue(self, owner, value, key, *, automatic=False, launch=None, manual=False):
+        if manual and (automatic or launch):
+            raise ValidationError("Разовое разрешение не включает расписание или составной запуск")
         existing = self.store.rows("SELECT id FROM outbox WHERE operation_key=?", (key,))
         if existing:
             return existing[0]["id"]
@@ -172,16 +174,16 @@ class PaidPromotions:
                 raise Conflict("Лимиты изменились; откройте превью заново")
             if automatic:
                 self.authority(fresh)
-            # Manual publication still obeys the same atomic spending budgets; enabling a schedule is not required.
-            checked = dry_run(
-                self.store,
-                fresh["item"]["id"],
-                {"price": fresh["amount"], "checked_at": fresh["checked_at"]},
-                replace(policy, enabled=True),
-                datetime.now(UTC),
-            )
-            if checked["reasons"]:
-                raise ValidationError("Расход не разрешён: " + "; ".join(checked["reasons"]))
+            if not manual:
+                checked = dry_run(
+                    self.store,
+                    fresh["item"]["id"],
+                    {"price": fresh["amount"], "checked_at": fresh["checked_at"]},
+                    replace(policy, enabled=True),
+                    datetime.now(UTC),
+                )
+                if checked["reasons"]:
+                    raise ValidationError("Расход не разрешён: " + "; ".join(checked["reasons"]))
             if self.store.rows("SELECT 1 FROM promotion_expenses WHERE status='UNCERTAIN' LIMIT 1"):
                 raise Conflict("Предыдущий расход Playerok неизвестен. Сначала выполните сверку")
             reserved = sum(
@@ -195,6 +197,16 @@ class PaidPromotions:
                 raise ValidationError("Недостаточно доступного баланса Playerok с учётом резервов")
             kind = "premium_publish" if fresh["item"]["status"] == "DRAFT" else "premium_bump"
             payload = {**fresh, "actor": owner, "automatic": automatic}
+            if manual:
+                payload["manual_authority"] = {
+                    "owner": owner,
+                    "limit": fresh["amount"],
+                    "item": fresh["item"]["id"],
+                    "quote": fresh["quote_id"],
+                    "account": fresh["account_id"],
+                    "key": key,
+                    "revision": fresh["policy_revision"],
+                }
             if launch:
                 payload.update(launch_id=launch["id"], launch_revision=launch["revision"])
             op = self.store.enqueue(key, kind, fresh["item"]["id"], payload, db, actor=owner)
@@ -213,6 +225,25 @@ class PaidPromotions:
         revision, _, _ = self.settings.get()
         if revision != value["policy_revision"]:
             raise ValidationError("Настройки расходов изменились; платёж остановлен")
+        if "manual_authority" in value and (
+            value["automatic"]
+            or value.get("launch_id")
+            or self.store.rows(
+                "SELECT owner_id FROM operation_receipts WHERE operation_id=?", (action["id"],)
+            )
+            != [{"owner_id": value["actor"]}]
+            or value["manual_authority"]
+            != {
+                "owner": value["actor"],
+                "limit": value["amount"],
+                "item": action["target"],
+                "quote": value["quote_id"],
+                "account": value["account_id"],
+                "key": action["operation_key"],
+                "revision": value["policy_revision"],
+            }
+        ):
+            raise ValidationError("Разовое согласие на PREMIUM не соответствует платежу")
         if value["automatic"]:
             self.authority(value)
         rows = self.store.rows(
@@ -349,7 +380,7 @@ class PaidPromotions:
                     totals["month"] += money(row["amount"])
                 if row["item_id"] == action["target"]:
                     totals["count"] += 1
-            if (
+            if "manual_authority" not in value and (
                 money(value["amount"]) > money(policy.per_operation)
                 or totals["day"] > money(policy.daily)
                 or totals["month"] > money(policy.monthly)

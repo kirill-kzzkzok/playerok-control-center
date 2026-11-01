@@ -3,6 +3,7 @@
 import secrets
 
 from app.database.store import Conflict
+from app.services.finance import money
 from app.services.paid_promotions import PaidPromotions
 from app.services.products import priority_price_basis
 from app.telegram.formatting import escaped
@@ -54,6 +55,23 @@ class PaidPromotionsPanel:
             if view.get("nonce") != parts[2] or not 0 <= int(parts[3]) < len(view.get("ids", [])):
                 raise Conflict("Тариф устарел. Откройте товар заново")
             value = await self.service.preview(owner, view["item_id"], view["ids"][int(parts[3])])
+            viewer = await self.api.call("get")
+            available = (viewer.get("profile") or {}).get("balance", {}).get("available")
+            if viewer.get("id") != value["account_id"] or available is None:
+                raise Conflict("Не удалось подтвердить аккаунт и доступный баланс Playerok")
+            reserved = sum(
+                (
+                    money(row["amount"])
+                    for row in self.store.rows(
+                        "SELECT amount FROM promotion_expenses WHERE status='RESERVED'"
+                    )
+                ),
+                money(0),
+            )
+            if money(available) < reserved + money(value["amount"]):
+                raise Conflict("Недостаточно баланса Playerok с учётом других зарезервированных расходов")
+            if self.store.rows("SELECT 1 FROM promotion_expenses WHERE status='UNCERTAIN' LIMIT 1"):
+                raise Conflict("Предыдущая оплата требует сверки. Новая покупка пока заблокирована")
             nonce = secrets.token_hex(8)
             await state.set_data({"paid_pending": {"nonce": nonce, "value": value}})
             verb = (
@@ -65,7 +83,8 @@ class PaidPromotionsPanel:
                 "💳 <b>Подтверждение расхода</b>\n"
                 + escaped(value["name"], 200)
                 + f"\n{verb}: {value['amount']} ₽ с баланса Playerok."
-                + "\nЛимиты берутся из настроек продвижения. Тариф повторно проверяется перед отправкой."
+                + f"\nДоступный баланс: {money(available)} ₽. Разовая покупка, расписание не включается."
+                + "\nВаше согласие ограничено этой суммой и тарифом; перед оплатой проверим их заново."
                 + "\nНеизвестный результат блокирует повторное списание."
             )
             rows = [[("✅ Подтвердить расход " + value["amount"] + " ₽", "payp:commit:" + nonce)]]
@@ -117,7 +136,7 @@ class PaidPromotionsPanel:
                         back=("К товару", "item:" + p["value"]["item"]["id"]),
                     ),
                 )
-            op = await self.service.queue(owner, p["value"], "paid-ui:" + parts[2])
+            op = await self.service.queue(owner, p["value"], "paid-ui:" + parts[2], manual=True)
             await state.clear()
             return (
                 "⏳ Платное действие ожидает выполнения. Успех будет показан только после сверки платежа и товара.",
