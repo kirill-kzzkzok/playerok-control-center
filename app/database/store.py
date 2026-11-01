@@ -358,6 +358,13 @@ class Store:
                 )
         # Without a recorded delivery revision there is no authority to disarm an
         # independently configured listing. Legacy release must not guess.
+        if matching_marker and marker.get("logical"):
+            logical = marker["logical"]
+            db.execute(
+                "UPDATE logical_products SET enabled=0,control_revision=control_revision+1,updated_at=? "
+                "WHERE id=? AND revision=? AND control_revision=? AND enabled=1",
+                (now(), logical["product_id"], logical["revision"], logical["control_revision"]),
+            )
         if matching_marker:
             db.execute("DELETE FROM settings WHERE key=?", ("launch:prepared:" + target,))
 

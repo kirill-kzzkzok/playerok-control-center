@@ -328,9 +328,34 @@ class Executor:
                 or not edit_receipt_matches(result["id"], expected, result)
             ):
                 raise APIError("CREATE_NOT_CONFIRMED", uncertain=True)
+            if value.get("managed_product_id"):
+                from app.services.logical_products import LogicalProducts
+
+                self.store.set_setting(
+                    "create:candidate:" + action["id"],
+                    {
+                        "id": result["id"],
+                        "account": self.api.account.id,
+                        "attachments": [image["id"] for image in result.get("attachments", [])],
+                    },
+                )
+                try:
+                    observed = await self.owned_item(result["id"])
+                    if observed.get("status") != "DRAFT" or not edit_receipt_matches(
+                        result["id"], expected, observed
+                    ):
+                        raise APIError("MANAGED_CREATE_READBACK_UNKNOWN", uncertain=True)
+                    result = observed
+                except (APIError, ValueError, TypeError):
+                    raise APIError("MANAGED_CREATE_READBACK_UNKNOWN", uncertain=True) from None
             with self.store.transaction() as db:
-                db.execute("INSERT INTO bindings(draft_id,remote_id) VALUES(?,?)", (target, result["id"]))
-                db.execute("UPDATE drafts SET state='REMOTE_DRAFT' WHERE id=?", (target,))
+                if value.get("managed_product_id"):
+                    LogicalProducts(self.store, self.api).confirm_creation(
+                        db, payload["owner"], target, value, result
+                    )
+                else:
+                    db.execute("INSERT INTO bindings(draft_id,remote_id) VALUES(?,?)", (target, result["id"]))
+                    db.execute("UPDATE drafts SET state='REMOTE_DRAFT' WHERE id=?", (target,))
             return self.item_result(result)
         if kind == "discount":
             item = await self.products.owned_item(target)

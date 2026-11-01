@@ -269,6 +269,14 @@ class Products:
         )
         require_conditions(draft["payload"], details["conditions"])
         validate_draft(draft["payload"], details["form"], getattr(self.api.account, "role", None))
+        from app.services.logical_products import LogicalProducts
+
+        logical = LogicalProducts(self.store, self.api)
+        creation = (
+            await logical.prepare_creation(owner, draft["payload"])
+            if draft["payload"].get("managed_delivery")
+            else None
+        )
         with self.store.transaction() as db:
             r = db.execute(
                 "UPDATE drafts SET state='QUEUED',revision=revision+1 WHERE id=? AND owner_id=? AND revision=? AND state='DRAFT'",
@@ -276,6 +284,8 @@ class Products:
             )
             if r.rowcount != 1:
                 raise Conflict("Черновик уже отправлен или изменён")
+            if creation:
+                logical.commit_creation(db, owner, ident, draft["payload"], creation)
             operation = self.store.enqueue(
                 f"create:{ident}", "create", ident, {"owner": owner}, db, actor=owner
             )

@@ -28,6 +28,11 @@ class Wizard:
             and payload.get("category_id") == settings.category_id
             and payload.get("obtaining_type_id") == settings.obtaining_type_id
         ):
+            if payload.get("delivery") != "gifts":
+                return
+            if payload.get("managed_delivery") and payload.get("gift_code"):
+                gift_code_from_description("gift: " + payload["gift_code"], max_count=settings.max_gifts)
+                return
             gift_code_from_description(payload.get("description", ""), max_count=settings.max_gifts)
 
     def __init__(self, store, api, products, attachments=None):
@@ -164,8 +169,8 @@ class Wizard:
         lines += [
             "",
             calculation,
-            "Стоимость PREMIUM доступна после создания серверного черновика. Покупка запрещена.",
-            "Первое действие создаёт серверный черновик. Публикация отдельная, только при подтверждённой нулевой стоимости.",
+            "Актуальный бесплатный или PREMIUM-тариф выберете перед итоговой публикацией.",
+            "Сейчас создаётся закрытый серверный черновик. Выдача и публикация подтверждаются в едином экране запуска.",
         ]
         return html_pages("\n".join(lines), 2800)
 
@@ -309,7 +314,7 @@ class Wizard:
                 payload.get("category_id") == gift_settings.category_id
                 and payload.get("obtaining_type_id") == gift_settings.obtaining_type_id
             ):
-                text += "\nДля подарков последняя непустая строка обязательна: gift: heart (или другой код каталога). Привязка и разрешение расходов — отдельно после создания."
+                text += "\nНапишите обычное описание для покупателя. Подарки выберете кнопками; служебный код добавится автоматически."
         elif step == "photos":
             text = f"🖼 <b>Фотографии: {len(payload['photos'])}</b>\nПришлите фото или файл JPEG/PNG/WEBP до 10 МБ. Локальный предел — 10 фото; лимиты API ещё не подтверждены."
             rows = [
@@ -338,6 +343,28 @@ class Wizard:
                 {"name": "Уникальные значения", "value": "stock"},
                 {"name": "Telegram Gifts", "value": "gifts"},
             ]
+        elif step == "gift_picker":
+            from app.gifts.core import gift_name
+
+            chosen = payload.get("gift_codes", [])
+            text = "🎁 <b>Выберите подарки</b>\nПовторное нажатие добавляет ещё один подарок."
+            if chosen:
+                text += "\n" + escaped(", ".join(gift_name(code) for code in chosen), 600)
+            for gift in self.store.rows(
+                "SELECT code,stars FROM gift_catalog WHERE available=1 ORDER BY code"
+            ):
+                rows.append(
+                    [
+                        (
+                            f"{gift_name(gift['code'])} · {gift['stars']} ⭐",
+                            f"w:{nonce}:gift_add:" + gift["code"],
+                        )
+                    ]
+                )
+            if chosen:
+                rows.append(
+                    [("Убрать последний", f"w:{nonce}:gift_undo"), ("✅ Выбрать", f"w:{nonce}:gift_done")]
+                )
         elif step == "delivery_data":
             text = "🔐 Пришлите текст выдачи или уникальные значения (одно на строку). Данные сохраняются только в локальной БД."
         elif step == "confirm":
@@ -591,6 +618,25 @@ class Wizard:
             except (ValueError, IndexError):
                 raise ValidationError("Страница вариантов недоступна") from None
             payload["choice_page"] = {"view": data["choice_view"], "number": number}
+        elif action in {"gift_add", "gift_undo", "gift_done"} and step == "gift_picker":
+            from app.services.logical_products import LogicalProducts
+
+            gifts = LogicalProducts(self.store, self.api).gift_service()
+            chosen = list(payload.get("gift_codes", []))
+            if action == "gift_add":
+                if len(chosen) >= gifts.settings.max_gifts:
+                    raise ValidationError("Достигнут предел подарков в одном заказе")
+                gifts.catalog_bundle(parts[3])
+                chosen.append(parts[3])
+            elif action == "gift_undo":
+                chosen = chosen[:-1]
+            else:
+                if not chosen:
+                    raise ValidationError("Выберите хотя бы один подарок")
+                payload["gift_code"] = ", ".join(chosen)
+                payload["gift_bundle"] = gifts.catalog_bundle(payload["gift_code"])
+                payload["step"] = "preview" if payload.get("return_preview") else "confirm"
+            payload["gift_codes"] = chosen
         elif action == "back":
             if step == "fields" and payload.get("field_index", 0) > 0:
                 payload["field_index"] -= 1
@@ -606,6 +652,7 @@ class Wizard:
                     "price": "photos",
                     "delivery": "price",
                     "delivery_data": "delivery",
+                    "gift_picker": "delivery",
                     "confirm": "delivery",
                     "finance": "preview",
                     "finance_method": "finance",
@@ -681,6 +728,18 @@ class Wizard:
                     payload["field_index"] += 1
             elif step == "delivery":
                 payload["delivery"] = choice["value"]
+                payload["managed_delivery"] = choice["value"] in {"text", "stock"}
+                if choice["value"] == "gifts" and not any(
+                    line.strip().lower().startswith("gift:")
+                    for line in payload.get("description", "").splitlines()
+                ):
+                    from app.services.logical_products import LogicalProducts
+
+                    await LogicalProducts(self.store, self.api).gift_service().refresh()
+                    payload["managed_delivery"] = True
+                    payload["step"] = "gift_picker"
+                    await self.save(owner, state, payload)
+                    return await self.screen(owner, state)
                 payload["step"] = (
                     ("preview" if payload.get("return_preview") else "confirm")
                     if choice["value"] in {"manual", "gifts"}
@@ -802,7 +861,9 @@ class Wizard:
             payload["field_index"] += 1
         elif step in {"name", "description"}:
             payload[step] = listing_text(text, step)
-            if step == "description":
+            if step == "description" and any(
+                line.strip().lower().startswith("gift:") for line in text.splitlines()
+            ):
                 self.validate_gift(payload)
             payload["step"] = (
                 "preview" if payload.get("return_preview") else "description" if step == "name" else "photos"

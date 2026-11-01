@@ -188,6 +188,136 @@ class LogicalProducts:
                 imported += 1
         return imported
 
+    async def prepare_creation(self, owner, value):
+        """Read-only preparation for a new wizard-created private draft."""
+        account = self.authority(owner, writes=True)
+        handler = {"gifts": "telegram_gifts", "text": "fixed_text", "stock": "unique_stock"}.get(
+            value.get("delivery")
+        )
+        if not handler:
+            raise Conflict("Выберите автоматический способ выдачи")
+        if marker(value["description"]):
+            raise Conflict("Новый товар не может присвоить существующий постоянный код")
+        gifts = self.gift_service() if handler == "telegram_gifts" else None
+        config = configuration(
+            handler,
+            {
+                "code": value.get("gift_code", ""),
+                **({"text": value.get("delivery_data", "")} if handler == "fixed_text" else {}),
+                "after": "",
+                "greeting": "",
+            },
+            max_count=gifts.settings.max_gifts if gifts else 5,
+        )
+        if handler == "telegram_gifts":
+            if (
+                value.get("category_id") != gifts.settings.category_id
+                or value.get("obtaining_type_id") != gifts.settings.obtaining_type_id
+            ):
+                raise Conflict("Категория или способ передачи не соответствует Telegram-подарку")
+            await gifts.refresh()
+            config["bundle"] = gifts.catalog_bundle(config["code"])
+            if config["bundle"] != value.get("gift_bundle"):
+                raise Conflict("Цена или доступность подарков изменилась. Выберите их заново")
+        return {"account": account, "handler": handler, "config": config}
+
+    def commit_creation(self, db, owner, draft_id, value, prepared):
+        self.authority(owner, prepared["account"], writes=True)
+        code = None
+        for _ in range(32):
+            candidate = "#" + str(1_000_000 + secrets.randbelow(9_000_000))
+            if not db.execute("SELECT 1 FROM logical_products WHERE code=?", (candidate,)).fetchone():
+                code = candidate
+                break
+        if code is None:
+            raise Conflict("Не удалось выделить постоянный код")
+        ident = uuid.uuid4().hex
+        original = value["description"]
+        value = {
+            **value,
+            "managed_product_id": ident,
+            "permanent_code": code,
+            "description": listing_text(marked_description(original, code), "description"),
+        }
+        db.execute(
+            "INSERT INTO logical_products(id,code,owner_id,account_id,handler,config,state,stock_item_id,baseline,original_description,created_at,updated_at) VALUES(?,?,?,?,?,?,'PENDING',?,'{}',?,?,?)",
+            (
+                ident,
+                code,
+                owner,
+                prepared["account"],
+                prepared["handler"],
+                encode(prepared["config"]),
+                draft_id,
+                original,
+                now(),
+                now(),
+            ),
+        )
+        db.execute("UPDATE drafts SET payload=? WHERE id=?", (encode(value), draft_id))
+        return value
+
+    def creation_proof(self, owner, value, observed):
+        from app.services.item_receipts import edit_receipt_matches
+
+        product = self.product(value["managed_product_id"], owner)
+        self.authority(owner, product["account_id"])
+        if (
+            marker(observed.get("description")) != product["code"]
+            or not edit_receipt_matches(
+                observed.get("id"), {key: value[key] for key in ("name", "description", "price")}, observed
+            )
+            or (observed.get("category") or {}).get("id") != value["category_id"]
+            or (observed.get("obtaining_type") or {}).get("id") != value["obtaining_type_id"]
+        ):
+            raise Conflict("Созданный товар не совпадает с подтверждённым черновиком")
+        baseline = critical(observed)
+        if baseline["account"] != product["account_id"] or observed.get("status") != "DRAFT":
+            raise Conflict("Созданный товар не подтверждён как черновик своего магазина")
+        return {
+            "product": product["id"],
+            "remote": observed["id"],
+            "baseline": baseline,
+            "description_hash": digest(observed["description"]),
+        }
+
+    def confirm_creation(self, db, owner, draft_id, value, observed):
+        self.commit_creation_proof(db, owner, draft_id, value, self.creation_proof(owner, value, observed))
+
+    def commit_creation_proof(self, db, owner, draft_id, value, proof):
+        product = self.product(value["managed_product_id"], owner)
+        self.authority(owner, product["account_id"])
+        if (
+            proof["product"] != product["id"]
+            or proof["baseline"]["account"] != product["account_id"]
+            or proof["description_hash"] != digest(value["description"])
+        ):
+            raise Conflict("Подтверждение создания не соответствует товару")
+        existing = self.listing(proof["remote"])
+        if existing:
+            if existing["id"] != product["id"] or existing["description_sha256"] != proof["description_hash"]:
+                raise Conflict("Созданный товар уже связан с другой настройкой")
+        elif product["state"] != "PENDING" or product["stock_item_id"] != draft_id or product["enabled"]:
+            raise Conflict("Подготовленная привязка создания изменилась")
+        else:
+            db.execute(
+                "UPDATE logical_products SET stock_item_id=?,baseline=?,state='VERIFIED',updated_at=? WHERE id=?",
+                (proof["remote"], encode(proof["baseline"]), now(), product["id"]),
+            )
+            db.execute(
+                "INSERT INTO logical_listings(item_id,product_id,config_revision,description_sha256,server_status,verified_at) VALUES(?,?,1,?,'DRAFT',?)",
+                (proof["remote"], product["id"], proof["description_hash"], now()),
+            )
+        binding = db.execute("SELECT remote_id FROM bindings WHERE draft_id=?", (draft_id,)).fetchone()
+        if binding and binding[0] != proof["remote"]:
+            raise Conflict("Черновик связан с другим серверным товаром")
+        db.execute(
+            "INSERT OR IGNORE INTO bindings(draft_id,remote_id) VALUES(?,?)", (draft_id, proof["remote"])
+        )
+        db.execute("UPDATE drafts SET state='REMOTE_DRAFT' WHERE id=?", (draft_id,))
+        if value.get("cost") is not None:
+            self.store.set_setting(f"finance:{owner}:cost:{proof['remote']}", value["cost"])
+
     async def prepare_legacy_description(self, owner, item_id):
         existing = self.listing(item_id)
         if not existing or existing["state"] != "LEGACY" or existing["handler"] != "telegram_gifts":

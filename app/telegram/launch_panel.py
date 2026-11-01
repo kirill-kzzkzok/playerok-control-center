@@ -94,7 +94,11 @@ class LaunchPanel:
                 "по подтверждённым правилам, до первой оплаты" if value["refund"] else "ручное решение"
             )
             text += "\nСостав: " + escaped(
-                (item.get("description") or "").splitlines()[-1] if item.get("description") else "не указан",
+                ", ".join(gift_name(code.strip()) for code in value["gift_code"].split(","))
+                if value.get("gift_code")
+                else (item.get("description") or "").splitlines()[-1]
+                if item.get("description")
+                else "не указан",
                 200,
             )
         text += "\nАвтоподнятие: " + (
@@ -120,6 +124,10 @@ class LaunchPanel:
             [("⭐ Тип публикации и тариф", p + "quotes")],
             [("✅ Проверить готовность", p + "check")],
         ]
+        if self.store.rows("SELECT 1 FROM logical_listings WHERE item_id=?", (item["id"],)):
+            rows.insert(
+                1, [("Наследовать настройки: " + ("да" if value.get("inherit") else "нет"), p + "inherit")]
+            )
         if value["mode"] in {"text", "stock"}:
             rows.insert(1, [("🔐 Данные выдачи", p + "edit:data"), ("Приветствие", p + "edit:greeting")])
         if value["mode"] != "manual":
@@ -201,9 +209,9 @@ class LaunchPanel:
             if parts[3] not in MODES:
                 raise ValidationError("Неизвестный способ выдачи")
             value["mode"] = parts[3]
-        elif command in {"complete", "refund", "promotion"}:
+        elif command in {"complete", "refund", "promotion", "inherit"}:
             key = "auto_complete" if command == "complete" else command
-            value[key] = not value[key]
+            value[key] = not value.get(key, False)
         elif command == "edit":
             field = parts[3]
             if field not in FIELDS:
@@ -276,6 +284,11 @@ class LaunchPanel:
             item = await self.service.automation.item(owner, value["launch_target"])
             if item.get("status") != "DRAFT":
                 raise Conflict("Изменение состава разрешено только неопубликованному черновику")
+            if self.store.rows("SELECT 1 FROM logical_listings WHERE item_id=?", (item["id"],)):
+                value["gift_code"] = ", ".join(chosen)
+                value.pop("ready", None)
+                self.store.update_draft(draft["id"], owner, draft["revision"], value)
+                return await self.show(owner, state, draft["id"])
             lines = [
                 line
                 for line in (item.get("description") or "").splitlines()

@@ -21,6 +21,7 @@ from app.database.store import Conflict, encode, now, server_time
 from app.services.automation import Automation, DeliveryPolicy, message_text
 from app.services.finance import money
 from app.services.inventory import Inventory, stock_values
+from app.services.logical_products import LogicalProducts, configuration
 from app.services.paid_promotions import PaidPromotions
 from app.services.products import Products, ValidationError, priority_price_basis
 from app.services.promotion_settings import PromotionSettings
@@ -77,6 +78,8 @@ class ListingLaunch:
                     "launch_target": target,
                     "account_id": self.api.account.id,
                     "mode": mode,
+                    "gift_code": value.get("gift_code"),
+                    "inherit": False,
                     "data": value.get("delivery_data", ""),
                     "greeting": "",
                     "after": "",
@@ -179,6 +182,10 @@ class ListingLaunch:
                     "category",
                     "obtaining_type",
                     "created_at",
+                    "user",
+                    "attributes",
+                    "data_fields",
+                    "comment",
                 )
             },
             "account": value["account_id"],
@@ -221,7 +228,7 @@ class ListingLaunch:
                 raise ValidationError(
                     "Лимиты Stars должны быть положительными и не превышать ограничения подключения"
                 )
-            data = await s.inspect_item(owner, item["id"])
+            data = await s.inspect_item(owner, item["id"], preview_code=value.get("gift_code"))
             # Some Playerok schemas expose this exact field as optional. Payment
             # still requires one valid value from that field in the fresh PAID deal.
             if self.store.setting("gifts:stopped", True):
@@ -352,6 +359,7 @@ class ListingLaunch:
                 ).fetchone()
                 if (row and row["enabled"]) or (policy and json.loads(policy["payload"]).get("enabled")):
                     raise Conflict("Для ручного режима сначала остановите существующую выдачу товара")
+            logical_context = self._commit_managed(db, owner, item, value, fresh)
             if value["publication"] == "PREMIUM":
                 operation = self._commit_premium_local(
                     db, owner, item, value, fresh, premium_preview, ident, revision, delivery_revision
@@ -383,7 +391,64 @@ class ListingLaunch:
                         "at": now(),
                     },
                 )
+            if logical_context:
+                prepared = self.store.setting("launch:prepared:" + item)
+                self.store.set_setting("launch:prepared:" + item, {**prepared, "logical": logical_context})
             return operation
+
+    def _commit_managed(self, db, owner, item, value, fresh):
+        logical = LogicalProducts(self.store, self.api)
+        product = logical.listing(item)
+        if not product or product["state"] == "LEGACY":
+            return None
+        logical.verify_listing(product, fresh["item"])
+        if product["enabled"]:
+            raise Conflict("Сначала остановите прежнюю выдачу товара")
+        handler = {
+            "gifts": "telegram_gifts",
+            "text": "fixed_text",
+            "stock": "unique_stock",
+            "manual": "manual",
+        }[value["mode"]]
+        config = configuration(
+            handler,
+            {
+                **({"text": value["data"]} if handler == "fixed_text" else {}),
+                "code": value.get("gift_code") or product and json.loads(product["config"]).get("code", ""),
+                "greeting": value["greeting"],
+                "after": value["after"],
+                "auto_fulfill": value["auto_complete"],
+                "mark_sent": value["auto_complete"],
+            },
+            max_count=self.gifts.settings.max_gifts if handler == "telegram_gifts" else 5,
+        )
+        if handler == "telegram_gifts":
+            config.update(
+                bundle=fresh["bundle"],
+                options={"order": value["order_limit"], "day": value["day_limit"], "refund": value["refund"]},
+            )
+        revision = product["revision"] + 1
+        db.execute(
+            "UPDATE logical_products SET handler=?,config=?,revision=?,updated_at=? WHERE id=?",
+            (handler, encode(config), revision, now(), product["id"]),
+        )
+        db.execute("UPDATE logical_listings SET config_revision=? WHERE item_id=?", (revision, item))
+        context = {
+            "product_id": product["id"],
+            "revision": revision,
+            "control_revision": product["control_revision"],
+            "inherit": bool(value.get("inherit", False)),
+        }
+        if handler != "manual":
+            cutoff = (
+                self.gifts.listing(item)["armed_at"]
+                if handler == "telegram_gifts"
+                else self.store.rows("SELECT updated_at FROM delivery_policies WHERE item_id=?", (item,))[0][
+                    "updated_at"
+                ]
+            )
+            logical.commit_arm(db, owner, item, context, cutoff)
+        return context
 
     def _delivery_authority(self, item):
         """Read-only CAS token, never a snapshot used for manual rollback."""
@@ -391,6 +456,10 @@ class ListingLaunch:
             "text": self.store.rows("SELECT revision FROM delivery_policies WHERE item_id=?", (item,)),
             "gift": self.store.rows("SELECT revision,enabled FROM gift_listings WHERE item_id=?", (item,)),
             "enabled": self.store.setting(f"delivery:{item}:enabled"),
+            "logical": self.store.rows(
+                "SELECT p.id,p.revision,p.control_revision,p.enabled,p.state FROM logical_products p JOIN logical_listings l ON l.product_id=p.id WHERE l.item_id=?",
+                (item,),
+            ),
         }
 
     def _commit_gift_listing(self, db, owner, item, value, fresh):
@@ -407,7 +476,11 @@ class ListingLaunch:
         from app.gifts.service import description_hash
 
         inspect_hash = description_hash(fresh["item"]["description"])
-        confirmed_code = gift_code_from_description(fresh["item"]["description"])
+        confirmed_code = (
+            value.get("gift_code")
+            or LogicalProducts(self.store, self.api).configured_gifts(fresh["item"])
+            or gift_code_from_description(fresh["item"]["description"])
+        )
         if existing and existing["description_sha256"] != inspect_hash:
             raise Conflict("Привязка изменилась; подтвердите её заново")
         if existing and existing["gift_code"] != confirmed_code:
@@ -615,6 +688,18 @@ class ListingLaunch:
             raise Conflict("Подтверждение запуска устарело")
         if config["mode"] != "manual" and not getattr(self.api.account, "automation_enabled", False):
             raise Conflict("Автоматизация остановлена; публикация с автовыдачей заблокирована")
+        if prepared.get("logical"):
+            context = prepared["logical"]
+            product = LogicalProducts(self.store, self.api).listing(action["target"])
+            if (
+                not product
+                or product["id"] != context["product_id"]
+                or product["revision"] != context["revision"]
+                or product["control_revision"] != context["control_revision"]
+                or product["state"] != "VERIFIED"
+                or (config["mode"] != "manual" and not product["enabled"])
+            ):
+                raise Conflict("Привязка выдачи изменилась; публикация остановлена")
         if config["mode"] == "gifts":
             l = self.gifts.listing(action["target"])
             if (

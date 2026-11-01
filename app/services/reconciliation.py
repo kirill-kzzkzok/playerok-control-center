@@ -77,6 +77,33 @@ class Reconciliation:
         action = self.action(actor, ident, uncertain=True)
         kind, target = action["kind"], action["target"]
         payload = json.loads(action["payload"])
+        if kind == "create":
+            from app.services.logical_products import LogicalProducts
+
+            draft = self.store.get_draft(target, actor)
+            value = draft["payload"]
+            candidate = self.store.setting("create:candidate:" + ident, {})
+            if (
+                not value.get("managed_product_id")
+                or not candidate.get("id")
+                or candidate.get("account") != self.api.account.id
+            ):
+                raise Conflict(
+                    "Нет подтверждённого ID ответа создания. Исход неизвестен; повтор создания запрещён"
+                )
+            observed = await self.api.call("get_item", id=candidate["id"])
+            if (
+                observed.get("id") != candidate["id"]
+                or [a.get("id") for a in observed.get("attachments") or []] != candidate["attachments"]
+            ):
+                raise Conflict("Фотографии или ID созданного товара не подтверждены")
+            proof = LogicalProducts(self.store, self.api).creation_proof(actor, value, observed)
+            return {
+                "decision": "CONFIRM_READ_STATE",
+                "remote_id": candidate["id"],
+                "creation": proof,
+                "checked_at": now(),
+            }
         if kind == "edit_fields":
             from types import SimpleNamespace
 
@@ -228,6 +255,13 @@ class Reconciliation:
                 or signature(dict(current)) != expected
             ):
                 raise Conflict("Операция уже разрешена другим действием")
+            if action["kind"] == "create" and status == "SUCCEEDED":
+                from app.services.logical_products import LogicalProducts
+
+                draft = self.store.get_draft(action["target"], actor)
+                LogicalProducts(self.store, self.api).commit_creation_proof(
+                    db, actor, draft["id"], draft["payload"], evidence["creation"]
+                )
             if action["kind"] in {"premium_publish", "premium_bump"} and status == "SUCCEEDED":
                 from app.services.paid_promotions import finish_expense, intent_key
 
