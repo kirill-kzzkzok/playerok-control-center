@@ -41,6 +41,7 @@ def safe_route(action):
         (
             "item:",
             "lp:item:",
+            "lp:ready:",
             "iv:",
             "order:",
             "chat:",

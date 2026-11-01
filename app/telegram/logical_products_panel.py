@@ -3,15 +3,18 @@
 import json
 import secrets
 from collections import Counter
+from datetime import UTC, datetime
 
 from app.database.store import Conflict
 from app.gifts.core import gift_code_from_description, gift_name
+from app.gifts.mtproto import GiftFailure
+from app.playerok.adapter import APIError
 from app.services.automation import message_text
 from app.services.inventory import Inventory
 from app.services.logical_products import PROBLEMS, LogicalProducts, marked_description
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
-from app.telegram.presentation import local_time, order_label, status
+from app.telegram.presentation import error_text, local_time, order_label, status
 from app.workers.logical_products import LogicalProductWorker
 
 MODES = {
@@ -150,10 +153,78 @@ class LogicalProductsPanel:
                 raise Conflict("Настройки товара изменились. Обновите карточку")
         return view
 
+    async def readiness(self, owner, product, item_id):
+        """Read-only diagnostics; arm still performs its own fresh guarded commit."""
+        self.service.authority(owner, product["account_id"])
+        problems = []
+        if not getattr(self.api.account, "writes_enabled", False):
+            problems.append("Запись Playerok выключена — проверьте подключения")
+        if not getattr(self.api.account, "automation_enabled", False):
+            problems.append("Автовыдача выключена в настройках подключения")
+        if not self.store.setting("orders:last_complete_sync"):
+            problems.append("Синхронизация заказов ещё не завершена")
+        if self.store.setting("sync:health", {}).get("status") == "ERROR":
+            problems.append("Синхронизация заказов завершилась ошибкой")
+        item = await self.api.call("get_item", id=item_id)
+        if item.get("status") != "APPROVED":
+            problems.append("Объявление не опубликовано")
+        try:
+            self.service.verify_listing(product, item)
+        except Conflict:
+            problems.append("Подтвердите описание и настройки товара заново")
+        config = json.loads(product["config"])
+        if (
+            product["handler"] == "unique_stock"
+            and not Inventory(self.store, self.api).counts(item_id)["AVAILABLE"]
+        ):
+            problems.append("На складе нет доступных единиц")
+        if product["handler"] == "fixed_text" and not config.get("text"):
+            problems.append("Не задан текст выдачи")
+        if product["handler"] == "telegram_gifts":
+            gifts = self.service.gift_service()
+            if not gifts.settings.payment_enabled:
+                problems.append("Покупки подарков выключены в настройках подключения")
+            if self.store.setting("gifts:stopped", True):
+                problems.append("Общая остановка подарков — разрешите новые покупки в настройках подарков")
+            if self.store.rows(
+                "SELECT 1 FROM gift_jobs WHERE state IN ('SPENDING','UNCERTAIN') OR refund_state='UNCERTAIN' LIMIT 1"
+            ):
+                problems.append("Предыдущий платёж или возврат требует сверки")
+            try:
+                await gifts.refresh()
+                bundle = gifts.catalog_bundle(config["code"])
+                if bundle != config["bundle"]:
+                    problems.append("Цена или состав подарков изменились — подтвердите пакет заново")
+                total = sum(g["stars"] for g in bundle)
+                order_limit, daily = gifts.limits()
+                options = config.get("options", {})
+                order_limit = min(order_limit, options.get("order") or order_limit)
+                daily = min(daily, options.get("day") or daily)
+                reserved = self.store.rows("SELECT COALESCE(SUM(reserved_stars),0) AS n FROM gift_jobs")[0][
+                    "n"
+                ]
+                spent = self.store.rows(
+                    "SELECT COALESCE(SUM(stars),0) AS n FROM gift_steps WHERE spent_at>=?",
+                    (datetime.now(UTC).date().isoformat(),),
+                )[0]["n"]
+                if total > order_limit or spent + reserved + total > daily:
+                    problems.append("Недостаточно доступного лимита Stars для всего пакета")
+                if self.store.setting("gifts:balance", {}).get("stars", 0) < reserved + total:
+                    problems.append("Недостаточно Stars с учётом текущих резервов")
+            except (APIError, GiftFailure, ValueError, TimeoutError, ConnectionError) as error:
+                problems.append(error_text(error))
+        return problems
+
     async def callback(self, action, owner, state):
         parts = action.split(":")
-        if len(parts) == 3 and parts[:2] == ["lp", "item"]:
-            return await self.card(owner, parts[2], state)
+        if len(parts) == 3 and parts[0] == "lp" and parts[1] in {"item", "ready"}:
+            result = await self.card(owner, parts[2], state)
+            view = (await state.get_data())["logical_view"]
+            if parts[1] == "ready" and view.get("product"):
+                product = self.service.product(view["product"], owner)
+                if not product["enabled"] and product["handler"] != "manual":
+                    return await self.callback("lp:" + view["nonce"] + ":arm", owner, state)
+            return result
         if len(parts) not in {3, 4} or parts[0] != "lp":
             raise Conflict("Кнопка настройки устарела")
         view = await self.view(owner, state, parts[1])
@@ -315,6 +386,17 @@ class LogicalProductsPanel:
             await self.service.reconcile_binding(owner, product["id"])
             return await self.card(owner, view["item"], state)
         if command == "arm":
+            problems = await self.readiness(owner, product, view["item"])
+            if problems:
+                return "🔴 <b>Запуск пока невозможен</b>\n" + "\n".join(
+                    "• " + reason for reason in problems
+                ), keyboard(
+                    [
+                        [("Исправить настройки товара", "lp:item:" + view["item"])],
+                        [("Подключения", "profile"), ("Настройки подарков", "gft:settings")],
+                    ],
+                    back=("К товару", "item:" + view["item"]),
+                )
             view["nonce"] = secrets.token_hex(6)
             view["confirm"] = "enable"
             await state.update_data(logical_view=view)

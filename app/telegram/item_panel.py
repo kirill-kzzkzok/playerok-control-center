@@ -113,6 +113,11 @@ class ItemPanel:
                 + "\nВыдача: "
                 + delivery
             )
+            if product:
+                text += "\nКод товара: " + escaped(product["code"], 20)
+                text += "\nНаследовать настройки: " + (
+                    "разрешено" if product["inherit_enabled"] else "выключено"
+                )
             rows = [
                 [("💰 Сколько получу чистыми", "finance:" + ident)],
                 [("✏️ Редактировать", "iv:edit:" + ident)],
@@ -120,6 +125,10 @@ class ItemPanel:
                 [("⭐ Продвижение", "payp:item:" + ident)],
                 [("⋯ Другие действия", "iv:other:" + ident)],
             ]
+            if item.get("status") == "DRAFT":
+                rows.insert(0, [("🚀 Запустить продажи", "launch:item:" + ident)])
+            elif product and not product["enabled"] and product["handler"] != "manual":
+                rows.insert(0, [("🚀 Запустить продажи", "lp:ready:" + ident)])
         elif section == "edit":
             text = title + "\nЧто изменить?"
             rows = [

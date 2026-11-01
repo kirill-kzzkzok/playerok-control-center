@@ -84,6 +84,7 @@ def navigation(action):
             "auto:check:",
             "stock:view:",
             "lp:item:",
+            "lp:ready:",
             "nav:back:",
             "nav:recover:",
             "nav:close:",
