@@ -8,7 +8,7 @@ from pathlib import Path
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.types import BufferedInputFile
 
 from app.database.store import Conflict
@@ -33,12 +33,13 @@ from app.telegram.item_panel import ItemPanel
 from app.telegram.keyboards import keyboard, main_menu
 from app.telegram.launch_panel import LaunchPanel
 from app.telegram.listings_panel import ListingsPanel
+from app.telegram.navigation import Navigation
 from app.telegram.operation_results import OperationResults
 from app.telegram.operations_panel import OperationsPanel
 from app.telegram.order_finance_panel import OrderFinancePanel
 from app.telegram.orders_panel import OrdersPanel
 from app.telegram.paid_promotions_panel import PaidPromotionsPanel
-from app.telegram.presentation import context_back, error_text
+from app.telegram.presentation import error_text
 from app.telegram.profile_panel import ProfilePanel
 from app.telegram.promotions_panel import PromotionsPanel
 from app.telegram.replies_panel import RepliesPanel
@@ -66,6 +67,7 @@ async def display(message, text, markup, edit=False):
 
 def create_router(store, api, products, synchronizer):
     router = Router()
+    navigator = Navigation(store)
     wizard = Wizard(store, api, products)
     finance = FinancePanel(store, api, products)
     chats = ChatPanel(store, api)
@@ -96,10 +98,24 @@ def create_router(store, api, products, synchronizer):
     @router.message(CommandStart())
     async def start(message, state):
         data = await state.get_data()
-        for key in ("item_filters", "order_search", "order_filter"):
+        for key in ("order_search", "order_filter"):
             if key in data:
                 store.set_setting(f"ui:{message.from_user.id}:{key}", data[key])
         await state.clear()
+        message, _ = await navigator.enter(message, message.from_user.id, state, "home")
+        text, markup = home_panel.home()
+        await message.answer(text, reply_markup=markup)
+
+    @router.message(Command("panel_reset"))
+    async def reset_navigation(message, state):
+        key = navigator.key(message.bot, message.from_user.id)
+        panel = store.setting(key, {})
+        await state.clear()  # Never restore a confirmation from the abandoned UI.
+        if panel.get("sending"):
+            # Explicit owner recovery, not an automatic resend. Unknown old UI
+            # is not deleted or treated as proof of any business operation.
+            store.set_setting(key, {"route": "home", "history": [], "abandoned_send": True})
+        message, _ = await navigator.enter(message, message.from_user.id, state, "home")
         text, markup = home_panel.home()
         await message.answer(text, reply_markup=markup)
 
@@ -113,9 +129,12 @@ def create_router(store, api, products, synchronizer):
         message = query.message
         if message is None or not hasattr(message, "answer"):
             return
+        if not navigator.allowed(message, owner, action):
+            return await query.answer("Экран закрыт или устарел. Откройте /start", show_alert=True)
         if not navigation(action) and (
             ack["status"] != "ok" or time.monotonic() - ack["checked_at"] > ACTION_MAX_WAIT
         ):
+            message, _ = await navigator.enter(message, owner, state, "input")
             return await message.answer(
                 "Нажатие не подтверждено или ожидало слишком долго. Действие не выполнено. "
                 "Откройте экран заново; для ранее запущенной операции сначала проверьте её результат.",
@@ -129,46 +148,53 @@ def create_router(store, api, products, synchronizer):
             )
         )
         try:
+            message, action = await navigator.enter(message, owner, state, action)
+            if message is None:
+                return
             # Persist only harmless list preferences, never confirmation tokens or pending actions.
             view_data = await state.get_data()
-            for key in ("item_filters", "order_search", "order_filter"):
+            for key in ("order_search", "order_filter"):
                 if key in view_data:
                     store.set_setting(f"ui:{owner}:{key}", view_data[key])
-            if action in {
-                "profile",
-                "profile:check",
-                "profile:details",
-                "diagnostics",
-                "backup",
-            } or action.startswith(
-                (
-                    "item:",
-                    "iv:",
-                    "order:",
-                    "chat:",
-                    "result:",
-                    "delivered:",
-                    "stats:",
-                    "sr:",
-                    "st:",
-                    "sd:",
-                    "sp:",
-                    "stock:list:",
-                    "ops:show:",
-                    "aq:list:",
-                    "aq:chain:",
-                    "aq:target:",
-                    "aq:evaluation:",
-                    "gft:item:",
-                    "gft:job:",
-                    "gft:details:",
-                    "gft:list:",
-                    "gft:catalog",
-                    "gft:bindings",
-                    "gft:reconcile:",
-                    "gft:refundcheck:",
+            if (
+                action
+                in {
+                    "profile",
+                    "profile:check",
+                    "profile:details",
+                    "diagnostics",
+                    "backup",
+                }
+                or action.startswith(
+                    (
+                        "item:",
+                        "iv:",
+                        "order:",
+                        "chat:",
+                        "result:",
+                        "delivered:",
+                        "stats:",
+                        "sr:",
+                        "st:",
+                        "sd:",
+                        "sp:",
+                        "stock:list:",
+                        "ops:show:",
+                        "aq:list:",
+                        "aq:chain:",
+                        "aq:target:",
+                        "aq:evaluation:",
+                        "gft:item:",
+                        "gft:job:",
+                        "gft:details:",
+                        "gft:list:",
+                        "gft:catalog",
+                        "gft:bindings",
+                        "gft:reconcile:",
+                        "gft:refundcheck:",
+                    )
                 )
-            ):
+            ) and not store.setting(navigator.key(message.bot, owner), {}).get("restoring"):
                 await state.clear()
             if action == "home":
                 await state.clear()
@@ -204,6 +230,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await interface_cleanup.callback(action, owner, state, message)
             elif action == "quickreplies":
                 text, markup = await replies.menu(owner, state)
+            elif action.startswith("replypreview:"):
+                return await replies.preview(action, message, state)
             elif action.startswith("quick:"):
                 text, markup = await replies.callback(action, owner, state)
             elif action.startswith("ops:"):
@@ -247,11 +275,17 @@ def create_router(store, api, products, synchronizer):
                     rows = [[("Открыть серверный лот", "item:" + binding[0]["remote_id"])]] if binding else []
                     text, markup = "Состояние: " + escape(draft["state"]), keyboard(rows)
             elif action in {"items", "chats"}:
-                filters = store.setting(f"ui:{owner}:item_filters", {})
-                await state.clear()
-                if action == "items":
-                    await state.update_data(item_filters=filters)
-                text, markup = await listings_panel.show(action, state)
+                restoring = store.setting(navigator.key(message.bot, owner), {}).get("restoring", False)
+                if not restoring:
+                    await state.clear()
+                    filters = (
+                        store.setting(f"ui:{owner}:item_filters", {})
+                        if store.setting(f"ui:{owner}:item_filters_pinned", False)
+                        else {"status": "APPROVED"}
+                    )
+                    if action == "items":
+                        await state.update_data(item_filters=filters)
+                text, markup = await listings_panel.show(action, state, restore=restoring)
             elif action == "itemfilters":
                 await state.set_state(None)
                 names = {
@@ -273,6 +307,7 @@ def create_router(store, api, products, synchronizer):
                         [("Категория · ввод ID / снять", "il:category")],
                         [("PREMIUM", "il:PREMIUM"), ("Обычные", "il:DEFAULT"), ("Любой приоритет", "il:ALL")],
                         [("Сбросить фильтры", "il:reset"), ("К списку", "il:back")],
+                        [("Запомнить фильтр", "il:remember")],
                     ]
                 )
                 text, markup = (
@@ -281,10 +316,11 @@ def create_router(store, api, products, synchronizer):
                 )
             elif action.startswith("itemfilter:"):
                 value = action.split(":", 1)[1]
-                if value != "ALL" and value not in ItemStatuses.__members__:
+                if value not in {"ALL", "ARCHIVE"} and value not in ItemStatuses.__members__:
                     raise ValidationError("Неизвестный статус товара")
                 filters = (await state.get_data()).get("item_filters", {})
-                filters["status"] = None if value == "ALL" else value
+                filters["status"] = None if value in {"ALL", "ARCHIVE"} else value
+                filters["archive"] = value == "ARCHIVE"
                 gift_picker = (await state.get_data()).get("gift_picker", False)
                 await state.set_data(
                     {"item_filters": filters, **({"gift_picker": True} if gift_picker else {})}
@@ -320,14 +356,7 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await wizard.start_edit(owner, state, action.split(":", 1)[1])
             elif action.startswith("quote:"):
                 ident = action.split(":", 1)[1]
-                item = await api.call("get_item", id=ident)
-                statuses = await products.priority_preview(ident, priority_price_basis(item))
-                text = "⭐ <b>Стоимость из Playerok API</b>\n" + "\n".join(
-                    f"{escape(s.get('name') or s.get('type') or '?')}: {s.get('price', 'неизвестно')} ₽ · {s.get('period', '?')} дн."
-                    for s in statuses
-                )
-                text += "\n\nПросмотр ничего не покупает. Покупка платного размещения здесь не реализована."
-                markup = keyboard([[("⬅️ Лот", "item:" + ident)]])
+                text, markup = await paid_promotions.callback("payp:item:" + ident, owner, state)
             elif action.startswith(("discount:", "editprice:")):
                 ident = action.split(":", 1)[1]
                 item = await products.owned_item(ident)
@@ -481,8 +510,8 @@ def create_router(store, api, products, synchronizer):
                     refresh=action == "profile:check" and not preserve,
                     details=action == "profile:details",
                 )
-            elif action.startswith(("stats:", "st:", "sd:", "sr:")):
-                return await statistics_panel.handle(action, message, owner=owner)
+            elif action.startswith(("stats:", "st:", "sd:", "sr:", "sg:")):
+                return await statistics_panel.handle(action, message, owner=owner, state=state)
             elif action == "settings" or action.startswith("sp:"):
                 if action == "settings":
                     await state.clear()
@@ -563,7 +592,7 @@ def create_router(store, api, products, synchronizer):
                 )
             else:
                 raise ValidationError("Кнопка устарела. Откройте главное меню.")
-            await display(message, text, context_back(markup, action), not preserve)
+            await display(message, text, markup, not preserve)
         except (APIError, ValidationError, Conflict, ValueError) as error:
             await message.answer("❗ " + error_text(error), reply_markup=keyboard([]))
         except sqlite3.Error:
@@ -574,10 +603,13 @@ def create_router(store, api, products, synchronizer):
 
     @router.message(F.text | F.photo | F.document)
     async def input_message(message, state):
+        message, _ = await navigator.enter(message, message.from_user.id, state, "input")
         try:
             current = await state.get_state()
             if current == "wizard":
                 text, markup = await wizard.message(message, state)
+            elif current == "statsgroup:choose":
+                text, markup = await statistics_panel.message(message, state)
             elif current and current.startswith("launch:"):
                 text, markup = await launch_panel.message(message, state)
             elif current == "stock:input":
@@ -607,7 +639,10 @@ def create_router(store, api, products, synchronizer):
             elif current and current.startswith("resolve:"):
                 text, markup = await operations.message(message, state)
             elif current == "reply" and (message.photo or message.document):
-                text, markup = await replies.photo(message, state)
+                result = await replies.photo(message, state)
+                if result is None:
+                    return
+                text, markup = result
             elif current == "discount":
                 data = await state.get_data()
                 item = await products.owned_item(data["item_id"])

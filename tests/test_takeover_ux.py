@@ -70,9 +70,15 @@ async def test_statistics_groups_all_reports_without_overloaded_menu(ux):
     labels = buttons(shown)
     assert {"📈 Графики", "🏆 Лучшие товары", "💰 Финансы", "📋 Подробный отчёт"} <= set(labels.values())
     for action in ("sr:7:charts", "sr:7:top", "sr:7:finance"):
+        await r.ui.click("stats:7")
         await r.ui.click(action)
-        assert "stats:7" in buttons(r.session.calls[-1])
+        labels = buttons(r.session.calls[-1])
+        back = (
+            "stats:7" if "stats:7" in labels else next(key for key in labels if key.startswith("nav:back:"))
+        )
         assert len(buttons(r.session.calls[-1])) < 9
+        await r.ui.click(back)
+        assert "7 дн." in r.session.last_panel.text
     assert not r.store.rows("SELECT * FROM outbox")
 
 
@@ -185,12 +191,19 @@ async def test_render_production_screen_cards_offline(ux, tmp_path):
     original = r.api.call
 
     async def call(method, **kwargs):
+        if method == "get":
+            return {"id": "seller", "username": "FixtureOwner", "profile": {}, "is_blocked": False}
+        if method == "get_transaction_providers":
+            from tests.test_withdrawals import snapshot
+
+            return [snapshot(minimum=1)["provider"]]
         if method == "get_item_priority_statuses":
             return [{"id": "test-premium", "type": "PREMIUM", "price": 25, "period": 7}]
         return await original(method, **kwargs)
 
     r.api.call = call
     r.api.value["raw_price"] = 100
+    r.api.value["fee_multiplier"] = "0.1"
     routes = [
         ("01_home", "home"),
         ("02_order", "order:paid"),
@@ -205,10 +218,15 @@ async def test_render_production_screen_cards_offline(ux, tmp_path):
         ("11_premium", "payp:item:lot"),
         ("12_operations", "ops:list:ALL:0"),
         ("13_delivery_result", "delivered:0"),
+        ("14_net_forecast", "finance:lot"),
+        ("15_withdrawal_preference", "providers"),
+        ("16_auto_promotion", "promotions"),
+        ("17_profile", "profile"),
+        ("18_active_items", "items"),
     ]
     for name, route in routes:
         await r.ui.click(route)
-        method = r.session.calls[-1]
+        method = r.session.last_panel
         assert "❗" not in (method.text or ""), route
         save_card(name, method.text, method.reply_markup)
     # Historical source classes run over the same isolated fixtures, not hand-written mockups.
@@ -220,7 +238,7 @@ async def test_render_production_screen_cards_offline(ux, tmp_path):
         if not os.environ.get("PCC_RENDER_OUTPUT"):
             continue  # Historical comparison is an explicit local artifact task, CI may be shallow.
         source = await asyncio.to_thread(
-            subprocess.check_output, ["git", "show", "9f5dee1:app/telegram/" + file + ".py"], encoding="utf-8"
+            subprocess.check_output, ["git", "show", "a65643b:app/telegram/" + file + ".py"], encoding="utf-8"
         )
         namespace = {"__name__": "offline_before_" + file}
         exec(compile(source, file, "exec"), namespace)  # noqa: S102 -- fixed trusted local historical commit, test-only fixture
@@ -238,7 +256,7 @@ async def test_render_production_screen_cards_offline(ux, tmp_path):
             text, markup = await panel.handle("stats:7", Capture(), owner=7)
         save_card(name, text, markup)
     (output / "index.html").write_text(
-        '<!doctype html><html lang="ru"><meta charset="utf-8"><title>Offline production UI acceptance</title><style>body{font:16px system-ui;background:#eaf0ec;margin:30px}main{display:flex;flex-wrap:wrap;gap:24px}article{max-width:660px}img{width:100%;max-width:660px}h1{font-size:22px}</style><h1>Достоверные offline-рендеры production-сообщений и клавиатур. Не снимки Telegram.</h1><p>Только временная SQLite, тестовые аккаунты и транспорты. Исходные пользовательские скриншоты в текущем вложении отсутствуют. BEFORE — код HEAD 9f5dee1.</p><main>'
+        '<!doctype html><html lang="ru"><meta charset="utf-8"><title>Offline production UI acceptance</title><style>body{font:16px system-ui;background:#eaf0ec;margin:30px}main{display:flex;flex-wrap:wrap;gap:24px}article{max-width:660px}img{width:100%;max-width:660px}h1{font-size:22px}</style><h1>Достоверные offline-рендеры production-сообщений и клавиатур. Не снимки Telegram.</h1><p>Только временная SQLite, тестовые аккаунты и транспорты. Исходные пользовательские скриншоты в текущем вложении отсутствуют. BEFORE — исходный renderer a65643b на тех же безопасных фикстурах.</p><main>'
         + "".join(cards)
         + "</main></html>",
         encoding="utf-8",

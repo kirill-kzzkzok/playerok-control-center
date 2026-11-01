@@ -36,7 +36,7 @@ async def test_ack_failure_does_not_break_safe_navigation(tmp_path, failure):
     bot = Bot("123:" + "x" * 35, session=session)
     try:
         await Interaction(bot, dispatcher(store, CatalogAPI())).click("home")
-        assert session.calls[-1].__api_method__ == "editMessageText"
+        assert session.calls[-1].__api_method__ == "sendMessage"
         assert not store.rows("SELECT * FROM outbox")
     finally:
         await bot.session.close()
@@ -86,7 +86,8 @@ async def test_ack_before_fsm_lock_does_not_block_next_update(tmp_path, monkeypa
         await asyncio.wait_for(ui.click("diagnostics"), timeout=0.1)
         assert not first.done()
         await first
-        assert sum(m.__api_method__ == "editMessageText" for m in session.calls) == 2
+        assert sum(m.__api_method__ == "editMessageText" for m in session.calls) == 1
+        assert sum(m.__api_method__ == "sendMessage" for m in session.calls) == 1
     finally:
         await bot.session.close()
         store.close()
@@ -131,7 +132,23 @@ async def test_ui_response_timeout_is_not_resent_and_navigation_recovers(tmp_pat
             await ui.message("/start")
         else:
             await ui.click("home")
+            await ui.click("diagnostics")
         assert sum(m.__api_method__ == method for m in session.calls) == 1
+        if method == "sendMessage":
+            from aiogram.types import InlineKeyboardMarkup
+
+            panel = store.setting("navigation:123:7")
+            assert panel["sending"]
+            await ui.click("diagnostics")
+            assert sum(m.__api_method__ == method for m in session.calls) == 1
+            # Telegram callback independently proves the unacknowledged send exists.
+            await ui.click(
+                "more",
+                message_id=501,
+                reply_markup=InlineKeyboardMarkup.model_validate(panel["pending_markup"]),
+            )
+            assert store.setting("navigation:123:7")["id"] == 501
+            assert not store.setting("navigation:123:7")["sending"]
         await ui.click("diagnostics")
         assert "Диагностика" in session.calls[-1].text
         assert not store.rows("SELECT * FROM outbox")
@@ -270,8 +287,9 @@ async def test_profile_status_survives_optional_photo_timeout(tmp_path, monkeypa
     bot = Bot("123:" + "x" * 35, session=session)
     try:
         await Interaction(bot, production_dispatcher(store, API())).click("profile:details")
-        assert session.calls[-1].__api_method__ == "sendMessage"
-        assert "Подключён" in session.calls[-1].text
+        assert session.calls[-1].__api_method__ == "sendPhoto"
+        assert store.setting("playerok:verification")["status"] == "CONNECTED"
+        assert not any(m.__api_method__ == "sendMessage" for m in session.calls)
         assert sum(m.__api_method__ == "sendPhoto" for m in session.calls) == 1
     finally:
         await bot.session.close()

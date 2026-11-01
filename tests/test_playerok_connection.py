@@ -245,11 +245,12 @@ async def test_no_changes_message_on_repeated_refresh_is_safe(rig):
     store, api = rig
     await PlayerokConnection(store, api).check()
     message = SimpleNamespace(
+        chat=SimpleNamespace(id=7),
         edit_text=AsyncMock(
             side_effect=TelegramBadRequest(
                 method=EditMessageText(text="x"), message="Bad Request: message is not modified"
             )
-        )
+        ),
     )
     await ProfilePanel(api, store).handle(message, refresh=True)
     assert api.calls == ["get"]

@@ -21,6 +21,14 @@ from app.telegram.storage import SQLiteStorage
 
 
 class TelegramSession(BaseSession):
+    @property
+    def last_panel(self):
+        return next(
+            method
+            for method in reversed(self.calls)
+            if method.__api_method__ in {"sendMessage", "editMessageText", "sendPhoto", "editMessageMedia"}
+        )
+
     def __init__(self):
         super().__init__()
         self.calls = []
@@ -43,9 +51,11 @@ class TelegramSession(BaseSession):
                 file_path="images/photo.png",
                 file_size=len(self.image),
             )
-        if name in {"sendMessage", "editMessageText", "sendPhoto"}:
+        if name in {"editMessageReplyMarkup", "deleteMessage"}:
+            return True
+        if name in {"sendMessage", "editMessageText", "sendPhoto", "editMessageMedia"}:
             return Message(
-                message_id=len(self.calls),
+                message_id=getattr(method, "message_id", None) or len(self.calls),
                 date=datetime.now(UTC),
                 chat=Chat(id=method.chat_id, type="private"),
                 text=getattr(method, "text", None),
@@ -108,10 +118,16 @@ class Interaction:
         )
         return await self.dp.feed_update(self.bot, Update(update_id=self.counter, message=message))
 
-    async def click(self, action, owner=7):
+    async def click(self, action, owner=7, *, message_id=None, reply_markup=None):
         self.counter += 1
+        panel = self.dp.storage.store.setting(f"navigation:{self.bot.id}:{owner}", {})
         message = Message(
-            message_id=1, date=datetime.now(UTC), chat=Chat(id=owner, type="private"), text="Menu"
+            message_id=message_id or panel.get("id") or 1,
+            date=datetime.now(UTC),
+            chat=Chat(id=owner, type="private"),
+            text="Menu",
+            reply_markup=reply_markup,
+            from_user=User(id=self.bot.id, first_name="Bot", is_bot=True),
         )
         query = CallbackQuery(
             id=str(self.counter),
@@ -209,9 +225,9 @@ async def test_financial_panel_through_real_dispatcher_is_read_only(tmp_path):
         await ui.click("settings")
         await ui.click("providers")
         await ui.click("fin:select:SBP")
-        await ui.message("1000")
-        assert "940.00" in session.calls[-1].text and "Оценка" in session.calls[-1].text
+        assert "сохранён" in session.calls[-1].text
         await ui.click("finance:item")
+        assert "На руки после вывода: 1692.00 ₽" in session.calls[-1].text
         await ui.click("fin:cost:item")
         await ui.message("500")
         assert store.setting("finance:7:cost:item") == "500.00"
@@ -221,7 +237,7 @@ async def test_financial_panel_through_real_dispatcher_is_read_only(tmp_path):
         assert session.calls[-1].text == "Доступ закрыт"
         assert not store.rows("SELECT * FROM outbox")
         assert not store.rows("SELECT * FROM financial_operations")
-        assert store.rows("SELECT count(*) AS n FROM financial_quotes")[0]["n"] >= 3
+        assert store.rows("SELECT count(*) AS n FROM financial_quotes")[0]["n"] >= 2
     finally:
         await bot.session.close()
         store.close()
@@ -312,8 +328,8 @@ async def test_photo_reply_preview_requires_confirmation_and_survives_restart(tm
         assert pending["payload"]["text"] == "<photo caption>"
         assert len(pending["payload"]["photos"]) == 1
         assert (await uploads.read(pending["payload"]["photos"][0])).startswith(b"\xff\xd8\xff")
-        assert "&lt;photo caption&gt;" in session.calls[-1].text
-        assert session.calls[-2].__api_method__ == "sendPhoto"
+        assert "&lt;photo caption&gt;" in session.calls[-1].media.caption
+        assert session.calls[-1].__api_method__ == "editMessageMedia"
         assert not store.rows("SELECT * FROM outbox")
         token = (await state.get_data())["confirm_token"]
         ui.dp = dispatcher(store, api)
@@ -560,7 +576,7 @@ async def test_promotions_settings_router_has_no_paid_execution(tmp_path):
         ui.dp = dispatcher(store, api)
         await ui.click(f"pp:{nonce}:save")
         assert store.rows("SELECT revision FROM promotion_policy") == [{"revision": 1}]
-        assert "деньги не списываются" in session.calls[-1].text
+        assert "Остановлено" in session.calls[-1].text
         await ui.click("promo:stop")
         assert store.rows("SELECT revision FROM promotion_policy") == [{"revision": 2}]
         assert not store.rows("SELECT * FROM promotion_expenses")

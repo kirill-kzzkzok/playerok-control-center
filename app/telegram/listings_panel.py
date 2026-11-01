@@ -15,12 +15,14 @@ class ListingsPanel:
         self.api, self.store = api, store
         self.category_picker = ItemCategoryPicker(api)
 
-    async def show(self, kind, state, *, nonce=None):
+    async def show(self, kind, state, *, nonce=None, restore=False):
         if kind not in {"items", "chats"}:
             raise ValidationError("Неизвестный список")
         data = await state.get_data()
         gift_picker = kind == "items" and data.get("gift_picker") is True
         cursor, seen, number = None, [], 1
+        if restore and data.get("list_kind") == kind:
+            cursor, number = data.get("list_cursor"), data.get("list_number", 1)
         if nonce is not None:
             if (
                 data.get("list_kind") != kind
@@ -35,14 +37,22 @@ class ListingsPanel:
             if number > 1000:
                 raise ValidationError("Достигнут лимит страниц. Откройте список заново")
         if kind == "items":
-            filters = checked_filters(data.get("item_filters", {}))
+            filters = checked_filters(
+                {"status": None if gift_picker else "APPROVED", **data.get("item_filters", {})}
+            )
             status = filters.get("status")
             extra = {"category_id": filters["category_id"]} if filters.get("category_id") else {}
             page = await self.api.call(
                 "get_my_items",
                 count=10,
                 after_cursor=cursor,
-                statuses=[ItemStatuses[status]] if status else None,
+                statuses=(
+                    [value for value in ItemStatuses if value.name not in {"APPROVED", "DRAFT"}]
+                    if filters.get("archive")
+                    else [ItemStatuses[status]]
+                    if status
+                    else None
+                ),
                 **extra,
             )
             title, prefix = "📦 Мои товары", "item"
@@ -101,15 +111,17 @@ class ListingsPanel:
         if kind == "items":
             rows.extend(
                 [
+                    [("Активные", "itemfilter:APPROVED"), ("Архив и прочие", "itemfilter:ARCHIVE")],
                     [("🔎 Поиск", "il:search"), ("Фильтры", "itemfilters")],
                     [("💾 Черновики Playerok", "itemfilter:DRAFT")]
                     if gift_picker
-                    else [("💾 Черновики", "drafts")],
+                    else [("💾 Мои черновики", "drafts"), ("Черновики Playerok", "itemfilter:DRAFT")],
                 ]
             )
         # Save only after the whole response/buttons validate; errors leave retryable cursor.
         await state.update_data(
             list_kind=kind,
+            list_cursor=cursor,
             list_next=next_cursor,
             list_nonce=next_nonce,
             list_seen=[*seen, next_cursor] if next_cursor else [],
@@ -136,6 +148,11 @@ class ListingsPanel:
         if action == "il:pickcategory":
             return await self.category_picker.start(state)
         data = await state.get_data()
+        if action == "il:remember":
+            owner = state.key.user_id
+            self.store.set_setting(f"ui:{owner}:item_filters", data.get("item_filters", {}))
+            self.store.set_setting(f"ui:{owner}:item_filters_pinned", True)
+            return "✅ Фильтр сохранён для открытия товаров.", keyboard([[("К списку", "il:back")]])
         filters = checked_filters(data.get("item_filters", {}))
         if action == "il:reset":
             await state.clear()

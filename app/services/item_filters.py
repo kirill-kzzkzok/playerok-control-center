@@ -13,9 +13,12 @@ def checked_filters(value):
         "maximum",
         "category_id",
         "priority",
+        "archive",
     }:
         raise ValidationError("Некорректные фильтры товаров")
     status = value.get("status")
+    if not isinstance(value.get("archive", False), bool):
+        raise ValidationError("Некорректный режим архива")
     if status and status not in ItemStatuses.__members__:
         raise ValidationError("Неизвестный статус товара")
     search = value.get("search", "")
@@ -43,6 +46,10 @@ def checked_filters(value):
 
 
 def matches_item(item, filters):
+    if filters.get("archive") and item.get("status") in {None, "APPROVED", "DRAFT"}:
+        return False
+    if filters.get("status") and item.get("status") != filters["status"]:
+        return False
     if filters.get("search", "").casefold() not in str(item.get("name") or "").casefold():
         return False
     if filters.get("priority") and item.get("priority") != filters["priority"]:

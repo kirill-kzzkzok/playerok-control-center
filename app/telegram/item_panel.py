@@ -101,8 +101,10 @@ class ItemPanel:
                 + delivery
             )
             rows = [
+                [("💰 Сколько получу чистыми", "finance:" + ident)],
                 [("✏️ Редактировать", "iv:edit:" + ident)],
                 [("⚡ Настроить выдачу", "iv:delivery:" + ident)],
+                [("⭐ Продвижение", "payp:item:" + ident)],
                 [("⋯ Другие действия", "iv:other:" + ident)],
             ]
         elif section == "edit":
@@ -137,10 +139,6 @@ class ItemPanel:
         elif section == "other":
             text = title + "\nДругие действия"
             rows = [
-                [("Финансовый расчёт", "finance:" + ident)],
-                [("Продвижение", "promo:item:" + ident)],
-                [("Стоимость размещения", "quote:" + ident)],
-                [("⭐ PREMIUM / платное поднятие", "payp:item:" + ident)],
                 [("Подробности", "iv:details:" + ident)],
             ]
             if item.get("status") == "DRAFT":

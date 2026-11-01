@@ -1,12 +1,15 @@
 import secrets
 from dataclasses import asdict
+from datetime import UTC, datetime
 
 from app.database.store import Conflict
 from app.services.finance import money
+from app.services.paid_promotions import PaidPromotions
 from app.services.products import ValidationError, priority_price_basis
 from app.services.promotion_settings import PromotionSettings
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
+from app.telegram.presentation import local_time
 
 EDIT = {
     "interval_seconds": "Интервал, секунд (от 600)",
@@ -56,9 +59,40 @@ class PromotionsPanel:
             ]
         )
         if not data.get("advanced"):
+            paid = PaidPromotions(self.service.store, self.api)
+            targets = self.service.store.rows(
+                "SELECT item_id FROM promotion_targets WHERE disposition='include' ORDER BY item_id"
+            )
+            scoped = any(paid.has_authority(row["item_id"], data["revision"]) for row in targets)
+            permission = self.service.store.setting("promotions:paid_authority", {})
+            global_authority = (
+                permission.get("revision") == data["revision"]
+                and permission.get("account_id") == self.api.account.id
+            )
+            status = "Остановлено" if not values["enabled"] else "Проверка без оплаты: расходы не разрешены"
+            if values["enabled"] and (scoped or global_authority):
+                try:
+                    paid.permissions(automatic=True)
+                    status = "Платное расписание разрешено; тарифы проверяются перед выполнением"
+                except ValidationError as error:
+                    status = str(error)
+            due = self.service.store.rows(
+                "SELECT MIN(due_at) AS due FROM promotion_schedule WHERE policy_revision=?",
+                (data["revision"],),
+            )[0]["due"]
+            next_check = (
+                local_time(datetime.fromtimestamp(due, UTC).isoformat())
+                if due
+                else "при следующем цикле фоновой задачи"
+            )
             text = (
-                "🚀 <b>Продвижение — проверка</b>\nРежим проверки: деньги не списываются. Платное расписание включается отдельно.\nПроверки: "
-                + ("включены" if values["enabled"] else "выключены")
+                "🚀 <b>Автопродвижение</b>\n"
+                + escaped(status, 200)
+                + f"\nВыбрано товаров: {len(targets)}"
+                + ("; действует общее правило магазина" if data["selection"] == "all" else "")
+                + f"\nЛимиты: {values['per_operation']} ₽ / операция · {values['daily']} ₽ / сутки · {values['monthly']} ₽ / месяц"
+                + "\nСледующая проверка: "
+                + next_check
             )
             rows = [
                 [("Выбрать товар и проверить", "items")],
@@ -67,11 +101,6 @@ class PromotionsPanel:
                 [("История проверок", "tools:promotion")],
                 [("⛔ Остановить продвижение", "promo:stop")],
             ]
-            if (
-                self.service.store.setting("promotions:paid_authority", {}).get("revision")
-                == data["revision"]
-            ):
-                text = "🚀 <b>Продвижение</b>\nПлатное расписание разрешено для подтверждённых тарифов.\nЛимиты и проверки применяются перед каждой операцией."
         else:
             group = data.get("group", "general")
             groups = {
@@ -143,16 +172,15 @@ class PromotionsPanel:
             rows.extend(
                 [
                     [
-                        ("Включить лот", f"pi:{nonce}:target:include"),
-                        ("Исключить", f"pi:{nonce}:target:exclude"),
+                        ("Участвует в расписании", f"pi:{nonce}:target:include"),
+                        ("Не участвует", f"pi:{nonce}:target:exclude"),
                     ],
-                    [("По общему правилу", f"pi:{nonce}:target:default")],
-                    [("⭐ PREMIUM / платное поднятие", "payp:item:" + parts[2])],
+                    [("Наследовать настройки магазина", f"pi:{nonce}:target:default")],
                     [("Настройки продвижения", "promotions")],
                 ]
             )
             return (
-                f"🚀 <b>Лот · проверка</b>\nВыбран: {'да' if self.service.selected(parts[2], selection) else 'нет'}\nВерсия политики: {revision}\nВыберите реальную стоимость для проверки без оплаты. Это не покупка. Политика и quote будут перечитаны.",
+                f"🚀 <b>Расписание товара</b>\nУчастие: {'включено' if self.service.selected(parts[2], selection) else 'выключено'}\nУчастие в списке не разрешает расходы: для платного запуска нужны подтверждённый тариф и отдельное разрешение расписания.\nВыберите стоимость для проверки без оплаты.",
                 keyboard(rows),
             )
         data = await state.get_data()

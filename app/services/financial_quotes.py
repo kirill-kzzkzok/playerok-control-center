@@ -28,6 +28,7 @@ def save_quote(store, owner, target, inputs, result):
             "fee_multiplier",
             "fee_checked_at",
             "fee_source",
+            "fee_basis",
             "cost",
             "withdrawal",
             "placement",

@@ -1,9 +1,10 @@
 import secrets
+from decimal import ROUND_CEILING, Decimal
 from html import escape
 
 from app.database.store import now
 from app.playerok.adapter import APIError
-from app.services.finance import format_calculation, money
+from app.services.finance import money, selected_fee_multiplier
 from app.services.financial_quotes import save_quote
 from app.services.products import priority_price_basis
 from app.services.withdrawals import (
@@ -45,6 +46,28 @@ class FinancePanel:
             "fee_checked_at": now(),
             "cost": self.store.setting(f"finance:{owner}:cost:{ident}"),
         }
+        obtaining = item.get("obtaining_type") or {}
+        payload["fee_multiplier"] = selected_fee_multiplier(
+            item.get("fee_multiplier"), obtaining.get("fee_multiplier")
+        )
+        payload["fee_basis"] = {
+            "item_id": ident,
+            "obtaining_type_id": obtaining.get("id"),
+            "category_id": (item.get("category") or {}).get("id"),
+        }
+        if (
+            item.get("fee_multiplier") is None
+            and obtaining.get("fee_multiplier") is None
+            and payload["fee_basis"]["category_id"]
+        ):
+            try:
+                schema = await self.products.schema_details(
+                    payload["fee_basis"]["category_id"], obtaining.get("id"), auto_agreements=False
+                )
+                payload["fee_multiplier"] = schema["fee_multiplier"]
+                payload["fee_checked_at"] = schema["checked_at"]
+            except APIError:
+                payload["fee_multiplier"] = None
         chosen = self.store.setting(self.preference_key(owner))
         if chosen:
             payload["withdrawal"] = await withdrawal_snapshot(self.api, chosen["provider"]["id"])
@@ -79,27 +102,69 @@ class FinancePanel:
                     "checked_at": now(),
                     "source": "Playerok itemPriorityStatuses",
                 }
-        result = draft_calculation(payload, placement=placement)
-        save_quote(self.store, owner, "item:" + ident, {**payload, "placement": placement}, result)
+        allocation = self.store.setting(f"finance:{owner}:placement_per_sale:{ident}")
+        result = draft_calculation(payload, placement=money(allocation) if allocation is not None else None)
+        save_quote(self.store, owner, "item:" + ident, {**payload, "placement": allocation}, result)
         name = ((payload.get("withdrawal") or {}).get("provider") or {}).get("name") or "не выбран"
+
+        def rub(value):
+            return str(value) + " ₽" if value is not None else "неизвестно"
+
+        net = result.after_withdrawal
+        cost = result.cost
+        profit = result.profit
         text = (
-            f"📦 <b>{escape(item.get('name') or ident)}</b>\n\n{escape(format_calculation(result))}\n\n"
-            f"Способ вывода: {escape(name)}\n"
-            "Минимальная комиссия рассчитана для вывода суммы этой продажи отдельной операцией. При объединении продаж результат меняется. Для USDT показан рублёвый эквивалент, не сумма токенов.\n"
-            "Платное размещение не покупается и не вычитается повторно из следующих продаж."
+            f"💰 <b>{escape(item.get('name') or 'Товар')}</b>\nПрогноз будущей продажи · оценка\n"
+            f"Цена продажи: {rub(result.sale)}\nКомиссия Playerok: {rub(result.platform_fee)}\n"
+            f"После комиссии площадки: {rub(result.after_platform)}\n"
+            f"Комиссия вывода ({escape(name)}): {rub(result.withdrawal_fee)}\n"
+            f"На руки после вывода: {rub(net)}\n"
+            f"PREMIUM / поднятия на продажу: {rub(money(allocation) if allocation is not None else None)}\n"
+            f"Себестоимость: {rub(cost)}\nЧистая прибыль: {rub(profit)}"
         )
-        return text, keyboard(
-            [
-                [("💳 Способ вывода", "providers")],
-                [("⭐ Стоимость нового размещения", "fin:placement:" + ident)],
-                [("✏️ Себестоимость", "fin:cost:" + ident)],
-                [("Очистить себестоимость", "fin:clearcost:" + ident)],
-                [("🔄 Обновить расчёт", "finance:" + ident)],
-                [("⬅️ Товар", "item:" + ident)],
-            ]
-        )
+        binding = self.store.rows("SELECT approved_stars FROM gift_listings WHERE item_id=?", (ident,))
+        if binding:
+            text += f"\nПодарки: {binding[0]['approved_stars']} Stars по привязке; RUB-курс не подставляется автоматически."
+        if allocation is None:
+            text += "\nРазовые расходы не вычтены: распределение не задано."
+        if placement is not None:
+            text += f"\nНовое размещение (разово, ещё не оплачено): {placement} ₽. В расход каждой продажи автоматически не включается."
+        if payload.get("withdrawal") and result.after_platform is not None and result.withdrawal_fee is None:
+            quote = estimate_withdrawal(result.after_platform, payload["withdrawal"])
+            text += "\n" + escape("; ".join(quote.unknown))
+            if quote.minimum_amount and 0 < result.after_platform < quote.minimum_amount:
+                count = int(
+                    (quote.minimum_amount / result.after_platform).to_integral_value(rounding=ROUND_CEILING)
+                )
+                batch = estimate_withdrawal(result.after_platform * Decimal(count), payload["withdrawal"])
+                if batch.net is not None:
+                    text += f"\nПри объединении {count} таких продаж: на руки ≈ {batch.net} ₽ суммарно."
+        text += "\nИсторическая прибыль по завершённым заказам учитывается отдельно."
+        rows = [
+            [("⚙️ Параметры расчёта", "fin:options:" + ident)],
+            [("🔄 Обновить расчёт", "finance:" + ident)],
+        ]
+        if not payload.get("withdrawal"):
+            rows.insert(0, [("💳 Выбрать способ получения денег", "providers")])
+        return text, keyboard(rows, back=("⬅️ Товар", "item:" + ident))
 
     async def callback(self, action, owner, state):
+        if action.startswith("fin:options:"):
+            ident = action.split(":", 2)[2]
+            await self.read_owned(ident)
+            return (
+                "⚙️ <b>Параметры прогноза</b>\nСебестоимость и распределение расходов задаются для этого товара. Способ получения денег общий для магазина. Исторические продажи не пересчитываются.",
+                keyboard(
+                    [
+                        [("💳 Способ получения денег", "providers")],
+                        [("✏️ Себестоимость", "fin:cost:" + ident)],
+                        [("Распределить расходы размещения", "fin:allocation:" + ident)],
+                        [("Очистить себестоимость", "fin:clearcost:" + ident)],
+                        [("⭐ Цена нового размещения", "fin:placement:" + ident)],
+                    ],
+                    back=("К расчёту", "finance:" + ident),
+                ),
+            )
         if action == "providers":
             methods = await withdrawal_methods(self.api)
             await state.set_state(None)
@@ -119,11 +184,13 @@ class FinancePanel:
                 raise ValueError("Кнопка выбора способа устарела; откройте список заново")
             snapshot = await withdrawal_snapshot(self.api, ident)
             self.store.set_setting(self.preference_key(owner), snapshot)
-            await state.set_state("finance:amount")
+            await state.set_state(None)
             await state.set_data({"withdrawal": snapshot})
             return (
-                "Введите сумму предполагаемого вывода в рублях. Это только калькулятор; средства останутся на месте.",
-                keyboard([[("Сменить способ", "providers")]]),
+                "✅ Способ получения денег сохранён для всех товаров: "
+                + escape(snapshot["provider"].get("name") or ident)
+                + ".\nКомиссии и лимиты будут проверяться заново при расчёте товара. Вывод средств не выполняется.",
+                keyboard([[("Сменить способ", "providers"), ("К профилю", "profile")]]),
             )
         if action == "fin:refresh":
             data = await state.get_data()
@@ -135,8 +202,10 @@ class FinancePanel:
             await state.update_data(withdrawal=snapshot)
             if data.get("withdrawal_amount") is not None:
                 return self.amount_text(data["withdrawal_amount"], snapshot, owner)
-            await state.set_state("finance:amount")
-            return "Параметры обновлены. Введите предполагаемую сумму вывода в рублях.", keyboard([])
+            await state.set_state(None)
+            return "✅ Условия выбранного способа обновлены для всех товаров.", keyboard(
+                [[("К профилю", "profile")]]
+            )
         if action.startswith("finance:"):
             await state.clear()
             return await self.item(owner, action.split(":", 1)[1])
@@ -146,6 +215,15 @@ class FinancePanel:
             await state.set_data({"finance_item_id": ident})
             return (
                 "Введите себестоимость одной единицы в рублях. Значение сохранится локально и не изменит товар на Playerok.",
+                keyboard([]),
+            )
+        if action.startswith("fin:allocation:"):
+            ident = action.split(":", 2)[2]
+            await self.read_owned(ident)
+            await state.set_state("finance:allocation")
+            await state.set_data({"finance_item_id": ident})
+            return (
+                "Укажите расход размещения и число будущих продаж, например: 100 10. На продажу будет учтено 10 ₽. Это прогноз, исторический учёт не меняется. Для явного нулевого распределения: 0 1.",
                 keyboard([]),
             )
         if action.startswith("fin:placement:"):
@@ -213,6 +291,16 @@ class FinancePanel:
     async def message(self, message, state):
         current = await state.get_state()
         data = await state.get_data()
+        if current == "finance:allocation":
+            parts = (message.text or "").split()
+            if len(parts) != 2 or not parts[1].isdigit() or not 1 <= int(parts[1]) <= 100000:
+                raise ValueError("Нужны сумма расходов и положительное число продаж")
+            owner, ident = message.from_user.id, data["finance_item_id"]
+            await self.read_owned(ident)
+            per_sale = (money(parts[0]) / Decimal(parts[1])).quantize(Decimal("0.01"))
+            self.store.set_setting(f"finance:{owner}:placement_per_sale:{ident}", str(per_sale))
+            await state.clear()
+            return await self.item(owner, ident)
         amount = money((message.text or "").replace(",", "."))
         if current == "finance:amount":
             if not data.get("withdrawal"):

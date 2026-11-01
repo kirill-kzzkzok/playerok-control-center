@@ -24,7 +24,7 @@ def store(tmp_path):
 
 def page(kind, ids=(), cursor=None):
     return {
-        kind: [{"id": ident, "name": ident} for ident in ids],
+        kind: [{"id": ident, "name": ident, "status": "APPROVED"} for ident in ids],
         "page_info": {"has_next_page": cursor is not None, "end_cursor": cursor},
     }
 
@@ -119,8 +119,10 @@ async def test_dispatcher_double_click_filter_reset_legacy_button_and_foreign_ow
 
     async def call(method, **kwargs):
         requests.append((method, kwargs))
-        if kwargs.get("statuses"):
-            return page("items", ["filtered"])
+        if kwargs.get("statuses") and kwargs["statuses"][0].name != "APPROVED":
+            result = page("items", ["filtered"])
+            result["items"][0]["status"] = kwargs["statuses"][0].name
+            return result
         if kwargs.get("after_cursor"):
             return page("items", ["second"], "b")
         return page("items", ["first"], "a")

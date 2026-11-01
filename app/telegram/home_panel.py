@@ -74,7 +74,7 @@ class HomePanel:
             return "⚙️ <b>Ещё</b>", keyboard(
                 [
                     [("📊 Статистика", "stats:7"), ("⚡ Автовыдача", "automation")],
-                    [("🚀 Продвижение", "promotions")],
+                    [("🚀 Автопродвижение", "promotions")],
                     [("👤 Профиль", "profile"), ("⚙️ Настройки", "settings")],
                     [("🛠 Инструменты", "tools")],
                 ],

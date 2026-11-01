@@ -99,10 +99,17 @@ class ProfilePanel:
             connection = getattr(self.api, "connection", None) or PlayerokConnection(self.store, self.api)
             status = await connection.check()
             text = self.connection_caption(status)
+            withdrawal = self.store.setting(f"finance:{message.chat.id}:withdrawal", {})
+            provider = withdrawal.get("provider") or {}
+            text += "\n💳 Получение денег: " + escaped(
+                provider.get("name") or provider.get("id") or "не выбрано", 60
+            )
             markup = keyboard(
                 [
                     [("🔄 Проверить соединение", "profile:check")],
                     [("Баланс и данные аккаунта", "profile:details")],
+                    [("💳 Способ получения денег", "providers")],
+                    [("✖️ Закрыть", "nav:close")],
                 ],
                 back=("⬅️ Ещё", "more"),
             )
@@ -121,14 +128,15 @@ class ProfilePanel:
             if details and status["status"] == "CONNECTED" and connection.viewer:
                 try:
                     async with asyncio.timeout(8):
-                        await self.photo(message, connection.viewer)
+                        return await self.photo(message, connection.viewer, markup=markup)
                 except (TelegramNetworkError, TimeoutError):
                     event("WARNING", "Картинка профиля: результат отправки неизвестен; повтора нет", level=30)
+                    return None
             return await message.answer(text, reply_markup=markup)
         viewer = await self.api.call("get")
         return await self.photo(message, viewer)
 
-    async def photo(self, message, viewer):
+    async def photo(self, message, viewer, *, markup=None):
         profile = dict(viewer.get("profile") or {})
         profile["username"] = profile.get("username") or viewer.get("username")
         avatar = await profile_avatar(profile.get("avatar_url"))
@@ -136,5 +144,5 @@ class ProfilePanel:
         return await message.answer_photo(
             BufferedInputFile(image, filename="profile.png"),
             caption=profile_caption(viewer),
-            reply_markup=keyboard([]),
+            reply_markup=markup or keyboard([[("✖️ Закрыть", "nav:close")]]),
         )

@@ -25,7 +25,7 @@ def amount_or_none(value):
         return None
 
 
-def statistics(store, days=7, at=None):
+def statistics(store, days=7, at=None, *, account_id=None):
     if days not in {1, 2, 7, 30, 0}:
         raise ValueError("Недопустимый период")
     at = at or datetime.now(UTC)
@@ -76,6 +76,8 @@ def statistics(store, days=7, at=None):
     name_dates = {}
     for order in store.rows("SELECT * FROM orders"):
         payload = json.loads(order["payload"])
+        if account_id is not None and ((payload.get("item") or {}).get("user") or {}).get("id") != account_id:
+            continue
         # Missing upstream time cannot become a real historical date via ingest fallback.
         created = parsed_time(payload.get("created_at"))
         if created is None:
@@ -176,5 +178,93 @@ def statistics(store, days=7, at=None):
         and not result["unknown_paid_amounts"]
         and not result["previous_unknown_paid"]
         else None
+    )
+    return result
+
+
+# Analytics projection only: original order IDs and accounting journals stay intact.
+def offer_identities(store, account):
+    import unicodedata
+
+    identities, invalid = {}, set()
+    for row in store.rows("SELECT item_id,payload FROM orders"):
+        payload = json.loads(row["payload"])
+        item = payload.get("item") or {}
+        category = item.get("category") or {}
+        seller = (item.get("user") or {}).get("id")
+        title = " ".join(unicodedata.normalize("NFKC", str(item.get("name") or "")).casefold().split())
+        identity = {"account": seller, "category": category.get("id"), "title": title}
+        ident = row["item_id"]
+        if (
+            seller != account
+            or not category.get("id")
+            or not title
+            or ident in identities
+            and identities[ident]["identity"] != identity
+        ):
+            invalid.add(ident)
+        else:
+            identities[ident] = {
+                "identity": identity,
+                "name": item["name"],
+                "category": category.get("name") or "Категория",
+            }
+    return {key: value for key, value in identities.items() if key not in invalid}
+
+
+def confirm_offer_group(store, owner, account, members, *, expected=None):
+    import hashlib
+
+    members = sorted(set(members))
+    if not account or store.setting("playerok:account_id") != account or len(members) < 2:
+        raise ValueError("Нужно выбрать не менее двух предложений подтверждённого магазина")
+    key = f"analytics:{owner}:{account}:offer_groups"
+    with store.transaction():
+        if not store.rows("SELECT 1 FROM administrators WHERE user_id=?", (owner,)):
+            raise ValueError("Доступ закрыт")
+        identities = offer_identities(store, account)
+        if any(ident not in identities for ident in members):
+            raise ValueError("Не подтверждены владелец, категория или название предложения")
+        if expected is not None and {ident: identities[ident] for ident in members} != expected:
+            raise ValueError("Данные предложений изменились. Проверьте объединение заново")
+        identity = identities[members[0]]["identity"]
+        if any(identities[ident]["identity"] != identity for ident in members):
+            raise ValueError("Объединять можно только предложения одного магазина, названия и категории")
+        groups = store.setting(key, [])
+        if any(
+            set(group["members"]) & set(members) and set(group["members"]) != set(members) for group in groups
+        ):
+            raise ValueError("Предложение уже объединено. Сначала отмените прежнее объединение")
+        group_id = hashlib.sha256(json.dumps(members).encode()).hexdigest()[:20]
+        groups = [group for group in groups if group["id"] != group_id]
+        groups.append({"id": group_id, "members": members, "identity": identity})
+        store.set_setting(key, groups)
+    return group_id
+
+
+def grouped_statistics(store, owner, account, days=7):
+    result = statistics(store, days, account_id=account or "")
+    identities = offer_identities(store, account)
+    mapping, sources = {}, {}
+    if account and store.setting("playerok:account_id") == account:
+        for group in store.setting(f"analytics:{owner}:{account}:offer_groups", []):
+            members = group["members"]
+            if all(
+                ident in identities and identities[ident]["identity"] == group["identity"]
+                for ident in members
+            ):
+                group_id = "group:" + group["id"]
+                sources[group_id] = members
+                mapping.update(dict.fromkeys(members, group_id))
+    names, counts, unknown, amounts = {}, defaultdict(int), defaultdict(int), defaultdict(lambda: Decimal(0))
+    for ident, count in result["item_orders"].items():
+        target = mapping.get(ident, ident)
+        names[target] = result["item_names"].get(ident, "Товар")
+        counts[target] += count
+        unknown[target] += result["item_unknown_paid"].get(ident, 0)
+        if ident in result["items"]:
+            amounts[target] += result["items"][ident]
+    result.update(
+        item_names=names, item_orders=counts, item_unknown_paid=unknown, items=amounts, offer_sources=sources
     )
     return result

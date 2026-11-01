@@ -25,7 +25,6 @@ class PanelTracking(BaseRequestMiddleware):
             in {
                 "sendMessage",
                 "sendPhoto",
-                "sendDocument",
                 "editMessageText",
                 "editMessageCaption",
                 "editMessageReplyMarkup",

@@ -64,8 +64,13 @@ async def test_dispatcher_filters_compose_persist_restart_validate_and_reset(tmp
         {"id": "unpriced", "name": "Товар_%", "price": None, "priority": "PREMIUM"},
     ]
 
+    for value in items:
+        value["status"] = "APPROVED"
+
     async def call(method, **kwargs):
         calls.append((method, kwargs))
+        for value in items:
+            value["status"] = kwargs["statuses"][0].name if kwargs.get("statuses") else "APPROVED"
         return {"items": items, "page_info": {"has_next_page": True, "end_cursor": "next"}}
 
     api.call = call
@@ -121,7 +126,7 @@ async def test_dispatcher_filters_compose_persist_restart_validate_and_reset(tmp
         await ui.click("il:reset")
         assert item_buttons() == {"item:match", "item:ordinary", "item:expensive", "item:unpriced"}
         assert "category_id" not in calls[-1][1]
-        assert calls[-1][1]["statuses"] is None
+        assert calls[-1][1]["statuses"][0].name == "APPROVED"
         assert not store.rows("SELECT * FROM outbox")
     finally:
         await dp.storage.close()

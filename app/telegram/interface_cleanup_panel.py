@@ -12,8 +12,12 @@ class InterfaceCleanupPanel:
     async def callback(self, action, owner, state, message):
         if message.chat.id != owner or message.chat.type != "private":
             raise Conflict("Очистка доступна только в личном чате владельца")
+        active_id = (
+            self.service.store.setting(f"navigation:{message.bot.id}:{owner}", {}).get("id")
+            or message.message_id
+        )
         if action == "ic:preview":
-            rows = self.service.preview(owner, message.bot.id, message.message_id)
+            rows = self.service.preview(owner, message.bot.id, active_id)
             totals = self.service.totals(owner, message.bot.id)
             nonce = secrets.token_hex(8)
             await state.set_state("interface_cleanup:confirm")
@@ -38,9 +42,7 @@ class InterfaceCleanupPanel:
                 or data.get("bot_id") != message.bot.id
             ):
                 raise Conflict("Подтверждение очистки устарело")
-            result = await self.service.execute(
-                owner, message.bot, message.message_id, data["rows"], data["nonce"]
-            )
+            result = await self.service.execute(owner, message.bot, active_id, data["rows"], data["nonce"])
             await state.clear()
             return (
                 f"🧹 Удалено: {result.get('DELETED', 0)} · отклонено: {result.get('FAILED', 0)} · неизвестный результат: {result.get('UNCERTAIN', 0)}"

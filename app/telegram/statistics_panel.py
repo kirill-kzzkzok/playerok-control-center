@@ -1,11 +1,12 @@
 import asyncio
+import secrets
 
 from aiogram.types import BufferedInputFile
 
 from app.rendering.charts import revenue_chart
 from app.services.finance import checked_time
 from app.services.order_finance import profit_statistics, settlement_statistics
-from app.services.statistics import statistics
+from app.services.statistics import confirm_offer_group, grouped_statistics, offer_identities
 from app.services.transactions import transaction_statistics
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
@@ -46,9 +47,80 @@ class StatisticsPanel:
         ]
         return keyboard(rows, back=("⬅️ К статистике", f"stats:{days}"))
 
-    async def handle(self, action, message, *, owner=None):
+    async def handle(self, action, message, *, owner=None, state=None):
         parts = action.split(":")
         days = int(parts[1])
+        if parts[0] == "sg":
+            account = self.store.setting("playerok:account_id")
+            if not account:
+                raise ValueError("Сначала подтвердите подключённый аккаунт в профиле")
+            if parts[2] == "sources":
+                grouped = grouped_statistics(self.store, owner, account, days)
+                members = grouped["offer_sources"].get("group:" + parts[3])
+                if not members:
+                    raise ValueError("Объединение изменилось. Откройте рейтинг заново")
+                page = int(parts[4]) if len(parts) == 5 else 0
+                if page < 0 or page * 20 >= len(members):
+                    raise ValueError("Страница исходных объявлений устарела")
+                names = offer_identities(self.store, account)
+                text = "🔗 <b>Исходные объявления группы</b>\n" + "\n".join(
+                    escaped(names[ident]["name"], 80) + " · <code>" + escaped(ident, 100) + "</code>"
+                    for ident in members[page * 20 : page * 20 + 20]
+                )
+                rows = []
+                if page:
+                    rows.append([("⬅️ Объявления", f"sg:{days}:sources:{parts[3]}:{page - 1}")])
+                if (page + 1) * 20 < len(members):
+                    rows.append([("Объявления ➡️", f"sg:{days}:sources:{parts[3]}:{page + 1}")])
+                return await message.answer(
+                    text, reply_markup=keyboard(rows, back=("К рейтингу", f"sr:{days}:top"))
+                )
+            if parts[2] == "commit":
+                pending = (await state.get_data()).get("offer_group", {})
+                if pending.get("nonce") != parts[3] or pending.get("account") != account:
+                    raise ValueError("Подтверждение объединения устарело")
+                confirm_offer_group(
+                    self.store, owner, account, pending["members"], expected=pending["expected"]
+                )
+                await state.clear()
+                return await message.answer(
+                    "✅ Предложения объединены только для аналитики. История заказов сохранена.",
+                    reply_markup=keyboard([[("Рейтинг товаров", f"sr:{days}:top")]]),
+                )
+            if parts[2] == "reset":
+                # Local projection only, never changes an order or money ledger.
+                self.store.set_setting(f"analytics:{owner}:{account}:offer_groups", [])
+                return await message.answer(
+                    "Объединения аналитики отменены. Исходные объявления показаны отдельно.",
+                    reply_markup=keyboard([[("Рейтинг товаров", f"sr:{days}:top")]]),
+                )
+            values = offer_identities(self.store, account)
+            ids = sorted(values)
+            page = int(parts[3]) if len(parts) == 4 else 0
+            if page < 0 or page * 20 > len(ids):
+                raise ValueError("Страница предложений устарела")
+            await state.set_state("statsgroup:choose")
+            await state.set_data({"group_candidates": ids, "group_account": account, "group_days": days})
+            lines = [
+                "🔗 <b>Объединить предложения</b>",
+                "Выберите номера объявлений одного продукта через запятую. Совпадение названий само по себе ничего не объединяет.",
+            ]
+            lines += [
+                f"{i}. {escaped(values[ident]['name'], 70)} · {escaped(values[ident]['category'], 40)}"
+                for i, ident in enumerate(ids[page * 20 : page * 20 + 20], page * 20 + 1)
+            ]
+            rows = [[("Отменить объединения аналитики", f"sg:{days}:reset")]]
+            if page:
+                rows.append([("⬅️ Предложения", f"sg:{days}:list:{page - 1}")])
+            if (page + 1) * 20 < len(ids):
+                rows.append([("Предложения ➡️", f"sg:{days}:list:{page + 1}")])
+            return await message.answer(
+                "\n".join(lines) if ids else "Нет предложений с подтверждёнными владельцем и категорией.",
+                reply_markup=keyboard(
+                    rows,
+                    back=("К рейтингу", f"sr:{days}:top"),
+                ),
+            )
         if parts[0] == "sr":
             group = parts[2] if len(parts) == 3 else "reports"
             groups = {
@@ -57,6 +129,7 @@ class StatisticsPanel:
                     "🏆 Лучшие товары",
                     [
                         [("По заказам", f"sd:{days}:bestsellers"), ("По выручке", f"sd:{days}:items")],
+                        [("Объединить предложения", f"sg:{days}:list")],
                         [
                             ("Категории · заказы", f"sd:{days}:category_counts"),
                             ("Категории · выручка", f"sd:{days}:categories"),
@@ -85,7 +158,9 @@ class StatisticsPanel:
             return await message.answer(
                 "<b>" + title + "</b>", reply_markup=keyboard(rows, back=("⬅️ К статистике", f"stats:{days}"))
             )
-        stats = await asyncio.to_thread(statistics, self.store, days)
+        stats = await asyncio.to_thread(
+            grouped_statistics, self.store, owner, self.store.setting("playerok:account_id"), days
+        )
         view = parts[2] if len(parts) == 3 else "overview"
         if parts[0] == "sd":
             if view == "settlements":
@@ -184,8 +259,6 @@ class StatisticsPanel:
                 for index, key in enumerate(top, 1):
                     label = stats["item_names"].get(key, key) if by_item else key
                     text += f"\n\n{index}. {escaped(label, 80)}"
-                    if by_item:
-                        text += f" · <code>{escaped(key, 40)}</code>"
                     known = counts[key] - unknown.get(key, 0)
                     amount = f"{revenues.get(key, 0)} ₽" if known else "нет известных сумм"
                     text += f"\nЗаказов: {counts[key]} · {amount}"
@@ -217,7 +290,26 @@ class StatisticsPanel:
                 text += "\nДо комиссий, по текущим статусам локальных заказов."
             else:
                 raise ValueError("Раздел статистики недоступен")
-            return await message.answer(text, reply_markup=self.markup(days, details=True))
+            markup = self.markup(days, details=True)
+            if view in {"items", "bestsellers"}:
+                visible = {key for key, _amount in top} if view == "items" else set(top)
+                for key, members in stats.get("offer_sources", {}).items():
+                    if key in visible:
+                        markup.inline_keyboard.insert(
+                            0,
+                            keyboard(
+                                [
+                                    [
+                                        (
+                                            "Состав: " + stats["item_names"].get(key, "Товар")[:35],
+                                            f"sg:{days}:sources:{key.split(':')[1]}",
+                                        )
+                                    ]
+                                ],
+                                home=False,
+                            ).inline_keyboard[0],
+                        )
+            return await message.answer(text, reply_markup=markup)
         if parts[0] == "stats":
             text = (
                 f"📊 <b>Статистика · {'всё время' if days == 0 else str(days) + ' дн.'}</b>"
@@ -246,4 +338,39 @@ class StatisticsPanel:
             BufferedInputFile(image, filename="statistics.png"),
             caption=caption,
             reply_markup=self.markup(days),
+        )
+
+    async def message(self, message, state):
+        data = await state.get_data()
+        ids = data.get("group_candidates", [])
+        try:
+            indices = [int(value.strip()) - 1 for value in (message.text or "").split(",")]
+        except ValueError:
+            raise ValueError("Введите номера через запятую, например: 1, 2, 3") from None
+        if len(set(indices)) < 2 or any(i < 0 or i >= len(ids) for i in indices):
+            raise ValueError("Выберите не менее двух разных номеров из списка")
+        account = data["group_account"]
+        values = offer_identities(self.store, account)
+        members = sorted({ids[i] for i in indices})
+        if (
+            any(ident not in values for ident in members)
+            or len({str(values[ident]["identity"]) for ident in members}) != 1
+        ):
+            raise ValueError("У предложений должны совпадать подтверждённые владелец, название и категория")
+        nonce = secrets.token_hex(8)
+        await state.set_state(None)
+        await state.update_data(
+            offer_group={
+                "nonce": nonce,
+                "account": account,
+                "members": members,
+                "expected": {ident: values[ident] for ident in members},
+            }
+        )
+        return (
+            f"Объединить {len(members)} объявлений «{escaped(values[members[0]]['name'], 100)}» в один продукт рейтинга?\nПодтвердите, что это один продукт. Заказы и их суммы не изменятся.",
+            keyboard(
+                [[("✅ Это один продукт", f"sg:{data['group_days']}:commit:{nonce}")]],
+                back=("Отмена", f"sr:{data['group_days']}:top"),
+            ),
         )

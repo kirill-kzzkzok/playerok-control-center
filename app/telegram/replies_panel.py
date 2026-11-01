@@ -125,11 +125,55 @@ class RepliesPanel:
         except BaseException:
             self.attachments.discard(source)
             raise
+        if len(result[0]) > 1024:
+            data = await state.get_data()
+            result[1].inline_keyboard.insert(
+                0,
+                keyboard(
+                    [[("📷 Посмотреть фотографию", "replypreview:photo:" + data["confirm_token"])]],
+                    home=False,
+                ).inline_keyboard[0],
+            )
+            return result
         await message.answer_photo(
             BufferedInputFile(await self.attachments.read(source), filename="reply-preview.jpg"),
-            caption="Предпросмотр фотографии. Подтвердите отправку следующим сообщением.",
+            caption=result[0]
+            if len(result[0]) <= 1024
+            else "Отправить покупателю фотографию и введённый текст?",
+            reply_markup=result[1],
         )
-        return result
+        return None
+
+    async def preview(self, action, message, state):
+        data = await state.get_data()
+        _, kind, nonce = action.split(":")
+        pending = data.get("pending", {})
+        if (
+            nonce != data.get("confirm_token")
+            or pending.get("kind") != "reply"
+            or not pending.get("payload", {}).get("photos")
+        ):
+            raise ValidationError("Предпросмотр устарел. Откройте переписку заново")
+        if kind == "photo":
+            source = pending["payload"]["photos"][0]
+            await message.answer_photo(
+                BufferedInputFile(await self.attachments.read(source), filename="reply-preview.jpg"),
+                caption="Фотография к подготовленному ответу. Покупателю ещё ничего не отправлено.",
+                reply_markup=keyboard([[("К тексту и подтверждению", "replypreview:text:" + nonce)]]),
+            )
+        elif kind == "text":
+            await message.answer(
+                "Отправить покупателю?\n\n" + escape(pending["payload"]["text"]),
+                reply_markup=keyboard(
+                    [
+                        [("✅ Отправить", "commit:" + nonce)],
+                        [("📷 Фотография", "replypreview:photo:" + nonce)],
+                    ],
+                    back=("Отмена", "chat:" + pending["target"]),
+                ),
+            )
+        else:
+            raise ValidationError("Недоступный предпросмотр")
 
     @staticmethod
     async def confirm(state, chat_id, text, origin=None, *, photos=None):

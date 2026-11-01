@@ -44,6 +44,7 @@ def navigation(action):
         "profile",
         "profile:check",
         "profile:details",
+        "nav:close",
         "gft:history",
         "gft:settings",
         "diagnostics",
@@ -65,6 +66,10 @@ def navigation(action):
     } or action.startswith(
         (
             "item:",
+            "nav:back:",
+            "nav:close:",
+            "replypreview:",
+            "ar:preview:",
             "payp:item:",
             "iv:",
             "tools:",

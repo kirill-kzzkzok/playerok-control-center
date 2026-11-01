@@ -143,8 +143,8 @@ async def test_dispatcher_card_gallery_and_foreign_owner_without_mutations(conte
         await ui.click(callback, owner=8)
         assert api.call.await_count == count
         await ui.click(callback)
-        assert session.calls[-1].__api_method__ == "sendPhoto"
-        assert "&lt;Item&gt;" in session.calls[-1].caption
+        assert session.calls[-1].__api_method__ == "editMessageMedia"
+        assert "&lt;Item&gt;" in session.calls[-1].media.caption
         download.assert_awaited_once()
         assert not store.rows("SELECT * FROM outbox")
     finally:

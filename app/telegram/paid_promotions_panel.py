@@ -28,14 +28,25 @@ class PaidPromotionsPanel:
             await state.set_data(
                 {"paid_choices": {"nonce": nonce, "item_id": ident, "ids": [q["id"] for q in choices]}}
             )
-            return "⭐ <b>PREMIUM-размещение</b>\n" + escaped(
-                item.get("name") or "Товар", 200
-            ) + "\nВыберите актуальный тариф. Перед списанием будет подтверждение.", keyboard(
+            _revision, _policy, selection = self.service.settings.get()
+            selected = self.service.settings.selected(ident, selection)
+            priority = item.get("priority")
+            priority_type = priority.get("type") if isinstance(priority, dict) else priority
+            return "⭐ <b>Продвижение товара</b>\n" + escaped(item.get("name") or "Товар", 200) + (
+                "\nPREMIUM: установлен" if priority_type == "PREMIUM" else "\nPREMIUM: не подтверждён"
+            ) + (
+                "\nВ расписании: выбран" if selected else "\nВ расписании: не выбран"
+            ) + "\nВыберите актуальный тариф. Перед списанием будет подтверждение." + (
+                "" if choices else "\nСейчас сервер не предложил доступных PREMIUM-тарифов."
+            ), keyboard(
                 [
                     [(f"PREMIUM · {q['price']} ₽ · {q.get('period', '?')} дн.", f"payp:pick:{nonce}:{i}")]
                     for i, q in enumerate(choices)
                 ]
-                + [[("Лимиты расходов / продвижение", "promotions")]],
+                + [
+                    [("Расписание этого товара", "promo:item:" + ident)],
+                    [("Лимиты и автопродвижение", "promotions")],
+                ],
                 back=("⬅️ К товару", "item:" + ident),
             )
         if parts[1] == "pick" and len(parts) == 4:

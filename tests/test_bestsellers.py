@@ -91,7 +91,8 @@ async def test_dispatcher_ranks_counts_before_revenue_and_exposes_unknown_withou
     store, monkeypatch, days
 ):
     monkeypatch.setattr(
-        "app.telegram.statistics_panel.statistics", lambda db, period: statistics(db, period, AT)
+        "app.telegram.statistics_panel.grouped_statistics",
+        lambda db, owner, account, period: statistics(db, period, AT),
     )
     sale(store, "expensive", "expensive", 999)
     sale(store, "small1", "small", 5)
@@ -139,7 +140,8 @@ async def test_dispatcher_ranks_counts_before_revenue_and_exposes_unknown_withou
 
 async def test_top15_ties_are_stable_and_long_names_fit_telegram_text_limit(store, monkeypatch):
     monkeypatch.setattr(
-        "app.telegram.statistics_panel.statistics", lambda db, period: statistics(db, period, AT)
+        "app.telegram.statistics_panel.grouped_statistics",
+        lambda db, owner, account, period: statistics(db, period, AT),
     )
     for index in reversed(range(20)):
         sale(store, f"order{index:02}", f"item{index:02}", None, name="<&>" * 100)
@@ -151,8 +153,9 @@ async def test_top15_ties_are_stable_and_long_names_fit_telegram_text_limit(stor
         await ui.message("/start")
         await ui.click("sd:0:bestsellers")
         text = session.calls[-1].text
-        assert "item14" in text and "item15" not in text
-        assert text.index("item00") < text.index("item01") < text.index("item14")
+        assert "item14" not in text and "item15" not in text  # IDs stay out of the normal ranking
+        assert "15." in text and "16." not in text
+        assert statistics(store, 0, AT)["item_orders"]["item14"] == 1
         assert len(unescape(text)) < 4096
         assert "&lt;&amp;&gt;" in text
         await ui.click("sd:0:bestsellers", owner=8)

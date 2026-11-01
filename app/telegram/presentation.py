@@ -139,48 +139,6 @@ def error_text(error):
     return escaped(str(error), 800)
 
 
-def context_back(markup, action):
-    """Replace only the generic home row; explicit back buttons and proofs stay intact."""
-    from aiogram.types import InlineKeyboardButton
-
-    if not markup:
-        return markup
-    target = None
-    if action.startswith(("gft:",)) and action != "gft:home":
-        target = ("⬅️ Подарки", "gft:home")
-    elif action.startswith(("stock:",)):
-        target = ("⬅️ К товарам", "items")
-    elif action.startswith(("od:", "ff:", "pf:")):
-        target = ("⬅️ К заказам", "orders")
-    elif action.startswith(("chat", "reply:", "compose:", "readchat:")):
-        target = ("⬅️ К сообщениям", "chats")
-    elif action.startswith(("edit", "discount:", "delete:", "publish:", "quote:", "finance:")):
-        ident = action.split(":", 1)[1]
-        target = ("⬅️ К товару", "item:" + ident)
-    elif action.startswith(("draft", "dl:", "il:", "itemfilter", "icp:")):
-        target = ("⬅️ К товарам", "items")
-    elif action.startswith(("sp:", "ar:", "quick", "providers", "fin:")):
-        target = ("⬅️ Настройки", "settings")
-    elif action.startswith(("ops:", "result:", "aq:", "delivered:", "agv:", "ic:")) or action in {
-        "diagnostics",
-        "sync",
-        "backup",
-    }:
-        target = ("⬅️ Инструменты", "tools")
-    elif action in {"settings", "profile", "profile:check"}:
-        target = ("⬅️ Ещё", "more")
-    if target:
-        markup = markup.model_copy(deep=True)
-        rows = markup.inline_keyboard
-        has_target = any(b.callback_data == target[1] for row in rows for b in row)
-        markup.inline_keyboard = [
-            row for row in rows if not (len(row) == 1 and row[0].callback_data == "home")
-        ]
-        if not has_target:
-            markup.inline_keyboard.append([InlineKeyboardButton(text=target[0], callback_data=target[1])])
-    return markup
-
-
 def item_label(store, ident):
     cached = store.setting("ui:item:" + ident + ":name")
     if isinstance(cached, str) and cached:

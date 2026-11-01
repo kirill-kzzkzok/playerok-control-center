@@ -106,7 +106,7 @@ async def test_complete_preview_real_wizard_then_create_and_one_time_stock_trans
             for secret in ("private-seller-field", "first-private-unit", "second-private-unit")
         )
     await click(ui, state, "photo_preview:0")
-    assert any(call.__api_method__ == "sendPhoto" for call in session.calls)
+    assert any(call.__api_method__ in {"sendPhoto", "editMessageMedia"} for call in session.calls)
     await click(ui, state, "submit")
     await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
     await Notifications(store, bot).once()

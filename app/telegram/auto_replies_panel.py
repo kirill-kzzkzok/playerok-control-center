@@ -76,15 +76,43 @@ class AutoRepliesPanel:
             if message is None:
                 raise Conflict("Откройте превью через панель")
             pages = html_pages(response, 2800)
-            for index, page in enumerate(pages, 1):
-                await message.answer(f"💬 <b>Полный текст автоответа · {index}/{len(pages)}</b>\n" + page)
+        else:
+            pages = []
         nonce = secrets.token_hex(6)
         await state.set_state("autoreply:confirm")
-        await state.set_data({"auto_reply_pending": pending, "auto_reply_nonce": nonce})
+        await state.set_data(
+            {
+                "auto_reply_pending": pending,
+                "auto_reply_nonce": nonce,
+                "auto_reply_preview": pages,
+                "auto_reply_question": text,
+            }
+        )
+        if pages:
+            return await self.preview(state, nonce, 0)
         return text, keyboard([[("Подтвердить локально", "ar:commit:" + nonce)], [("Отмена", "ar:menu")]])
+
+    async def preview(self, state, nonce, index):
+        data = await state.get_data()
+        pages = data.get("auto_reply_preview", [])
+        if nonce != data.get("auto_reply_nonce") or not 0 <= index < len(pages):
+            raise Conflict("Предпросмотр устарел. Откройте автоответ заново")
+        rows = []
+        if index:
+            rows.append([("⬅️ Предыдущая страница", f"ar:preview:{nonce}:{index - 1}")])
+        if index + 1 < len(pages):
+            rows.append([("Следующая страница ➡️", f"ar:preview:{nonce}:{index + 1}")])
+        else:
+            rows.append([("Подтвердить локально", "ar:commit:" + nonce)])
+        return f"💬 <b>Полный текст автоответа · {index + 1}/{len(pages)}</b>\n" + pages[
+            index
+        ] + "\n\n" + data["auto_reply_question"], keyboard(rows, back=("Отмена", "ar:menu"))
 
     async def callback(self, action, owner, state, message=None):
         self.service.owner(owner)
+        if action.startswith("ar:preview:"):
+            _, _, nonce, index = action.split(":")
+            return await self.preview(state, nonce, int(index))
         if action.startswith("ar:history:"):
             page = int(action.split(":", 2)[2])
             if not 0 <= page <= 1_000_000:

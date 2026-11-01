@@ -78,8 +78,9 @@ async def test_provider_selection_amount_and_restart_never_withdraw(setup):
     assert all(button.callback_data != "fin:select:LOCAL" for row in markup.inline_keyboard for button in row)
     await panel.callback("fin:select:SBP", 7, state)
     state = FSMContext(SQLiteStorage(store), state.key)
-    text, _ = await panel.message(SimpleNamespace(text="1000", from_user=SimpleNamespace(id=7)), state)
-    assert "940.00" in text and "Оценка" in text
+    assert await state.get_state() is None
+    text, _ = await panel.callback("finance:item", 7, state)
+    assert "1692.00" in text and "Прогноз будущей продажи" in text
     assert store.setting("finance:7:withdrawal")["provider"]["id"] == "SBP"
     assert store.setting("finance:8:withdrawal") is None
     assert not store.rows("SELECT * FROM outbox")
@@ -87,7 +88,7 @@ async def test_provider_selection_amount_and_restart_never_withdraw(setup):
     quotes = store.rows("SELECT * FROM financial_quotes")
     assert len(quotes) == 1 and json.loads(quotes[0]["payload"])["kind"] == "ESTIMATE_ONLY"
     await panel.callback("fin:refresh", 7, state)
-    assert set(api.calls) <= {"get_transaction_providers"}
+    assert set(api.calls) <= {"get_transaction_providers", "get_item"}
 
 
 async def test_local_cost_for_sold_item_does_not_require_market_editability(setup):
@@ -202,7 +203,8 @@ async def test_premium_preview_is_one_time_quote_not_a_purchase_or_repeated_expe
     for _ in range(2):
         await panel.callback("finance:item", 7, state)
     quotes = store.rows("SELECT payload FROM financial_quotes ORDER BY created_at")
-    assert all(json.loads(q["payload"])["result"]["placement_expense"] == "37.00" for q in quotes)
+    assert all(json.loads(q["payload"])["result"]["placement_expense"] is None for q in quotes)
+    assert all(json.loads(q["payload"])["inputs"]["placement_quote"]["price"] == "37.00" for q in quotes)
     assert json.loads(quotes[-1]["payload"])["inputs"]["placement_quote"]["base_price"] == 2000
     api.item["status"] = "SOLD"
     with pytest.raises(ValueError):

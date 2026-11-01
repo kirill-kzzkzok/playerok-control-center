@@ -174,7 +174,10 @@ def test_smooth_curves_preserve_observations_and_never_invent_peaks(values):
 
 
 async def test_dispatcher_statistics_access_callbacks_and_escaping(store, monkeypatch):
-    monkeypatch.setattr("app.telegram.statistics_panel.statistics", lambda db, days: statistics(db, days, AT))
+    monkeypatch.setattr(
+        "app.telegram.statistics_panel.grouped_statistics",
+        lambda db, owner, account, days: statistics(db, days, AT),
+    )
     order(store, "sale")
     session, api = TelegramSession(), CatalogAPI()
     bot = Bot("123:" + "x" * 35, session=session)
@@ -189,9 +192,9 @@ async def test_dispatcher_statistics_access_callbacks_and_escaping(store, monkey
         assert session.calls[0].show_alert
         for action in ["stats:1", "st:2:time", "st:7:average", "st:30:promotion", "st:0:comparison"]:
             await ui.click(action)
-            sent = session.calls[-1]
+            sent = session.last_panel
             if action.startswith("stats:"):
-                assert sent.__api_method__ == "sendMessage"
+                assert sent.__api_method__ in {"sendMessage", "editMessageText"}
                 assert "полнота магазина не подтверждена" in sent.text
                 await ui.click("sr:1")
                 await ui.click("sr:1:charts")
@@ -201,16 +204,16 @@ async def test_dispatcher_statistics_access_callbacks_and_escaping(store, monkey
                     for b in row
                 )
             else:
-                assert sent.__api_method__ == "sendPhoto"
-                assert len(sent.caption) < 1024
-                assert "прибыль не подтверждены" in sent.caption
+                assert sent.__api_method__ == "editMessageMedia"
+                assert len(sent.media.caption) < 1024
+                assert "прибыль не подтверждены" in sent.media.caption
         await ui.click("sd:0:details")
-        assert "Период: всё время" in session.calls[-1].text
-        assert "статусы текущие" in session.calls[-1].text
+        assert "Период: всё время" in session.last_panel.text
+        assert "статусы текущие" in session.last_panel.text
         await ui.click("sd:7:items")
-        assert "&lt;Product&gt;" in session.calls[-1].text
+        assert "&lt;Product&gt;" in session.last_panel.text
         await ui.click("sd:7:categories")
-        assert "&lt;Game&gt;" in session.calls[-1].text
+        assert "&lt;Game&gt;" in session.last_panel.text
         assert not api.calls
         assert not store.rows("SELECT * FROM outbox")
         assert not store.rows("SELECT * FROM promotion_expenses")

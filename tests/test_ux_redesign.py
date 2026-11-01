@@ -105,6 +105,7 @@ async def test_gift_picker_server_drafts_keep_selection_context_after_restart(ux
     await r.ui.click("il:reset")
     assert "gft:item:lot" in buttons(r.session.calls[-1])
     await r.ui.click("home")
+    r.api.value["status"] = "APPROVED"
     await r.ui.click("items")
     assert "item:lot" in buttons(r.session.calls[-1])
     assert "drafts" in buttons(r.session.calls[-1])
@@ -185,7 +186,8 @@ async def test_more_and_all_tools_have_real_routes_without_external_calls(ux):
         await r.ui.click(route)
         assert "❗" not in r.session.calls[-1].text, route
         assert any(
-            k in buttons(r.session.calls[-1]) for k in ("home", "more", "tools", "gft:home", "stats:7")
+            k in {"home", "more", "tools", "gft:home", "stats:7"} or k.startswith("nav:back:")
+            for k in buttons(r.session.calls[-1])
         ), route
     assert not r.api.calls
     assert not r.store.rows("SELECT * FROM outbox")
@@ -199,7 +201,9 @@ async def test_item_compact_sections_all_old_actions_and_safe_delete(ux):
     card = r.session.calls[-1]
     assert "&lt;Item&gt;" in card.text and "Опубликован" in card.text
     assert "<Description>" not in card.text and "Позиция" not in card.text
-    assert len(buttons(card)) == 4
+    assert {"finance:lot", "payp:item:lot", "iv:edit:lot", "iv:delivery:lot", "iv:other:lot"} <= buttons(
+        card
+    ).keys()
     await r.ui.click("iv:edit:lot")
     assert {"discount:lot", "editdesc:lot", "editname:lot", "editphoto:lot", "editfields:lot"} <= buttons(
         r.session.calls[-1]
@@ -208,9 +212,7 @@ async def test_item_compact_sections_all_old_actions_and_safe_delete(ux):
     assert "stock:view:lot" in buttons(r.session.calls[-1])
     assert "gft:item:lot" not in buttons(r.session.calls[-1])
     await r.ui.click("iv:other:lot")
-    assert {"finance:lot", "promo:item:lot", "quote:lot", "delete:lot", "iv:details:lot"} <= buttons(
-        r.session.calls[-1]
-    ).keys()
+    assert {"delete:lot", "iv:details:lot"} <= buttons(r.session.calls[-1]).keys()
     await r.ui.click("delete:lot")
     pending = await r.state.get_data()
     token = pending["confirm_token"]
@@ -337,7 +339,11 @@ async def test_navigation_from_notification_never_edits_evidence(ux):
     r.store.execute("INSERT INTO notifications VALUES('message:incoming',7,1,'SUCCEEDED')")
     for action in ("home", "more", "tools", "chat:chat", "iv:other:lot"):
         await r.ui.click(action)
-        assert r.session.calls[-1].__api_method__ == "sendMessage"
+        assert not any(
+            m.__api_method__ in {"editMessageText", "editMessageMedia", "deleteMessage"}
+            and getattr(m, "message_id", None) == 1
+            for m in r.session.calls
+        )
     assert r.store.rows("SELECT telegram_message_id FROM notifications")[0]["telegram_message_id"] == 1
 
 
@@ -355,7 +361,7 @@ async def test_navigation_after_failed_ack_recovers_without_writes(tmp_path):
         for action in ("more", "tools:data", "iv:edit:lot", "gft:settings"):
             await ui.click(action)
             assert r"Нажатие не подтверждено" not in session.calls[-1].text
-            assert session.calls[-1].__api_method__ == "editMessageText"
+            assert session.calls[-1].__api_method__ in {"sendMessage", "editMessageText"}
         assert not store.rows("SELECT * FROM outbox")
     finally:
         await bot.session.close()
