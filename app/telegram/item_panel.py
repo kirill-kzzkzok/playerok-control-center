@@ -193,6 +193,92 @@ class ItemPanel:
             )
         return text, markup
 
+    async def edit_photos(self, action, owner, state):
+        parts = action.split(":")
+        if parts[0] == "editphoto":
+            ident = parts[1]
+            item = await self.owned(ident)
+            if item.get("is_attachments_forbidden") is True:
+                raise ValidationError("Playerok скрыл фотографии. Редактирование недоступно")
+            ids = [image["id"] for image in self.images(item)]
+            if len(ids) != len(item.get("attachments") or []) or len(set(ids)) != len(ids):
+                raise ValidationError("Не удалось подтвердить полный набор фотографий")
+            nonce = secrets.token_hex(6)
+            view = {"id": ident, "ids": ids, "nonce": nonce, "owner": owner}
+            await state.clear()
+            await state.set_data(
+                {"photo_edit": view, "item_gallery": {"id": ident, "images": ids, "nonce": nonce}}
+            )
+            rows = [[(f"Фото {i + 1}", f"ipe:{nonce}:select:{i}")] for i in range(len(ids))]
+            rows.insert(0, [("➕ Добавить фото", f"ipe:{nonce}:add")])
+            if ids:
+                rows.append([("Заменить все фотографии…", f"ipe:{nonce}:all")])
+            return (
+                f"🖼 <b>Фотографии товара</b>\nСейчас: {len(ids)}. Выберите фото или добавьте новое.",
+                keyboard(rows, back=("К редактированию", "iv:edit:" + ident)),
+            )
+        view = (await state.get_data()).get("photo_edit", {})
+        if len(parts) not in {3, 4} or parts[1] != view.get("nonce") or owner != view.get("owner"):
+            raise ValidationError("Выбор фотографии устарел. Откройте фотографии заново")
+        item = await self.owned(view["id"])
+        if [image["id"] for image in self.images(item)] != view["ids"]:
+            raise ValidationError("Фотографии изменились на Playerok. Откройте их заново")
+        command, prefix = parts[2], "ipe:" + view["nonce"] + ":"
+        if command == "select":
+            if len(parts) != 4 or not parts[3].isdigit() or not 0 <= int(parts[3]) < len(view["ids"]):
+                raise ValidationError("Фотография недоступна")
+            view["selected"] = int(parts[3])
+            await state.update_data(photo_edit=view)
+            return f"🖼 <b>Фото {view['selected'] + 1}</b>\nОстальные фотографии сохранятся.", keyboard(
+                [
+                    [("Просмотреть", f"itemmedia:{view['nonce']}:{view['selected']}")],
+                    [("Заменить", prefix + "replace"), ("Удалить", prefix + "remove")],
+                ],
+                back=("Все фотографии", "editphoto:" + view["id"]),
+            )
+        if command not in {"add", "replace", "remove", "all"}:
+            raise ValidationError("Действие с фотографией недоступно")
+        selected = view.get("selected")
+        if command in {"replace", "remove"} and (
+            type(selected) is not int or not 0 <= selected < len(view["ids"])
+        ):
+            raise ValidationError("Сначала выберите фотографию")
+        keep = list(view["ids"])
+        if command == "all":
+            keep = []
+        elif command in {"replace", "remove"}:
+            keep.pop(selected)
+        if command == "remove":
+            nonce = secrets.token_hex(8)
+            await state.set_data(
+                {
+                    "pending": {
+                        "kind": "edit",
+                        "target": view["id"],
+                        "payload": {"replace_attachment_ids": view["ids"], "keep_attachment_ids": keep},
+                    },
+                    "confirm_token": nonce,
+                }
+            )
+            await state.set_state(None)
+            return f"Удалить только фото {selected + 1}? Остальные фотографии сохранятся.", keyboard(
+                [[("✅ Удалить это фото", "commit:" + nonce)]], back=("Отмена", "editphoto:" + view["id"])
+            )
+        await state.set_data(
+            {
+                "item_id": view["id"],
+                "attachment_ids": view["ids"],
+                "keep_attachment_ids": keep,
+                "photo_mode": command,
+            }
+        )
+        await state.set_state("editphoto")
+        return "Пришлите новое фото или файл JPEG/PNG/WEBP. " + (
+            "После отдельного подтверждения будут заменены ВСЕ фотографии."
+            if command == "all"
+            else "Остальные фотографии сохранятся."
+        ), keyboard([], back=("Отмена", "editphoto:" + view["id"]))
+
     async def media(self, action, state):
         parts = action.split(":")
         view = (await state.get_data()).get("item_gallery", {})

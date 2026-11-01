@@ -1,7 +1,7 @@
 from decimal import Decimal, InvalidOperation
 
 
-def edit_receipt_matches(target, changes, result):
+def edit_receipt_matches(target, changes, result, *, keep_attachment_ids=()):
     """Positive evidence for requested fields, never just a matching item ID."""
     if not isinstance(result, dict) or result.get("id") != target:
         return False
@@ -15,16 +15,22 @@ def edit_receipt_matches(target, changes, result):
                 return False
         except (ValueError, InvalidOperation):
             return False
-    if "add_attachments" in changes:
+    if "add_attachments" in changes or "remove_attachments" in changes:
         images = result.get("attachments")
-        if not isinstance(images, list) or len(images) != len(changes["add_attachments"]):
+        if not isinstance(images, list) or len(images) != len(changes.get("add_attachments", [])) + len(
+            keep_attachment_ids
+        ):
             return False
         ids = []
         for image in images:
             if not isinstance(image, dict) or not isinstance(image.get("id"), str) or not image["id"]:
                 return False
             ids.append(image["id"])
-        if len(set(ids)) != len(ids) or set(ids).intersection(changes.get("remove_attachments", [])):
+        if (
+            len(set(ids)) != len(ids)
+            or set(ids).intersection(changes.get("remove_attachments", []))
+            or not set(keep_attachment_ids).issubset(ids)
+        ):
             return False
     return True
 

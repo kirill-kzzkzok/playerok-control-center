@@ -477,6 +477,7 @@ class Executor:
                 "price",
                 "add_photos",
                 "replace_attachment_ids",
+                "keep_attachment_ids",
                 "logical_binding",
                 "expected_description",
             }:
@@ -503,28 +504,53 @@ class Executor:
                         marked_description(changes["description"], product["code"]), "description"
                     )
                     protected_description = True
-            if "add_photos" in payload:
-                sources = payload["add_photos"]
-                if not isinstance(sources, list) or not 1 <= len(sources) <= 10:
+            keep = []
+            if "add_photos" in payload or "keep_attachment_ids" in payload:
+                sources = payload.get("add_photos", [])
+                if (
+                    not isinstance(sources, list)
+                    or len(sources) > 10
+                    or ("keep_attachment_ids" not in payload and not sources)
+                ):
                     raise ValidationError("Требуется от 1 до 10 изображений")
                 current_attachments = current.get("attachments") or []
                 current_ids = [attachment.get("id") for attachment in current_attachments]
                 if any(not ident for ident in current_ids):
                     raise ValidationError("API не вернул идентификаторы фотографий")
                 expected = payload.get("replace_attachment_ids")
-                if not isinstance(expected, list) or sorted(expected) != sorted(current_ids):
+                if not isinstance(expected, list) or (
+                    expected != current_ids
+                    if "keep_attachment_ids" in payload
+                    else sorted(expected) != sorted(current_ids)
+                ):
                     raise ValidationError("Фотографии товара изменились. Повторно откройте превью.")
-                changes["add_attachments"] = [await Attachments().read(source) for source in sources]
-                changes["remove_attachments"] = current_ids
+                keep = payload.get("keep_attachment_ids", [])
+                if (
+                    not isinstance(keep, list)
+                    or any(not isinstance(ident, str) for ident in keep)
+                    or len(set(keep)) != len(keep)
+                    or not set(keep).issubset(current_ids)
+                    or len(keep) + len(sources) > 10
+                ):
+                    raise ValidationError("Не подтверждён сохраняемый набор фотографий")
+                if sources:
+                    changes["add_attachments"] = [await Attachments().read(source) for source in sources]
+                removed = [ident for ident in current_ids if ident not in keep]
+                if removed:
+                    changes["remove_attachments"] = removed
             if not changes:
                 raise ValidationError("Нет разрешённых изменений")
             result = await self.mutate(action, "updateItem", "update_item", id=target, **changes)
-            if not edit_receipt_matches(target, changes, result):
+            if not edit_receipt_matches(target, changes, result, keep_attachment_ids=keep):
                 raise APIError("EDIT_NOT_CONFIRMED", uncertain=True)
-            if protected_description:
+            if protected_description or "keep_attachment_ids" in payload:
                 try:
                     observed = await self.owned_item(target)
-                    if not edit_receipt_matches(target, changes, observed):
+                    if not edit_receipt_matches(target, changes, observed, keep_attachment_ids=keep):
+                        raise APIError("EDIT_READBACK_UNKNOWN", uncertain=True)
+                    if "keep_attachment_ids" in payload and {
+                        a["id"] for a in observed.get("attachments", [])
+                    } != {a["id"] for a in result.get("attachments", [])}:
                         raise APIError("EDIT_READBACK_UNKNOWN", uncertain=True)
                 except APIError:
                     raise APIError("EDIT_READBACK_UNKNOWN", uncertain=True) from None

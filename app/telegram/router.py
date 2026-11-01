@@ -391,7 +391,9 @@ def create_router(store, api, products, synchronizer):
                     f"💰 <b>Цена и скидка</b>\nБазовая цена: {item['raw_price']} ₽\nТекущая цена: {item['price']} ₽\n\nВведите цену со скидкой (минимум 5%). Для снятия скидки укажите базовую цену. Базовая цена не изменяется.",
                     keyboard([]),
                 )
-            elif action.startswith(("editdesc:", "editname:", "editphoto:")):
+            elif action.startswith(("editphoto:", "ipe:")):
+                text, markup = await item_panel.edit_photos(action, owner, state)
+            elif action.startswith(("editdesc:", "editname:")):
                 kind, ident = action.split(":", 1)
                 item = await api.call("get_item", id=ident)
                 if not api.account.id or (item.get("user") or {}).get("id") != api.account.id:
@@ -714,6 +716,8 @@ def create_router(store, api, products, synchronizer):
                     "target": data["item_id"],
                     "payload": {"add_photos": [source], "replace_attachment_ids": data["attachment_ids"]},
                 }
+                if "keep_attachment_ids" in data:
+                    pending["payload"]["keep_attachment_ids"] = data["keep_attachment_ids"]
                 try:
                     await state.set_data({"pending": pending, "confirm_token": nonce})
                     await state.set_state(None)
@@ -722,8 +726,10 @@ def create_router(store, api, products, synchronizer):
                     raise
                 await message.answer_photo(
                     BufferedInputFile(await wizard.attachments.read(source), filename="replacement.jpg"),
-                    caption="Новое фото заменит все текущие фотографии после подтверждения.",
-                    reply_markup=keyboard([[("✅ Заменить фотографии", "commit:" + nonce)]]),
+                    caption="Заменить ВСЕ фотографии?"
+                    if data.get("photo_mode") == "all" or "keep_attachment_ids" not in data
+                    else "Сохранить изменение? Остальные фотографии сохранятся.",
+                    reply_markup=keyboard([[("✅ Подтвердить изменение фото", "commit:" + nonce)]]),
                 )
                 return
             elif current in {"reply", "edit"}:

@@ -4,6 +4,7 @@ import pytest
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.types import Document
 
+from tests.test_ux_redesign import buttons
 from tests.test_ux_redesign import ux as ux_fixture
 
 ux = ux_fixture
@@ -24,6 +25,7 @@ async def test_processed_or_invalid_fsm_input_is_deleted_once(ux, route, value):
 async def test_media_input_is_removed_after_durable_staging(ux):
     r = ux
     await r.ui.click("editphoto:lot")
+    await r.ui.click(next(key for key in buttons(r.session.last_panel) if key.endswith(":add")))
     await r.ui.message(
         document=Document(
             file_id="photo", file_unique_id="fixture", file_name="image.png", mime_type="image/png"
