@@ -27,6 +27,10 @@ async def test_confirmed_gift_has_observed_latency_but_no_invented_server_paymen
     assert result["observed"]["p50"] >= 0
     assert result["preparation"]["samples"] == 1
     assert result["confirmation"]["samples"] == 1
+    assert result["recipient"]["samples"] == 2
+    assert result["payment_form"]["samples"] == 2
+    assert result["payment_rpc"]["samples"] == 2
+    assert result["receipt_read"]["samples"] == 2
 
 
 async def test_latency_screen_is_read_only_and_accessible_from_statistics(shop):

@@ -1,4 +1,5 @@
 import json
+import math
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -20,7 +21,20 @@ def parsed_time(value):
 
 def delivery_statistics(store, days=0):
     """Local observation durations, never created_at masquerading as paid_at."""
-    series = {key: [] for key in ("observed", "server_paid", "preparation", "confirmation")}
+    series = {
+        key: []
+        for key in (
+            "observed",
+            "server_paid",
+            "preparation",
+            "confirmation",
+            "deal_check",
+            "recipient",
+            "payment_form",
+            "payment_rpc",
+            "receipt_read",
+        )
+    }
     completed = 0
     cutoff = datetime.now(UTC) - timedelta(days=days) if days else None
     for job in store.rows(
@@ -43,6 +57,21 @@ def delivery_statistics(store, days=0):
             series["confirmation"].append((finished - started).total_seconds())
         # The current Playerok deal contract has no independently verified
         # payment timestamp. Do not silently substitute order creation time.
+    for row in store.rows(
+        "SELECT result,created_at FROM outbox WHERE kind='gift_send' AND status='SUCCEEDED'"
+    ):
+        created = parsed_time(row["created_at"])
+        if cutoff and (not created or created < cutoff):
+            continue
+        value = json.loads(row["result"] or "{}")
+        for key, duration in value.get("stage_durations", {}).items():
+            if (
+                key in {"deal_check", "recipient", "payment_form", "payment_rpc", "receipt_read"}
+                and type(duration) in {int, float}
+                and math.isfinite(duration)
+                and duration >= 0
+            ):
+                series[key].append(duration)
 
     def summary(values):
         values = sorted(values)

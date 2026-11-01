@@ -65,6 +65,11 @@ class StatisticsPanel:
                 ("preparation", "Подготовка до платежа"),
                 ("confirmation", "От начала платежа до подтверждения"),
                 ("server_paid", "От серверного времени оплаты"),
+                ("deal_check", "Проверка сделки и товара"),
+                ("recipient", "Определение получателя"),
+                ("payment_form", "Подготовка платёжных форм"),
+                ("payment_rpc", "Отправка платёжного запроса"),
+                ("receipt_read", "Независимая проверка квитанции"),
             ):
                 value = values[key]
                 text += (
@@ -72,7 +77,7 @@ class StatisticsPanel:
                     + label
                     + ": "
                     + (
-                        f"p50 {value['p50']} с · p95 {value['p95']} с · p99 {value['p99']} с · {value['samples']} заказов"
+                        f"p50 {value['p50']} с · p95 {value['p95']} с · p99 {value['p99']} с · {value['samples']} измерений"
                         if value["samples"]
                         else "нет подтверждённых измерений"
                     )

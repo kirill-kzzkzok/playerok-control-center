@@ -526,6 +526,8 @@ class GiftService:
         return order
 
     async def execute(self, action):
+        measured = {}
+        stage_start = time.perf_counter()
         j, l = self.guard(action)
         step = self.step(action)
         with self.store.transaction() as db:
@@ -541,12 +543,14 @@ class GiftService:
                 "UPDATE gift_jobs SET state='CHECKING',updated_at=? WHERE order_id=?", (now(), j["order_id"])
             )
         order = await self.fresh_order(j)
+        measured["deal_check"] = time.perf_counter() - stage_start
         username = buyer_recipient(order, field_id=l["username_field_id"])
         self.store.execute(
             "UPDATE gift_jobs SET recipient_username=? WHERE order_id=? AND state='CHECKING'",
             (username, j["order_id"]),
         )
         j["recipient_username"] = username
+        stage_start = time.perf_counter()
         try:
             recipient = await self.sender.resolve(username)
         except InvalidRecipient as exc:
@@ -558,6 +562,7 @@ class GiftService:
         ):
             raise GiftFailure("RECIPIENT_CHANGED" if j["recipient_id"] else "PERSONAL_ACCOUNT_CHANGED")
         event("CHECK", "Получатель @[скрыто] проверен", order=j["order_id"], operation=action["id"])
+        measured["recipient"] = time.perf_counter() - stage_start
         self.store.execute(
             "UPDATE gift_jobs SET recipient_username=?,recipient_id=?,recipient_access_hash=?,payer_id=?,updated_at=? WHERE order_id=? AND state='CHECKING'",
             (
@@ -571,6 +576,7 @@ class GiftService:
         )
         bundle = json.loads(j["bundle"])
         total = sum(g["stars"] for g in bundle)
+        stage_start = time.perf_counter()
         try:
             await self.sender.check_quantities(bundle[step["position"] :])
             # Validate every remaining gift before the first paid request. Forms are read-only;
@@ -591,6 +597,7 @@ class GiftService:
             if exc.code in {"PRICE_CHANGED", "GIFT_UNAVAILABLE"}:
                 self.disarm(l["owner_id"], j["item_id"])
             raise
+        measured["payment_form"] = time.perf_counter() - stage_start
         generation = self.store.rows("SELECT COUNT(*) n FROM gift_steps WHERE spent_at IS NOT NULL")[0]["n"]
         balance = await self.sender.balance()
         fresh = await self.fresh_order(j)
@@ -665,7 +672,9 @@ class GiftService:
             operation=action["id"],
             position=step["position"] + 1,
         )
+        stage_start = time.perf_counter()
         result = await self.sender.pay(prepared)
+        measured["payment_rpc"] = time.perf_counter() - stage_start
         evidence = {**self.job(j["order_id"]), **self.step(action)}
         acknowledgement = self.sender.acknowledgement(evidence, result)
         # Save the external RPC correlation before the independent network read.
@@ -694,8 +703,13 @@ class GiftService:
             ):
                 raise GiftFailure("DELIVERY_CORRELATION_UNKNOWN")
         evidence["ack_message_id"] = acknowledgement
+        stage_start = time.perf_counter()
         receipt = await self.sender.receipt(evidence, result)
-        return {"gift_receipt": receipt}
+        measured["receipt_read"] = time.perf_counter() - stage_start
+        return {
+            "gift_receipt": receipt,
+            "stage_durations": {key: round(value, 6) for key, value in measured.items()},
+        }
 
     def continue_bundle(self, order_id, db):
         j = self.job(order_id)
