@@ -232,6 +232,18 @@ class FinancePanel:
             lines.append("Чистая прибыль: " + rub(result.profit))
         elif result.after_platform is not None and result.cost is not None:
             lines.append("Прибыль до дополнительных расходов: " + rub(result.after_platform - result.cost))
+            if fee is not None:
+                label = (
+                    "Оценка прибыли после процентной комиссии"
+                    if approximate_part
+                    else "Оценка прибыли после вывода"
+                )
+                value = result.after_platform - result.cost - fee
+                if result.placement_expense is not None:
+                    value -= result.placement_expense
+                lines.append(label + ": ≈ " + rub(value))
+                if result.placement_expense is None:
+                    lines.append("Без распределения расходов размещения")
         else:
             lines.append("Для прибыли укажите себестоимость и проверьте комиссию")
         if approximate_part:

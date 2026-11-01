@@ -118,6 +118,24 @@ class ItemPanel:
                 text += "\nНаследовать настройки: " + (
                     "разрешено" if product["inherit_enabled"] else "выключено"
                 )
+            from app.database.store import now
+            from app.services.finance import selected_fee_multiplier
+            from app.services.withdrawals import draft_calculation
+
+            cost = self.store.setting(f"finance:{owner}:cost:{ident}")
+            quote = draft_calculation(
+                {
+                    "price": item["price"],
+                    "cost": cost,
+                    "fee_multiplier": selected_fee_multiplier(
+                        item.get("fee_multiplier"), (item.get("obtaining_type") or {}).get("fee_multiplier")
+                    ),
+                    "fee_checked_at": now(),
+                }
+            )
+            text += "\nСебестоимость: " + (str(quote.cost) + " ₽" if quote.cost is not None else "не задана")
+            if quote.after_platform is not None and quote.cost is not None:
+                text += f"\nДо вывода и размещения: ≈ {quote.after_platform - quote.cost} ₽"
             rows = [
                 [("💰 Сколько получу чистыми", "finance:" + ident)],
                 [("✏️ Редактировать", "iv:edit:" + ident)],
