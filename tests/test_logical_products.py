@@ -1,0 +1,282 @@
+"""Universal binding contracts; production services, isolated SQLite and API boundary."""
+
+import asyncio
+import copy
+from contextlib import nullcontext
+from types import SimpleNamespace
+
+import pytest
+
+from app.database.store import Store
+from app.services.logical_products import LogicalProducts, configuration, marked_description, marker
+from app.services.products import Products
+from app.workers.outbox import Executor, OutboxWorker
+
+
+class ReadAPI:
+    def __init__(self):
+        self.account = SimpleNamespace(id="seller", writes_enabled=True, automation_enabled=True)
+        self.item = {
+            "id": "lot",
+            "user": {"id": "seller"},
+            "name": "Real digital product",
+            "description": "Original description",
+            "price": 100,
+            "status": "APPROVED",
+            "category": {"id": "category"},
+            "obtaining_type": {"id": "obtaining"},
+        }
+        self.calls = []
+        self.lock = asyncio.Lock()
+        self.mutations = []
+        self.lost_ack = False
+        self.account.permit = lambda operation: nullcontext()
+        self.account.update_item = self.update_item
+
+    def update_item(self, id, **changes):
+        assert id == self.item["id"]
+        self.mutations.append(copy.deepcopy(changes))
+        self.item.update(changes)
+        if self.lost_ack:
+            raise TimeoutError("external boundary lost ACK")
+        return copy.deepcopy(self.item)
+
+    async def call(self, method, **kwargs):
+        self.calls.append((method, kwargs))
+        assert method == "get_item"
+        return copy.deepcopy(self.item)
+
+
+@pytest.fixture
+def logical(tmp_path):
+    store = Store(tmp_path / "logical.sqlite3")
+    store.execute("INSERT INTO administrators VALUES(7)")
+    store.set_setting("playerok:account_id", "seller")
+    api = ReadAPI()
+    yield store, api, LogicalProducts(store, api)
+    store.close()
+
+
+def test_marker_is_exact_last_line_and_preserves_text():
+    assert marker("Text\n\n#1234567\n") == "#1234567"
+    assert marked_description("Text\n\n", "#1234567") == "Text\n#1234567"
+    assert marked_description("Text\n#1234567", "#1234567") == "Text\n#1234567"
+    for value in (
+        "#1234567\nText",
+        "Text\n#1234567\n#7654321",
+        "Text\n#123456",
+        "Text\n#12345678",
+        "Text #1234567",
+        "Text\n#1234567 extra",
+    ):
+        with pytest.raises(ValueError):
+            marker(value)
+    with pytest.raises(ValueError):
+        marked_description("Text\n#7654321", "#1234567")
+
+
+def test_internal_gift_configuration_uses_existing_strict_parser():
+    assert configuration("telegram_gifts", {"code": " Heart , HEART "})["code"] == "heart, heart"
+    with pytest.raises(ValueError):
+        configuration("telegram_gifts", {"code": "unknown"})
+
+
+async def test_prepare_is_read_only_commit_queues_exact_description_and_stays_off(logical):
+    store, api, service = logical
+    prepared = await service.prepare(7, "lot", "fixed_text", {"text": "Delivery data", "after": "Thanks"})
+    assert not store.rows("SELECT * FROM logical_products")
+    assert not store.rows("SELECT * FROM outbox")
+    result = service.commit(7, prepared)
+    product = service.product(result["product_id"], 7)
+    assert marker("Text\n" + product["code"]) == product["code"]
+    assert product["enabled"] == 0
+    assert product["state"] == "PENDING"
+    op = store.rows("SELECT * FROM outbox")[0]
+    assert op["kind"] == "edit"
+    assert op["target"] == "lot"
+    assert all(method == "get_item" for method, _ in api.calls)
+    assert service.commit(7, prepared) == result
+
+
+async def test_commit_rejects_account_change_and_disabled_writes(logical):
+    store, api, service = logical
+    prepared = await service.prepare(7, "lot", "manual", {})
+    api.account.id = "other"
+    with pytest.raises(ValueError):
+        service.commit(7, prepared)
+    assert not store.rows("SELECT * FROM logical_products")
+    api.account.id = "seller"
+    api.account.writes_enabled = False
+    with pytest.raises(ValueError):
+        service.commit(7, prepared)
+    assert not store.rows("SELECT * FROM outbox")
+
+
+@pytest.mark.parametrize("case", ["success", "changed", "wrong_item", "lost_ack"])
+async def test_binding_runs_real_outbox_and_independent_readback(logical, case):
+    store, api, service = logical
+    prepared = await service.prepare(7, "lot", "manual", {})
+    result = service.commit(7, prepared)
+    if case == "changed":
+        api.item["description"] = "Owner changed description"
+    if case == "wrong_item":
+        original = api.call
+
+        async def wrong_once(method, **kwargs):
+            result = await original(method, **kwargs)
+            if len(api.calls) == 2:
+                result["id"] = "different-lot"
+            return result
+
+        api.call = wrong_once
+    api.lost_ack = case == "lost_ack"
+    await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
+    op = store.rows("SELECT status FROM outbox")[0]["status"]
+    product = service.product(result["product_id"])
+    if case == "success":
+        assert op == "SUCCEEDED"
+        assert product["state"] == "VERIFIED"
+        assert product["enabled"] == 0
+        assert marker(api.item["description"]) == product["code"]
+        assert len(api.calls) >= 3
+    elif case in {"changed", "wrong_item"}:
+        assert op == "PERMANENT_FAILED"
+        assert not api.mutations
+    else:
+        assert op == "UNCERTAIN"
+        assert len(api.mutations) == 1
+        assert product["state"] == "PENDING"
+        assert not await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
+        api.account.writes_enabled = False
+        await service.reconcile_binding(7, product["id"])
+        assert service.product(product["id"])["state"] == "VERIFIED"
+        assert store.rows("SELECT status FROM outbox")[0]["status"] == "SUCCEEDED"
+        assert len(api.mutations) == 1
+    assert product["enabled"] == 0
+
+
+def test_legacy_migration_is_repeatable_and_does_not_activate_or_rewrite(logical):
+    store, api, service = logical
+    store.set_setting("gifts:listing_options:old", {"order": 30, "day": 70, "after": "Original thanks"})
+    store.execute(
+        "INSERT INTO gift_listings(item_id,owner_id,gift_code,gift_id,approved_stars,description_sha256,category_id,obtaining_type_id,username_field_id,bundle) "
+        "VALUES('old',7,'heart','5170145012310081615',15,'oldhash','category','obtaining','username',?)",
+        ('[{"code":"heart","gift_id":"5170145012310081615","stars":15}]',),
+    )
+    old = store.rows("SELECT * FROM gift_listings")
+    assert service.migrate_legacy() == 1
+    snapshot = store.rows("SELECT * FROM logical_products")
+    import json
+
+    assert json.loads(snapshot[0]["config"])["after"] == "Original thanks"
+    assert snapshot[0]["state"] == "LEGACY" and snapshot[0]["enabled"] == 0
+    assert service.migrate_legacy() == 0
+    store.apply_migrations()
+    assert store.rows("SELECT * FROM logical_products") == snapshot
+    assert store.rows("SELECT * FROM gift_listings") == old
+    assert not store.rows("SELECT * FROM outbox")
+    assert not api.calls
+
+
+async def test_fixed_text_arms_only_explicitly_and_preserves_cutoff_on_relist(logical):
+    store, api, service = logical
+    prepared = await service.prepare(7, "lot", "fixed_text", {"text": "Delivery", "after": "Thanks"})
+    result = service.commit(7, prepared)
+    await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
+    product = service.product(result["product_id"])
+    await service.arm(7, product["id"], product["revision"], inherit=True)
+    product = service.product(product["id"])
+    assert product["enabled"] == 1
+    cutoff = product["armed_at"]
+    old = copy.deepcopy(api.item)
+    old["status"] = "SOLD"
+    new = copy.deepcopy(api.item)
+    new["id"] = "relisted"
+    await service.adopt(7, product["id"], new, [old, new])
+    assert service.listing("relisted")["id"] == product["id"]
+    assert (
+        store.rows("SELECT updated_at FROM delivery_policies WHERE item_id='relisted'")[0]["updated_at"]
+        == cutoff
+    )
+    assert not store.rows("SELECT * FROM logical_order_scopes")
+    assert len(api.mutations) == 1  # Only the explicitly confirmed description edit.
+
+
+async def test_relist_rejects_active_duplicate_and_changed_price(logical):
+    store, api, service = logical
+    result = service.commit(7, await service.prepare(7, "lot", "fixed_text", {"text": "Delivery"}))
+    await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
+    product = service.product(result["product_id"])
+    await service.arm(7, product["id"], product["revision"], inherit=True)
+    new = copy.deepcopy(api.item)
+    new["id"] = "relisted"
+    with pytest.raises(ValueError):
+        await service.adopt(7, product["id"], new, [api.item, new])
+    old = copy.deepcopy(api.item)
+    old["status"] = "SOLD"
+    new["price"] = 999
+    with pytest.raises(ValueError):
+        await service.adopt(7, product["id"], new, [old, new])
+    assert service.listing("relisted") is None
+
+
+@pytest.mark.parametrize("views_change", [False, True])
+async def test_catalog_worker_discovers_new_id_without_changing_delivery_engine(logical, views_change):
+    from app.workers.logical_products import LogicalProductWorker
+
+    store, api, service = logical
+    result = service.commit(7, await service.prepare(7, "lot", "fixed_text", {"text": "Delivery"}))
+    await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
+    product = service.product(result["product_id"])
+    await service.arm(7, product["id"], product["revision"], inherit=True)
+    new = copy.deepcopy(api.item)
+    new["id"] = "relisted"
+    counter = 0
+
+    async def catalog(method, **kwargs):
+        nonlocal counter
+        if method == "get_my_items":
+            return {"items": [{"id": "relisted"}], "page_info": {"has_next_page": False}}
+        assert method == "get_item" and kwargs["id"] == "relisted"
+        counter += 1
+        return {**new, "views_counter": counter if views_change else 1}
+
+    api.call = catalog
+    assert await LogicalProductWorker(store, api).once() == 1
+    assert service.listing("relisted")["id"] == product["id"]
+    assert len(api.mutations) == 1
+
+
+async def test_stop_during_arm_read_wins_over_late_enable(logical):
+    store, api, service = logical
+    result = service.commit(7, await service.prepare(7, "lot", "fixed_text", {"text": "Delivery"}))
+    await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
+    product = service.product(result["product_id"])
+    original = api.call
+
+    async def stop_during_read(method, **kwargs):
+        value = await original(method, **kwargs)
+        service.stop(7, product["id"])
+        return value
+
+    api.call = stop_during_read
+    with pytest.raises(ValueError):
+        await service.arm(7, product["id"], product["revision"])
+    assert service.product(product["id"])["enabled"] == 0
+    assert not store.rows("SELECT 1 FROM delivery_policies WHERE json_extract(payload,'$.enabled')=1")
+
+
+async def test_second_old_preview_cannot_replace_first_verified_binding(logical):
+    store, api, service = logical
+    first = await service.prepare(7, "lot", "fixed_text", {"text": "First"})
+    stale = await service.prepare(7, "lot", "fixed_text", {"text": "Second"})
+    result = service.commit(7, first)
+    await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
+    product = service.product(result["product_id"])
+    await service.arm(7, product["id"], product["revision"])
+    before = store.rows("SELECT * FROM logical_listings")
+    with pytest.raises(ValueError):
+        service.commit(7, stale)
+    assert store.rows("SELECT * FROM logical_listings") == before
+    assert len(store.rows("SELECT * FROM logical_products")) == 1
+    assert len(store.rows("SELECT * FROM outbox")) == 1

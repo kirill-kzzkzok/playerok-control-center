@@ -25,7 +25,14 @@ class DeliveryChains:
         if not policy.enabled or policy.mode not in {"text", "stock"}:
             raise ValidationError("Политика автоматики выключена или имеет ручной режим")
         item_id = order["item"]["id"]
+        from app.services.logical_products import LogicalProducts, stock_scope
+
+        await LogicalProducts(self.store, self.api).fresh_delivery_item(item_id)
         with self.store.transaction() as db:
+            LogicalProducts(self.store, self.api).pin_order(
+                db, ident, item_id, "unique_stock" if policy.mode == "stock" else "fixed_text"
+            )
+            inventory_item = stock_scope(self.store, item_id, ident)
             if (
                 db.execute("SELECT 1 FROM gift_jobs WHERE order_id=?", (ident,)).fetchone()
                 or db.execute(
@@ -71,7 +78,7 @@ class DeliveryChains:
             if policy.mode == "stock":
                 stock = db.execute(
                     "SELECT id FROM inventory WHERE item_id=? AND status='AVAILABLE' ORDER BY id LIMIT 1",
-                    (item_id,),
+                    (inventory_item,),
                 ).fetchone()
                 if not stock:
                     Orders.empty_stock(db, item_id, ident)
@@ -106,7 +113,8 @@ class DeliveryChains:
             if (
                 policy.mode == "stock"
                 and not db.execute(
-                    "SELECT 1 FROM inventory WHERE item_id=? AND status='AVAILABLE' LIMIT 1", (item_id,)
+                    "SELECT 1 FROM inventory WHERE item_id=? AND status='AVAILABLE' LIMIT 1",
+                    (inventory_item,),
                 ).fetchone()
             ):
                 Orders.empty_stock(db, item_id, ident)
@@ -174,6 +182,9 @@ class DeliveryChains:
         if not rows:
             raise ValidationError("Шаг цепочки не зарегистрирован")
         step = rows[0]
+        from app.services.logical_products import LogicalProducts
+
+        LogicalProducts(self.store, self.api).require_delivery(step["item_id"], order_id=ident)
         if (
             step["status"] != "ACTIVE"
             or step["operation_id"] != action["id"]
@@ -201,6 +212,9 @@ class DeliveryChains:
 
     async def verify_step(self, action):
         step = self.dispatchable(action)
+        from app.services.logical_products import LogicalProducts
+
+        await LogicalProducts(self.store, self.api).fresh_delivery_item(step["item_id"])
         ident = action["target"]
         order = await self.api.call("get_deal", deal_id=ident)
         deliverable(order, ident, self.api.account.id)

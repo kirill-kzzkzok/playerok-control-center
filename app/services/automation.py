@@ -76,10 +76,13 @@ class Automation:
 
     def readiness(self, ident):
         """Shared local snapshot; this screen never enables execution."""
+        from app.services.logical_products import stock_scope
+
         with self.store.transaction():
             revision, policy = self.get(ident)
             rows = self.store.rows(
-                "SELECT status,COUNT(*) AS n FROM inventory WHERE item_id=? GROUP BY status", (ident,)
+                "SELECT status,COUNT(*) AS n FROM inventory WHERE item_id=? GROUP BY status",
+                (stock_scope(self.store, ident),),
             )
             counts = {
                 s: next((r["n"] for r in rows if r["status"] == s), 0)
@@ -91,6 +94,14 @@ class Automation:
         writes = bool(getattr(self.api.account, "writes_enabled", False))
         runtime = bool(getattr(self.api.account, "automation_enabled", False))
         reasons = []
+        from app.services.logical_products import LogicalProducts
+
+        try:
+            LogicalProducts(self.store, self.api).require_delivery(
+                ident, "unique_stock" if policy.mode == "stock" else "fixed_text"
+            )
+        except Conflict as error:
+            reasons.append(str(error))
         if not revision:
             reasons.append("политика ещё не настроена")
         elif not policy.enabled:
@@ -147,7 +158,11 @@ class Automation:
             text += "\n⚠️ Последняя сверка с ошибкой; проверьте актуальность данных."
         return text + "\nSENT — только после отдельного подтверждения владельца."
 
-    async def save(self, actor, ident, expected, payload, *, future_confirmed=False, stock_resume=False):
+    async def save(
+        self, actor, ident, expected, payload, *, future_confirmed=False, stock_resume=False, logical_arm=None
+    ):
+        from app.services.logical_products import stock_scope
+
         policy = DeliveryPolicy(**payload)
         if policy.enabled and policy.auto_enroll and future_confirmed is not True:
             raise ValidationError("Нужно отдельно подтвердить автоматическую выдачу будущим заказам")
@@ -174,13 +189,15 @@ class Automation:
                 or policy.mode != "stock"
                 or self.store.setting(f"delivery:{ident}:enabled") is not False
                 or not db.execute(
-                    "SELECT 1 FROM inventory WHERE item_id=? AND status='AVAILABLE' LIMIT 1", (ident,)
+                    "SELECT 1 FROM inventory WHERE item_id=? AND status='AVAILABLE' LIMIT 1",
+                    (stock_scope(self.store, ident),),
                 ).fetchone()
             ):
                 raise Conflict("Возобновление больше недоступно: проверьте остановку и остаток")
+            cutoff = now()
             db.execute(
                 "INSERT INTO delivery_policies VALUES(?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET revision=excluded.revision,actor=excluded.actor,payload=excluded.payload,updated_at=excluded.updated_at",
-                (ident, revision + 1, actor, encode(asdict(policy)), now()),
+                (ident, revision + 1, actor, encode(asdict(policy)), cutoff),
             )
             db.execute(
                 "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'SAVE_DELIVERY_POLICY',?,?,?)",
@@ -195,6 +212,10 @@ class Automation:
                 "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (f"delivery:{ident}:enabled", encode(policy.enabled)),
             )
+            if logical_arm is not None:
+                from app.services.logical_products import LogicalProducts
+
+                LogicalProducts(self.store, self.api).commit_arm(db, actor, ident, logical_arm, cutoff)
         return revision + 1
 
     def stop_all(self, actor):
@@ -217,6 +238,8 @@ class Automation:
         return count
 
     async def simulate(self, actor, ident):
+        from app.services.logical_products import stock_scope
+
         order = await self.orders.fresh(actor, ident)
         item_id = order["item"]["id"]
         revision, policy = self.get(item_id)
@@ -252,7 +275,8 @@ class Automation:
             if value.get("id") != chat or value.get("is_texting_allowed") is not True:
                 reasons.append("чат недоступен для отправки")
         available = self.store.rows(
-            "SELECT COUNT(*) AS n FROM inventory WHERE item_id=? AND status='AVAILABLE'", (item_id,)
+            "SELECT COUNT(*) AS n FROM inventory WHERE item_id=? AND status='AVAILABLE'",
+            (stock_scope(self.store, item_id, ident),),
         )[0]["n"]
         if policy.mode == "stock" and available == 0:
             reasons.append("нет доступного уникального запаса")

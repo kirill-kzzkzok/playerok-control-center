@@ -40,6 +40,7 @@ def safe_route(action):
     } or action.startswith(
         (
             "item:",
+            "lp:item:",
             "iv:",
             "order:",
             "chat:",

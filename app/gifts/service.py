@@ -44,7 +44,7 @@ class GiftService:
             raise GiftFailure("GIFT_ORDER_NOT_FOUND")
         return rows[0]
 
-    async def inspect_item(self, owner, item_id):
+    async def inspect_item(self, owner, item_id, *, preview_code=None):
         self.owner(owner)
         s = self.settings
         if not (s.category_id and s.obtaining_type_id and s.buyer_username_field_id):
@@ -60,16 +60,27 @@ class GiftService:
             "id"
         ) != s.obtaining_type_id:
             raise GiftValidationError("Не совпадает настроенная категория или способ «Подарок»")
+        from app.services.logical_products import LogicalProducts
+
+        logical_code = (
+            LogicalProducts(self.store, self.api).configured_gifts(item) if preview_code is None else None
+        )
         if item.get("deleted_at") or item.get("status") not in {
             "DRAFT",
             "APPROVED",
             "PENDING_APPROVAL",
             "PENDING_MODERATION",
-        }:
+        } | ({"SOLD"} if logical_code else set()):
             raise GiftValidationError(
                 "Состояние товара не разрешает настройку подарков. Обновите карточку товара"
             )
-        code = gift_code_from_description(item.get("description"), max_count=self.settings.max_gifts)
+        if preview_code is not None:
+            # Read-only setup preview, never used by enrollment or payment.
+            code = gift_code_from_description("gift: " + preview_code, max_count=self.settings.max_gifts)
+        else:
+            code = logical_code
+            if code is None:
+                code = gift_code_from_description(item.get("description"), max_count=self.settings.max_gifts)
         # The schema is authoritative for field identity/type, never a label/substring heuristic.
         fields = []
         async for page in self.api.pages(
@@ -286,7 +297,9 @@ class GiftService:
             self.store.set_setting("gifts:stopped", False)
         event("INFO", "Владелец разрешил новые подарочные покупки; настройки товаров не включались")
 
-    async def arm(self, owner, item_id, revision, *, auto_fulfill=False, prepublication=False):
+    async def arm(
+        self, owner, item_id, revision, *, auto_fulfill=False, prepublication=False, logical_arm=None
+    ):
         stop_revision = self.store.setting("gifts:stop_revision", 0)
         if self.store.setting("gifts:stopped", True):
             raise GiftValidationError(
@@ -329,10 +342,15 @@ class GiftService:
                 "SELECT 1 FROM delivery_chains WHERE item_id=? AND status IN ('ACTIVE','BLOCKED')", (item_id,)
             ).fetchone():
                 raise Conflict("Для лота уже действует складская/текстовая выдача или незавершённая цепочка")
+            cutoff = now()
             db.execute(
                 "UPDATE gift_listings SET enabled=1,auto_fulfill=?,armed_at=?,revision=revision+1 WHERE item_id=?",
-                (int(auto_fulfill), now(), item_id),
+                (int(auto_fulfill), cutoff, item_id),
             )
+            if logical_arm is not None:
+                from app.services.logical_products import LogicalProducts
+
+                LogicalProducts(self.store, self.api).commit_arm(db, owner, item_id, logical_arm, cutoff)
 
     def disarm(self, owner, item_id):
         self.owner(owner)
@@ -363,6 +381,14 @@ class GiftService:
                 try:
                     deliverable(payload, row["id"], self.api.account.id)
                 except ValueError:
+                    continue
+                from app.services.logical_products import LogicalProducts
+
+                try:
+                    LogicalProducts(self.store, self.api).pin_order(
+                        db, row["id"], row["item_id"], "telegram_gifts"
+                    )
+                except Conflict:
                     continue
                 if (
                     db.execute("SELECT 1 FROM reservations WHERE order_id=?", (row["id"],)).fetchone()
@@ -420,6 +446,9 @@ class GiftService:
 
     def guard(self, action, *, spending=False):
         j = self.job(action["target"])
+        from app.services.logical_products import LogicalProducts
+
+        LogicalProducts(self.store, self.api).require_delivery(j["item_id"], "telegram_gifts", j["order_id"])
         l = self.listing(j["item_id"])
         lease = self.store.rows("SELECT * FROM outbox WHERE id=?", (action["id"],))[0]
         if (
@@ -462,7 +491,12 @@ class GiftService:
         l = self.listing(job["item_id"])
         try:
             data = await self.inspect_item(l["owner_id"], job["item_id"])
-            if data["item"]["status"] != "APPROVED":
+            from app.services.logical_products import LogicalProducts
+
+            logical = LogicalProducts(self.store, self.api).listing(job["item_id"])
+            if data["item"]["status"] != "APPROVED" and not (
+                data["item"]["status"] == "SOLD" and logical and logical["state"] == "VERIFIED"
+            ):
                 raise GiftFailure("LISTING_NOT_PUBLISHED")
             if data["hash"] != l["description_sha256"] or data["code"] != l["gift_code"]:
                 raise GiftFailure("LISTING_CHANGED")
@@ -695,10 +729,13 @@ class GiftService:
         # Native updateDeal is confirmed in the official seller UI, with the adapter's
         # conservative status/ownership/non-system guard and independent readback.
         capability = getattr(self.api, "gift_refund_capability", None)
-        options = self.store.setting("gifts:listing_options:" + job["item_id"], {})
+        from app.services.logical_products import refund_allowed
+
         supported = (
             await capability(order)
-            if capability and self.settings.refund_enabled and options.get("refund", True)
+            if capability
+            and self.settings.refund_enabled
+            and refund_allowed(self.store, job["item_id"], job["order_id"])
             else False
         )
         if supported is True:
@@ -818,6 +855,12 @@ class GiftService:
         if not l:
             return "🎁 Подарочная выдача не настроена"
         reasons = []
+        from app.services.logical_products import LogicalProducts
+
+        try:
+            LogicalProducts(self.store, self.api).require_delivery(item_id, "telegram_gifts")
+        except Conflict as error:
+            reasons.append(str(error))
         if not l["enabled"]:
             reasons.append("лот остановлен владельцем")
         if not s.settings.payment_enabled:

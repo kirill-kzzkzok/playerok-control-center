@@ -29,6 +29,11 @@ class Inventory:
     def __init__(self, store, api):
         self.store, self.automation = store, Automation(store, api)
 
+    def scope(self, ident):
+        from app.services.logical_products import stock_scope
+
+        return stock_scope(self.store, ident)
+
     async def item(self, owner, ident):
         item = await self.automation.item(owner, ident)
         if item.get("deleted_at") or item.get("status") not in {
@@ -42,18 +47,20 @@ class Inventory:
 
     def counts(self, ident):
         rows = self.store.rows(
-            "SELECT status,COUNT(*) AS n FROM inventory WHERE item_id=? GROUP BY status", (ident,)
+            "SELECT status,COUNT(*) AS n FROM inventory WHERE item_id=? GROUP BY status", (self.scope(ident),)
         )
         return {state: next((row["n"] for row in rows if row["status"] == state), 0) for state in STATES}
 
     def preview(self, ident, text):
         values, empty, duplicates = stock_values(text)
+        scope = self.scope(ident)
         known = {
             row["fingerprint"]
-            for row in self.store.rows("SELECT fingerprint FROM inventory WHERE item_id=?", (ident,))
+            for row in self.store.rows("SELECT fingerprint FROM inventory WHERE item_id=?", (scope,))
         }
         fresh = [value for value in values if hashlib.sha256(value.encode()).hexdigest() not in known]
         return {
+            "scope": scope,
             "new": len(fresh),
             "empty": empty,
             "duplicates": duplicates,
@@ -87,7 +94,7 @@ class Inventory:
             for value in values:
                 count += db.execute(
                     "INSERT OR IGNORE INTO inventory(item_id,secret,fingerprint) VALUES(?,?,?)",
-                    (ident, value, hashlib.sha256(value.encode()).hexdigest()),
+                    (current["scope"], value, hashlib.sha256(value.encode()).hexdigest()),
                 ).rowcount
             if draft_id:
                 db.execute(

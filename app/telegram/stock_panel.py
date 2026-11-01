@@ -103,7 +103,7 @@ class StockPanel:
                 raise Conflict("Страница недоступна")
             rows = self.store.rows(
                 "SELECT i.id,r.order_id FROM inventory i LEFT JOIN reservations r ON r.inventory_id=i.id WHERE i.item_id=? AND i.status=? ORDER BY i.id LIMIT 11 OFFSET ?",
-                (ident, selected, page * 10),
+                (self.service.scope(ident), selected, page * 10),
             )
             text = f"📚 {LABELS[selected]} · страница {page + 1}\n" + (
                 "\n".join(

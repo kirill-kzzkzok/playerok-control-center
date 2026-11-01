@@ -30,7 +30,7 @@ class Notifications:
         if not initialized and self.store.setting("sync:health", {}).get("status") == "OK":
             with self.store.transaction() as db:
                 db.execute(
-                    "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT i.key,a.user_id,'BASELINE' FROM inbox i CROSS JOIN administrators a WHERE i.kind NOT IN ('worker_failed','operation_uncertain','stock_empty','order_problem','promotion_guard','enrollment_blocked')"
+                    "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT i.key,a.user_id,'BASELINE' FROM inbox i CROSS JOIN administrators a WHERE i.kind NOT IN ('worker_failed','operation_uncertain','stock_empty','order_problem','promotion_guard','enrollment_blocked','logical_product_blocked')"
                 )
                 db.execute(
                     "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -42,7 +42,7 @@ class Notifications:
             "AND EXISTS (SELECT 1 FROM administrators a WHERE NOT EXISTS "
             "(SELECT 1 FROM notifications n WHERE n.event_key=i.key AND n.owner_id=a.user_id)) "
             + (
-                "AND i.kind IN ('worker_failed','operation_uncertain','stock_empty','order_problem','promotion_guard','enrollment_blocked') "
+                "AND i.kind IN ('worker_failed','operation_uncertain','stock_empty','order_problem','promotion_guard','enrollment_blocked','logical_product_blocked') "
                 if not initialized
                 else ""
             )
@@ -105,6 +105,29 @@ class Notifications:
                     + "\nТребуется проверка владельца. Сбой условий не запускает слепой повтор."
                 )
                 markup = keyboard([[("Заказ", "order:" + payload["order_id"])]])
+            elif event["kind"] == "logical_product_blocked":
+                rows = self.store.rows(
+                    "SELECT p.code,p.error_code,l.item_id FROM logical_products p JOIN logical_listings l ON l.product_id=p.id WHERE p.id=? LIMIT 1",
+                    (payload["product_id"],),
+                )
+                if not rows or rows[0]["error_code"] != payload["code"]:
+                    self.store.execute(
+                        "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT ?,user_id,'SKIPPED' FROM administrators",
+                        (event["key"],),
+                    )
+                    continue
+                from app.services.logical_products import PROBLEMS
+
+                text = (
+                    "⚠️ <b>Проверьте постоянный код товара</b>\n"
+                    + escaped(rows[0]["code"], 20)
+                    + "\n"
+                    + escaped(
+                        PROBLEMS.get(payload["code"], "Связь объявления с настройкой выдачи не подтверждена"),
+                        300,
+                    )
+                )
+                markup = keyboard([[("Проверить товар", "lp:item:" + rows[0]["item_id"])]])
             elif event["kind"] == "stock_empty":
                 if self.store.rows(
                     "SELECT 1 FROM inventory WHERE item_id=? AND status='AVAILABLE' LIMIT 1",

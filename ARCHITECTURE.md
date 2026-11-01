@@ -953,3 +953,11 @@ ListingLaunch PREPARE обновляет только наблюдения (ка
 
 ## Пустые подписи и корреляция receipt (2026-11-01)
 InputInvoiceStarGift.message для новых отправок отсутствует. Поле reference остаётся внутренним audit/idempotency ключом. Миграция023: receipt_mode REFERENCE(default для старых строк)/MESSAGE_ID(новый intent), ack_message_id; уникальность payer+recipient+ACKID. Режим записывается в одной транзакции с SPENDING до внешнегоRPC. Единственный подходящий Telegram ID из PaymentResult updates сохраняется до независимого get_messages(ids=[ack]). Это наблюдение исхода, а не новое разрешение. Потерянный/неоднозначный ACK не заменяется эвристикой по времени/похожим Gift; UNCERTAIN остаётся без повтора. Старый reference-mode обслуживается только для совместимой read-only сверки уже начатых старых операций. SQL-сбой записи ACK также сохраняет неизвестность; исправленная история не создаёт новую форму/платёж.
+
+## Logical product identity (schema24, 2026-11-01)
+
+LogicalProducts is an identity/policy projection over existing Gifts and DeliveryChains, not an execution engine. Immutable public #7digit codes identify account-owned configurations; logical_listings tracks verified item IDs; logical_order_scopes pins order/version/config/canonical stock bucket. Inventory units are never copied on relist. Existing reservation, lease, Outbox, receipt and UNKNOWN boundaries remain authoritative.
+
+Marker edits reuse edit/updateItem with fresh baseline guards and independent readback. Store.finish commits the verified binding with the operation. Unknown edits reconcile by read only. STOP increments a separate control_revision; commit_arm is invoked inside the existing policy/arm transaction, fencing late network completions. No network await is introduced inside SQLite transactions.
+
+LogicalProductWorker reuses PageScanner with durable bounded listing/hydration checkpoints and account-scoped serialization. Only completed current active-catalog checks authorize opted-in inheritance. Fresh PAID deals supply already-SOLD candidate IDs without inventing parent_id or replaying historical orders. Legacy local projections never mutate existing gifts/intents or enable disabled policies. Details and limitations: UNIVERSAL_AUTODELIVERY_ACCEPTANCE.md.

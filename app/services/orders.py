@@ -115,32 +115,51 @@ class Orders:
             )
 
     def add_stock(self, item_id, values):
+        from app.services.logical_products import stock_scope
+
         cleaned = [value.strip() for value in values if value.strip()]
         if not cleaned:
             raise ValueError("Пустой запас")
         with self.store.transaction() as db:
+            scope = stock_scope(self.store, item_id)
             total = 0
             for value in cleaned:
                 fingerprint = hashlib.sha256(value.encode()).hexdigest()
                 total += db.execute(
                     "INSERT OR IGNORE INTO inventory(item_id,secret,fingerprint) VALUES(?,?,?)",
-                    (item_id, value, fingerprint),
+                    (scope, value, fingerprint),
                 ).rowcount
             return total
 
     @staticmethod
     def empty_stock(db, item_id, order_id):
-        db.execute(
-            "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (f"delivery:{item_id}:enabled", "false"),
-        )
+        product = db.execute(
+            "SELECT p.id,p.stock_item_id FROM logical_products p JOIN logical_listings l ON l.product_id=p.id "
+            "WHERE l.item_id=? AND p.handler='unique_stock' AND p.state='VERIFIED' AND l.verified_at IS NOT NULL",
+            (item_id,),
+        ).fetchone()
+        aliases = [item_id]
+        scope = item_id
+        if product:
+            scope = product["stock_item_id"]
+            aliases = [
+                row[0]
+                for row in db.execute(
+                    "SELECT item_id FROM logical_listings WHERE product_id=?", (product["id"],)
+                )
+            ]
+        for alias in aliases:
+            db.execute(
+                "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (f"delivery:{alias}:enabled", "false"),
+            )
         last_id = db.execute(
-            "SELECT COALESCE(MAX(id),0) FROM inventory WHERE item_id=?", (item_id,)
+            "SELECT COALESCE(MAX(id),0) FROM inventory WHERE item_id=?", (scope,)
         ).fetchone()[0]
         db.execute(
             "INSERT OR IGNORE INTO inbox(key,kind,payload,received_at,processed_at) VALUES(?,'stock_empty',?,?,?)",
             (
-                f"stock_empty:{item_id}:{last_id}",
+                f"stock_empty:{scope}:{last_id}",
                 encode({"item_id": item_id, "order_id": order_id}),
                 now(),
                 now(),
@@ -148,6 +167,8 @@ class Orders:
         )
 
     def reserve(self, order_id, actor=None):
+        from app.services.logical_products import LogicalProducts, stock_scope
+
         with self.store.transaction() as db:
             order = db.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
             if order and (
@@ -159,6 +180,8 @@ class Orders:
                 raise Conflict("Для заказа настроена подарочная выдача; складское резервирование запрещено")
             if not order or order["status"] != "PAID" or not order["chat_id"]:
                 raise Conflict("Выдача разрешена только оплаченной продаже с известным чатом")
+            LogicalProducts(self.store).pin_order(db, order_id, order["item_id"], "unique_stock")
+            scope = stock_scope(self.store, order["item_id"], order_id)
             existing = db.execute(
                 "SELECT inventory_id FROM reservations WHERE order_id=?", (order_id,)
             ).fetchone()
@@ -168,7 +191,7 @@ class Orders:
                 raise Conflict("Выдача этого заказа уже зарегистрирована. Проверьте историю операций")
             stock = db.execute(
                 "SELECT id FROM inventory WHERE item_id=? AND status='AVAILABLE' ORDER BY id LIMIT 1",
-                (order["item_id"],),
+                (scope,),
             ).fetchone()
             if not stock:
                 self.empty_stock(db, order["item_id"], order_id)
@@ -191,7 +214,7 @@ class Orders:
                 ),
             )
             if not db.execute(
-                "SELECT 1 FROM inventory WHERE item_id=? AND status='AVAILABLE' LIMIT 1", (order["item_id"],)
+                "SELECT 1 FROM inventory WHERE item_id=? AND status='AVAILABLE' LIMIT 1", (scope,)
             ).fetchone():
                 self.empty_stock(db, order["item_id"], order_id)
             return stock[0]

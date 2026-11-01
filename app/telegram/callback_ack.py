@@ -66,6 +66,7 @@ def navigation(action):
     } or action.startswith(
         (
             "item:",
+            "lp:item:",
             "nav:back:",
             "nav:recover:",
             "nav:close:",

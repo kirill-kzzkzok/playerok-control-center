@@ -136,6 +136,7 @@ class ItemPanel:
                     rows.append([("🎁 Настроить подарки", "gft:item:" + ident)])
             for draft in stock.service.prepared(owner, ident):
                 rows.append([("📥 Перенести запас из мастера", "stock:transfer:" + draft)])
+            rows.insert(0, [("🔗 Постоянный код и выдача товара", "lp:item:" + ident)])
         elif section == "other":
             text = title + "\nДругие действия"
             rows = [

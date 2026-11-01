@@ -91,6 +91,8 @@ class Reconciliation:
             if order.get("id") != target or order.get("direction") != "OUT" or not chat_id:
                 raise Conflict("Чат продажи не подтверждён")
         if kind == "delivery":
+            from app.services.logical_products import stock_scope
+
             order = await self.api.call("get_deal", deal_id=target)
             stock = self.store.rows(
                 "SELECT i.id,i.secret,i.item_id FROM inventory i JOIN reservations r ON r.inventory_id=i.id WHERE r.order_id=?",
@@ -103,7 +105,7 @@ class Reconciliation:
                 or order.get("direction") != "OUT"
                 or not chat_id
                 or stock[0]["id"] != payload.get("inventory_id")
-                or stock[0]["item_id"] != (order.get("item") or {}).get("id")
+                or stock[0]["item_id"] != stock_scope(self.store, (order.get("item") or {}).get("id"), target)
             ):
                 raise Conflict("Резерв не соответствует актуальной продаже")
             text = stock[0]["secret"]

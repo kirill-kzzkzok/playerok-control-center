@@ -34,6 +34,11 @@ def permitted_notice(job, outcome):
 def guard(service, action):
     job = service.job(action["target"])
     if action["kind"] == "gift_refund":
+        from app.services.logical_products import LogicalProducts, refund_allowed
+
+        LogicalProducts(service.store, service.api).require_delivery(
+            job["item_id"], "telegram_gifts", job["order_id"]
+        )
         if (
             job["state"] != "INVALID_RECIPIENT"
             or job["spent_at"]
@@ -42,6 +47,7 @@ def guard(service, action):
             or job["refund_operation_id"] != action["id"]
             or not service.runtime()
             or not service.settings.refund_enabled
+            or not refund_allowed(service.store, job["item_id"], job["order_id"])
         ):
             raise ValidationError("Возврат подарочного заказа заблокирован")
         local = service.store.rows("SELECT status,payload FROM orders WHERE id=?", (job["order_id"],))
@@ -79,6 +85,8 @@ async def execute_followup(executor, action):
         raise ValidationError("Владелец/товар/чат сделки не подтверждены")
     Orders(executor.store).ingest(order)
     if action["kind"] == "gift_refund":
+        from app.services.logical_products import refund_allowed
+
         deliverable(order, target, executor.api.account.id)
         if (
             buyer_recipient(order, field_id=service.listing(j["item_id"])["username_field_id"]).casefold()
@@ -89,6 +97,7 @@ async def execute_followup(executor, action):
         if (
             not capability
             or not service.settings.refund_enabled
+            or not refund_allowed(executor.store, j["item_id"], j["order_id"])
             or await capability(order) is not True
             or not service.runtime()
             or j["state"] != "INVALID_RECIPIENT"
@@ -130,6 +139,9 @@ async def execute_followup(executor, action):
     text = MESSAGES[outcome]
     if outcome == "DELIVERED":
         after = executor.store.setting("gifts:listing_options:" + j["item_id"], {}).get("after", "")
+        scopes = executor.store.rows("SELECT config FROM logical_order_scopes WHERE order_id=?", (target,))
+        if scopes:
+            after = json.loads(scopes[0]["config"]).get("after", "")
         if after:
             from app.services.automation import message_text
 

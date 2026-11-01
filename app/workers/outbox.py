@@ -58,6 +58,10 @@ class Executor:
         }
 
     def dispatch_guard(self, action):
+        if action["payload"].get("logical_binding"):
+            from app.services.logical_products import LogicalProducts
+
+            LogicalProducts(self.store, self.api).binding_guard(action)
         if action["kind"] in {"publish", "premium_publish"}:
             from app.services.listing_launch import ListingLaunch
 
@@ -86,6 +90,14 @@ class Executor:
             DeliveryChains(self.store, self.api).dispatchable(action)
         if action["payload"].get("auto_reply"):
             AutoReplies(self.store, self.api).dispatchable(action)
+        if action["kind"] in {"delivery", "delivery_text", "chain_message"}:
+            from app.services.logical_products import LogicalProducts
+
+            local = self.store.rows("SELECT item_id FROM orders WHERE id=?", (action["target"],))
+            if local:
+                LogicalProducts(self.store, self.api).require_delivery(
+                    local[0]["item_id"], order_id=action["target"]
+                )
         if action["kind"] in {"gift_refund", "gift_notice"}:
             from app.gifts.execution import guard
 
@@ -446,8 +458,21 @@ class Executor:
                 return {"removed": True}
             if getattr(self.api.account, "auto_accept_agreements", False):
                 await self.products.prepare_item_agreements(current)
+            if payload.get("logical_binding"):
+                from app.services.logical_products import LogicalProducts
+
+                if current.get("is_editable") is False or current.get("status") not in {"DRAFT", "APPROVED"}:
+                    raise ValidationError("Текущее состояние Playerok не разрешает изменение описания")
+                LogicalProducts(self.store, self.api).binding_guard(action, current)
             changes = {k: v for k, v in payload.items() if k in {"name", "description", "price"}}
-            if set(payload) - {"name", "description", "price", "add_photos", "replace_attachment_ids"}:
+            if set(payload) - {
+                "name",
+                "description",
+                "price",
+                "add_photos",
+                "replace_attachment_ids",
+                "logical_binding",
+            }:
                 raise ValidationError("Изменение содержит неподдерживаемые поля")
             if "price" in changes:
                 changes["price"] = listing_price(changes["price"], getattr(self.api.account, "role", None))
@@ -472,6 +497,13 @@ class Executor:
             result = await self.mutate(action, "updateItem", "update_item", id=target, **changes)
             if not edit_receipt_matches(target, changes, result):
                 raise APIError("EDIT_NOT_CONFIRMED", uncertain=True)
+            if payload.get("logical_binding"):
+                try:
+                    observed = await self.owned_item(target)
+                    receipt = LogicalProducts(self.store, self.api).confirm_binding(action, observed)
+                except (APIError, ValueError, TypeError):
+                    raise APIError("LOGICAL_BINDING_READBACK_UNKNOWN", uncertain=True) from None
+                return {**self.item_result(observed), "logical_binding": receipt}
             return self.item_result(result)
         if kind == "mark_read":
             await self.api.call("get_chat", chat_id=target)
@@ -560,6 +592,12 @@ class Executor:
                 raise APIError("MESSAGE_ID_MISSING", uncertain=True)
             return {"message_id": result["id"]}
         if kind == "delivery":
+            from app.services.logical_products import LogicalProducts, stock_scope
+
+            local_item = self.store.rows("SELECT item_id FROM orders WHERE id=?", (target,))
+            if local_item:
+                await LogicalProducts(self.store, self.api).fresh_delivery_item(local_item[0]["item_id"])
+
             order = await self.api.call("get_deal", deal_id=target)
             deliverable(order, target, self.api.account.id)
             Orders(self.store).ingest(order)
@@ -575,7 +613,7 @@ class Executor:
                 not chat
                 or not stock
                 or stock[0]["status"] != "RESERVED"
-                or stock[0]["item_id"] != (order.get("item") or {}).get("id")
+                or stock[0]["item_id"] != stock_scope(self.store, (order.get("item") or {}).get("id"), target)
             ):
                 raise ValidationError("Резерв не соответствует сделке")
             result = await self.mutate(

@@ -123,6 +123,9 @@ async def run_connected(config, *, network_diagnostics=False):
         )
         orders = Orders(store)
         products = Products(store, api)
+        from app.services.logical_products import LogicalProducts
+
+        LogicalProducts(store, api).migrate_legacy()
         sync = Synchronizer(store, api, orders)
         dispatcher = Dispatcher(
             storage=SQLiteStorage(store),
@@ -160,6 +163,15 @@ async def run_connected(config, *, network_diagnostics=False):
                 )
             )
         if config.writes_enabled and config.automation_enabled:
+            from app.workers.logical_products import LogicalProductWorker
+
+            tasks.append(
+                supervisor.start(
+                    "logical-products",
+                    lambda: when_connected(lambda: LogicalProductWorker(store, api).run(stop)),
+                    stop,
+                )
+            )
             tasks.append(
                 supervisor.start("auto-replies", lambda: AutoReplyWorker(store, api).run(stop), stop)
             )

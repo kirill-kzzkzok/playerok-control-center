@@ -40,6 +40,10 @@ class HomePanel:
         rows = [[(label, path)] for label, path, sql in checks if self.store.rows(sql)]
         if self.store.rows("SELECT 1 FROM gift_jobs WHERE refund_state IN ('MANUAL','FAILED') LIMIT 1"):
             rows.append([("Возврат требует решения", "gft:list:refund:0")])
+        for row in self.store.rows(
+            "SELECT p.code,l.item_id FROM logical_products p JOIN logical_listings l ON l.product_id=p.id WHERE p.error_code IS NOT NULL GROUP BY p.id LIMIT 10"
+        ):
+            rows.append([("Проверить товар " + row["code"], "lp:item:" + row["item_id"])])
         if self.store.setting("sync:health", {}).get("status") == "ERROR":
             rows.append([("Не удалось синхронизировать магазин", "diagnostics")])
         if getattr(getattr(self.api, "connection", None), "state", {}).get("status") == "DISCONNECTED":

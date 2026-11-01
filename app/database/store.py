@@ -360,6 +360,10 @@ class Store:
             row = db.execute(
                 "SELECT operation_key,kind,target,payload FROM outbox WHERE id=?", (ident,)
             ).fetchone()
+            if row["kind"] == "edit" and json.loads(row["payload"]).get("logical_binding"):
+                from app.services.logical_products import finish_binding
+
+                finish_binding(db, {**dict(row), "id": ident}, status, result)
             self.release_launch(db, ident, row["target"], row["payload"], status, error=error)
             if row["kind"] in {"premium_publish", "premium_bump"}:
                 from app.services.paid_promotions import finish_expense

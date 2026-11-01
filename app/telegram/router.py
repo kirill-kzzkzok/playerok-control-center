@@ -33,6 +33,7 @@ from app.telegram.item_panel import ItemPanel
 from app.telegram.keyboards import keyboard, main_menu
 from app.telegram.launch_panel import LaunchPanel
 from app.telegram.listings_panel import ListingsPanel
+from app.telegram.logical_products_panel import LogicalProductsPanel
 from app.telegram.navigation import Navigation
 from app.telegram.operation_results import OperationResults
 from app.telegram.operations_panel import OperationsPanel
@@ -89,6 +90,7 @@ def create_router(store, api, products, synchronizer):
     home_panel = HomePanel(store, api)
     item_panel = ItemPanel(api, store)
     listings_panel = ListingsPanel(api, store)
+    logical_panel = LogicalProductsPanel(store, api)
     stock_panel = StockPanel(store, api)
     gifts_panel = GiftsPanel(store, api)
     launch_panel = LaunchPanel(store, api, gifts_panel.service)
@@ -211,6 +213,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = home_panel.show(action, owner)
             elif action == "create":
                 text, markup = await wizard.start(owner, state)
+            elif action.startswith("lp:"):
+                text, markup = await logical_panel.callback(action, owner, state)
             elif action.startswith("agv:"):
                 text, markup = await agreements_panel.callback(action, state)
             elif action.startswith("gft:"):
@@ -631,6 +635,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await launch_panel.message(message, state)
             elif current == "stock:input":
                 text, markup = await stock_panel.message(message, state)
+            elif current and current.startswith("logical:"):
+                text, markup = await logical_panel.message(message, state)
             elif current and current.startswith("gifts:"):
                 text, markup = await gifts_panel.message(message, state)
             elif current and current.startswith("finance:"):
