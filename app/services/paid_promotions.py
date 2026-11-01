@@ -79,12 +79,10 @@ class PaidPromotions:
     def authority(self, value):
         revision, policy, selection = self.settings.get()
         approval = self.store.setting("promotions:approved:" + value["item"]["id"], {})
-        permission = self.store.setting("promotions:paid_authority", {})
         if (
             not policy.enabled
             or revision != value["policy_revision"]
-            or permission.get("revision") != revision
-            or permission.get("account_id") != self.api.account.id
+            or not self.has_authority(value["item"]["id"], revision)
             or not self.settings.selected(value["item"]["id"], selection)
             or any(
                 approval.get(k) != value.get(k)
@@ -93,6 +91,16 @@ class PaidPromotions:
         ):
             raise ValidationError("Платное автоподнятие не разрешено для текущей версии настроек и тарифа")
         return policy
+
+    def has_authority(self, item, revision):
+        """A launch grants its own item only; explicit shop-wide arm stays valid."""
+        return any(
+            permission.get("revision") == revision and permission.get("account_id") == self.api.account.id
+            for permission in (
+                self.store.setting("promotions:paid_authority", {}),
+                self.store.setting("promotions:launch_authority:" + item, {}),
+            )
+        )
 
     def arm(self, owner, revision):
         self.settings.access.orders.owner(owner)

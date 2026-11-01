@@ -25,6 +25,7 @@ def launch(rig):
     r = rig
     r.api.item.update(status="DRAFT", price=100, raw_price=100)
     r.store.set_setting("sync:health", {"status": "OK"})
+    r.store.set_setting("gifts:stopped", False)  # explicit owner permission in isolated fixture
     original = r.api.call
     r.quotes = [
         {"id": "free", "type": "DEFAULT", "price": 0, "period": 7},

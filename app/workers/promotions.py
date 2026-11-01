@@ -123,8 +123,7 @@ class PromotionWorker:
 
                         paid = PaidPromotions(self.store, self.api)
                         approval = self.store.setting("promotions:approved:" + ident, {})
-                        authority = self.store.setting("promotions:paid_authority", {})
-                        if result["would_allow"] and authority.get("revision") == revision and approval:
+                        if result["would_allow"] and paid.has_authority(ident, revision) and approval:
                             paid_attempt = True
                             preview = await paid.preview(actor, ident, approval["quote_id"])
                             await paid.queue(

@@ -50,7 +50,11 @@ class Executor:
     def item_result(result):
         return {
             "remote_id": result["id"],
-            **{k: result[k] for k in ("name", "slug", "status", "price", "raw_price") if k in result},
+            **{
+                k: result[k]
+                for k in ("name", "slug", "status", "price", "raw_price", "created_at")
+                if k in result
+            },
         }
 
     def dispatch_guard(self, action):

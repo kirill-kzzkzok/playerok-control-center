@@ -131,9 +131,47 @@ class GiftsPanel:
                         [("Лимиты расходов", "gft:limits")],
                         [("Проверить метку в описании", "gft:description")],
                         [("⛔ Остановить выдачу", "gft:stop")],
+                        *(
+                            [[("▶️ Разрешить новые покупки", "gft:resume")]]
+                            if self.store.setting("gifts:stopped", True)
+                            else []
+                        ),
                     ],
                     back=("⬅️ Подарки", "gft:home"),
                 ),
+            )
+        if command == "resume":
+            await state.clear()
+            nonce = secrets.token_hex(6)
+            await state.set_data(
+                {
+                    "gift_resume": {
+                        "nonce": nonce,
+                        "stop_revision": self.store.setting("gifts:stop_revision", 0),
+                    }
+                }
+            )
+            return (
+                (
+                    "▶️ Разрешить новые покупки подарков?\n"
+                    "Stars смогут расходоваться только по отдельно включённым товарам, после оплаты заказа и в пределах лимитов. "
+                    "Остановленные товары останутся выключенными. Сейчас ничего не отправляется."
+                ),
+                keyboard(
+                    [
+                        [("Разрешить в пределах лимитов", "gft:resume_confirm:" + nonce)],
+                        [("Отмена", "gft:settings")],
+                    ]
+                ),
+            )
+        if command == "resume_confirm":
+            value = (await state.get_data()).get("gift_resume")
+            if not value or len(parts) != 3 or value["nonce"] != parts[2]:
+                raise Conflict("Подтверждение устарело. Откройте настройки подарков")
+            await state.clear()
+            await s.resume(owner, value["stop_revision"])
+            return "✅ Новые покупки разрешены. Товары включаются отдельно.", keyboard(
+                [[("Настройки подарков", "gft:settings")], [("К товарам", "gft:bindings")]]
             )
         if command == "refresh":
             try:
@@ -203,7 +241,7 @@ class GiftsPanel:
             s.stop(owner)
             await state.clear()
             return (
-                "Новые покупки остановлены. Уже отправленный запрос отменить невозможно. Проверьте UNCERTAIN. Лоты потребуется включить заново.",
+                "Новые покупки остановлены. Уже отправленный запрос отменить невозможно. Проверьте операции с неизвестным результатом. Лоты потребуется включить заново.",
                 keyboard([[("Требуют проверки", "gft:list:uncertain:0"), ("Назад", "gft:home")]]),
             )
         if command in {"limits", "description"}:
@@ -288,10 +326,10 @@ class GiftsPanel:
             j = s.job(ident)
             text = (
                 f"🎁 Заказ <code>{escape(ident)}</code>\nПодарок: {escape(j['gift_code'])}\n"
-                f"Выдача: {status(j['state'])}\nВозврат: {j['refund_state']}\n"
-                f"Расход (intent): {j['stars'] if j['stars'] is not None else 'не начат'} ⭐\n"
+                f"Выдача: {status(j['state'])}\nВозврат: {status(j['refund_state'])}\n"
+                f"Согласованная стоимость: {j['stars'] if j['stars'] is not None else 'не начат'} ⭐\n"
                 f"Причина: {escape(j['error_code'] or 'нет')}\n"
-                "Получатель скрыт в общем журнале. Нет автоматического повтора UNCERTAIN."
+                "Получатель скрыт в общем журнале. Операции с неизвестным результатом не повторяются автоматически."
             )
             steps = s.steps(ident)
             done = sum(g["state"] == "SUCCEEDED" for g in steps)
@@ -301,7 +339,7 @@ class GiftsPanel:
             text += f"\nПодтверждено: {confirmed} Stars · неизвестный расход: {unknown} Stars"
             text += f"\nСогласованная стоимость пакета: {sum(g['stars'] for g in steps)} Stars"
             if done and done < len(steps):
-                text += "\n⚠️ PARTIALLY_DELIVERED — полный возврат и SENT запрещены"
+                text += "\n⚠️ Частичная доставка — полный возврат и отметка выполнения запрещены"
             for g in steps:
                 icon = (
                     "✅"
@@ -312,7 +350,7 @@ class GiftsPanel:
                     if g["state"] == "BLOCKED"
                     else "⏳"
                 )
-                text += f"\n{icon} {escape(gift_name(g['code']))} {g['position'] + 1}/{len(steps)} · {g['stars']} ⭐ · {g['state']}"
+                text += f"\n{icon} {escape(gift_name(g['code']))} {g['position'] + 1}/{len(steps)} · {g['stars']} ⭐ · {status(g['state'])}"
                 if g["error_code"]:
                     text += (
                         "\nПричина: " + escape(gift_reason(g["error_code"])) + " · " + escape(g["error_code"])
@@ -337,7 +375,7 @@ class GiftsPanel:
             ):
                 rows.append([("Повторить только безопасную проверку", "gft:retrycheck:" + ident)])
             if j["state"] == "SUCCEEDED":
-                text += "\nВыдано — проверьте завершение сделки. Для отчёта с полями требуется существующая форма Fulfillment."
+                text += "\nВыдано — проверьте завершение сделки. Если Playerok требует отчёт, заполните форму подтверждения выполнения."
             if j["state"] == "UNCERTAIN" and j["spent_at"]:
                 rows.append([("🔎 Сверить доставку (только чтение)", "gft:reconcile:" + ident)])
             if j["refund_state"] in {"MANUAL", "UNCERTAIN", "FAILED"} and not j["spent_at"]:
@@ -398,7 +436,7 @@ class GiftsPanel:
                 await state.clear()
                 await state.set_data({"gift_retry": {"order": ident, "nonce": nonce}})
                 return (
-                    "Продолжить с первой неотправленной позиции? Её предыдущая проверка остановлена до платёжного намерения. Доставленные подарки не повторяются. Возможна реальная покупка оставшихся подарков. UNCERTAIN не повторяется.",
+                    "Продолжить с первой неотправленной позиции? Её предыдущая проверка остановлена до платёжного намерения. Доставленные подарки не повторяются. Возможна реальная покупка оставшихся подарков. Операции с неизвестным результатом не повторяются.",
                     keyboard(
                         [
                             [("Подтверждаю", f"gft:confirmretry:{ident}:{nonce}")],
@@ -478,15 +516,16 @@ class GiftsPanel:
             await state.set_data({"gift_arm": {"item": ident, "revision": l["revision"], "nonce": nonce}})
             return (
                 (
-                    f"⚠️ Разрешить реальные платные отправки {escape(l['gift_code'])} за {l['approved_stars']} ⭐ по новым PAID заказам?\n"
-                    "Лимиты и проверки получателя обязательны. UNCERTAIN блокирует новые покупки.\n"
-                    "При отдельном допуске автовозврата окончательный отказ username отменит допустимую PAID сделку; иначе — ручное решение.\n"
-                    "Автоматическое SENT доступно только после подтверждённой доставки и для legacy Fulfillment; отчёт с полями остаётся ручным."
+                    self.bundle_text(json.loads(l["bundle"]))
+                    + "\n\n⚠️ Разрешить реальные платные отправки этого пакета по новым оплаченным заказам?\n"
+                    "Лимиты и проверки получателя обязательны. Неизвестный результат платежа блокирует новые покупки.\n"
+                    "При отдельном допуске автовозврата подтверждённый несуществующий Telegram username отменит подходящий оплаченный заказ; иначе — ручное решение.\n"
+                    "Автоматическая отметка выполнения доступна только после подтверждённой доставки, если Playerok не требует отчёт. Заполнение отчёта остаётся ручным."
                 ),
                 keyboard(
                     [
                         [("Разрешаю подарки; завершать вручную", f"gft:arm:{ident}:{nonce}:0")],
-                        [("Разрешаю подарки + допустимый авто-SENT", f"gft:arm:{ident}:{nonce}:1")],
+                        [("Разрешаю подарки и допустимое автозавершение", f"gft:arm:{ident}:{nonce}:1")],
                         [("Отмена", "gft:item:" + ident)],
                     ]
                 ),

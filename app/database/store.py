@@ -295,38 +295,56 @@ class Store:
         )
         if status != "PERMANENT_FAILED" or not launch_id or not releasable:
             return
-        db.execute(
-            "UPDATE drafts SET state='DRAFT',revision=revision+1 WHERE id=? AND state='QUEUED'",
-            (launch_id,),
+        marker_row = db.execute(
+            "SELECT value FROM settings WHERE key=?", ("launch:prepared:" + target,)
+        ).fetchone()
+        marker = json.loads(marker_row[0]) if marker_row else {}
+        matching_marker = marker.get("operation") == ident and marker.get("id") == launch_id
+        # A persisted older PREMIUM payload may carry the revision only in its
+        # marker. Read it before deleting anything, and never borrow another
+        # operation's authority to disarm delivery.
+        delivery_revision = payload.get("delivery_revision")
+        if delivery_revision is None and matching_marker:
+            delivery_revision = marker.get("delivery_revision")
+        launch_revision = payload.get("launch_revision")
+        if launch_revision is None and matching_marker:
+            launch_revision = marker.get("revision")
+        released = db.execute(
+            "UPDATE drafts SET state='DRAFT',revision=revision+1 "
+            "WHERE id=? AND state='QUEUED' AND (? IS NULL OR revision=?)",
+            (launch_id, launch_revision, launch_revision),
         )
+        if released.rowcount != 1:
+            return
+        authority_key = "promotions:launch_authority:" + target
+        authority_row = db.execute("SELECT value FROM settings WHERE key=?", (authority_key,)).fetchone()
+        authority = json.loads(authority_row[0]) if authority_row else {}
+        if authority.get("launch_id") == launch_id and authority.get("launch_revision") == launch_revision:
+            db.execute("DELETE FROM settings WHERE key=?", (authority_key,))
         # CAS on the launch's own delivery revision: only rows still at the revision
         # the launch committed are disarmed. A newer owner edit (independently
         # re-armed delivery) survives untouched - no lost owner update.
-        delivery_revision = payload.get("delivery_revision")
         if delivery_revision is not None:
             db.execute(
                 "UPDATE gift_listings SET enabled=0,revision=revision+1 "
                 "WHERE item_id=? AND enabled=1 AND revision=?",
                 (target, delivery_revision),
             )
-            db.execute(
+            policy_changed = db.execute(
                 "UPDATE delivery_policies SET payload=json_set(payload,'$.enabled',0),"
                 "revision=revision+1,updated_at=? "
                 "WHERE item_id=? AND json_extract(payload,'$.enabled')=1 AND revision=?",
                 (now(), target, delivery_revision),
             )
-            db.execute(
-                "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (f"delivery:{target}:enabled", "false"),
-            )
-        else:
-            # No delivery revision recorded (legacy payloads): disarm conservatively,
-            # the draft release is still safe because the item was never published.
-            db.execute(
-                "UPDATE gift_listings SET enabled=0,revision=revision+1 WHERE item_id=? AND enabled=1",
-                (target,),
-            )
-        db.execute("DELETE FROM settings WHERE key=?", ("launch:prepared:" + target,))
+            if policy_changed.rowcount == 1:
+                db.execute(
+                    "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (f"delivery:{target}:enabled", "false"),
+                )
+        # Without a recorded delivery revision there is no authority to disarm an
+        # independently configured listing. Legacy release must not guess.
+        if matching_marker:
+            db.execute("DELETE FROM settings WHERE key=?", ("launch:prepared:" + target,))
 
     def finish(self, ident, token, status, result=None, error=None):
         if status not in {"SUCCEEDED", "RETRYABLE_FAILED", "UNCERTAIN", "PERMANENT_FAILED"}:

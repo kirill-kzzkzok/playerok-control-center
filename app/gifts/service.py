@@ -252,13 +252,46 @@ class GiftService:
     def stop(self, owner):
         self.owner(owner)
         with self.store.transaction() as db:
+            self.store.set_setting("gifts:stop_revision", self.store.setting("gifts:stop_revision", 0) + 1)
             db.execute("UPDATE gift_listings SET enabled=0,revision=revision+1")
             db.execute(
                 "INSERT INTO settings VALUES('gifts:stopped','true') ON CONFLICT(key) DO UPDATE SET value='true'"
             )
         event("WARNING", "Экстренная остановка новых подарочных покупок", level=30)
 
+    async def resume(self, owner, expected_stop_revision):
+        """Explicit global permission; never arms a listing or queues a payment."""
+        self.owner(owner)
+        self.settings.require_configured()
+        if not self.settings.payment_enabled or not getattr(self.api.account, "writes_enabled", False):
+            raise GiftValidationError("Покупка подарков или запись Playerok выключены")
+        if not getattr(self.api.account, "automation_enabled", False):
+            raise GiftValidationError("Автоматизация выключена в настройках подключения")
+        await self.refresh()
+        with self.store.transaction():
+            if self.store.setting("gifts:stop_revision", 0) != expected_stop_revision:
+                raise Conflict("Выдача остановлена после открытия экрана. Подтвердите новое решение")
+            if self.store.rows(
+                "SELECT 1 FROM gift_steps WHERE state IN ('SPENDING','UNCERTAIN') LIMIT 1"
+            ) or self.store.rows(
+                "SELECT 1 FROM gift_jobs WHERE refund_state IN ('SPENDING','UNCERTAIN') LIMIT 1"
+            ):
+                raise Conflict("Сначала проверьте неизвестный результат предыдущей операции")
+            # Recheck gates after the network awaits; a failed identity check must
+            # not regain write authority just because the owner pressed resume.
+            if not self.api.account.writes_enabled or not getattr(
+                self.api.account, "automation_enabled", False
+            ):
+                raise Conflict("Подключение Playerok больше не подтверждено")
+            self.store.set_setting("gifts:stopped", False)
+        event("INFO", "Владелец разрешил новые подарочные покупки; настройки товаров не включались")
+
     async def arm(self, owner, item_id, revision, *, auto_fulfill=False, prepublication=False):
+        stop_revision = self.store.setting("gifts:stop_revision", 0)
+        if self.store.setting("gifts:stopped", True):
+            raise GiftValidationError(
+                "Подарочная выдача остановлена. Явно разрешите новые покупки в настройках подарков"
+            )
         data = await self.inspect_item(owner, item_id)
         self.settings.require_configured()
         disabled = []
@@ -276,6 +309,8 @@ class GiftService:
         if data["item"]["status"] != ("DRAFT" if prepublication else "APPROVED"):
             raise GiftValidationError("Включать можно только опубликованный лот")
         with self.store.transaction() as db:
+            if self.store.setting("gifts:stop_revision", 0) != stop_revision:
+                raise Conflict("Выдача остановлена во время проверки. Подтвердите включение заново")
             row = db.execute("SELECT * FROM gift_listings WHERE item_id=?", (item_id,)).fetchone()
             if (
                 not row
@@ -297,9 +332,6 @@ class GiftService:
             db.execute(
                 "UPDATE gift_listings SET enabled=1,auto_fulfill=?,armed_at=?,revision=revision+1 WHERE item_id=?",
                 (int(auto_fulfill), now(), item_id),
-            )
-            db.execute(
-                "INSERT INTO settings VALUES('gifts:stopped','false') ON CONFLICT(key) DO UPDATE SET value='false'"
             )
 
     def disarm(self, owner, item_id):

@@ -1,30 +1,30 @@
 """PREPARE (read-only checks) then a single atomic COMMIT for a listing launch.
 
 Design (PROGRESS.md, "STOP-THE-PATCH-CASCADE"):
-- Stage 1 PREPARE: only reads (server/Playerok); no local writes.
+- Stage 1 PREPARE: reads and observation caches, no control-state writes.
 - Stage 2 COMMIT: one BEGIN IMMEDIATE transaction holding EVERY local write:
   delivery configuration, paid permissions, the Outbox operation, the durable
   marker, the DRAFT->QUEUED CAS. Partial local state cannot survive a failure:
   SQLite rolls the whole transaction back. This removes the snapshot/rollback
   machinery and its recurring defect class entirely.
-- The only PREPARE-stage local write is the promotion schedule enable flag
-  (non-spending: every paid operation still needs approval + authority), which
-  the premium preview must observe for consistent revision checks. The stock
-  import moved INTO the commit transaction (idempotent by fingerprint).
+- PREPARE may refresh observations (catalog/balance/verified payer). It never
+  changes policy, spend authority, delivery flags or the emergency stop.
 """
 
 import hashlib
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
+from datetime import UTC, datetime
+from decimal import Decimal
 
-from app.database.store import Conflict, encode, now
+from app.database.store import Conflict, encode, now, server_time
 from app.services.automation import Automation, DeliveryPolicy, message_text
 from app.services.finance import money
 from app.services.inventory import Inventory, stock_values
 from app.services.paid_promotions import PaidPromotions
 from app.services.products import Products, ValidationError, priority_price_basis
 from app.services.promotion_settings import PromotionSettings
-from app.services.promotions import PromotionPolicy
+from app.services.promotions import PromotionPolicy, dry_run
 
 
 def digest(value):
@@ -93,7 +93,59 @@ class ListingLaunch:
             self.store.set_setting(key, ident)
             return ident
 
-    async def check(self, owner, value):
+    def creation_origin(self, owner, item, publication_operation=None):
+        """First-launch eligibility only; never relax a generic re-arm cutoff.
+
+        A newly created item cannot have sales before its server creation time.
+        Preserve that clock domain only with an exact successful creation receipt.
+        Imported drafts, prior publication attempts and known orders fail closed.
+        """
+        if self.store.setting("playerok:bound_account_id") != self.api.account.id:
+            return None
+        created = server_time(item.get("created_at"))
+        if not created or datetime.fromisoformat(created).timestamp() > datetime.now(UTC).timestamp() + 300:
+            return None
+        rows = self.store.rows(
+            "SELECT d.id AS draft_id,o.id AS operation_id,o.result FROM bindings b "
+            "JOIN drafts d ON d.id=b.draft_id JOIN outbox o ON o.target=d.id "
+            "WHERE b.remote_id=? AND b.test_only=0 AND d.owner_id=? "
+            "AND d.state='REMOTE_DRAFT' AND o.kind='create' AND o.status='SUCCEEDED'",
+            (item["id"], owner),
+        )
+        if len(rows) != 1:
+            return None
+        source = rows[0]
+        receipt = json.loads(source["result"]) if source["result"] else {}
+        if receipt.get("remote_id") != item["id"] or server_time(receipt.get("created_at")) != created:
+            return None
+        if self.store.rows("SELECT 1 FROM orders WHERE item_id=? LIMIT 1", (item["id"],)):
+            return None
+        attempts = self.store.rows(
+            "SELECT id,status,payload FROM outbox WHERE target=? AND kind IN ('publish','premium_publish')",
+            (item["id"],),
+        )
+        if attempts:
+            marker = self.store.setting("launch:prepared:" + item["id"], {})
+            config = self.store.setting("launch:config:" + item["id"])
+            if len(attempts) != 1:
+                return None
+            attempt = attempts[0]
+            payload = json.loads(attempt["payload"])
+            if (
+                attempt["id"] != publication_operation
+                or attempt["status"] not in {"PENDING", "PROCESSING"}
+                or marker.get("operation") != attempt["id"]
+                or marker.get("id") != config
+                or payload.get("launch_id") != config
+            ):
+                return None
+        return {
+            "source_draft": source["draft_id"],
+            "create_operation": source["operation_id"],
+            "created_at": created,
+        }
+
+    async def check(self, owner, value, *, publication_operation=None):
         if self.api.account.id != value["account_id"]:
             raise ValidationError("Аккаунт Playerok изменился. Откройте новый черновик запуска")
         PaidPromotions(self.store, self.api).permissions(value["account_id"])
@@ -118,11 +170,22 @@ class ListingLaunch:
         result = {
             "item": {
                 k: item.get(k)
-                for k in ("id", "name", "description", "price", "raw_price", "category", "obtaining_type")
+                for k in (
+                    "id",
+                    "name",
+                    "description",
+                    "price",
+                    "raw_price",
+                    "category",
+                    "obtaining_type",
+                    "created_at",
+                )
             },
             "account": value["account_id"],
             "config": digest({k: v for k, v in value.items() if k != "ready"}),
         }
+        if mode != "manual":
+            result["enrollment_origin"] = self.creation_origin(owner, item, publication_operation)
         if mode in {"text", "stock"}:
             DeliveryPolicy(
                 enabled=True,
@@ -159,8 +222,10 @@ class ListingLaunch:
                     "Лимиты Stars должны быть положительными и не превышать ограничения подключения"
                 )
             data = await s.inspect_item(owner, item["id"])
-            if not data["required"]:
-                raise ValidationError("Поле Telegram username в способе получения должно быть обязательным")
+            # Some Playerok schemas expose this exact field as optional. Payment
+            # still requires one valid value from that field in the fresh PAID deal.
+            if self.store.setting("gifts:stopped", True):
+                raise ValidationError("Подарочная выдача остановлена. Явно возобновите её в разделе подарков")
             await s.refresh()
             bundle = s.catalog_bundle(data["code"])
             total = sum(g["stars"] for g in bundle)
@@ -210,7 +275,8 @@ class ListingLaunch:
             # copy would silently overwrite other lots' promotion settings on queue().
             # The volatile `enabled` flag is excluded: queue() legitimately flips it for
             # the opt-in schedule without invalidating the confirmed budget itself.
-            _revision, current_policy, _ = PromotionSettings(self.store, self.api).get()
+            policy_revision, current_policy, _ = PromotionSettings(self.store, self.api).get()
+            result["policy_revision"] = policy_revision
             expected = dict(value["promotion_policy"])
             expected.pop("enabled", None)
             actual = asdict(current_policy)
@@ -219,9 +285,10 @@ class ListingLaunch:
                 raise Conflict(
                     "Общие настройки продвижения изменились. Откройте черновик запуска и обновите лимиты"
                 )
-            # policy_revision is deliberately NOT part of the readiness digest: the
-            # opt-in schedule enable in queue() bumps it without changing the budget.
             viewer = await self.api.call("get")
+            result["balance"] = str(
+                money((viewer.get("profile") or {}).get("balance", {}).get("available", 0))
+            )
             if (
                 viewer.get("id") != value["account_id"]
                 or money((viewer.get("profile") or {}).get("balance", {}).get("available", 0)) < amount
@@ -238,35 +305,32 @@ class ListingLaunch:
         if draft["revision"] != revision or draft["state"] != "DRAFT" or not value.get("ready"):
             raise Conflict("Настройки изменились. Проверьте готовность заново")
         item = value["launch_target"]
+        delivery_before = self._delivery_authority(item)
 
-        # ---------- Stage 1: PREPARE (read-only checks; local writes only for
-        # the non-spending schedule enable flag, which the premium preview must
-        # see to keep revision checks consistent) ----------
+        # PREPARE: external reads and observation caches, no control writes.
         fresh = await self.check(owner, value)
         if digest(fresh) != digest(value["ready"]):
             raise Conflict("Товар, тариф или подарок изменились. Подтвердите новое превью")
         premium_preview = None
         if value["publication"] == "PREMIUM":
-            if value["promotion"]:
-                # The schedule enable flag is a LOCAL, non-spending write: flip it in
-                # PREPARE so the premium preview (and its policy_revision) is taken
-                # against the post-enable policy. Enabling the schedule never spends
-                # by itself: every paid operation still requires approval+authority.
-                settings = PromotionSettings(self.store, self.api)
-                p_revision, existing, selection = settings.get()
-                if asdict(existing) != {**value["promotion_policy"], "enabled": existing.enabled}:
-                    raise Conflict("Общие настройки продвижения изменились. Подтвердите новые лимиты")
-                if not existing.enabled:
-                    settings.save(
-                        owner, p_revision, {**value["promotion_policy"], "enabled": True}, selection
-                    )
             paid = PaidPromotions(self.store, self.api)
             premium_preview = await paid.preview(owner, item, fresh["quote"]["id"])
+            if premium_preview["policy_revision"] != fresh["policy_revision"]:
+                raise Conflict("Настройки продвижения изменились при подготовке")
             if money(premium_preview["amount"]) != money(fresh["quote"]["price"]):
                 raise Conflict("Цена PREMIUM изменилась при подготовке. Подтвердите новое превью")
 
         # ---------- Stage 2: COMMIT (single atomic transaction, no awaits) ----------
         with self.store.transaction() as db:
+            PaidPromotions(self.store, self.api).permissions(value["account_id"])
+            if self._delivery_authority(item) != delivery_before:
+                raise Conflict("Настройки выдачи изменились во время подготовки. Проверьте заново")
+            if value["mode"] == "gifts" and self.store.setting("gifts:stopped", True):
+                raise Conflict("Подарочная выдача остановлена во время подготовки")
+            if value["mode"] != "manual" and self.creation_origin(owner, fresh["item"]) != fresh.get(
+                "enrollment_origin"
+            ):
+                raise Conflict("История создания или публикации товара изменилась во время подготовки")
             # CAS: this revision is never queued twice.
             if (
                 db.execute(
@@ -280,7 +344,7 @@ class ListingLaunch:
             if value["mode"] == "gifts":
                 delivery_revision = self._commit_gift_listing(db, owner, item, value, fresh)
             elif value["mode"] in {"text", "stock"}:
-                delivery_revision = self._commit_text_delivery(db, owner, item, value)
+                delivery_revision = self._commit_text_delivery(db, owner, item, value, fresh)
             else:
                 row = db.execute("SELECT enabled FROM gift_listings WHERE item_id=?", (item,)).fetchone()
                 policy = db.execute(
@@ -320,6 +384,14 @@ class ListingLaunch:
                     },
                 )
             return operation
+
+    def _delivery_authority(self, item):
+        """Read-only CAS token, never a snapshot used for manual rollback."""
+        return {
+            "text": self.store.rows("SELECT revision FROM delivery_policies WHERE item_id=?", (item,)),
+            "gift": self.store.rows("SELECT revision,enabled FROM gift_listings WHERE item_id=?", (item,)),
+            "enabled": self.store.setting(f"delivery:{item}:enabled"),
+        }
 
     def _commit_gift_listing(self, db, owner, item, value, fresh):
         """Synchronous gift bind + arm inside the commit transaction, from PREPARE
@@ -362,14 +434,17 @@ class ListingLaunch:
         )
         db.execute("UPDATE gift_listings SET bundle=? WHERE item_id=?", (encode(bundle), item))
         policy = db.execute("SELECT payload FROM delivery_policies WHERE item_id=?", (item,)).fetchone()
-        if policy and json.loads(policy["payload"]).get("enabled"):
+        if (policy and json.loads(policy["payload"]).get("enabled")) or db.execute(
+            "SELECT 1 FROM delivery_chains WHERE item_id=? AND status IN ('ACTIVE','BLOCKED')", (item,)
+        ).fetchone():
             raise Conflict("Для лота уже действует складская/текстовая выдача или незавершённая цепочка")
         db.execute(
             "UPDATE gift_listings SET enabled=1,auto_fulfill=?,armed_at=?,revision=revision+1 WHERE item_id=?",
-            (int(value["auto_complete"]), now(), item),
-        )
-        db.execute(
-            "INSERT INTO settings VALUES('gifts:stopped','false') ON CONFLICT(key) DO UPDATE SET value='false'"
+            (
+                int(value["auto_complete"]),
+                (fresh.get("enrollment_origin") or {}).get("created_at") or now(),
+                item,
+            ),
         )
         self.store.set_setting(
             "gifts:listing_options:" + item,
@@ -384,8 +459,10 @@ class ListingLaunch:
             "revision"
         ]
 
-    def _commit_text_delivery(self, db, owner, item, value):
+    def _commit_text_delivery(self, db, owner, item, value, fresh):
         """Synchronous delivery-policy write inside the commit transaction."""
+        if db.execute("SELECT 1 FROM gift_listings WHERE item_id=? AND enabled=1", (item,)).fetchone():
+            raise Conflict("Для товара уже включена подарочная выдача. Сначала остановите её")
         row = db.execute("SELECT revision FROM delivery_policies WHERE item_id=?", (item,)).fetchone()
         version = row["revision"] if row else 0
         policy = DeliveryPolicy(
@@ -401,7 +478,13 @@ class ListingLaunch:
             "INSERT INTO delivery_policies(item_id,revision,actor,payload,updated_at) VALUES(?,?,?,?,?) "
             "ON CONFLICT(item_id) DO UPDATE SET revision=excluded.revision,actor=excluded.actor,"
             "payload=excluded.payload,updated_at=excluded.updated_at",
-            (item, version + 1, owner, encode(asdict(policy)), now()),
+            (
+                item,
+                version + 1,
+                owner,
+                encode(asdict(policy)),
+                (fresh.get("enrollment_origin") or {}).get("created_at") or now(),
+            ),
         )
         db.execute(
             "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -421,6 +504,37 @@ class ListingLaunch:
     ):
         """Synchronous premium permission + reservation commit from the PREPARE
         preview (all network checks already done)."""
+        settings = PromotionSettings(self.store, self.api)
+        current, policy, selection = settings.get()
+        if current != fresh["policy_revision"] or current != preview["policy_revision"]:
+            raise Conflict("Настройки расходов изменились перед фиксацией")
+        if self.store.rows("SELECT 1 FROM promotion_expenses WHERE status='UNCERTAIN' LIMIT 1"):
+            raise Conflict("Предыдущий расход Playerok требует сверки")
+        checked = dry_run(
+            self.store,
+            item,
+            {"price": preview["amount"], "checked_at": preview["checked_at"]},
+            replace(policy, enabled=True),
+            datetime.now(UTC),
+        )
+        if checked["reasons"]:
+            raise ValidationError("Расход не разрешён: " + "; ".join(checked["reasons"]))
+        # The fresh balance is checked again by the worker before any RPC. At
+        # COMMIT, serialise reservations against the observation from PREPARE.
+        balance = money(fresh["balance"])
+        reserved = sum(
+            (
+                money(r["amount"])
+                for r in self.store.rows("SELECT amount FROM promotion_expenses WHERE status='RESERVED'")
+            ),
+            Decimal(0),
+        )
+        if balance < reserved + money(preview["amount"]):
+            raise ValidationError("Баланс Playerok не покрывает резервы других операций")
+        preview = dict(preview)
+        if value["promotion"] and not policy.enabled:
+            current = settings.save(owner, current, {**asdict(policy), "enabled": True}, selection)
+            preview["policy_revision"] = current
         if value["promotion"]:
             db.execute(
                 "INSERT INTO settings(key,value) VALUES(?,?) "
@@ -444,8 +558,16 @@ class ListingLaunch:
                 "INSERT INTO settings(key,value) VALUES(?,?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (
-                    "promotions:paid_authority",
-                    encode({"account_id": self.api.account.id, "revision": policy_revision, "actor": owner}),
+                    "promotions:launch_authority:" + item,
+                    encode(
+                        {
+                            "account_id": self.api.account.id,
+                            "revision": policy_revision,
+                            "actor": owner,
+                            "launch_id": ident,
+                            "launch_revision": revision,
+                        }
+                    ),
                 ),
             )
         launch = {
@@ -465,6 +587,7 @@ class ListingLaunch:
             "automatic": False,
             "launch_id": ident,
             "launch_revision": revision,
+            "delivery_revision": delivery_revision,
         }
         op = self.store.enqueue(key, "premium_publish", item, payload, db, actor=owner)
         self.store.set_setting("launch:prepared:" + item, {**launch, "operation": op})
@@ -487,6 +610,7 @@ class ListingLaunch:
             draft["state"] != "QUEUED"
             or draft["revision"] != prepared["revision"]
             or self.api.account.id != config["account_id"]
+            or value.get("launch_revision") != prepared["revision"]
         ):
             raise Conflict("Подтверждение запуска устарело")
         if config["mode"] != "manual" and not getattr(self.api.account, "automation_enabled", False):
@@ -517,7 +641,14 @@ class ListingLaunch:
         prepared = self.store.setting("launch:prepared:" + action["target"])
         row = self.store.rows("SELECT owner_id FROM drafts WHERE id=?", (prepared["id"],))[0]
         draft = self.load(row["owner_id"], prepared["id"])
-        fresh = await self.check(row["owner_id"], draft["payload"])
+        fresh = await self.check(row["owner_id"], draft["payload"], publication_operation=action["id"])
+        if action["kind"] == "premium_publish":
+            current, _, _ = PromotionSettings(self.store, self.api).get()
+            if current != action["payload"]["policy_revision"]:
+                raise Conflict("Настройки расходов изменились после подтверждения запуска")
+            # Only the schedule enable committed atomically with this operation
+            # may change the revision since the owner's ready snapshot.
+            fresh["policy_revision"] = draft["payload"]["ready"]["policy_revision"]
         if digest(fresh) != digest(draft["payload"]["ready"]):
             raise Conflict("Готовность изменилась перед публикацией. Серверный черновик сохранён")
         self.guard(action)

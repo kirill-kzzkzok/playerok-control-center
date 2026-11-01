@@ -211,6 +211,7 @@ def rig(tmp_path):
     store = Store(tmp_path / "gifts.sqlite")
     store.execute("INSERT INTO administrators VALUES(7)")
     store.set_setting("orders:last_complete_sync", now())
+    store.set_setting("gifts:stopped", False)  # existing test-owner global permission
     api, remote = Marketplace(), MTProtoTransport()
     settings = GiftSettings(
         1, "test-hash", "data/test.session", "stars", "gift", "username-field", True, 100, 100, True
