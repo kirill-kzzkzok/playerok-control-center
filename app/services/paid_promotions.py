@@ -27,6 +27,24 @@ def finish_expense(db, operation, status):
         db.execute("UPDATE promotion_expenses SET status=? WHERE operation_key=?", (status, row[0]))
 
 
+def placement_funds(viewer):
+    """Official priority modal: available OR pendingIncome, never their sum.
+
+    LOCAL is sent once; the placement API selects the internal source. `frozen`
+    is not pendingIncome, and administrative hasFrozenBalance remains a veto.
+    All outstanding placement reservations are conservatively charged to either pool.
+    """
+    profile = viewer.get("profile") or {}
+    if viewer.get("has_frozen_balance") is True or profile.get("has_frozen_balance") is True:
+        raise ValidationError("Playerok заблокировал операции с балансом. Это не ожидаемый доход от продаж")
+    balance = profile.get("balance") or {}
+    if balance.get("available") is None:
+        raise ValidationError("Доступный баланс Playerok не подтверждён")
+    available = money(balance["available"])
+    pending = money(balance.get("pending_income") or 0)
+    return available, pending, max(available, pending)
+
+
 class PaidPromotions:
     def __init__(self, store, api):
         self.store, self.api = store, api
@@ -175,9 +193,7 @@ class PaidPromotions:
         viewer = await self.api.call("get")
         if viewer.get("id") != fresh["account_id"]:
             raise ValidationError("Аккаунт баланса не соответствует товару")
-        available = (viewer.get("profile") or {}).get("balance", {}).get("available")
-        if available is None:
-            raise ValidationError("Доступный баланс Playerok не подтверждён")
+        _, _, available = placement_funds(viewer)
         with self.store.transaction() as db:
             again = db.execute("SELECT id FROM outbox WHERE operation_key=?", (key,)).fetchone()
             if again:
@@ -207,7 +223,9 @@ class PaidPromotions:
                 Decimal(0),
             )
             if money(available) < reserved + money(fresh["amount"]):
-                raise ValidationError("Недостаточно доступного баланса Playerok с учётом резервов")
+                raise ValidationError(
+                    "Недостаточно баланса Playerok или средств в заморозке с учётом резервов; источники не складываются"
+                )
             kind = "premium_publish" if fresh["item"]["status"] in {"DRAFT", "SOLD"} else "premium_bump"
             payload = {**fresh, "actor": owner, "automatic": automatic}
             if manual:
@@ -306,7 +324,7 @@ class PaidPromotions:
             or payment.get("status") != "CONFIRMED"
             or payment.get("direction") != "OUT"
             or payment.get("operation") != "ITEM_PREMIUM_PRIORITY"
-            or payment.get("provider_id") != "LOCAL"
+            or payment.get("provider_id") not in {"LOCAL", "PENDING_INCOME"}
             or payment.get("value") is None
             or money(payment["value"]) != money(value["amount"])
         ):
@@ -374,7 +392,7 @@ class PaidPromotions:
         ):
             raise ValidationError("Тариф или товар изменились перед оплатой")
         viewer = await self.api.call("get")
-        balance = (viewer.get("profile") or {}).get("balance", {}).get("available")
+        _, _, balance = placement_funds(viewer)
         with self.store.transaction():
             self.guard(action)
             if not quote_fresh(fresh["checked_at"], max_age=30):

@@ -130,6 +130,29 @@ async def test_gifts_armed_before_publication_and_first_immediate_sale_is_enroll
     assert r.api.sent[0][1] == "Thanks"
 
 
+async def test_premium_launch_reserves_pending_income_without_sending_payment(launch):
+    r = launch
+    original = r.api.call
+
+    async def call(method, **kwargs):
+        result = await original(method, **kwargs)
+        if method == "get":
+            result["profile"]["balance"].update(available=5, pending_income=53)
+        return result
+
+    r.api.call = call
+    ident, revision = await configured(r, publication="PREMIUM", quote_id="premium", manual_premium=True)
+    assert r.launch.load(7, ident)["payload"]["ready"]["balance"] == "53.00"
+    operation = await r.launch.queue(7, ident, revision)
+    assert r.store.rows("SELECT kind,status FROM outbox WHERE id=?", (operation,)) == [
+        {"kind": "premium_publish", "status": "PENDING"}
+    ]
+    assert r.store.rows("SELECT amount,status FROM promotion_expenses") == [
+        {"amount": "10.00", "status": "RESERVED"}
+    ]
+    assert not r.publications and not r.remote.payments
+
+
 @pytest.mark.parametrize("mode", ["text", "stock"])
 async def test_prepared_text_and_stock_are_enabled_before_publication(launch, mode):
     r = launch

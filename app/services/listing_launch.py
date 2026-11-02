@@ -22,7 +22,7 @@ from app.services.automation import Automation, DeliveryPolicy, message_text
 from app.services.finance import money
 from app.services.inventory import Inventory, stock_values
 from app.services.logical_products import LogicalProducts, configuration
-from app.services.paid_promotions import PaidPromotions
+from app.services.paid_promotions import PaidPromotions, placement_funds
 from app.services.products import Products, ValidationError, priority_price_basis
 from app.services.promotion_settings import PromotionSettings
 from app.services.promotions import PromotionPolicy, dry_run
@@ -300,13 +300,9 @@ class ListingLaunch:
                     "Общие настройки продвижения изменились. Откройте черновик запуска и обновите лимиты"
                 )
             viewer = await self.api.call("get")
-            result["balance"] = str(
-                money((viewer.get("profile") or {}).get("balance", {}).get("available", 0))
-            )
-            if (
-                viewer.get("id") != value["account_id"]
-                or money((viewer.get("profile") or {}).get("balance", {}).get("available", 0)) < amount
-            ):
+            _, _, capacity = placement_funds(viewer)
+            result["balance"] = str(capacity)
+            if viewer.get("id") != value["account_id"] or capacity < amount:
                 raise ValidationError("Баланс Playerok или его владелец не подтверждены для PREMIUM")
         if value["promotion"] and value["publication"] != "PREMIUM":
             raise ValidationError("Платное автоподнятие требует подтверждённого PREMIUM-тарифа")

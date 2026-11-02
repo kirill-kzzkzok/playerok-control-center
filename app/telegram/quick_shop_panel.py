@@ -75,12 +75,23 @@ class QuickShopPanel:
         ):
             quote = data["quotes"][int(parts[3])]
             value = await self.wizard.products.native_relist_preview(owner, data["id"], quote["id"])
+            funds_note = ""
+            if quote["type"] == "PREMIUM":
+                from app.services.paid_promotions import placement_funds
+
+                viewer = await self.api.call("get")
+                if viewer.get("id") != value["account_id"]:
+                    raise Conflict("Не подтверждён аккаунт баланса")
+                available, pending, _ = placement_funds(viewer)
+                funds_note = f"\nБаланс: {available} ₽ · заморозка дохода: {pending} ₽. Если баланса недостаточно, Playerok может использовать заморозку."
             nonce = secrets.token_hex(6)
             await state.update_data(relist={**data, "nonce": nonce, "value": value})
             return (
                 "🔄 <b>Подтвердить повторное размещение?</b>\n"
                 + ("⭐ PREMIUM" if quote["type"] == "PREMIUM" else "🆓 Обычное размещение")
-                + f"\nИтого: {value.get('amount', 0)} ₽\nНажатие разрешает только это размещение. Настройки выдачи не включаются автоматически.",
+                + f"\nИтого: {value.get('amount', 0)} ₽"
+                + funds_note
+                + "\nНажатие разрешает только это размещение. Настройки выдачи не включаются автоматически.",
                 keyboard(
                     [[("✅ Подтвердить и выставить повторно", f"relist:{nonce}:commit")]],
                     back=("⬅️ К тарифам", "relist:item:" + data["id"]),

@@ -106,6 +106,7 @@ class LaunchPanel:
         )
         if value["publication"] == "PREMIUM":
             policy = value["promotion_policy"]
+            text += "\nОплата размещения: баланс или заморозка дохода, если её разрешает Playerok."
             text += f"\nРасходы Playerok: до {policy['per_operation']} ₽ за раз / {policy['daily']} ₽ в сутки / {policy['monthly']} ₽ в месяц"
             text += (
                 f"\nРасписание: каждые {policy['interval_seconds']} с; пауза {policy['cooldown_seconds']} с"

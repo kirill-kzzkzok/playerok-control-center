@@ -4,7 +4,7 @@ import secrets
 
 from app.database.store import Conflict
 from app.services.finance import money
-from app.services.paid_promotions import PaidPromotions
+from app.services.paid_promotions import PaidPromotions, placement_funds
 from app.services.products import priority_price_basis
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
@@ -56,7 +56,7 @@ class PaidPromotionsPanel:
                 raise Conflict("Тариф устарел. Откройте товар заново")
             value = await self.service.preview(owner, view["item_id"], view["ids"][int(parts[3])])
             viewer = await self.api.call("get")
-            available = (viewer.get("profile") or {}).get("balance", {}).get("available")
+            available, pending, capacity = placement_funds(viewer)
             if viewer.get("id") != value["account_id"] or available is None:
                 raise Conflict("Не удалось подтвердить аккаунт и доступный баланс Playerok")
             reserved = sum(
@@ -68,8 +68,10 @@ class PaidPromotionsPanel:
                 ),
                 money(0),
             )
-            if money(available) < reserved + money(value["amount"]):
-                raise Conflict("Недостаточно баланса Playerok с учётом других зарезервированных расходов")
+            if capacity < reserved + money(value["amount"]):
+                raise Conflict(
+                    "Недостаточно баланса Playerok или средств в заморозке с учётом резервов; источники не складываются"
+                )
             if self.store.rows("SELECT 1 FROM promotion_expenses WHERE status='UNCERTAIN' LIMIT 1"):
                 raise Conflict("Предыдущая оплата требует сверки. Новая покупка пока заблокирована")
             nonce = secrets.token_hex(8)
@@ -83,7 +85,8 @@ class PaidPromotionsPanel:
                 "💳 <b>Подтверждение расхода</b>\n"
                 + escaped(value["name"], 200)
                 + f"\n{verb}: {value['amount']} ₽ с баланса Playerok."
-                + f"\nДоступный баланс: {money(available)} ₽. Разовая покупка, расписание не включается."
+                + f"\nБаланс: {available} ₽ · заморозка дохода: {pending} ₽."
+                + "\nЕсли баланса недостаточно, Playerok может оплатить размещение из заморозки. Источники не складываются. Разовая покупка, расписание не включается."
                 + "\nВаше согласие ограничено этой суммой и тарифом; перед оплатой проверим их заново."
                 + "\nНеизвестный результат блокирует повторное списание."
             )
