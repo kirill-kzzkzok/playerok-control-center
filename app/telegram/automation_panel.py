@@ -23,9 +23,7 @@ class AutomationPanel:
         rows = self.store.rows(
             "SELECT item_id,revision FROM delivery_policies ORDER BY updated_at DESC LIMIT 6"
         )
-        buttons = [
-            [(item_label(self.store, row["item_id"])[:55], "auto:item:" + row["item_id"])] for row in rows
-        ]
+        buttons = [[(item_label(self.store, row["item_id"])[:55], "item:" + row["item_id"])] for row in rows]
         buttons.extend(
             [
                 [("📦 Выбрать товар", "items")],
@@ -63,7 +61,7 @@ class AutomationPanel:
         for field, label in FIELDS.items():
             text += f"\n{label}: {'задано' if values[field] else 'пусто'}"
         text += "\n\nСохранённое состояние (правки выше ещё не применены):\n" + escaped(
-            self.service.status_text(data["id"]), 1600
+            automation_summary(self.store, self.service.api, data["id"]), 1600
         )
         text += "\nАвтоматически включать будущие продажи: " + ("да" if values.get("auto_enroll") else "нет")
         text += "\nПри отдельном включении будущих продаж и двух разрешающих флагах новые заказы могут отправляться без подтверждения каждого. Старые заказы не включаются; смена версии политики начинает новый временной отсчёт."

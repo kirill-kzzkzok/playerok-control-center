@@ -110,7 +110,6 @@ async def test_owner_and_snapshot_checked_before_api(setup):
 async def test_one_message_receipt_cannot_confirm_two_operations(setup, source):
     store, api, service = setup
     first = store.enqueue("first", "reply", "chat", {"text": "private code"})
-    second = store.enqueue("second", "reply", "chat", {"text": "private code"})
     action = store.claim()
     store.finish(
         first,
@@ -118,6 +117,10 @@ async def test_one_message_receipt_cannot_confirm_two_operations(setup, source):
         "SUCCEEDED" if source == "success" else "UNCERTAIN",
         result={"message_id": "sent"} if source == "success" else None,
     )
+    # Equal Windows timestamps do not guarantee FIFO between two UUIDs.
+    # Both operations still coexist before receipt resolution; claim the first
+    # before enqueueing the second rather than finishing the wrong lease.
+    second = store.enqueue("second", "reply", "chat", {"text": "private code"})
     action = store.claim()
     store.finish(second, action["lease_token"], "UNCERTAIN", error="NETWORK_ERROR")
     api.call.return_value["messages"][0]["created_at"] = now()

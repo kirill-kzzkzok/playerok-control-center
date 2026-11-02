@@ -69,6 +69,16 @@ class OperationResults:
             text += "\nУведомление о результате могло прийти без подтверждения Telegram. Здесь показан сохранённый исход; повтор операции не выполняется."
         buttons = []
         payload = json.loads(row["payload"])
+        targets = self.store.rows("SELECT item_id FROM orders WHERE id=?", (row["target"],))
+        item_id = (
+            targets[0]["item_id"]
+            if targets
+            else row["target"]
+            if self.store.rows("SELECT 1 FROM logical_listings WHERE item_id=?", (row["target"],))
+            else None
+        )
+        if item_id:
+            buttons.append([("🔍 Проверить готовность товара", "rd:check:" + item_id)])
         if status == "SUCCEEDED" and payload.get("platform_settings"):
             product = self.store.rows(
                 "SELECT p.code,p.state,p.enabled FROM logical_products p JOIN logical_listings l ON l.product_id=p.id WHERE l.item_id=?",

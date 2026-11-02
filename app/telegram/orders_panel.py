@@ -13,7 +13,7 @@ from app.services.order_management import OrderManagement, deliverable, order_sn
 from app.services.products import ValidationError
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
-from app.telegram.presentation import MODES, history_event, local_time, status
+from app.telegram.presentation import automation_summary, history_event, local_time, status
 
 
 class OrdersPanel:
@@ -118,7 +118,7 @@ class OrdersPanel:
             f"Статус Playerok: {status(order['status'], 'order')}\nСоздан: {local_time(order.get('created_at'))}\n"
             f"Проблема Playerok: {'да' if order.get('has_problem') else 'нет' if order.get('has_problem') is False else 'не подтверждено'}\n"
             f"Локальная отметка: {'проблема' if annotation['problem'] else 'нет'}\n"
-            f"{Automation(self.store, self.service.api).status_text(item['id'])}\n"
+            f"{automation_summary(self.store, self.service.api, item['id'], item=item, compact=True)}\n"
             f"Запас: {stock.get('AVAILABLE', 0)} доступно · {stock.get('RESERVED', 0)} в резерве · {stock.get('QUARANTINED', 0)} в карантине\n"
             f"Локальных событий: {history_count} · Событий Playerok: {len(order.get('logs') or [])}"
         )
@@ -190,9 +190,9 @@ class OrdersPanel:
                     else "способ ещё не подтверждён — ожидается сверка"
                 )
             if not gifts and not gift_listing:
-                readiness = Automation(self.store, self.service.api).readiness(item["id"])
-                if readiness["mode"] != "manual":
-                    text += "\nАвтовыдача: " + readiness["status"] + " · " + MODES[readiness["mode"]]
+                text += "\n" + automation_summary(
+                    self.store, self.service.api, item["id"], item=item, compact=True
+                )
             if cached:
                 text += "\n⚠️ Сохранённые данные. Связь с Playerok не подтверждена."
             followup = self.store.rows(

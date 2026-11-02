@@ -29,7 +29,10 @@ class GiftsPanel:
         self.store = store
 
     def summary(self, item_id):
-        return self.service.status_text(item_id)
+        from app.services.product_readiness import ProductReadiness
+        from app.telegram.product_presentation import summary
+
+        return summary(ProductReadiness(self.store, self.service.api).snapshot(item_id))
 
     @staticmethod
     def bundle_text(bundle):

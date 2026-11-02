@@ -33,7 +33,7 @@ class AutoRepliesPanel:
             return "💬 <b>Мои автоответы</b>" + ("\nПравил пока нет." if not rules else ""), keyboard(
                 rows, back=("⬅️ Автоответы", "ar:menu")
             )
-        text = "💬 <b>Автоответы</b>\nБот отвечает покупателям на заданные фразы."
+        text = "💬 <b>Ответы на фразы покупателей</b>\nОтдельные правила для переписки. Сообщения после оплаты и выдачи настраиваются в карточке товара."
         text += f"\nПравил: {len(rules)} · Включено: {sum(bool(r['enabled']) for r in rules)}"
         reason = self.blocked_reason()
         if reason:

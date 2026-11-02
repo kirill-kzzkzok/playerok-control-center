@@ -41,6 +41,8 @@ async def shop(tmp_path):
 
 async def configure(r, reply=True, fulfill=True, text=None, item="lot"):
     await r.ui.click("iv:delivery:" + item)
+    if "platform:item:" + item not in buttons(r.session.last_panel):
+        await click(r, action="lp:method:" + item)
     assert "platform:item:" + item in buttons(r.session.last_panel)
     await click(r, action="platform:item:" + item)
     assert "Товар уже выдаётся самой площадкой" in r.session.last_panel.text
@@ -262,8 +264,8 @@ async def test_durable_input_restart_old_nonce_and_existing_item_card(shop):
     await r.ui.click(nonce)
     assert Automation(r.store, r.api).get("lot")[0] == revision
     await r.ui.click("item:lot")
-    assert "Выдача: 📦 Playerok" in r.session.last_panel.text
-    assert "Автоответ: 🟢 Включён" in r.session.last_panel.text
+    assert "Способ выдачи: 📦 Playerok" in r.session.last_panel.text
+    assert "После оплаты: включён" in r.session.last_panel.text
     assert not r.api.messages
     purchase(r)
     await EnrollmentWorker(r.store, r.api).once()

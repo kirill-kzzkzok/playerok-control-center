@@ -209,7 +209,8 @@ async def test_item_compact_sections_all_old_actions_and_safe_delete(ux):
         r.session.calls[-1]
     ).keys()
     await r.ui.click("iv:delivery:lot")
-    assert "stock:view:lot" in buttons(r.session.calls[-1])
+    assert "lp:method:lot" in buttons(r.session.calls[-1])
+    assert "stock:view:lot" not in buttons(r.session.calls[-1])  # No unrelated stock before selecting it.
     assert "gft:item:lot" not in buttons(r.session.calls[-1])
     await r.ui.click("iv:other:lot")
     assert {"delete:lot", "iv:details:lot"} <= buttons(r.session.calls[-1]).keys()

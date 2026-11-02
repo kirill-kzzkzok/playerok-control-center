@@ -233,6 +233,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = home_panel.show(action, owner)
             elif action == "create":
                 text, markup = await wizard.start(owner, state)
+            elif action.startswith(("rd:check:", "rd:balance:")):
+                text, markup = await item_panel.diagnostic(action.split(":", 2)[2], owner)
             elif action.startswith("lp:"):
                 text, markup = await logical_panel.callback(action, owner, state)
             elif action.startswith("agv:"):

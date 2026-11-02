@@ -85,25 +85,11 @@ def connection_summary(api):
     return "🟡 Подключение Playerok нужно проверить"
 
 
-def automation_summary(store, api, ident):
-    from app.services.automation import Automation
+def automation_summary(store, api, ident, *, item=None, compact=False):
+    from app.services.product_readiness import ProductReadiness
+    from app.telegram.product_presentation import summary
 
-    value = Automation(store, api).readiness(ident)
-    text = f"Выдача: {value['status'].lower()} · {MODES[value['mode']]}"
-    if not value["revision"]:
-        return text + "\nВыберите способ и сохраните настройки. Отправки пока не разрешены."
-    reasons = []
-    if value["mode"] == "stock":
-        text += f"\nДоступно: {value['counts']['AVAILABLE']} · в резерве: {value['counts']['RESERVED']}"
-    for reason in value["reasons"]:
-        if reason == "глобальные записи выключены" or reason == "глобальная автоматика выключена":
-            if "Отправки выключены в настройках подключения" not in reasons:
-                reasons.append("Отправки выключены в настройках подключения")
-        else:
-            reasons.append(reason.replace("политика", "настройка"))
-    if reasons:
-        text += "\n" + escaped("; ".join(reasons), 650)
-    return text
+    return summary(ProductReadiness(store, api).snapshot(ident, item=item), compact=compact)
 
 
 def error_text(error):

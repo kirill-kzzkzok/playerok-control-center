@@ -1,8 +1,7 @@
 """Small owner tools; all remote writes stay in the existing wizard/Outbox."""
 
-import json
+import asyncio
 import secrets
-from datetime import UTC, datetime
 
 from app.database.store import Conflict
 from app.playerok.adapter import validate_page
@@ -11,7 +10,6 @@ from app.services.logical_products import LogicalProducts
 from app.services.products import ValidationError
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
-from app.telegram.presentation import recent
 from playerokapi.enums import ItemStatuses
 
 
@@ -109,81 +107,10 @@ class QuickShopPanel:
         raise Conflict("Кнопка устарела. Обновите товар")
 
     def automation(self, ident):
-        automation = Automation(self.store, self.api)
-        _, policy = automation.get(ident)
-        gift = self.gifts.listing(ident)
-        product = LogicalProducts(self.store, self.api).listing(ident)
-        if policy.mode == "playerok":
-            gift = None
-        enabled = bool(gift["enabled"]) if gift else policy.enabled
-        mode = (
-            "Telegram Gifts"
-            if gift
-            else {
-                "playerok": "Playerok",
-                "text": "Постоянный текст",
-                "stock": "Склад",
-                "manual": "Не настроена",
-            }[policy.mode]
-        )
-        reply = (
-            bool(self.store.setting("gifts:listing_options:" + ident, {}).get("after"))
-            if gift
-            else bool(policy.paid_reply if policy.mode == "playerok" else policy.greeting or policy.after)
-        )
-        complete = bool(gift["auto_fulfill"]) if gift else policy.mark_sent
-        ready, unknown = False, False
-        if enabled:
-            if gift:
-                ready = "Подарочная выдача: Работает" in self.gifts.status_text(ident)
-                balance = self.store.setting("gifts:balance", {})
-                unknown = not recent(balance.get("at")) or not recent(
-                    self.store.setting("gifts:connection", {}).get("at")
-                )
-                try:
-                    ready = (
-                        ready
-                        and self.gifts.catalog_bundle(gift["gift_code"]) == json.loads(gift["bundle"])
-                        and balance.get("stars", -1) >= gift["approved_stars"]
-                    )
-                    order_limit, day_limit = self.gifts.limits(ident)
-                    reserved = self.store.rows("SELECT COALESCE(SUM(reserved_stars),0) AS n FROM gift_jobs")[
-                        0
-                    ]["n"]
-                    spent = self.store.rows(
-                        "SELECT COALESCE(SUM(stars),0) AS n FROM gift_steps WHERE spent_at>=?",
-                        (datetime.now(UTC).date().isoformat(),),
-                    )[0]["n"]
-                    ready = (
-                        ready
-                        and gift["approved_stars"] <= order_limit
-                        and gift["approved_stars"] + reserved + spent <= day_limit
-                        and gift["approved_stars"] + reserved <= balance.get("stars", -1)
-                    )
-                    unknown = unknown or bool(
-                        self.store.rows(
-                            "SELECT 1 FROM gift_steps WHERE spent_at>? LIMIT 1", (balance.get("at", ""),)
-                        )
-                    )
-                except ValueError:
-                    ready = False
-            else:
-                ready = automation.readiness(ident)["status"] == "Работает"
-            if product and (not product["enabled"] or product["state"] != "VERIFIED"):
-                ready = False
+        from app.services.product_readiness import ProductReadiness
+        from app.telegram.product_presentation import summary
 
-        def flag(on):
-            return (
-                "🔴 выключено"
-                if not on or not enabled
-                else "🟡 включено, не готово"
-                if not ready
-                else "⚪ нет свежей проверки"
-                if unknown
-                else "🟢 готово"
-            )
-
-        return f"📦 Выдача: {mode} · {flag(enabled)}\n💬 Автоответ{' после выдачи' if gift else ''}: {flag(reply)}\n✅ Автовыполнение: {flag(complete)}"
+        return summary(ProductReadiness(self.store, self.api).snapshot(ident), compact=True)
 
     async def status(self, owner, state, page=0):
         LogicalProducts(self.store, self.api).authority(owner)
@@ -195,9 +122,21 @@ class QuickShopPanel:
             "get_my_items", statuses=[ItemStatuses.APPROVED], count=5, after_cursor=cursors[page]
         )
         values, next_cursor = validate_page(result, "items", [c for c in cursors[:page] if c])
-        lines = []
-        for value in values[:5]:
-            item = await Automation(self.store, self.api).item(owner, value["id"])
+        from app.services.product_readiness import ProductReadiness
+        from app.telegram.product_presentation import summary
+
+        readiness = ProductReadiness(self.store, self.api)
+        lines, item_rows = [], []
+
+        async def complete(value):
+            if all(key in value for key in ("status", "name", "price", "user")):
+                return value
+            return await Automation(self.store, self.api).item(owner, value["id"])
+
+        items = await asyncio.gather(*(complete(v) for v in values[:5]))
+        for item in items:
+            if (item.get("user") or {}).get("id") != self.api.account.id:
+                continue
             if item.get("status") != "APPROVED" or item.get("deleted_at"):
                 continue
             priority = item.get("priority")
@@ -205,14 +144,22 @@ class QuickShopPanel:
                 priority = priority.get("type")
             premium = "🟢" if priority == "PREMIUM" else "🔴" if priority == "DEFAULT" else "⚪ неизвестно"
             lines.append(
-                "📦 <b>"
+                str(len(lines) + 1)
+                + ". 📦 <b>"
                 + escaped(item.get("name"), 65)
                 + "</b> — "
                 + escaped(item.get("price"), 20)
                 + " ₽\n"
-                + self.automation(item["id"])
+                + summary(readiness.snapshot(item["id"], item=item), compact=True)
                 + "\n⭐ PREMIUM: "
                 + premium
+            )
+            number = len(lines)
+            item_rows.append(
+                [
+                    (f"🔍 {number}. Проверить", "rd:check:" + item["id"]),
+                    (f"⚙️ {number}. Открыть товар", "item:" + item["id"]),
+                ]
             )
         title = (
             "📊 <b>МОИ АКТИВНЫЕ ТОВАРЫ"
@@ -230,5 +177,6 @@ class QuickShopPanel:
         return title + "\n\n" + (
             "\n\n".join(lines) or "Подтверждённых активных товаров на этой странице нет."
         ), keyboard(
-            ([rows] if rows else []) + [[("🔄 Обновить", "status:view:0")]], back=("⬅️ Мой магазин", "home")
+            item_rows + ([rows] if rows else []) + [[("🔄 Обновить", "status:view:0")]],
+            back=("⬅️ Мой магазин", "home"),
         )

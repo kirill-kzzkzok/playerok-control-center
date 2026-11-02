@@ -145,18 +145,19 @@ async def test_explicit_stock_resume_requires_confirmation_and_preserves_runtime
 @pytest.mark.parametrize(
     "condition,expected",
     [
-        ("ready", "Работает"),
-        ("runtime", "Не готово"),
-        ("baseline", "Не готово"),
-        ("empty", "Не готово"),
+        ("ready", "Включено, есть блокировка"),
+        ("runtime", "Включено, есть блокировка"),
+        ("baseline", "Включено, есть блокировка"),
+        ("empty", "Включено, есть блокировка"),
         ("guard", "Остановлено"),
-        ("disabled", "Остановлено"),
+        ("disabled", "Выключено владельцем"),
     ],
 )
 async def test_item_order_and_policy_share_actual_readiness(rig, condition, expected):
     store, api, session, _bot, ui, _state = rig
     automation = Inventory(store, api).automation
     api.account.writes_enabled = api.account.automation_enabled = True
+    store.set_setting("playerok:account_id", "seller")
     store.set_setting("orders:last_complete_sync", now())
     await automation.save(
         7,
@@ -185,13 +186,18 @@ async def test_item_order_and_policy_share_actual_readiness(rig, condition, expe
         text = session.calls[-1].text
         assert expected.lower() in text.lower()
         assert "Автодействия: выключены" not in text
+        if not action.startswith("order:"):
+            assert "Постоянная привязка не подтверждена" in text  # Full product screens show all reasons.
+        else:
+            assert ("Перед включением:" if condition == "disabled" else "Требует внимания:") in text
         if action.startswith("auto:"):
-            assert "Со склада" in text
+            assert "со склада" in text.lower()
         # Full reasons and stock remain available from the nested delivery screen.
         if action.startswith("item:"):
             await ui.click("iv:delivery:item")
             assert (
-                expected.lower() in session.calls[-1].text.lower() and "Со склада" in session.calls[-1].text
+                expected.lower() in session.calls[-1].text.lower()
+                and "со склада" in session.calls[-1].text.lower()
             )
 
 

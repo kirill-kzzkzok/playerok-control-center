@@ -3,18 +3,15 @@
 import json
 import secrets
 from collections import Counter
-from datetime import UTC, datetime
 
 from app.database.store import Conflict
 from app.gifts.core import gift_code_from_description, gift_codes, gift_name
-from app.gifts.mtproto import GiftFailure
-from app.playerok.adapter import APIError
 from app.services.automation import message_text
 from app.services.inventory import Inventory
 from app.services.logical_products import PROBLEMS, LogicalProducts, marked_description
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
-from app.telegram.presentation import error_text, local_time, order_label, status
+from app.telegram.presentation import local_time, order_label, status
 from app.workers.logical_products import LogicalProductWorker
 
 MODES = {
@@ -144,8 +141,16 @@ class LogicalProductsPanel:
             rows.append([("Настроить выдачу", prefix + "configure")])
         if product and product["handler"] == "unique_stock":
             rows.insert(0, [("📚 Склад", "stock:view:" + item_id)])
+        from app.services.product_readiness import ProductReadiness
+        from app.telegram.product_presentation import STATES
+
+        readiness = ProductReadiness(self.store, self.api).snapshot(item_id, item=item)
+        text += "\n" + STATES[readiness["state"]]
+        if readiness["problems"]:
+            text += "\n" + "\n".join("• " + escaped(p["text"], 180) for p in readiness["problems"][:6])
+        rows.append([("🔍 Проверить готовность", "rd:check:" + item_id)])
         rows.append([("🔄 Обновить", "lp:item:" + item_id)])
-        return text, keyboard(rows, back=("К настройке товара", "iv:delivery:" + item_id))
+        return text, keyboard(rows, back=("⬅️ К товару", "item:" + item_id))
 
     async def view(self, owner, state, nonce):
         self.owner(owner)
@@ -159,75 +164,48 @@ class LogicalProductsPanel:
         return view
 
     async def readiness(self, owner, product, item_id):
-        """Read-only diagnostics; arm still performs its own fresh guarded commit."""
-        self.service.authority(owner, product["account_id"])
-        problems = []
-        if not getattr(self.api.account, "writes_enabled", False):
-            problems.append("Запись Playerok выключена — проверьте подключения")
-        if not getattr(self.api.account, "automation_enabled", False):
-            problems.append("Автовыдача выключена в настройках подключения")
-        if getattr(self.api.account, "connection_verified", True) is not True:
-            problems.append("Аккаунт Playerok не подтверждён свежей проверкой — откройте профиль")
-        if not self.store.setting("orders:last_complete_sync"):
-            problems.append("Синхронизация заказов ещё не завершена")
-        if self.store.setting("sync:health", {}).get("status") == "ERROR":
-            problems.append("Синхронизация заказов завершилась ошибкой")
-        item = await self.api.call("get_item", id=item_id)
-        if item.get("status") != "APPROVED":
-            problems.append("Объявление не опубликовано")
-        try:
-            self.service.verify_listing(product, item)
-        except Conflict:
-            problems.append("Подтвердите описание и настройки товара заново")
-        config = json.loads(product["config"])
-        if (
-            product["handler"] == "unique_stock"
-            and not Inventory(self.store, self.api).counts(item_id)["AVAILABLE"]
-        ):
-            problems.append("На складе нет доступных единиц")
-        if product["handler"] == "fixed_text" and not config.get("text"):
-            problems.append("Не задан текст выдачи")
-        if product["handler"] == "telegram_gifts":
-            gifts = self.service.gift_service()
-            if not gifts.settings.payment_enabled:
-                problems.append("Покупки подарков выключены в настройках подключения")
-            if self.store.setting("gifts:stopped", True):
-                problems.append("Общая остановка подарков — разрешите новые покупки в настройках подарков")
-            if self.store.rows(
-                "SELECT 1 FROM gift_jobs WHERE state IN ('SPENDING','UNCERTAIN') OR refund_state='UNCERTAIN' LIMIT 1"
-            ):
-                problems.append("Предыдущий платёж или возврат требует сверки")
-            try:
-                await gifts.inspect_item(owner, item_id, preview_code=config["code"])
-            except (APIError, GiftFailure, ValueError, TimeoutError, ConnectionError) as error:
-                problems.append(error_text(error))
-            try:
-                await gifts.refresh()
-                bundle = gifts.catalog_bundle(config["code"])
-                if bundle != config["bundle"]:
-                    problems.append("Цена или состав подарков изменились — подтвердите пакет заново")
-                total = sum(g["stars"] for g in bundle)
-                order_limit, daily = gifts.limits()
-                options = config.get("options", {})
-                order_limit = min(order_limit, options.get("order") or order_limit)
-                daily = min(daily, options.get("day") or daily)
-                reserved = self.store.rows("SELECT COALESCE(SUM(reserved_stars),0) AS n FROM gift_jobs")[0][
-                    "n"
-                ]
-                spent = self.store.rows(
-                    "SELECT COALESCE(SUM(stars),0) AS n FROM gift_steps WHERE spent_at>=?",
-                    (datetime.now(UTC).date().isoformat(),),
-                )[0]["n"]
-                if total > order_limit or spent + reserved + total > daily:
-                    problems.append("Недостаточно доступного лимита Stars для всего пакета")
-                if self.store.setting("gifts:balance", {}).get("stars", 0) < reserved + total:
-                    problems.append("Недостаточно Stars с учётом текущих резервов")
-            except (APIError, GiftFailure, ValueError, TimeoutError, ConnectionError) as error:
-                problems.append(error_text(error))
-        return problems
+        from app.services.product_readiness import ProductReadiness
+
+        result = await ProductReadiness(self.store, self.api).check(owner, item_id, for_arm=True)
+        return [p["text"] for p in result["problems"] if p["blocking"]]
 
     async def callback(self, action, owner, state):
         parts = action.split(":")
+        if len(parts) == 3 and parts[1] in {"method", "messages", "completion"}:
+            await self.card(owner, parts[2], state)
+            view = (await state.get_data())["logical_view"]
+            product = self.service.product(view["product"], owner) if view.get("product") else None
+            prefix = "lp:" + view["nonce"] + ":"
+            if parts[1] == "method":
+                rows = [[(label, prefix + "mode:" + handler)] for handler, label in MODES.items()]
+                rows.append([("📦 Выдаёт Playerok", "platform:item:" + parts[2])])
+                if product and product["enabled"]:
+                    rows.insert(0, [("⛔ Остановить текущую выдачу", prefix + "stop")])
+                return (
+                    "🔄 <b>Способ выдачи</b>\nДля изменения активной выдачи сначала остановите её. Смена на Playerok проверяется отдельно при сохранении.",
+                    keyboard(rows, back=("⬅️ К товару", "item:" + parts[2])),
+                )
+            if product and json.loads(product["config"]).get("platform_only"):
+                from app.telegram.platform_panel import PlatformPanel
+
+                return await PlatformPanel(self.store, self.api).callback(
+                    "platform:item:" + parts[2], owner, state
+                )
+            if not product or product["handler"] == "manual":
+                return await self.callback(prefix + "configure", owner, state)
+            if product["enabled"]:
+                return (
+                    "Для изменения сообщений или завершения остановите новые выдачи. Уже начатые операции не повторяются. Затем откройте этот пункт снова.",
+                    keyboard(
+                        [[("⛔ Остановить выдачу", prefix + "stop")]], back=("⬅️ К товару", "item:" + parts[2])
+                    ),
+                )
+            if parts[1] == "messages":
+                return await self.callback(prefix + "editafter", owner, state)
+            await state.update_data(
+                logical_setup={"handler": product["handler"], "config": json.loads(product["config"])}
+            )
+            return await self.setup_screen(state)
         if len(parts) == 3 and parts[0] == "lp" and parts[1] in {"item", "ready"}:
             result = await self.card(owner, parts[2], state)
             view = (await state.get_data())["logical_view"]
@@ -268,6 +246,8 @@ class LogicalProductsPanel:
                 keyboard([], back=("Отмена", "lp:item:" + view["item"])),
             )
         if command == "mode":
+            if product and product["enabled"]:
+                raise Conflict("Сначала остановите текущую выдачу в настройках товара")
             if value not in MODES:
                 raise Conflict("Неизвестный способ выдачи")
             config = json.loads(product["config"]) if product and product["handler"] == value else {}

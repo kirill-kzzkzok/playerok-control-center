@@ -142,7 +142,8 @@ async def test_status_blocked_stock_is_not_green_and_owner_only(shop):
         future_confirmed=True,
     )
     await h.ui.message("/status")
-    assert "включено, не готово" in h.session.last_panel.text
+    assert "Включено, есть блокировка" in h.session.last_panel.text
+    assert "rd:check:" + h.api.item["id"] in buttons(h.session.last_panel)
     assert "🟢 готово" not in h.session.last_panel.text
     count = len(h.session.calls)
     await h.ui.message("/status", owner=99)

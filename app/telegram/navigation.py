@@ -1,6 +1,8 @@
 """One owner UI panel; durable rendering outcomes, separate from business receipts."""
 
 import asyncio
+import hashlib
+import json
 import secrets
 from copy import deepcopy
 
@@ -41,7 +43,12 @@ def safe_route(action):
     } or action.startswith(
         (
             "item:",
+            "rd:check:",
+            "rd:balance:",
             "lp:item:",
+            "lp:method:",
+            "lp:messages:",
+            "lp:completion:",
             "lp:ready:",
             "iv:",
             "order:",
@@ -326,7 +333,14 @@ class Navigation:
             view = deepcopy(proposal or {name: panel.get(name) for name in ("route", "history", "context")})
             view["context"] = {k: v for k, v in (await state.get_data()).items() if k in CONTEXT}
             markup = reply_markup.model_copy(deep=True) if reply_markup else keyboard([], home=False)
-            token = secrets.token_hex(6)
+            unchanged_route = (
+                view.get("route") == panel.get("route")
+                and view.get("history") == panel.get("history")
+                and not panel.get("closed")
+                and not panel.get("editing")
+            )
+            token = panel.get("token") if unchanged_route else None
+            token = token or secrets.token_hex(6)
             for row in markup.inline_keyboard:
                 for button in row:
                     if button.callback_data == "nav:close":
@@ -356,6 +370,30 @@ class Navigation:
             ident, kind = panel.get("id"), "photo" if photo is not None else "text"
             if ident and self.protected(owner, ident):
                 ident = None  # Proofs and notifications are never adopted as panels.
+            fingerprint = (
+                hashlib.sha256(
+                    json.dumps(
+                        {"text": text, "markup": markup.model_dump(mode="json"), "kwargs": kwargs},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                    ).encode()
+                ).hexdigest()
+                if photo is None
+                else None
+            )
+            if (
+                ident
+                and kind == "text"
+                and panel.get("kind") == "text"
+                and unchanged_route
+                and fingerprint == panel.get("content_fingerprint")
+                and getattr(message.from_user, "id", None) == bot.id
+                and message.message_id == ident
+            ):
+                panel.update(view)
+                self.store.set_setting(key, panel)
+                return message
             panel.update(
                 pending_view=view,
                 pending_markup=markup.model_dump(mode="json"),
@@ -445,6 +483,7 @@ class Navigation:
                 id=ident,
                 kind=kind,
                 token=token,
+                content_fingerprint=fingerprint,
                 restoring=False,
                 context={k: v for k, v in (await state.get_data()).items() if k in CONTEXT},
             )

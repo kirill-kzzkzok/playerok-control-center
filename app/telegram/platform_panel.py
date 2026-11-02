@@ -33,6 +33,7 @@ class PlatformPanel:
                 [("✏️ Изменить текст ответа", prefix + "text")],
                 [("✅ Автовыполнение: " + ("Вкл" if data["fulfill"] else "Выкл"), prefix + "fulfill")],
                 [("💾 Сохранить", prefix + "save")],
+                [("🔍 Проверить готовность", "rd:check:" + data["id"])],
             ],
             back=("⬅️ К выдаче товара", "iv:delivery:" + data["id"]),
         )

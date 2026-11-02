@@ -68,71 +68,54 @@ class ItemPanel:
         rows = [[("🖼 Просмотреть фото", f"itemmedia:{nonce}:0")]] if images else []
         return item, text, rows
 
+    async def diagnostic(self, ident, owner, *, balance=False):
+        from app.services.product_readiness import ProductReadiness
+        from app.telegram.product_presentation import actions, summary
+
+        result = await ProductReadiness(self.store, self.api).check(owner, ident)
+        text = "🔍 <b>Проверка готовности</b>\n" + summary(result)
+        return text, keyboard(
+            actions(result) + [[("🔄 Проверить ещё раз", "rd:check:" + ident)]],
+            back=("⬅️ К товару", "item:" + ident),
+        )
+
     async def screen(self, ident, section, state, owner, gifts, stock):
-        from app.telegram.presentation import automation_summary, status
+        from app.telegram.presentation import status
 
         item, details, photos = await self.card(ident, state)
         if isinstance(item.get("name"), str):
             self.store.set_setting("ui:item:" + ident + ":name", item["name"][:200])
-        if section not in {"card", "edit", "delivery", "other", "details"}:
+        if section not in {
+            "card",
+            "edit",
+            "delivery",
+            "other",
+            "details",
+            "messages",
+            "completion",
+            "history",
+        }:
             raise ValidationError("Экран устарел. Откройте товар заново")
-        binding = gifts.service.listing(ident)
         product = LogicalProducts(self.store, self.api).listing(ident)
-        policy = self.store.rows("SELECT 1 FROM delivery_policies WHERE item_id=?", (ident,))
         _, saved_policy = Automation(self.store, self.api).get(ident)
         platform = saved_policy.mode == "playerok"
-        gift_applicable = binding or (
-            (item.get("category") or {}).get("id") == gifts.service.settings.category_id
-            and (item.get("obtaining_type") or {}).get("id") == gifts.service.settings.obtaining_type_id
-        )
         title = "📦 <b>" + escaped(item.get("name") or "Товар", 200) + "</b>"
         if section == "card":
-            delivery = (
-                ("настроена для товара; проверьте готовность" if binding["enabled"] else "выключена")
-                if binding
-                else (
-                    Automation(self.store, self.api).readiness(ident)["status"].lower()
-                    if policy
-                    else "не настроена"
-                )
-            )
-            if product and product["state"] != "LEGACY":
-                if product["state"] != "VERIFIED":
-                    delivery = "не готова — подтвердите привязку товара"
-                elif product["handler"] == "manual":
-                    delivery = "вручную"
-                elif not product["enabled"]:
-                    delivery = "остановлена"
-                elif binding:
-                    delivery = gifts.summary(ident).splitlines()[0].split(": ", 1)[-1].lower()
-                else:
-                    delivery = Automation(self.store, self.api).readiness(ident)["status"].lower()
+            from app.services.product_readiness import ProductReadiness
+            from app.telegram.product_presentation import summary
+
+            readiness = ProductReadiness(self.store, self.api).snapshot(ident, item=item)
             text = (
                 title
-                + f"\nЦена: {escaped(item.get('price'), 40)} ₽"
-                + "\nСтатус: "
+                + f"\nЦена: {escaped(item.get('price'), 40)} ₽\nСтатус: "
                 + status(item.get("status"), "item")
-                + "\nВыдача: "
-                + delivery
             )
-            if platform:
-                text = (
-                    title
-                    + f"\nЦена: {escaped(item.get('price'), 40)} ₽\nСтатус: "
-                    + status(item.get("status"), "item")
-                )
-                text += "\nВыдача: 📦 Playerok"
-                text += "\nАвтоответ: " + (
-                    "🟢 Включён" if saved_policy.enabled and saved_policy.paid_reply else "выключен"
-                )
-                text += "\nАвтовыполнение: " + (
-                    "🟢 Включено" if saved_policy.enabled and saved_policy.mark_sent else "выключено"
-                )
             if product:
-                text += "\nКод товара: " + escaped(product["code"], 20)
+                text += "\n🔐 Код товара: " + escaped(product["code"], 20)
                 text += "\nНаследовать настройки: " + (
                     "разрешено" if product["inherit_enabled"] else "выключено"
                 )
+            text += "\n" + summary(readiness)
             from app.database.store import now
             from app.services.finance import selected_fee_multiplier
             from app.services.withdrawals import draft_calculation
@@ -157,10 +140,20 @@ class ItemPanel:
             if estimate is not None and estimate.after_platform is not None and estimate.cost is not None:
                 text += f"\nДо вывода и размещения: ≈ {estimate.after_platform - estimate.cost} ₽"
             rows = [
+                [("🔍 Проверить готовность", "rd:check:" + ident)],
+                *(
+                    [[("🔄 Обновить баланс", "rd:balance:" + ident)]]
+                    if readiness["mode"] == "telegram_gifts"
+                    else []
+                ),
+                [("⚙️ Настроить выдачу", "iv:delivery:" + ident)],
+                [
+                    ("💬 Сообщения покупателю", "iv:messages:" + ident),
+                    ("✅ Завершение заказа", "iv:completion:" + ident),
+                ],
                 [("💰 Сколько получу чистыми", "finance:" + ident)],
-                [("✏️ Редактировать", "iv:edit:" + ident)],
-                [("⚡ Настроить выдачу", "iv:delivery:" + ident)],
-                [("⭐ Продвижение", "payp:item:" + ident)],
+                [("✏️ Редактировать", "iv:edit:" + ident), ("⭐ Продвижение", "payp:item:" + ident)],
+                [("📋 История и операции", "iv:history:" + ident)],
                 [("⋯ Другие действия", "iv:other:" + ident)],
             ]
             if item.get("status") == "DRAFT":
@@ -178,45 +171,75 @@ class ItemPanel:
                 [("Фотографии", "editphoto:" + ident)],
                 [("Характеристики и данные", "editfields:" + ident)],
             ] + photos
-        elif section == "delivery":
-            if platform:
-                return (
-                    title + "\n📦 Товар выдаёт Playerok. Бот управляет только ответом и отметкой продавца.",
-                    keyboard(
-                        [
-                            [("📦 Выдаёт Playerok", "platform:item:" + ident)],
-                            [("Другой способ выдачи", "lp:item:" + ident)],
-                        ],
-                        back=("⬅️ К товару", "item:" + ident),
-                    ),
-                )
-            text = (
-                title
-                + "\n"
-                + (gifts.summary(ident) if binding else automation_summary(self.store, self.api, ident))
-            )
-            if product:
-                rows = []
-                if product["handler"] == "unique_stock":
-                    rows.append([("📚 Склад", "stock:view:" + ident)])
-                if product["handler"] in {"fixed_text", "unique_stock"}:
-                    rows.append([("🔎 Проверить без отправки", "auto:check:" + ident)])
-            elif binding:
-                rows = [[("🎁 Настроить подарки", "gft:item:" + ident)]]
-                # Do not advertise competing fulfillment while a gift binding is active.
-                if not binding["enabled"]:
-                    rows.append([("Другой способ выдачи", "auto:item:" + ident)])
-            else:
+        elif section in {"delivery", "messages", "completion", "history"}:
+            from app.services.product_readiness import ProductReadiness
+            from app.telegram.product_presentation import summary
+
+            readiness = ProductReadiness(self.store, self.api).snapshot(ident, item=item)
+            text = title + "\n" + summary(readiness)
+            route = "platform:item:" + ident if platform else "lp:item:" + ident
+            if section == "delivery":
                 rows = [
-                    [("📚 Склад", "stock:view:" + ident)],
-                    [("Настроить автовыдачу / проверить без отправки", "auto:item:" + ident)],
+                    [("⚙️ Настройки текущего способа", route)],
+                    [("🔄 Изменить способ выдачи", "lp:method:" + ident)],
+                    [("🔍 Проверить готовность", "rd:check:" + ident)],
                 ]
-                if gift_applicable:
-                    rows.append([("🎁 Настроить подарки", "gft:item:" + ident)])
-            for draft in stock.service.prepared(owner, ident):
-                rows.append([("📥 Перенести запас из мастера", "stock:transfer:" + draft)])
-            rows.insert(0, [("⚡ Настроить выдачу товара", "lp:item:" + ident)])
-            rows.append([("📦 Выдаёт Playerok", "platform:item:" + ident)])
+                if readiness["mode"] == "unique_stock":
+                    rows.insert(1, [("📚 Пополнить склад", "stock:view:" + ident)])
+                if readiness["mode"] in {"unique_stock", "fixed_text"}:
+                    rows.append([("Проверить конкретный заказ без отправки", "auto:check:" + ident)])
+                if readiness["mode"] == "telegram_gifts":
+                    rows[0] = [("🎁 Состав, сообщения и лимиты", route)]
+                if not product:
+                    rows.append([("📦 Выдаёт Playerok", "platform:item:" + ident)])
+                for draft in stock.service.prepared(owner, ident):
+                    rows.append([("📥 Перенести запас из мастера", "stock:transfer:" + draft)])
+            elif section in {"messages", "completion"}:
+                text += "\n\n" + (
+                    "Сообщение после оплаты и отметка выполнения настраиваются независимо."
+                    if platform
+                    else "Приветствие отправляется до выдачи, итоговое сообщение — после подтверждения. У подарков действует стандартное уведомление, если своё не задано."
+                )
+                rows = [
+                    [
+                        (
+                            "Изменить настройки",
+                            "platform:item:" + ident if platform else "lp:" + section + ":" + ident,
+                        )
+                    ]
+                ]
+                if section == "messages":
+                    rows.append([("Ответы на фразы покупателей — отдельно", "ar:menu")])
+            else:
+                ids = (
+                    [ident]
+                    if not product
+                    else [
+                        r["item_id"]
+                        for r in self.store.rows(
+                            "SELECT item_id FROM logical_listings WHERE product_id=?", (product["id"],)
+                        )
+                    ]
+                )
+                marks = ",".join("?" for _ in ids)
+                from app.telegram.presentation import local_time
+
+                orders = self.store.rows(
+                    f"SELECT id,status,created_at FROM orders WHERE item_id IN ({marks}) ORDER BY created_at DESC LIMIT 5",
+                    ids,
+                )
+                rows = [
+                    [(local_time(o["created_at"]) + " · " + status(o["status"], "order"), "order:" + o["id"])]
+                    for o in orders
+                ]
+                operations = self.store.rows(
+                    f"SELECT b.id,b.kind,b.status FROM outbox b LEFT JOIN orders o ON o.id=b.target WHERE o.item_id IN ({marks}) OR b.target IN ({marks}) ORDER BY b.created_at DESC LIMIT 5",
+                    ids + ids,
+                )
+                rows += [[("Операция: " + status(o["status"]), "ops:show:" + o["id"])] for o in operations]
+                if not orders and not operations:
+                    text += "\nИстория этого товара пока пуста."
+                rows.append([("Подробности объявления", "iv:details:" + ident)])
         elif section == "other":
             text = title + "\nДругие действия"
             rows = [

@@ -20,8 +20,8 @@ async def test_all_known_text_blockers_are_shown_without_enabling_or_queueing(sh
     await click(r, suffix=":arm")
     text = r.session.last_panel.text
     assert "Запуск пока невозможен" in text
-    assert "Запись Playerok выключена" in text and "Автовыдача выключена" in text
-    assert "Синхронизация заказов" in text
+    assert "Записи Playerok выключены" in text and "Глобальная автоматизация выключена" in text
+    assert "синхронизация" in text
     assert not any(":enable:" in key for key in buttons(r.session.last_panel))
     assert r.store.rows("SELECT id,status FROM outbox") == before
 
@@ -37,7 +37,7 @@ async def test_gift_balance_and_global_stop_are_reported_together(shop):
     await click(r, suffix=":arm")
     text = r.session.last_panel.text
     assert "Запуск пока невозможен" in text
-    assert "Общая остановка подарков" in text
+    assert "общая остановка подарочных покупок" in text
     assert "Недостаточно Stars" in text
     assert not r.api.remote.payments
 
