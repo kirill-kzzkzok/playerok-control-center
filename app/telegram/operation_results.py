@@ -69,6 +69,31 @@ class OperationResults:
             text += "\nУведомление о результате могло прийти без подтверждения Telegram. Здесь показан сохранённый исход; повтор операции не выполняется."
         buttons = []
         payload = json.loads(row["payload"])
+        if status == "SUCCEEDED" and payload.get("platform_settings"):
+            product = self.store.rows(
+                "SELECT p.code,p.state,p.enabled FROM logical_products p JOIN logical_listings l ON l.product_id=p.id WHERE l.item_id=?",
+                (row["target"],),
+            )
+            policies = self.store.rows(
+                "SELECT payload FROM delivery_policies WHERE item_id=?", (row["target"],)
+            )
+            if product and product[0]["state"] == "VERIFIED":
+                policy = json.loads(policies[0]["payload"]) if policies else {}
+                active = product[0]["enabled"] and policy.get("enabled") and policy.get("mode") == "playerok"
+                text = (
+                    "✅ Привязка подтверждена\n🔐 Постоянный код: "
+                    + escaped(product[0]["code"], 20)
+                    + "\n📦 Выдача: Playerok"
+                )
+                text += "\n💬 Автоответ: " + (
+                    "включён" if active and policy.get("paid_reply") else "выключен"
+                )
+                text += "\n✅ Автовыполнение: " + (
+                    "включено" if active and policy.get("mark_sent") else "выключено"
+                )
+                if not policies:
+                    text += "\n⚠️ Настройки не применены. Откройте товар и сохраните их заново."
+                buttons.append([("Настройки выдачи", "platform:item:" + row["target"])])
         if status == "SUCCEEDED" and payload.get("native_relist"):
             text += "\nШтатное повторное размещение подтверждено. Копия товара не создавалась."
             gift = self.store.rows("SELECT 1 FROM gift_listings WHERE item_id=?", (row["target"],))

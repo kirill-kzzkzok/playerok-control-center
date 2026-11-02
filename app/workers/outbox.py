@@ -515,7 +515,17 @@ class Executor:
             if payload.get("logical_binding"):
                 from app.services.logical_products import LogicalProducts
 
-                if current.get("is_editable") is False or current.get("status") not in {"DRAFT", "APPROVED"}:
+                allowed = {"DRAFT", "APPROVED"}
+                if payload["logical_binding"].get("platform_binding"):
+                    from app.services.platform_orders import PLATFORM_STATUSES
+
+                    allowed = PLATFORM_STATUSES
+                    if (
+                        current.get("status") not in {"DRAFT", "APPROVED"}
+                        and current.get("is_editable") is not True
+                    ):
+                        raise ValidationError("Playerok не разрешил редактирование архивного товара")
+                if current.get("is_editable") is False or current.get("status") not in allowed:
                     raise ValidationError("Текущее состояние Playerok не разрешает изменение описания")
                 LogicalProducts(self.store, self.api).binding_guard(action, current)
             changes = {k: v for k, v in payload.items() if k in {"name", "description", "price"}}
@@ -528,8 +538,13 @@ class Executor:
                 "keep_attachment_ids",
                 "logical_binding",
                 "expected_description",
+                "platform_settings",
             }:
                 raise ValidationError("Изменение содержит неподдерживаемые поля")
+            if payload.get("platform_settings") and not (payload.get("logical_binding") or {}).get(
+                "platform_binding"
+            ):
+                raise ValidationError("Настройки Playerok требуют подтверждаемой привязки")
             if "price" in changes:
                 changes["price"] = listing_price(changes["price"], getattr(self.api.account, "role", None))
             for field in ("name", "description"):

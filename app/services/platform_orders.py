@@ -6,7 +6,7 @@ from dataclasses import asdict
 from app.database.store import Conflict, encode, now
 from app.services.automation import Automation, DeliveryPolicy, future_order, message_text
 from app.services.logical_products import LogicalProducts
-from app.services.order_management import sale
+from app.services.order_management import deal_details, sale
 from app.services.products import ValidationError
 
 DEFAULT_REPLY = (
@@ -42,11 +42,11 @@ class PlatformOrders:
         self.policies = Automation(store, api)
         self.logical = LogicalProducts(store, api)
 
-    async def save(self, owner, item_id, revision, *, reply, fulfill, text):
+    async def save(self, owner, item_id, revision, *, reply, fulfill, text, switch_confirmed=False):
         account = self.logical.authority(owner)
         item = await self.policies.item(owner, item_id)
-        if item.get("status") != "APPROVED" or item.get("deleted_at"):
-            raise ValidationError("Выберите опубликованный товар")
+        if item.get("deleted_at") or item.get("status") not in PLATFORM_STATUSES:
+            raise ValidationError("Состояние товара не разрешает настройку. Откройте его на Playerok")
         policy = DeliveryPolicy(
             mode="playerok",
             enabled=reply or fulfill,
@@ -56,65 +56,70 @@ class PlatformOrders:
             greeting=message_text(text, required=reply),
             account_id=account,
         )
+        current, _ = self.policies.get(item_id)
+        if current != revision:
+            raise Conflict("Настройки изменились. Откройте товар заново")
+        product = self.logical.listing(item_id)
+        gift = self.store.rows("SELECT enabled FROM gift_listings WHERE item_id=?", (item_id,))
+        replacing = bool(gift and gift[0]["enabled"]) or bool(
+            product
+            and product["handler"] == "telegram_gifts"
+            and not json.loads(product["config"]).get("platform_only")
+        )
+        if replacing and not switch_confirmed:
+            return {"switch": True}
+        if not product or product["state"] != "VERIFIED":
+            if product and product["state"] == "PENDING":
+                rows = self.store.rows(
+                    "SELECT status,started_at,error_code FROM outbox WHERE id=?", (product["operation_id"],)
+                )
+                if (
+                    not rows
+                    or rows[0]["status"] != "PERMANENT_FAILED"
+                    or rows[0]["started_at"] is not None
+                    or rows[0]["error_code"] == "MANUALLY_STOPPED_UNCERTAIN"
+                ):
+                    return {"operation": product["operation_id"]}
+            prepared = await self.logical.prepare(
+                owner, item_id, "manual", {"platform_only": True}, platform_binding=True
+            )
+            return {
+                "binding": prepared,
+                "settings": {
+                    "owner": owner,
+                    "item_id": item_id,
+                    "revision": revision,
+                    "policy": asdict(policy),
+                    "switch_confirmed": switch_confirmed,
+                },
+            }
+        self.logical.verify_listing(product, item)
         with self.store.transaction() as db:
-            self.logical.authority(owner, account)
-            current, _ = self.policies.get(item_id)
-            if current != revision:
-                raise Conflict("Настройки изменились. Откройте товар заново")
-            product = self.logical.listing(item_id)
-            ids = [item_id]
-            if product:
-                if product["state"] != "VERIFIED" or product["owner_id"] != owner:
-                    raise Conflict("Сначала подтвердите существующую привязку товара")
-                self.logical.verify_listing(product, item)
-                ids = [
-                    r[0]
-                    for r in db.execute(
-                        "SELECT item_id FROM logical_listings WHERE product_id=?", (product["id"],)
-                    )
-                ]
-            placeholders = ",".join("?" for _ in ids)
-            if policy.enabled and (
+            commit_platform_settings(db, owner, item_id, revision, policy, switch_confirmed=switch_confirmed)
+        return {"saved": True}
+
+    def confirm(self, owner, request):
+        settings = request["settings"]
+        if settings["owner"] != owner:
+            raise Conflict("Подтверждение принадлежит другому владельцу")
+        with self.store.transaction() as db:
+            revision, _ = self.policies.get(settings["item_id"])
+            if revision != settings["revision"]:
+                raise Conflict("Настройки изменились до подтверждения")
+            result = self.logical.commit(owner, request["binding"])
+            row = db.execute("SELECT payload FROM outbox WHERE id=?", (result["operation_id"],)).fetchone()
+            payload = json.loads(row[0])
+            if "platform_settings" not in payload:
+                product = self.logical.product(result["product_id"], owner)
+                payload["platform_settings"] = {
+                    **settings,
+                    "control_revision": product["control_revision"],
+                    "stop_token": stop_token(db),
+                }
                 db.execute(
-                    f"SELECT 1 FROM orders o JOIN outbox b ON b.target=o.id WHERE o.item_id IN ({placeholders}) "
-                    "AND b.kind IN ('delivery','delivery_text','gift_send','chain_message','fulfill') "
-                    "AND (b.status IN ('PENDING','PROCESSING','RETRYABLE_FAILED','UNCERTAIN') OR b.error_code='MANUALLY_STOPPED_UNCERTAIN') LIMIT 1",
-                    ids,
-                ).fetchone()
-                or db.execute(
-                    f"SELECT 1 FROM delivery_chains WHERE item_id IN ({placeholders}) AND status IN ('ACTIVE','BLOCKED') LIMIT 1",
-                    ids,
-                ).fetchone()
-            ):
-                raise Conflict("Есть незавершённая выдача или неизвестный результат; сначала разрешите заказ")
-            cutoff = now()
-            if product:
-                config = json.loads(product["config"])
-                config["platform_only"] = True
-                db.execute(
-                    "UPDATE logical_products SET config=?,revision=revision+1,control_revision=control_revision+1,enabled=?,armed_at=?,updated_at=? WHERE id=?",
-                    (encode(config), int(policy.enabled), cutoff, cutoff, product["id"]),
+                    "UPDATE outbox SET payload=? WHERE id=?", (encode(payload), result["operation_id"])
                 )
-                db.execute(
-                    "UPDATE logical_listings SET config_revision=config_revision+1 WHERE product_id=?",
-                    (product["id"],),
-                )
-            for ident in ids:
-                old, _ = self.policies.get(ident)
-                db.execute(
-                    "UPDATE gift_listings SET enabled=0,revision=revision+1 WHERE item_id=? AND enabled=1",
-                    (ident,),
-                )
-                db.execute(
-                    "INSERT INTO delivery_policies VALUES(?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET revision=excluded.revision,actor=excluded.actor,payload=excluded.payload,updated_at=excluded.updated_at",
-                    (ident, old + 1, owner, encode(asdict(policy)), cutoff),
-                )
-                self.store.set_setting(f"delivery:{ident}:enabled", policy.enabled)
-                db.execute(
-                    "INSERT OR IGNORE INTO auto_enrollment(order_id,policy_revision,status,error_code,updated_at) SELECT id,?,'SKIPPED','OWNER_SAVED_AFTER_DISCOVERY',? FROM orders WHERE item_id=?",
-                    (old + 1, cutoff, ident),
-                )
-            self.store.audit(owner, "SAVE_PLAYEROK_FOLLOWUP", item_id, "FUTURE_ORDERS_ONLY")
+            return result
 
     def authority(self, item_id, revision):
         rows = self.store.rows("SELECT actor FROM delivery_policies WHERE item_id=?", (item_id,))
@@ -195,8 +200,139 @@ class PlatformOrders:
 
     async def verify(self, action):
         chain, policy = self.guard(action)
-        order = await self.api.call("get_deal", deal_id=action["target"])
+        order = await deal_details(self.api, action["target"], need_chat=action["kind"] == "chain_message")
         platform_sale(order, action["target"], policy.account_id, item=chain["item_id"])
         self.policies.orders.orders.ingest(order)
         self.guard(action)
         return order
+
+
+PLATFORM_STATUSES = {
+    "DRAFT",
+    "APPROVED",
+    "SOLD",
+    "EXPIRED",
+    "DISCONTINUED",
+    "DECLINED",
+    "PENDING_APPROVAL",
+    "PENDING_MODERATION",
+}
+
+
+def stop_token(db):
+    return db.execute(
+        "SELECT COALESCE(MAX(rowid),0) FROM audit_log WHERE action='STOP_ALL_DELIVERY_POLICIES'"
+    ).fetchone()[0]
+
+
+def commit_platform_settings(db, owner, item_id, revision, policy, *, switch_confirmed=False):
+    """One local commit, only after independent VERIFIED description evidence."""
+    account = db.execute("SELECT value FROM settings WHERE key='playerok:account_id'").fetchone()
+    if (
+        not account
+        or json.loads(account[0]) != policy.account_id
+        or not db.execute("SELECT 1 FROM administrators WHERE user_id=?", (owner,)).fetchone()
+    ):
+        raise Conflict("Аккаунт или владелец изменился")
+    row = db.execute("SELECT revision FROM delivery_policies WHERE item_id=?", (item_id,)).fetchone()
+    if (row[0] if row else 0) != revision:
+        raise Conflict("Настройки изменились во время подтверждения")
+    product = db.execute(
+        "SELECT p.*,l.config_revision,l.verified_at FROM logical_products p JOIN logical_listings l ON l.product_id=p.id WHERE l.item_id=?",
+        (item_id,),
+    ).fetchone()
+    if (
+        not product
+        or product["state"] != "VERIFIED"
+        or product["revision"] != product["config_revision"]
+        or not product["verified_at"]
+        or product["error_code"] is not None
+        or product["owner_id"] != owner
+        or product["account_id"] != policy.account_id
+    ):
+        raise Conflict("Сначала подтвердите постоянную привязку товара")
+    ids = [
+        r[0] for r in db.execute("SELECT item_id FROM logical_listings WHERE product_id=?", (product["id"],))
+    ]
+    placeholders = ",".join("?" for _ in ids)
+    if not switch_confirmed and (
+        product["handler"] == "telegram_gifts"
+        and not json.loads(product["config"]).get("platform_only")
+        or db.execute(
+            f"SELECT 1 FROM gift_listings WHERE item_id IN ({placeholders}) AND enabled=1", ids
+        ).fetchone()
+    ):
+        raise Conflict("Нужно явно подтвердить замену Telegram Gifts")
+    if policy.enabled and (
+        db.execute(
+            f"SELECT 1 FROM orders o JOIN outbox b ON b.target=o.id WHERE o.item_id IN ({placeholders}) AND b.kind IN ('delivery','delivery_text','gift_send','chain_message','fulfill') AND (b.status IN ('PENDING','PROCESSING','RETRYABLE_FAILED','UNCERTAIN') OR b.error_code='MANUALLY_STOPPED_UNCERTAIN') LIMIT 1",
+            ids,
+        ).fetchone()
+        or db.execute(
+            f"SELECT 1 FROM delivery_chains WHERE item_id IN ({placeholders}) AND status IN ('ACTIVE','BLOCKED') LIMIT 1",
+            ids,
+        ).fetchone()
+    ):
+        raise Conflict("Есть незавершённая выдача или неизвестный результат; сначала разрешите заказ")
+    cutoff = now()
+    config = {**json.loads(product["config"]), "platform_only": True}
+    db.execute(
+        "UPDATE logical_products SET config=?,revision=revision+1,control_revision=control_revision+1,enabled=?,inherit_enabled=?,armed_at=?,updated_at=? WHERE id=?",
+        (encode(config), int(policy.enabled), int(policy.enabled), cutoff, cutoff, product["id"]),
+    )
+    db.execute(
+        "UPDATE logical_listings SET config_revision=config_revision+1 WHERE product_id=?", (product["id"],)
+    )
+    for ident in ids:
+        old = db.execute("SELECT revision FROM delivery_policies WHERE item_id=?", (ident,)).fetchone()
+        next_revision = (old[0] if old else 0) + 1
+        db.execute(
+            "UPDATE gift_listings SET enabled=0,revision=revision+1 WHERE item_id=? AND enabled=1", (ident,)
+        )
+        db.execute(
+            "INSERT INTO delivery_policies VALUES(?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET revision=excluded.revision,actor=excluded.actor,payload=excluded.payload,updated_at=excluded.updated_at",
+            (ident, next_revision, owner, encode(asdict(policy)), cutoff),
+        )
+        db.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (f"delivery:{ident}:enabled", encode(policy.enabled)),
+        )
+        db.execute(
+            "INSERT OR IGNORE INTO auto_enrollment(order_id,policy_revision,status,error_code,updated_at) SELECT id,?,'SKIPPED','OWNER_SAVED_AFTER_DISCOVERY',? FROM orders WHERE item_id=?",
+            (next_revision, cutoff, ident),
+        )
+    db.execute(
+        "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'SAVE_PLAYEROK_FOLLOWUP',?,'FUTURE_ORDERS_ONLY',?)",
+        (owner, item_id, cutoff),
+    )
+
+
+def finish_platform_binding(db, action):
+    payload = json.loads(action["payload"]) if isinstance(action["payload"], str) else action["payload"]
+    settings = payload.get("platform_settings")
+    if not settings:
+        return
+    try:
+        product = db.execute(
+            "SELECT control_revision FROM logical_products WHERE id=?",
+            (payload["logical_binding"]["product_id"],),
+        ).fetchone()
+        if (
+            stop_token(db) != settings["stop_token"]
+            or not product
+            or product[0] != settings["control_revision"]
+        ):
+            raise Conflict("Остановка во время подтверждения")
+        commit_platform_settings(
+            db,
+            settings["owner"],
+            settings["item_id"],
+            settings["revision"],
+            DeliveryPolicy(**settings["policy"]),
+            switch_confirmed=settings["switch_confirmed"],
+        )
+    except (Conflict, ValidationError):
+        db.execute(
+            "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'PLAYEROK_BINDING_SETTINGS_BLOCKED',?,'REOPEN_SETTINGS_REQUIRED',?)",
+            (settings["owner"], settings["item_id"], now()),
+        )

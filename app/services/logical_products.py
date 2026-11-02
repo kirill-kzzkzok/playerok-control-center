@@ -324,7 +324,7 @@ class LogicalProducts:
             raise Conflict("Перенос недоступен. Обновите карточку привязки")
         return await self.prepare(owner, item_id, existing["handler"], {}, migrate_legacy=True)
 
-    async def prepare(self, owner, item_id, handler, config, *, migrate_legacy=False):
+    async def prepare(self, owner, item_id, handler, config, *, migrate_legacy=False, platform_binding=False):
         account = self.authority(owner)
         item = await self.api.call("get_item", id=item_id)
         baseline = critical(item)
@@ -332,7 +332,16 @@ class LogicalProducts:
             raise Conflict("Товар принадлежит другому аккаунту")
         if item.get("is_editable") is False:
             raise Conflict("Playerok запрещает редактирование этого товара")
-        if item.get("deleted_at") or item.get("status") not in {"DRAFT", "APPROVED"}:
+        allowed = {"DRAFT", "APPROVED"}
+        if platform_binding:
+            from app.services.platform_orders import PLATFORM_STATUSES
+
+            allowed = PLATFORM_STATUSES
+            if item.get("status") not in {"DRAFT", "APPROVED"} and item.get("is_editable") is not True:
+                raise Conflict(
+                    "Playerok не подтвердил разрешение редактировать архивный товар. Откройте его на сайте"
+                )
+        if item.get("deleted_at") or item.get("status") not in allowed:
             raise ValueError("Привязка доступна для опубликованного товара или серверного черновика")
         existing = self.listing(item_id)
         if existing and existing["enabled"]:
@@ -420,6 +429,7 @@ class LogicalProducts:
             "revision": existing["revision"] if existing else 0,
             "control_revision": existing["control_revision"] if existing else 0,
             "code": code,
+            **({"platform_binding": True} if platform_binding else {}),
         }
 
     def commit(self, owner, prepared):
@@ -506,6 +516,7 @@ class LogicalProducts:
                         "account": prepared["account"],
                         "original_hash": digest(prepared["original"]),
                         "baseline": prepared["baseline"],
+                        **({"platform_binding": True} if prepared.get("platform_binding") else {}),
                     },
                 },
                 db,
@@ -566,6 +577,11 @@ class LogicalProducts:
         self.binding_guard(action, writes=writes)
         expected = action["payload"]["description"]
         product = self.product(action["payload"]["logical_binding"]["product_id"])
+        if action["payload"]["logical_binding"].get("platform_binding"):
+            from app.services.platform_orders import PLATFORM_STATUSES
+
+            if observed.get("deleted_at") or observed.get("status") not in PLATFORM_STATUSES:
+                raise Conflict("Состояние товара больше не разрешает подтверждение привязки")
         if (
             observed.get("id") != action["target"]
             or critical(observed) != action["payload"]["logical_binding"]["baseline"]
@@ -1066,7 +1082,11 @@ def finish_binding(db, action, status, result):
         "UPDATE logical_listings SET verified_at=?,server_status=? WHERE item_id=? AND operation_id=? AND config_revision=?",
         (now(), receipt["status"], receipt["item_id"], action["id"], receipt["revision"]),
     )
-    db.execute(
+    changed = db.execute(
         "UPDATE logical_products SET state='VERIFIED',updated_at=? WHERE id=? AND revision=? AND state='PENDING'",
         (now(), receipt["product_id"], receipt["revision"]),
-    )
+    ).rowcount
+    if changed:
+        from app.services.platform_orders import finish_platform_binding
+
+        finish_platform_binding(db, action)

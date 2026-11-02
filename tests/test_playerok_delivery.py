@@ -24,7 +24,19 @@ from tests.test_ux_redesign import buttons
 @pytest.fixture
 async def shop(tmp_path):
     async for factory in simulation_fixture.__wrapped__(tmp_path):
-        yield factory
+
+        async def create(factory=factory, **kwargs):
+            r = await factory(**kwargs)
+
+            def update_item(id, **changes):
+                r.api.mutations.append(deepcopy(changes))
+                r.api.items[id].update(changes)
+                return deepcopy(r.api.items[id])
+
+            r.api.account.update_item = update_item
+            return r
+
+        yield create
 
 
 async def configure(r, reply=True, fulfill=True, text=None, item="lot"):
@@ -40,7 +52,17 @@ async def configure(r, reply=True, fulfill=True, text=None, item="lot"):
         await click(r, suffix=":text")
         await r.ui.message(text)
     await click(r, suffix=":save")
-    assert "Сохранено" in r.session.last_panel.text
+    await finish_save(r, item)
+
+
+async def finish_save(r, item="lot"):
+    if any(k.endswith(":switch") for k in buttons(r.session.last_panel)):
+        await click(r, suffix=":switch")
+    if any(k.endswith(":bind") for k in buttons(r.session.last_panel)):
+        await click(r, suffix=":bind")
+        await r.worker.once()
+        await r.ui.click("platform:item:" + item)
+    assert "Привязка подтверждена" in r.session.last_panel.text
 
 
 def purchase(r, ident="order", status="PAID", item="lot"):
@@ -70,8 +92,9 @@ async def test_independent_settings_and_future_sale_without_second_delivery(shop
     assert not r.store.rows("SELECT * FROM reservations")
     assert not r.store.rows("SELECT * FROM inventory")
     assert not r.store.rows("SELECT 1 FROM outbox WHERE kind IN ('delivery','delivery_text','gift_send')")
-    assert not r.store.rows("SELECT * FROM logical_products")
-    assert r.api.item["description"] == old_description
+    product = LogicalProducts(r.store, r.api).listing("lot")
+    assert product["state"] == "VERIFIED"
+    assert r.api.item["description"].removesuffix("\n" + product["code"]).strip() == old_description.strip()
     assert not r.api.remote.payments
     if fulfill:
         operation = r.store.rows("SELECT id FROM outbox WHERE kind='fulfill'")[0]["id"]
@@ -124,7 +147,7 @@ async def test_unknown_reply_blocks_repeat_and_does_not_lose_order(shop):
     await drain(r)
     await drain(r)
     assert len(r.api.messages) == 1
-    assert r.store.rows("SELECT status FROM outbox")[0]["status"] == "UNCERTAIN"
+    assert r.store.rows("SELECT status FROM outbox WHERE kind='chain_message'")[0]["status"] == "UNCERTAIN"
     assert r.api.orders["order"]["status"] == "PAID"
     assert r.store.rows("SELECT id FROM orders") == [{"id": "order"}]
 
@@ -163,7 +186,7 @@ async def test_unknown_fulfillment_never_repeats_after_server_accepted(shop):
     await drain(r)
     await drain(r)
     assert calls == ["order"]
-    assert r.store.rows("SELECT status FROM outbox") == [{"status": "UNCERTAIN"}]
+    assert r.store.rows("SELECT status FROM outbox WHERE kind='fulfill'") == [{"status": "UNCERTAIN"}]
 
 
 async def test_required_report_is_not_fabricated_and_reply_still_confirmed(shop):
@@ -194,9 +217,11 @@ async def test_required_report_is_not_fabricated_and_reply_still_confirmed(shop)
     assert not r.api.remote.payments
 
 
-async def test_confirmed_logical_relist_inherits_platform_policy_without_delivery(shop):
+@pytest.mark.parametrize("previous_stock", [False, True])
+async def test_confirmed_logical_relist_inherits_platform_policy_without_delivery(shop, previous_stock):
     r = await shop()
-    await setup_ui(r, "fixed_text", "Never send this old secret")
+    if previous_stock:
+        await setup_ui(r, "fixed_text", "Never send this old secret")
     await configure(r, text="Наследуемый ответ")
     r.api.item["status"] = "SOLD"
     r.api.items["relisted"] = {**deepcopy(r.api.item), "id": "relisted", "status": "APPROVED"}
@@ -232,6 +257,7 @@ async def test_durable_input_restart_old_nonce_and_existing_item_card(shop):
     r.ui.dp = production_dispatcher(r.store, r.api)
     await r.ui.message("Ответ после перезапуска")
     nonce = await click(r, suffix=":save")
+    await finish_save(r)
     revision = Automation(r.store, r.api).get("lot")[0]
     await r.ui.click(nonce)
     assert Automation(r.store, r.api).get("lot")[0] == revision
@@ -269,7 +295,7 @@ async def test_positive_fulfillment_reconciliation_does_not_repeat_mutation(shop
 
     r.api.account.update_deal = lost
     await drain(r)
-    row = r.store.rows("SELECT * FROM outbox")[0]
+    row = r.store.rows("SELECT * FROM outbox WHERE kind='fulfill'")[0]
     result = await Reconciliation(r.store, r.api).evidence(7, row["id"])
     assert result["remote_status"] == "SENT"
     assert calls == ["order"]
@@ -390,7 +416,7 @@ async def test_stop_during_message_rpc_preserves_result_and_blocks_next_step(sho
         await task
     await drain(r)
     assert len(r.api.messages) == 1
-    assert r.store.rows("SELECT kind,status FROM outbox") == [
+    assert r.store.rows("SELECT kind,status FROM outbox WHERE kind!='edit'") == [
         {"kind": "chain_message", "status": "SUCCEEDED"}
     ]
     assert r.api.orders["order"]["status"] == "PAID"
