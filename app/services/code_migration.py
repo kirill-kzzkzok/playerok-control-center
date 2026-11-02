@@ -80,6 +80,8 @@ class CodeMigration:
                     item = await self.api.call("get_item", id=ident)
                 except APIError as error:
                     problems.append({"item_id": ident, "reason": error.code})
+                    if error.code in {"RATE_LIMITED", "HTTP_429"}:
+                        return problems
                     continue
                 lines = (item.get("description") or "").splitlines()
                 codes = [line.strip() for line in lines if re.fullmatch(r"#[0-9]{7}", line.strip())]
@@ -178,6 +180,11 @@ class CodeMigration:
 
     def idle(self, product_id):
         args = (product_id,)
+        if self.store.rows(
+            "SELECT 1 FROM promotion_expenses WHERE status='UNCERTAIN' AND item_id IN (SELECT item_id FROM logical_listings WHERE product_id=?) LIMIT 1",
+            args,
+        ):
+            raise Conflict("Расход PREMIUM не подтверждён. Остановка повтора не заменяет сверку платежа")
         if self.store.rows(
             "SELECT 1 FROM outbox o WHERE (o.target IN (SELECT item_id FROM logical_listings WHERE product_id=?) OR o.target IN (SELECT id FROM orders WHERE item_id IN (SELECT item_id FROM logical_listings WHERE product_id=?))) AND o.status IN ('PENDING','PROCESSING','RETRYABLE_FAILED','UNCERTAIN') AND json_extract(o.payload,'$.code_migration') IS NULL LIMIT 1",
             (product_id, product_id),

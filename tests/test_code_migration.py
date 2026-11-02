@@ -366,3 +366,39 @@ async def test_archived_old_code_discovered_later_keeps_reserved_new_code(legacy
     assert plan["products"][0]["code"] == code
     assert any(i["id"] == relisted["id"] and i["ready"] for i in plan["products"][0]["items"])
     assert len(store.rows("SELECT * FROM logical_code_reservations")) == 1
+
+
+async def test_catalog_stops_at_first_rate_limit_without_burst_retries(legacy):
+    from app.playerok.adapter import APIError
+
+    store, api, service = legacy
+    reads = []
+
+    async def boundary(method, **kwargs):
+        reads.append(method)
+        if method == "get_my_items":
+            return {
+                "items": [{"id": "other-" + str(n)} for n in range(24)],
+                "page_info": {"has_next_page": False},
+            }
+        raise APIError("RATE_LIMITED", retry_after=60)
+
+    api.call = boundary
+    problems = await service.discover(7)
+    assert reads == ["get_my_items", "get_item"]
+    assert problems[0]["reason"] == "RATE_LIMITED"
+    assert not store.rows("SELECT * FROM outbox")
+
+
+async def test_stopping_unknown_premium_does_not_make_product_safe_to_rename(legacy):
+    store, api, service = legacy
+    store.enqueue("unknown-premium", "premium_publish", "lot", {})
+    store.execute(
+        "UPDATE outbox SET status='PERMANENT_FAILED',error_code='MANUALLY_STOPPED_UNCERTAIN' WHERE operation_key='unknown-premium'"
+    )
+    store.execute(
+        "INSERT INTO promotion_expenses VALUES('unknown-premium','lot','19','UNCERTAIN',?)", (now(),)
+    )
+    plan = await service.prepare(7)
+    assert not plan["products"][0]["ready"]
+    assert not api.mutations
