@@ -196,6 +196,19 @@ async def test_snapshot_unknown_payment_blocks_next_step_and_replay_after_restar
     assert not r.store.rows("SELECT * FROM outbox WHERE kind='gift_refund'")
 
 
+async def test_consistent_updated_sale_price_in_private_snapshot_keeps_gift_identity(case):
+    r = case
+    r.partial["item"]["price"] = r.full["item"]["price"] = 90
+    await LogicalProductWorker(r.store, r.api).once()
+    assert LogicalProducts(r.store, r.api).listing("deal-item-copy") is not None
+    gifts = GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender)
+    for _ in range(4):
+        await gifts.once()
+        await r.worker.once()
+    assert len(r.api.remote.payments) == 2
+    assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "SUCCEEDED"}]
+
+
 async def test_private_order_snapshot_is_not_offered_as_a_public_gift_product(case):
     from tests.test_ux_redesign import buttons
 

@@ -1,5 +1,6 @@
 import hashlib
 import json
+from decimal import Decimal, InvalidOperation
 
 from app.database.store import Conflict, encode
 from app.services.orders import Orders
@@ -55,6 +56,16 @@ async def deal_details(api, ident, *, full_item=False, need_chat=True):
         sale(detailed, ident, api.account.id)
         if (detailed.get("item") or {}).get("id") != item["id"]:
             raise Conflict("Полная сделка относится к другому товару; выдача остановлена")
+        detailed_item = detailed.get("item") or {}
+        if full_item and item.get("price") is not None and detailed_item.get("price") is not None:
+            try:
+                short_price, full_price = Decimal(str(item["price"])), Decimal(str(detailed_item["price"]))
+            except InvalidOperation:
+                raise Conflict("Playerok не подтвердил цену покупки; выдача остановлена") from None
+            if not short_price.is_finite() or not full_price.is_finite() or short_price != full_price:
+                raise Conflict(
+                    "Цена в двух карточках одной сделки различается. Обновите заказ; выдача остановлена"
+                )
         order = detailed
     return order
 
