@@ -165,6 +165,8 @@ class ItemPanel:
             ]
             if item.get("status") == "DRAFT":
                 rows.insert(0, [("🚀 Запустить продажи", "launch:item:" + ident)])
+            elif item.get("status") == "SOLD":
+                rows.insert(0, [("🔄 Перевыставить", "relist:item:" + ident)])
             elif product and not platform and not product["enabled"] and product["handler"] != "manual":
                 rows.insert(0, [("🚀 Запустить продажи", "lp:ready:" + ident)])
         elif section == "edit":

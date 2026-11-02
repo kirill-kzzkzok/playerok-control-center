@@ -68,6 +68,12 @@ class OperationResults:
         if receipt["notice_status"] == "UNCERTAIN":
             text += "\nУведомление о результате могло прийти без подтверждения Telegram. Здесь показан сохранённый исход; повтор операции не выполняется."
         buttons = []
+        payload = json.loads(row["payload"])
+        if status == "SUCCEEDED" and payload.get("native_relist"):
+            text += "\nШтатное повторное размещение подтверждено. Копия товара не создавалась."
+            gift = self.store.rows("SELECT 1 FROM gift_listings WHERE item_id=?", (row["target"],))
+            text += "\n🎁 Telegram Gifts: " + ("привязка сохранена" if gift else "не настроено")
+            text += "\n⚡ Готовность автовыдачи: проверьте актуальную карточку товара."
         if status in {"PENDING", "PROCESSING", "RETRYABLE_FAILED"}:
             text += "\nПостановка в очередь не означает выполнения."
         elif status == "UNCERTAIN" or row["error_code"] == "MANUALLY_STOPPED_UNCERTAIN":

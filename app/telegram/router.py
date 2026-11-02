@@ -45,6 +45,7 @@ from app.telegram.platform_panel import PlatformPanel
 from app.telegram.presentation import error_text, local_time
 from app.telegram.profile_panel import ProfilePanel
 from app.telegram.promotions_panel import PromotionsPanel
+from app.telegram.quick_shop_panel import QuickShopPanel
 from app.telegram.replies_panel import RepliesPanel
 from app.telegram.settings_panel import SettingsPanel
 from app.telegram.statistics_panel import StatisticsPanel
@@ -99,6 +100,7 @@ def create_router(store, api, products, synchronizer):
     gifts_panel = GiftsPanel(store, api)
     launch_panel = LaunchPanel(store, api, gifts_panel.service)
     operation_results = OperationResults(store)
+    quick_shop = QuickShopPanel(store, api, wizard, gifts_panel.service)
     agreements_panel = AgreementsPanel(store, api, products)
 
     @router.message(CommandStart())
@@ -113,6 +115,20 @@ def create_router(store, api, products, synchronizer):
             return await navigator.recovery_prompt(message, message.from_user.id)
         message, _ = await navigator.enter(message, message.from_user.id, state, "home")
         text, markup = home_panel.home()
+        await message.answer(text, reply_markup=markup)
+
+    @router.message(Command("status"))
+    async def status_command(message, state):
+        automation_panel.service.orders.owner(message.from_user.id)
+        await state.clear()
+        message, _ = await navigator.enter(message, message.from_user.id, state, "status:view:0")
+        try:
+            text, markup = await quick_shop.status(message.from_user.id, state)
+        except (APIError, ValidationError, Conflict):
+            text, markup = (
+                "⚪ Не удалось подтвердить активные товары. Проверьте подключение и обновите статус.",
+                keyboard([[("🔄 Проверить снова", "status:view:0")]]),
+            )
         await message.answer(text, reply_markup=markup)
 
     @router.message(Command("panel_reset"))
@@ -263,6 +279,10 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await listings_panel.show("items", state, restore=message.navigation_restoring)
             elif action == "promotions" or action.startswith(("promo:", "pp:", "pi:")):
                 text, markup = await promotions_panel.callback(action, owner, state)
+            elif action.startswith("relist:"):
+                text, markup = await quick_shop.relist(action, owner, state)
+            elif action.startswith("status:view:"):
+                text, markup = await quick_shop.status(owner, state, int(action.split(":")[-1]))
             elif action.startswith("platform:"):
                 text, markup = await platform_panel.callback(action, owner, state)
             elif action == "automation" or action.startswith(("auto:", "ap:")):

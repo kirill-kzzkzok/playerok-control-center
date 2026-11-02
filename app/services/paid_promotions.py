@@ -50,10 +50,16 @@ class PaidPromotions:
     def snapshot(item):
         return {k: item.get(k) for k in ("id", "status", "price", "raw_price", "priority")}
 
-    async def preview(self, owner, ident, quote_id):
+    async def preview(self, owner, ident, quote_id, *, native_relist=False):
         item = await self.settings.access.item(owner, ident)
         self.permissions()
-        if item.get("status") not in {"DRAFT", "APPROVED"}:
+        if native_relist:
+            from app.services.logical_products import LogicalProducts
+
+            LogicalProducts(self.store, self.api).authority(owner)
+        if native_relist and (item.get("status") != "SOLD" or item.get("may_be_published") is not True):
+            raise ValidationError("Playerok не разрешил штатное повторное размещение этого товара")
+        if item.get("status") not in ({"SOLD"} if native_relist else {"DRAFT", "APPROVED"}):
             raise ValidationError("Платное размещение доступно для черновика или опубликованного товара")
         quotes = await self.api.call(
             "get_item_priority_statuses", item_id=ident, item_price=priority_price_basis(item)
@@ -74,6 +80,7 @@ class PaidPromotions:
             "policy_revision": revision,
             "checked_at": now(),
             "before_payment_id": (item.get("status_payment") or {}).get("id"),
+            **({"native_relist": True} if native_relist else {}),
         }
 
     def authority(self, value):
@@ -122,7 +129,9 @@ class PaidPromotions:
         self.store.audit(owner, "ARM_PAID_PROMOTIONS", "*", "EXPLICIT_OWNER_PERMISSION")
 
     async def approve(self, owner, value, *, prepublication=False):
-        fresh = await self.preview(owner, value["item"]["id"], value["quote_id"])
+        fresh = await self.preview(
+            owner, value["item"]["id"], value["quote_id"], native_relist=value.get("native_relist", False)
+        )
         if any(
             fresh.get(k) != value.get(k)
             for k in ("account_id", "item", "quote_id", "amount", "period", "policy_revision")
@@ -139,12 +148,16 @@ class PaidPromotions:
         self.store.audit(owner, "APPROVE_PREMIUM_TARIFF", fresh["item"]["id"], "EXPLICIT_OWNER_PERMISSION")
 
     async def queue(self, owner, value, key, *, automatic=False, launch=None, manual=False):
+        if value.get("native_relist") and (not manual or automatic or launch):
+            raise ValidationError("Повторное PREMIUM-размещение требует отдельного разового согласия")
         if manual and (automatic or launch):
             raise ValidationError("Разовое разрешение не включает расписание или составной запуск")
         existing = self.store.rows("SELECT id FROM outbox WHERE operation_key=?", (key,))
         if existing:
             return existing[0]["id"]
-        fresh = await self.preview(owner, value["item"]["id"], value["quote_id"])
+        fresh = await self.preview(
+            owner, value["item"]["id"], value["quote_id"], native_relist=value.get("native_relist", False)
+        )
         if any(
             fresh.get(k) != value.get(k)
             for k in (
@@ -195,7 +208,7 @@ class PaidPromotions:
             )
             if money(available) < reserved + money(fresh["amount"]):
                 raise ValidationError("Недостаточно доступного баланса Playerok с учётом резервов")
-            kind = "premium_publish" if fresh["item"]["status"] == "DRAFT" else "premium_bump"
+            kind = "premium_publish" if fresh["item"]["status"] in {"DRAFT", "SOLD"} else "premium_bump"
             payload = {**fresh, "actor": owner, "automatic": automatic}
             if manual:
                 payload["manual_authority"] = {
@@ -220,6 +233,12 @@ class PaidPromotions:
 
     def guard(self, action):
         value = action["payload"]
+        if value.get("native_relist") and (
+            action["kind"] != "premium_publish"
+            or not value.get("manual_authority")
+            or value.get("item", {}).get("status") != "SOLD"
+        ):
+            raise ValidationError("Нет точного разрешения повторной публикации")
         self.permissions(value["account_id"], value["automatic"])
         self.settings.access.orders.owner(value["actor"])
         revision, _, _ = self.settings.get()
@@ -312,7 +331,12 @@ class PaidPromotions:
         self.guard(action)
         if self.store.setting(intent_key(action["id"]), {}).get("started_at"):
             raise APIError("PREMIUM_PAYMENT_ALREADY_STARTED", uncertain=True)
-        fresh = await self.preview(value["actor"], action["target"], value["quote_id"])
+        fresh = await self.preview(
+            value["actor"],
+            action["target"],
+            value["quote_id"],
+            native_relist=value.get("native_relist", False),
+        )
         if any(
             fresh.get(k) != value.get(k)
             for k in (
@@ -330,7 +354,12 @@ class PaidPromotions:
         if self.snapshot(latest) != value["item"]:
             raise ValidationError("Товар изменился при подготовке условий")
         await executor.products.prepare_item_agreements(latest)
-        fresh = await self.preview(value["actor"], action["target"], value["quote_id"])
+        fresh = await self.preview(
+            value["actor"],
+            action["target"],
+            value["quote_id"],
+            native_relist=value.get("native_relist", False),
+        )
         if any(
             fresh.get(k) != value.get(k)
             for k in (

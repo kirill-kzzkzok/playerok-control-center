@@ -210,6 +210,53 @@ class Products:
     def __init__(self, store, api):
         self.store, self.api = store, api
 
+    def native_relist_guard(self, value):
+        from app.services.logical_products import LogicalProducts
+
+        LogicalProducts(self.store, self.api).authority(value["actor"], value["account_id"], writes=True)
+
+    async def native_relist_preview(self, owner, item_id, quote_id):
+        from app.services.automation import Automation
+        from app.services.logical_products import LogicalProducts
+
+        LogicalProducts(self.store, self.api).authority(owner)
+        item = await Automation(self.store, self.api).item(owner, item_id)
+        if item.get("status") != "SOLD" or item.get("may_be_published") is not True:
+            raise ValidationError("Playerok не разрешил повторное размещение этого товара")
+        quotes = await self.priority_preview(item_id, priority_price_basis(item))
+        selected = [q for q in quotes if q.get("id") == quote_id and q.get("type") in {"DEFAULT", "PREMIUM"}]
+        if len(selected) != 1 or selected[0].get("price") is None:
+            raise ValidationError("Тариф повторного размещения не подтверждён")
+        quote = selected[0]
+        if quote["type"] == "PREMIUM":
+            from app.services.paid_promotions import PaidPromotions
+
+            return await PaidPromotions(self.store, self.api).preview(
+                owner, item_id, quote_id, native_relist=True
+            )
+        if Decimal(str(quote["price"])) != 0:
+            raise ValidationError("Обычное размещение не подтверждено как бесплатное")
+        return {
+            "native_relist": True,
+            "actor": owner,
+            "account_id": self.api.account.id,
+            "priority_id": quote["id"],
+            "price": item["price"],
+            "raw_price": priority_price_basis(item),
+            "item_id": item_id,
+        }
+
+    async def queue_native_relist(self, owner, value, key):
+        if value.get("type") == "PREMIUM":
+            from app.services.paid_promotions import PaidPromotions
+
+            return await PaidPromotions(self.store, self.api).queue(owner, value, key, manual=True)
+        fresh = await self.native_relist_preview(owner, value["item_id"], value["priority_id"])
+        if fresh != value:
+            raise Conflict("Товар или тариф изменились. Подтвердите заново")
+        self.native_relist_guard(fresh)
+        return self.store.enqueue(key, "publish", value["item_id"], fresh, actor=owner)
+
     async def schema(self, category_id, obtaining_type_id):
         return (await self.schema_details(category_id, obtaining_type_id))["form"]
 

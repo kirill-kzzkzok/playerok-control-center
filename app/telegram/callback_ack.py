@@ -82,6 +82,8 @@ def navigation(action):
             "fin:options:",
             "auto:item:",
             "platform:item:",
+            "status:view:",
+            "relist:item:",
             "auto:check:",
             "stock:view:",
             "lp:item:",

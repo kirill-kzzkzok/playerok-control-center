@@ -58,6 +58,8 @@ def safe_route(action):
             "payp:item:",
             "auto:item:",
             "platform:item:",
+            "status:view:",
+            "relist:item:",
             "auto:check:",
             "ops:list:",
             "ops:show:",

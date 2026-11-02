@@ -58,11 +58,13 @@ class Executor:
         }
 
     def dispatch_guard(self, action):
+        if action["kind"] == "publish" and action["payload"].get("native_relist"):
+            self.products.native_relist_guard(action["payload"])
         if action["payload"].get("logical_binding"):
             from app.services.logical_products import LogicalProducts
 
             LogicalProducts(self.store, self.api).binding_guard(action)
-        if action["kind"] in {"publish", "premium_publish"}:
+        if action["kind"] in {"publish", "premium_publish"} and not action["payload"].get("native_relist"):
             from app.services.listing_launch import ListingLaunch
 
             ListingLaunch(self.store, self.api, self.gifts()).guard(action)
@@ -203,7 +205,7 @@ class Executor:
 
     async def __call__(self, action):
         kind, target, payload = action["kind"], action["target"], action["payload"]
-        if kind in {"publish", "premium_publish"}:
+        if kind in {"publish", "premium_publish"} and not payload.get("native_relist"):
             from app.services.listing_launch import ListingLaunch
 
             await ListingLaunch(self.store, self.api, self.gifts()).preflight(action)
@@ -461,7 +463,12 @@ class Executor:
             return {"accepted_ids": accepted, "confirmed": True}
         if kind == "publish":
             item = await self.owned_item(target)
-            if item.get("status") != "DRAFT":
+            if payload.get("native_relist"):
+                self.products.native_relist_guard(payload)
+                if item.get("status") != "SOLD" or item.get("may_be_published") is not True:
+                    raise ValidationError("Playerok больше не разрешает штатное повторное размещение")
+                await self.products.prepare_item_agreements(item)
+            elif item.get("status") != "DRAFT":
                 raise ValidationError("Публикация разрешена только серверному черновику")
             base_price = priority_price_basis(item)
             quote = await self.products.free_priority(target, base_price)
