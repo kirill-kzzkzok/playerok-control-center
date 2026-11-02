@@ -407,6 +407,11 @@ class LogicalProductsPanel:
                 ), keyboard(
                     [
                         *[[p["action"]] for p in problems],
+                        *(
+                            [[("⛔ Остановить выдачу для изменения настроек", prefix + "stop")]]
+                            if product["enabled"]
+                            else []
+                        ),
                         [("Изменить настройки", prefix + "configure")],
                     ],
                     back=("К товару", "item:" + view["item"]),

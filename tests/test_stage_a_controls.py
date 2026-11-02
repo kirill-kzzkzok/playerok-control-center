@@ -167,3 +167,16 @@ async def test_explicit_check_recovers_stale_price_blocker_while_stopped(shop):
     assert not logical.listing("lot")["error_code"]
     assert logical.listing("lot")["enabled"]
     assert not r.api.remote.payments
+
+
+async def test_active_changed_product_error_has_direct_stop_then_configuration(shop):
+    r = await shop(gift=True)
+    await setup_ui(r, "telegram_gifts", "gift: heart")
+    r.api.item["description"] += " changed"
+    await r.ui.click("lp:ready:lot")
+    assert "Запуск пока невозможен" in r.session.last_panel.text
+    await click(r, suffix=":stop")
+    await click(r, action="lp:item:lot")
+    await click(r, suffix=":configure")
+    assert any(k.endswith(":mode:telegram_gifts") for k in buttons(r.session.last_panel))
+    assert not r.api.remote.payments and not r.api.messages
