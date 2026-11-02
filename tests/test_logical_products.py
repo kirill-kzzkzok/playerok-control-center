@@ -196,7 +196,7 @@ async def test_fixed_text_arms_only_explicitly_and_preserves_cutoff_on_relist(lo
     assert len(api.mutations) == 1  # Only the explicitly confirmed description edit.
 
 
-async def test_relist_rejects_active_duplicate_and_changed_price(logical):
+async def test_relist_rejects_active_duplicate_but_accepts_confirmed_sale_price(logical):
     store, api, service = logical
     result = service.commit(7, await service.prepare(7, "lot", "fixed_text", {"text": "Delivery"}))
     await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
@@ -209,9 +209,24 @@ async def test_relist_rejects_active_duplicate_and_changed_price(logical):
     old = copy.deepcopy(api.item)
     old["status"] = "SOLD"
     new["price"] = 999
-    with pytest.raises(ValueError):
+    await service.adopt(7, product["id"], new, [old, new])
+    adopted = service.listing("relisted")
+    assert adopted["id"] == product["id"]
+    assert adopted["config"] == service.product(product["id"])["config"]
+    assert adopted["armed_at"] == service.product(product["id"])["armed_at"]
+
+
+async def test_relist_cannot_change_name_while_reusing_a_valid_code(logical):
+    store, api, service = logical
+    result = service.commit(7, await service.prepare(7, "lot", "fixed_text", {"text": "Delivery"}))
+    await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
+    product = service.product(result["product_id"])
+    await service.arm(7, product["id"], product["revision"], inherit=True)
+    old = {**copy.deepcopy(api.item), "status": "SOLD"}
+    new = {**copy.deepcopy(api.item), "id": "relisted", "name": "Different " + api.item["name"]}
+    with pytest.raises(ValueError, match="название"):
         await service.adopt(7, product["id"], new, [old, new])
-    assert service.listing("relisted") is None
+    assert not service.listing("relisted")
 
 
 @pytest.mark.parametrize("views_change", [False, True])

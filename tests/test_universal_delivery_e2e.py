@@ -184,7 +184,14 @@ async def test_ui_binding_relist_paid_delivery_and_thanks(simulation, handler, v
     await setup_ui(r, handler, value)
     product = LogicalProducts(r.store, r.api).listing("lot")
     r.api.item["status"] = "SOLD"
-    r.api.items["lot2"] = {**copy.deepcopy(r.api.item), "id": "lot2", "status": "APPROVED"}
+    r.api.items["lot2"] = {
+        **copy.deepcopy(r.api.item),
+        "id": "lot2",
+        "status": "APPROVED",
+        "price": 90,
+        "discount": 10,
+        "attachments": [{"id": "updated-photo"}],
+    }
     await LogicalProductWorker(r.store, r.api).once()
     assert LogicalProducts(r.store, r.api).listing("lot2")["id"] == product["id"]
     r.api.order("paid", "lot2", status="PENDING")

@@ -114,6 +114,28 @@ async def test_old_gift_controls_cannot_report_logically_stopped_product_as_work
     assert not r.remote.payments
 
 
+async def test_stop_and_rearm_during_relist_read_invalidates_the_old_authority(rig):
+    r = rig
+    registry, product = await bind_logical(r)
+    new = {**copy.deepcopy(r.api.item), "id": "relisted", "status": "APPROVED"}
+    old = {**copy.deepcopy(r.api.item), "status": "SOLD"}
+    catalog = r.api.gift_sender.catalog
+
+    async def rearm_during_catalog():
+        r.api.gift_sender.catalog = catalog
+        registry.stop(7, product["id"])
+        current = registry.product(product["id"])
+        await registry.arm(7, product["id"], current["revision"], inherit=True)
+        return await catalog()
+
+    r.api.gift_sender.catalog = rearm_during_catalog
+    with pytest.raises(ValueError, match="Наследование остановлено"):
+        await registry.adopt(7, product["id"], new, [old, new])
+    assert registry.listing("relisted") is None
+    assert registry.product(product["id"])["enabled"]
+    assert not r.remote.payments
+
+
 async def test_legacy_active_gift_cannot_be_reconfigured_without_stop(rig):
     r = rig
     r.api.item["price"] = 100

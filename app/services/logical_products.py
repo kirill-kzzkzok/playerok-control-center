@@ -802,7 +802,8 @@ class LogicalProducts:
             raise Conflict("Автоматическое наследование для этого товара не разрешено")
         if (
             not existing
-            and critical(item) != json.loads(product["baseline"])
+            and {k: v for k, v in critical(item).items() if k != "price"}
+            != {k: v for k, v in json.loads(product["baseline"]).items() if k != "price"}
             or marker(item.get("name")) != product["code"]
             or item.get("status") not in ({"APPROVED", "SOLD"} if paid_order else {"APPROVED"})
             or item.get("deleted_at")
@@ -862,6 +863,8 @@ class LogicalProducts:
         )
         if not links or any(link["description_sha256"] != digest(item["description"]) for link in links):
             raise Conflict("Описание нового объявления отличается от подтверждённого")
+        if not any(link["title_snapshot"] == marked_title(item["name"], product["code"]) for link in links):
+            raise Conflict("Изменилось название перевыставленного товара. Подтвердите привязку заново")
         config = json.loads(product["config"])
         platform = config.get("platform_only") is True
         if product["handler"] == "telegram_gifts" and not platform:
@@ -874,6 +877,8 @@ class LogicalProducts:
             if (
                 not current["enabled"]
                 or current["revision"] != product["revision"]
+                or current["control_revision"] != product["control_revision"]
+                or current["armed_at"] != product["armed_at"]
                 or not current["inherit_enabled"]
             ):
                 raise Conflict("Наследование остановлено во время проверки")
