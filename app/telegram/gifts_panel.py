@@ -107,6 +107,7 @@ class GiftsPanel:
             active = bool(
                 s.settings.payment_enabled
                 and not stopped
+                and not self.store.setting("gifts:paused", False)
                 and enabled
                 and getattr(s.api.account, "writes_enabled", False)
                 and getattr(s.api.account, "automation_enabled", False)
@@ -128,12 +129,21 @@ class GiftsPanel:
                 + "\nПроверено: "
                 + (checked_time(b["at"]) if b.get("at") else "ещё не проверялось")
                 + "\nАвтовыдача: "
-                + ("разрешена для включённых товаров" if active else "выключена"),
+                + (
+                    "временная пауза — настройки сохранены"
+                    if self.store.setting("gifts:paused", False)
+                    else "разрешена для включённых товаров"
+                    if active
+                    else "выключена"
+                ),
                 keyboard(rows, back=("⬅️ Мой магазин", "home")),
             )
         if command == "history":
             await state.clear()
             return await self._callback("gft:list:all:0", owner, state)
+        if command in {"pause", "unpause"}:
+            s.pause(owner, command == "pause")
+            return await self._callback("gft:settings", owner, state)
         if command == "settings":
             await state.clear()
             order, day = s.limits()
@@ -146,7 +156,15 @@ class GiftsPanel:
                 + "\nПлатёжный допуск: "
                 + ("включён" if s.settings.payment_enabled else "выключен")
                 + "\nАвтовозврат: "
-                + ("разрешён с проверками" if s.settings.refund_enabled else "выключен"),
+                + ("разрешён с проверками" if s.settings.refund_enabled else "выключен")
+                + "\nВременная пауза: "
+                + ("да" if self.store.setting("gifts:paused", False) else "нет")
+                + "\nЭкстренная остановка: "
+                + (
+                    "да — требуется отдельное разрешение"
+                    if self.store.setting("gifts:stopped", True)
+                    else "нет"
+                ),
                 keyboard(
                     [
                         [("🔄 Проверить подключение и баланс", "gft:refresh")],
@@ -154,6 +172,9 @@ class GiftsPanel:
                         [("Лимиты расходов", "gft:limits")],
                         [("Проверить метку в описании", "gft:description")],
                         [("⛔ Остановить выдачу", "gft:stop")],
+                        [("▶️ Снять временную паузу", "gft:unpause")]
+                        if self.store.setting("gifts:paused", False)
+                        else [("⏸ Временная пауза покупок", "gft:pause")],
                         *(
                             [[("▶️ Разрешить новые покупки", "gft:resume")]]
                             if self.store.setting("gifts:stopped", True)

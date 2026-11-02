@@ -267,12 +267,20 @@ class GiftService:
             and getattr(self.api.account, "writes_enabled", False)
             and getattr(self.api.account, "automation_enabled", False)
             and not self.store.setting("gifts:stopped", True)
+            and not self.store.setting("gifts:paused", False)
             and bool(self.store.setting("orders:last_complete_sync"))
             and self.store.setting("sync:health", {}).get("status") != "ERROR"
             and not self.store.rows(
                 "SELECT 1 FROM gift_jobs WHERE state='UNCERTAIN' OR refund_state='UNCERTAIN' LIMIT 1"
             )
         )
+
+    def pause(self, owner, paused):
+        """Temporary admission gate, distinct from the destructive emergency STOP."""
+        self.owner(owner)
+        with self.store.transaction():
+            self.store.set_setting("gifts:paused", bool(paused))
+            self.store.set_setting("gifts:stop_revision", self.store.setting("gifts:stop_revision", 0) + 1)
 
     def stop(self, owner):
         self.owner(owner)
@@ -327,6 +335,8 @@ class GiftService:
             raise GiftValidationError(
                 "Подарочная выдача остановлена. Явно разрешите новые покупки в настройках подарков"
             )
+        if self.store.setting("gifts:paused", False):
+            raise GiftValidationError("Действует временная пауза подарков. Снимите её в настройках подарков")
         data = await self.inspect_item(owner, item_id)
         self.settings.require_configured()
         disabled = []
@@ -353,6 +363,7 @@ class GiftService:
                 or row["description_sha256"] != data["hash"]
                 or row["gift_code"] != data["code"]
                 or row["enabled"]
+                and logical_arm is None
             ):
                 raise Conflict("Привязка изменилась; подтвердите код и цену заново")
             if json.loads(row["bundle"]) != self.catalog_bundle(data["code"]):
@@ -916,6 +927,8 @@ class GiftService:
             reasons.append("глобальная автоматика выключена")
         if self.store.setting("gifts:stopped", True):
             reasons.append("общая остановка подарков")
+        if self.store.setting("gifts:paused", False):
+            reasons.append("временная пауза подарочных покупок; настройки товаров сохранены")
         if not self.store.setting("orders:last_complete_sync"):
             reasons.append("сверка заказов не завершена")
         if self.store.setting("sync:health", {}).get("status") == "ERROR":

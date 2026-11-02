@@ -503,11 +503,14 @@ async def test_two_concurrent_orders_payment_lock_and_explicit_safe_retry(rig):
     r.api.gift_sender.pay = slow_pay
     first = asyncio.create_task(r.worker.once())
     await entered.wait()
+    spending = next(i for i in ("order", "order2") if r.service.job(i)["state"] == "SPENDING")
+    waiting = next(i for i in ("order", "order2") if i != spending)
     await r.worker.once()
-    assert r.service.job("order2")["error_code"] == "PAYMENT_LOCKED"
+    assert r.service.job(waiting)["error_code"] == "PAYMENT_LOCKED"
+    assert r.service.job(spending)["state"] == "SPENDING"
     release.set()
     await first
-    r.service.retry_preflight(7, "order2")
+    r.service.retry_preflight(7, waiting)
     await r.worker.once()
     assert len(r.remote.payments) == 2
     assert all(r.service.job(i)["state"] == "SUCCEEDED" for i in ["order", "order2"])

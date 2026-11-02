@@ -199,6 +199,11 @@ class Automation:
         if policy.enabled and policy.auto_enroll and future_confirmed is not True:
             raise ValidationError("Нужно отдельно подтвердить автоматическую выдачу будущим заказам")
         item = await self.item(actor, ident)
+        if logical_arm is not None:
+            from app.services.logical_products import LogicalProducts
+
+            logical = LogicalProducts(self.store, self.api)
+            logical.verify_listing(logical.product(logical_arm["product_id"], actor), item)
         if stock_resume and (
             item.get("deleted_at")
             or item.get("status") not in {"DRAFT", "APPROVED", "PENDING_APPROVAL", "PENDING_MODERATION"}

@@ -27,9 +27,11 @@ class LogicalProductWorker:
         async with self.store.logical_scan_lock:
             return await self.scan()
 
-    async def scan(self):
+    async def scan(self, *, product_id=None):
         products = self.store.rows(
-            "SELECT * FROM logical_products WHERE enabled=1 AND inherit_enabled=1 AND state='VERIFIED'"
+            "SELECT * FROM logical_products WHERE state='VERIFIED' AND "
+            + ("id=?" if product_id else "enabled=1 AND inherit_enabled=1"),
+            (product_id,) if product_id else (),
         )
         if not products:
             return 0
@@ -206,6 +208,10 @@ class LogicalProductWorker:
                 self.problem(product, "DUPLICATE_ACTIVE_MARKER")
                 continue
             for item in candidates:
+                if product_id and not self.service.listing(item["id"]):
+                    # An explicit binding recovery can verify existing aliases,
+                    # never adopt a new item or enable an execution projection.
+                    continue
                 try:
                     # A separate fresh read confirms the selected object after
                     # the catalog scan; existing aliases are also rechecked.

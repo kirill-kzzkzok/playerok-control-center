@@ -96,8 +96,8 @@ class LogicalProductsPanel:
             else:
                 try:
                     self.service.verify_listing(product, item)
-                except ValueError:
-                    text += "\n⚠️ Параметры объявления изменились. Повторно проверьте привязку."
+                except ValueError as exc:
+                    text += "\n⚠️ " + escaped(str(exc), 300)
                 else:
                     text += "\nОписание подтверждено Playerok"
                 text += "\nНаследование перевыставлений: " + (
@@ -116,7 +116,12 @@ class LogicalProductsPanel:
             )
             if product["enabled"] or active_projection:
                 rows.append([("⛔ Остановить выдачу товара", prefix + "stop")])
-            elif product["state"] == "VERIFIED" and product["handler"] != "manual" and not platform:
+            if (
+                (not product["enabled"] or not active_projection)
+                and product["state"] == "VERIFIED"
+                and product["handler"] != "manual"
+                and not platform
+            ):
                 rows.append([("▶️ Включить выдачу", prefix + "arm")])
             rows += [
                 [("Изменить настройки", "platform:item:" + item_id if platform else prefix + "configure")],
@@ -169,7 +174,7 @@ class LogicalProductsPanel:
         from app.services.product_readiness import ProductReadiness
 
         result = await ProductReadiness(self.store, self.api).check(owner, item_id, for_arm=True)
-        return [p["text"] for p in result["problems"] if p["blocking"]]
+        return [p for p in result["problems"] if p["blocking"]]
 
     async def callback(self, action, owner, state):
         parts = action.split(":")
@@ -213,7 +218,7 @@ class LogicalProductsPanel:
             view = (await state.get_data())["logical_view"]
             if parts[1] == "ready" and view.get("product"):
                 product = self.service.product(view["product"], owner)
-                if not product["enabled"] and product["handler"] != "manual":
+                if product["handler"] != "manual":
                     return await self.callback("lp:" + view["nonce"] + ":arm", owner, state)
             return result
         if len(parts) not in {3, 4} or parts[0] != "lp":
@@ -398,11 +403,11 @@ class LogicalProductsPanel:
             problems = await self.readiness(owner, product, view["item"])
             if problems:
                 return "🔴 <b>Запуск пока невозможен</b>\n" + "\n".join(
-                    "• " + reason for reason in problems
+                    "• " + escaped(reason["text"], 400) for reason in problems
                 ), keyboard(
                     [
-                        [("Исправить настройки товара", "lp:item:" + view["item"])],
-                        [("Подключения", "profile"), ("Настройки подарков", "gft:settings")],
+                        *[[p["action"]] for p in problems],
+                        [("Изменить настройки", prefix + "configure")],
                     ],
                     back=("К товару", "item:" + view["item"]),
                 )

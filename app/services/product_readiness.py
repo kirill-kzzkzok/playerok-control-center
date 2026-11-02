@@ -57,7 +57,10 @@ class ProductReadiness:
             else {"stock": "unique_stock", "text": "fixed_text"}.get(policy.mode, "manual")
         )
         unconfigured = not revision and not product and not gift
-        enabled = bool(gift["enabled"]) if mode == "telegram_gifts" and gift else bool(policy.enabled)
+        projection_enabled = (
+            bool(gift["enabled"]) if mode == "telegram_gifts" and gift else bool(policy.enabled)
+        )
+        enabled = bool(product["enabled"]) if product else projection_enabled
         problems = []
 
         def add(code, text, label, route, *, unknown=False, terminal=False, blocking=True):
@@ -181,19 +184,19 @@ class ProductReadiness:
             if complete_item and product["state"] == "VERIFIED":
                 try:
                     self.logical.verify_listing(product, item)
-                except (Conflict, ValueError):
+                except (Conflict, ValueError) as exc:
                     add(
                         "ITEM_CHANGED",
-                        "Описание или параметры товара изменились. Подтвердите привязку заново.",
+                        str(exc),
                         "Проверить объявление",
                         "lp:item:" + ident,
                     )
-            if enabled and not product["enabled"] and not for_arm:
+            if not for_arm and enabled != projection_enabled:
                 add(
-                    "PRODUCT_STOP",
-                    "Выдача остановлена в настройках товара.",
-                    "Настроить выдачу",
-                    "iv:delivery:" + ident,
+                    "PROJECTION_MISMATCH",
+                    "Разрешения товара и способа выдачи расходятся. Подтвердите включение заново либо остановите товар.",
+                    "Восстановить разрешение выдачи",
+                    "lp:ready:" + ident,
                 )
         if item and (item.get("status") and item.get("status") != "APPROVED" or item.get("deleted_at")):
             add(
@@ -301,6 +304,13 @@ class ProductReadiness:
                     "GIFTS_STOP",
                     "Действует общая остановка подарочных покупок.",
                     "Управление подарками",
+                    "gft:settings",
+                )
+            if self.store.setting("gifts:paused", False):
+                add(
+                    "GIFTS_PAUSE",
+                    "Подарочные покупки временно приостановлены. Настройки товаров сохранены.",
+                    "Снять временную паузу",
                     "gft:settings",
                 )
             if self.store.rows(
@@ -463,6 +473,13 @@ class ProductReadiness:
                         cached_items.clear()
                     cached_items[cache_key] = item
                     product = self.logical.listing(ident)
+                    if product and product["error_code"] == "RELIST_CONFIRMATION_REQUIRED":
+                        from app.workers.logical_products import LogicalProductWorker
+
+                        # Clear an old scan blocker only through a complete
+                        # catalogue/duplicate check and a second server read.
+                        self.logical.verify_listing(product, item)
+                        await LogicalProductWorker(self.store, self.api).scan(product_id=product["id"])
                     _, policy = self.automation.get(ident)
                     gift = self.gifts.listing(ident)
                     if (

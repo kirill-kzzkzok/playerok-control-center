@@ -111,17 +111,9 @@ class LogicalProducts:
             return None
         if listing["state"] == "LEGACY" or len(listing["code"]) != 3:
             raise Conflict("Требуется перенос постоянного кода в название товара")
-        if (
-            listing["handler"] != "telegram_gifts"
-            or listing["state"] != "VERIFIED"
-            or not listing["verified_at"]
-            or listing["revision"] != listing["config_revision"]
-            or marker(item.get("name")) != listing["code"]
-            or marked_title(item["name"], listing["code"]) != listing["title_snapshot"]
-            or critical(item) != json.loads(listing["baseline"])
-            or digest(item["description"]) != listing["description_sha256"]
-        ):
+        if listing["handler"] != "telegram_gifts":
             raise Conflict("Постоянный код или настройки подарочного товара изменились")
+        self.verify_listing(listing, item)
         return json.loads(listing["config"])["code"]
 
     def migrate_legacy(self):
@@ -631,6 +623,23 @@ class LogicalProducts:
 
     def verify_listing(self, product, item):
         link = self.listing(item.get("id"))
+        actual = critical(item)
+        baseline = json.loads(product["baseline"])
+        # RUB sale price is not delivery identity or the approved Stars cost.
+        # Keep the original snapshot for audit; callers obtain fresh server data.
+        for key, label in {
+            "account": "владелец",
+            "category": "категория",
+            "obtaining": "способ получения",
+            "name": "постоянный код",
+            "fields": "характеристики или поля получения",
+        }.items():
+            if actual.get(key) != baseline.get(key):
+                raise Conflict("Изменились " + label + ". Проверьте настройки и подтвердите привязку заново")
+        if link and marked_title(item["name"], product["code"]) != link["title_snapshot"]:
+            raise Conflict("Изменилось название товара. Проверьте настройки и подтвердите привязку заново")
+        if link and digest(item["description"]) != link["description_sha256"]:
+            raise Conflict("Изменилось описание товара. Проверьте настройки и подтвердите привязку заново")
         if (
             product["state"] != "VERIFIED"
             or len(product["code"]) != 3
@@ -640,7 +649,6 @@ class LogicalProducts:
             or link["config_revision"] != product["revision"]
             or marker(item.get("name")) != product["code"]
             or marked_title(item["name"], product["code"]) != link["title_snapshot"]
-            or critical(item) != json.loads(product["baseline"])
             or digest(item["description"]) != link["description_sha256"]
         ):
             raise Conflict("Код, описание или критичные параметры товара не подтверждены")
@@ -652,9 +660,12 @@ class LogicalProducts:
         self.authority(owner, product["account_id"], writes=True)
         if not getattr(self.api.account, "automation_enabled", False):
             raise Conflict("Автоматизация выключена в настройках подключения")
-        if product["revision"] != revision or product["enabled"] or product["handler"] == "manual":
+        if product["revision"] != revision or product["handler"] == "manual":
             raise Conflict("Настройки изменились, выдача уже включена или выбран ручной режим")
-        item = await self.api.call("get_item", id=item_id or product["stock_item_id"])
+        ident = item_id or product["stock_item_id"]
+        item = await self.api.call("get_item", id=ident)
+        if item.get("id") != ident:
+            raise Conflict("Playerok вернул другое объявление. Обновите карточку товара")
         self.verify_listing(product, item)
         if item.get("status") != "APPROVED":
             raise Conflict("Включение доступно для опубликованного товара")
@@ -664,11 +675,24 @@ class LogicalProducts:
             "revision": revision,
             "control_revision": product["control_revision"],
             "inherit": bool(inherit),
+            "expected_enabled": product["enabled"],
         }
         if product["handler"] == "telegram_gifts":
             gifts = self.gift_service()
-            await gifts.bind(owner, item["id"], config["code"], expected_bundle=config["bundle"])
             listing = gifts.listing(item["id"])
+            if listing and listing["enabled"]:
+                if (
+                    listing["gift_code"] != config["code"]
+                    or json.loads(listing["bundle"]) != config["bundle"]
+                ):
+                    raise Conflict(
+                        "Состав подарков расходится с привязкой. Остановите выдачу и подтвердите настройки"
+                    )
+                if product["enabled"]:
+                    raise Conflict("Выдача уже включена. Обновите карточку")
+            else:
+                await gifts.bind(owner, item["id"], config["code"], expected_bundle=config["bundle"])
+                listing = gifts.listing(item["id"])
             await gifts.arm(
                 owner,
                 item["id"],
@@ -688,7 +712,9 @@ class LogicalProducts:
                 mark_sent=config.get("mark_sent", False),
             )
             automation = Automation(self.store, self.api)
-            old_revision, _ = automation.get(item["id"])
+            old_revision, old_policy = automation.get(item["id"])
+            if product["enabled"] and old_policy.enabled:
+                raise Conflict("Выдача уже включена. Обновите карточку")
             await automation.save(
                 owner,
                 item["id"],
@@ -711,7 +737,7 @@ class LogicalProducts:
             not getattr(self.api.account, "automation_enabled", False)
             or product["revision"] != context["revision"]
             or product["control_revision"] != context["control_revision"]
-            or product["enabled"]
+            or product["enabled"] != context.get("expected_enabled", 0)
             or product["state"] != "VERIFIED"
             or not link
             or link["id"] != product["id"]
@@ -736,14 +762,16 @@ class LogicalProducts:
                 {**config.get("options", {}), "after": config.get("after", "")},
             )
         changed = db.execute(
-            "UPDATE logical_products SET enabled=1,inherit_enabled=?,armed_at=?,updated_at=? WHERE id=? AND revision=? AND control_revision=? AND enabled=0",
+            "UPDATE logical_products SET enabled=1,inherit_enabled=?,armed_at=?,updated_at=?,control_revision=control_revision+? WHERE id=? AND revision=? AND control_revision=? AND enabled=?",
             (
                 int(context["inherit"]),
                 cutoff,
                 now(),
+                int(bool(context.get("expected_enabled", 0))),
                 product["id"],
                 context["revision"],
                 context["control_revision"],
+                context.get("expected_enabled", 0),
             ),
         ).rowcount
         if changed != 1:
@@ -763,10 +791,18 @@ class LogicalProducts:
         """Called only with a completed account scan; never discover or spend here."""
         product = self.product(product_id, owner)
         self.authority(owner, product["account_id"], writes=True)
-        if not product["enabled"] or not product["inherit_enabled"] or product["state"] != "VERIFIED":
+        existing = self.listing(item.get("id"))
+        if existing:
+            self.verify_listing(product, item)
+        if (
+            product["state"] != "VERIFIED"
+            or not existing
+            and (not product["enabled"] or not product["inherit_enabled"])
+        ):
             raise Conflict("Автоматическое наследование для этого товара не разрешено")
         if (
-            critical(item) != json.loads(product["baseline"])
+            not existing
+            and critical(item) != json.loads(product["baseline"])
             or marker(item.get("name")) != product["code"]
             or item.get("status") not in ({"APPROVED", "SOLD"} if paid_order else {"APPROVED"})
             or item.get("deleted_at")
