@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.methods import EditMessageText
 
 from app.database.store import Store
@@ -45,10 +45,13 @@ async def test_rejected_notification_edit_is_terminal_without_losing_history(tmp
     store.close()
 
 
-async def test_definite_bad_content_does_not_leave_editing_pending(tmp_path):
+@pytest.mark.parametrize("limited", [False, True])
+async def test_definite_bad_content_does_not_leave_editing_pending(tmp_path, limited):
     class Reject(TelegramSession):
         async def make_request(self, bot, method, timeout=None):
             if method.__api_method__ == "editMessageText":
+                if limited:
+                    raise TelegramRetryAfter(method=method, message="slow down", retry_after=30)
                 raise TelegramBadRequest(method=method, message="can't parse entities: private text")
             return await super().make_request(bot, method, timeout)
 
@@ -59,7 +62,7 @@ async def test_definite_bad_content_does_not_leave_editing_pending(tmp_path):
     await ui.click("home")
     try:
         await ui.click("diagnostics")
-    except TelegramBadRequest:
+    except (TelegramBadRequest, TelegramRetryAfter):
         pass
     assert not store.setting("navigation:123:7").get("editing")
     assert not store.rows("SELECT * FROM outbox")
@@ -157,4 +160,59 @@ async def test_wizard_entry_preserves_previous_fsm_on_data_write_failure(tmp_pat
         await Wizard(store, CatalogAPI(), Products(store, CatalogAPI())).start(7, state)
     assert await state.get_state() == "previous"
     assert await state.get_data() == {"context": "previous"}
+    store.close()
+
+
+def test_warning_window_keeps_separate_causes_and_total_count(caplog, monkeypatch):
+    import logging
+
+    from app.telegram.transport import TelegramNetworkSession
+
+    clock = [0.0]
+    monkeypatch.setattr("app.telegram.transport.time.monotonic", lambda: clock[0])
+    session = TelegramNetworkSession()
+
+    def emit(code):
+        state, token, started = session._begin("getUpdates")
+        if code:
+            state["error_code"] = code
+        session._finish(state, token, started, "TelegramNetworkError" if code else "OK")
+
+    with caplog.at_level(logging.INFO):
+        emit("NETWORK_ERROR")
+        emit("NETWORK_ERROR")
+        emit("TIMEOUT")
+        clock[0] = 31
+        emit("NETWORK_ERROR")
+        emit(None)
+    assert sum("Проблема Telegram сохраняется" in r.message for r in caplog.records) == 1
+    assert "3 повторов" in caplog.text
+    assert "3 неудачных" in caplog.text and "1 неудачных" in caplog.text
+    assert len(caplog.records) == 5
+
+
+async def test_unknown_notification_rejection_has_finite_refresh_budget(tmp_path):
+    store = Store(tmp_path / "budget.sqlite")
+    store.claim_first_owner(7)
+    store.set_setting("sync:health", {"status": "OK"})
+    store.set_setting("notifications:initialized", True)
+    orders = Orders(store)
+    orders.ingest_message("chat", {"id": "m", "text": "before"})
+    bot = SimpleNamespace(
+        send_message=AsyncMock(return_value=SimpleNamespace(message_id=1)),
+        edit_message_text=AsyncMock(
+            side_effect=TelegramBadRequest(
+                method=EditMessageText(text="x", chat_id=7, message_id=1),
+                message="unexpected private response",
+            )
+        ),
+    )
+    worker = Notifications(store, bot)
+    await worker.once()
+    orders.ingest_message("chat", {"id": "m", "text": "after"})
+    for _ in range(10):
+        store.execute("UPDATE notifications SET refresh_after=0")
+        await worker.refresh_messages()
+    assert bot.edit_message_text.await_count == 8
+    assert store.rows("SELECT status FROM notifications") == [{"status": "SUCCEEDED"}]
     store.close()

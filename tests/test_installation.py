@@ -56,11 +56,12 @@ def test_backup_closes_target_connection_instead_of_only_committing(tmp_path, mo
     try:
         backup = tmp_path / "backup.sqlite"
         store.backup(backup)
-        assert len(targets) == 1
+        assert len(targets) == 2  # Independent read-only source and backup target.
         import pytest
 
-        with pytest.raises(sqlite3.ProgrammingError):
-            targets[0].execute("SELECT 1")
+        for connection in targets:
+            with pytest.raises(sqlite3.ProgrammingError):
+                connection.execute("SELECT 1")
         backup.unlink()  # Also verifies Windows releases its handle immediately.
     finally:
         store.close()

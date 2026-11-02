@@ -136,7 +136,7 @@ class TelegramNetworkSession(AiohttpSession):
         self.results[state["method"]] = state
         # Structured evidence remains available in results; no URL/payload or raw errors.
         logging.getLogger(__name__).debug(
-            "Telegram request_id=%s method=%s route=%s host=%s seconds=%s http=%s connection=%s outcome=%s cause=%s",
+            "Telegram request_id=%s method=%s route=%s host=%s seconds=%s http=%s connection=%s outcome=%s cause=%s retry_after=%s",
             state["request_id"],
             state["method"],
             self.route,
@@ -146,6 +146,7 @@ class TelegramNetworkSession(AiohttpSession):
             state.get("connection"),
             outcome,
             state.get("error_code", state.get("blocked", "-")),
+            state.get("retry_after", 0),
         )
         code = state.get("error_code") or state.get("blocked") or outcome
         # Expected no-op and outer ACK cancellation aren't connection outages.
@@ -187,6 +188,8 @@ class TelegramNetworkSession(AiohttpSession):
                 "downloadFile": "загрузка файла",
             }
             text += " · " + names.get(state["method"], "запрос API")
+            if code == "RATE_LIMITED":
+                text += f" · ожидание {state.get('retry_after', 0)} с"
             if code == "UNKNOWN_TELEGRAM_ERROR":
                 text += " · диагностика " + state["request_id"]
             event("WARNING", text, level=logging.WARNING)
@@ -207,6 +210,7 @@ class TelegramNetworkSession(AiohttpSession):
             raise TelegramNetworkError(method=method, message="Local SOCKS transport unavailable") from None
         except Exception as error:
             state["error_code"] = telegram_error(error)
+            state["retry_after"] = getattr(error, "retry_after", 0)
             cause = state.get("network_error", "")
             if cause in {"ClientConnectorDNSError"}:
                 state["error_code"] = "DNS_ERROR"
@@ -237,6 +241,7 @@ class TelegramNetworkSession(AiohttpSession):
             ) from None
         except Exception as error:
             state["error_code"] = telegram_error(error)
+            state["retry_after"] = getattr(error, "retry_after", 0)
             cause = state.get("network_error", "")
             if cause in {"ClientConnectorDNSError"}:
                 state["error_code"] = "DNS_ERROR"

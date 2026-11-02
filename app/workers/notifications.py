@@ -269,7 +269,7 @@ class Notifications:
                 )
             except TelegramBadRequest as error:
                 if telegram_error(error) != "MESSAGE_NOT_MODIFIED":
-                    terminal = telegram_error(error) in TERMINAL_EDIT
+                    terminal = telegram_error(error) in TERMINAL_EDIT or row["refresh_failures"] + 1 >= 8
                     self.store.execute(
                         "UPDATE notifications SET refresh_after=?,refresh_failures=? WHERE event_key=? AND owner_id=?",
                         (
@@ -283,11 +283,16 @@ class Notifications:
                         row["owner_id"], "NOTIFICATION_UPDATE", row["event_key"], telegram_error(error)
                     )
                     continue
-            except Exception:  # noqa: BLE001 -- only idempotent edits; no new message
+            except Exception as error:  # noqa: BLE001 -- only idempotent edits; no new message
                 self.store.execute(
-                    "UPDATE notifications SET refresh_after=?,refresh_failures=refresh_failures+1 WHERE event_key=? AND owner_id=?",
+                    "UPDATE notifications SET refresh_after=?,refresh_failures=? WHERE event_key=? AND owner_id=?",
                     (
-                        time.time() + min(3600, 5 * 2 ** min(row["refresh_failures"] + 1, 10)),
+                        time.time()
+                        + max(
+                            min(3600, 5 * 2 ** min(row["refresh_failures"] + 1, 10)),
+                            getattr(error, "retry_after", 0),
+                        ),
+                        -1 if row["refresh_failures"] + 1 >= 8 else row["refresh_failures"] + 1,
                         row["event_key"],
                         row["owner_id"],
                     ),
@@ -404,7 +409,11 @@ class Notifications:
 
     def defer_update(self, notification, actions, error):
         for action in actions:
-            failures = -1 if telegram_error(error) in TERMINAL_EDIT else action["failures"] + 1
+            failures = (
+                -1
+                if telegram_error(error) in TERMINAL_EDIT or action["failures"] + 1 >= 8
+                else action["failures"] + 1
+            )
             delay = max(min(3600, 5 * 2 ** min(failures, 10)), getattr(error, "retry_after", 0))
             self.store.execute(
                 "UPDATE notification_actions SET retry_after=?,failures=? WHERE operation_id=? AND event_key=? AND owner_id=?",

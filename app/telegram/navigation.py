@@ -7,7 +7,7 @@ import secrets
 import time
 from copy import deepcopy
 
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.types import InputMediaPhoto
 
 from app.database.store import Conflict
@@ -335,6 +335,8 @@ class Navigation:
                     level=30,
                 )
                 return await self.recovery_prompt(message, owner)
+            if panel.get("ui_retry_at", 0) > time.time():
+                return message  # Explicit Telegram flood limit; no blind resend/re-execution.
             view = deepcopy(proposal or {name: panel.get(name) for name in ("route", "history", "context")})
             view["context"] = {k: v for k, v in (await state.get_data()).items() if k in CONTEXT}
             markup = reply_markup.model_copy(deep=True) if reply_markup else keyboard([], home=False)
@@ -421,6 +423,14 @@ class Navigation:
                     )
                 else:
                     result = None
+            except TelegramRetryAfter as error:
+                panel["editing"] = False
+                panel["ui_error"] = "RATE_LIMITED"
+                panel["ui_retry_at"] = time.time() + error.retry_after
+                for name in ("pending_view", "pending_markup", "pending_kind", "pending_token"):
+                    panel.pop(name, None)
+                self.store.set_setting(key, panel)
+                raise
             except TelegramBadRequest as error:
                 if "message is not modified" in error.message.lower():
                     result = message

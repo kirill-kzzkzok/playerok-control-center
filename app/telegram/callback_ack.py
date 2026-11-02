@@ -78,6 +78,11 @@ def navigation(action):
     } or action.startswith(
         (
             "item:",
+            "rd:check:",
+            "rd:balance:",
+            "lp:method:",
+            "lp:messages:",
+            "lp:completion:",
             "draft:",
             "finance:",
             "fin:options:",

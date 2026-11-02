@@ -129,7 +129,19 @@ class PlayerokProxy:
                 pass
             current = self.state.get("state")
             if current != previous:
-                event("INFO" if current == "READY" else "WARNING", "Playerok Proxy: " + current)
+                ready = current == "READY" and self.ready
+                labels = {
+                    "STARTING": "Telegram-прокси запускается",
+                    "DEGRADED": "Telegram-прокси недоступен · новые запросы заблокированы",
+                    "RECOVERING": "Telegram-прокси восстанавливает маршрут",
+                    "STOPPED": "Telegram-прокси остановлен",
+                }
+                text = (
+                    "Telegram-прокси: проверенный маршрут восстановлен"
+                    if ready
+                    else labels.get(current, "Telegram-прокси требует проверки")
+                )
+                event("INFO" if ready else "WARNING", text, level=20 if ready else 30)
                 previous = current
 
     async def __aenter__(self):

@@ -211,3 +211,25 @@ async def test_partial_catalog_card_is_unknown_not_changed_description(shop):
     codes = {p["code"] for p in result["problems"]}
     assert "ITEM_CHANGED" not in codes
     assert "ITEM_UNCHECKED" in codes and result["state"] == "UNKNOWN"
+
+
+async def test_readiness_check_remains_readonly_and_reachable_after_lost_ack(shop):
+    from aiogram.exceptions import TelegramNetworkError
+
+    r = await shop()
+    await configure(r)
+    r.ui.dp = production_dispatcher(r.store, r.api)
+    await r.ui.message("/status")
+    original = r.session.make_request
+
+    async def no_ack(bot, method, timeout=None):
+        if method.__api_method__ == "answerCallbackQuery":
+            raise TelegramNetworkError(method=method, message="lost ACK")
+        return await original(bot, method, timeout)
+
+    r.session.make_request = no_ack
+    before = r.store.rows("SELECT id,status FROM outbox")
+    await r.ui.click("rd:check:lot")
+    assert "Проверка готовности" in r.session.last_panel.text
+    assert r.store.rows("SELECT id,status FROM outbox") == before
+    assert not r.api.messages and not r.api.remote.payments

@@ -14,7 +14,7 @@ def telegram_error(error):
     if isinstance(error, TimeoutError):
         return "TIMEOUT"
     if isinstance(error, TelegramNetworkError):
-        return "NETWORK_ERROR"
+        return "TIMEOUT" if "request timeout error" in error.message.lower() else "NETWORK_ERROR"
     if isinstance(error, TelegramBadRequest):
         text = error.message.lower()
         for code, phrases in (

@@ -50,3 +50,51 @@ DEBUG включается PCC_LOG_LEVEL=DEBUG в окружении запус�
 - Не подтверждены live latency, поведение конкретного рабочего узла localVPN и настоящие серверные ответы Telegram/Playerok. Новых маршрутов/fallback, зависимостей или платных разрешений нет.
 
 Проверка владельцем: перезапустить start.bat; /status → товар → Проверить готовность → назад; открыть результат операции и /start. Диагностика не отправляет товар и не меняет лоты. Для нового просмотра результата после удалённой панели используйте /start и существующую историю операций. Старые отложенные заказы требуют отдельного решения владельца и не стартуют сами после15мин.
+
+## Итоговые уточнения
+Read-only маршруты rd:check/balance и локальные экраны настройки доступны при потерянном ACK; mutating permissions не расширены. Явный429 не оставляет editing и соблюдает cooldown, timeout не обнуляет unknown. Неизвестные повторные notification refresh прекращаются после8попыток, история и результаты сохранены. Первый полный прогон1726passed/2failed за560.04s выявил устаревшее ожидание1backupconnection и неверный порядок timestamp в положительном fixture; проверки закрытия source+target и реального возраста receipt сохранены. Это не зелёная итоговая приёмка; окончательный результат проверяется отдельно.
+
+Последний адресный regression:67passed/exit0/35.37s. Ruffcheck/format302files,compileall,pipcheck,selfcheck — exit0; schema1..28/tempbackup/integrity/FK и external_requests0. Финальная полная приёмка сохраняется в data/stability-acceptance-pytest.txt; итоговый CI доступен в Offline acceptance на GitHub. Фактический итог полного набора и URL CI приводятся в сообщении сдачи, не подменяются фазовыми результатами.
+
+Коммиты этапов: [Telegram и логи](https://github.com/kirill-kzzkzok/playerok-control-center/commit/09ca742), [измерения и оптимизация](https://github.com/kirill-kzzkzok/playerok-control-center/commit/35eabfe), [функциональные переходы](https://github.com/kirill-kzzkzok/playerok-control-center/commit/bbeeb6a). Финальный follow-up включает ACK/RetryAfter и последние regression fixes.
+
+### Изменённые файлы
+- `PROGRESS.md`
+- `README.md`
+- `TELEGRAM_STABILITY_REPORT.md`
+- `TELEGRAM_STABILITY_SPEC.md`
+- `app/__main__.py`
+- `app/database/migrations/028_ui_lookup_indexes.sql`
+- `app/database/store.py`
+- `app/localvpn.py`
+- `app/playerok/thread_calls.py`
+- `app/security/logging.py`
+- `app/services/agreements.py`
+- `app/services/catalog.py`
+- `app/services/listing_launch.py`
+- `app/telegram/callback_ack.py`
+- `app/telegram/drafts_panel.py`
+- `app/telegram/errors.py`
+- `app/telegram/launch_panel.py`
+- `app/telegram/listings_panel.py`
+- `app/telegram/navigation.py`
+- `app/telegram/operation_results.py`
+- `app/telegram/router.py`
+- `app/telegram/storage.py`
+- `app/telegram/transport.py`
+- `app/telegram/wizard.py`
+- `app/telemetry.py`
+- `app/workers/enrollment.py`
+- `app/workers/notifications.py`
+- `app/workers/outbox.py`
+- `tests/test_auto_agreements.py`
+- `tests/test_console_logging.py`
+- `tests/test_enrollment.py`
+- `tests/test_fix_observability.py`
+- `tests/test_installation.py`
+- `tests/test_listing_launch.py`
+- `tests/test_product_readiness.py`
+- `tests/test_reconciliation.py`
+- `tests/test_telegram_integration.py`
+- `tests/test_telegram_stability.py`
+- `tests/test_ui_performance.py`

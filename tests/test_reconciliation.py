@@ -200,6 +200,9 @@ async def test_delivery_confirmation_updates_quarantine_atomically_but_does_not_
     store, api, service = setup
     order, ident, expected = delivery(store)
     messages = api.call.return_value
+    # This is a delivered receipt, so create its timestamp after the operation.
+    # Fixture setup before reserve can cross a wall-clock second under full-suite load.
+    messages["messages"][0]["created_at"] = now()
     api.call.side_effect = lambda method, **kwargs: order if method == "get_deal" else messages
     await service.resolve(1, ident, expected, "CONFIRM_MESSAGE", "Код в моём сообщении совпадает", "sent")
     assert store.rows("SELECT status FROM inventory")[0]["status"] == "DELIVERED"
