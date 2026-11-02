@@ -415,3 +415,34 @@ async def test_automatic_migration_surfaces_blockers_in_telegram_without_confirm
     assert "Проблемы переноса" in text
     assert "ограничения" in text
     assert not api.mutations
+
+
+@pytest.mark.parametrize("change", ["service_separator", "body", "leading"])
+async def test_readonly_reconcile_accepts_only_removed_legacy_separator_not_user_text(legacy, change):
+    store, api, service = legacy
+    original = api.account.update_item
+
+    def update(id, **changes):
+        original(id, **changes)
+        api.item["description"] = api.item["description"][:-1]
+        if change == "body":
+            api.item["description"] += "changed"
+        if change == "leading":
+            api.item["description"] = " " + api.item["description"]
+        return dict(api.item)
+
+    api.account.update_item = update
+    service.queue(7, await service.prepare(7))
+    worker = OutboxWorker(store, Executor(store, api, Products(store, api)))
+    await worker.once()
+    assert store.rows("SELECT status FROM outbox") == [{"status": "UNCERTAIN"}]
+    if change == "service_separator":
+        receipt = await service.reconcile(7, "lot")
+        assert receipt["service_separator_normalized"] is True
+        service.logical.verify_listing(service.logical.product("stable"), api.item)
+        assert store.rows("SELECT status FROM outbox") == [{"status": "SUCCEEDED"}]
+    else:
+        with pytest.raises(ValueError):
+            await service.reconcile(7, "lot")
+    assert len(api.mutations) == 1
+    assert not await worker.once()

@@ -529,3 +529,70 @@ async def test_stopped_paid_operation_can_still_be_reconciled_to_success(rig):
     )
     assert r.store.rows("SELECT status FROM promotion_expenses")[0]["status"] == "SUCCEEDED"
     assert not r.api.charges
+
+
+@pytest.mark.parametrize("fault", [None, "id", "amount", "owner", "pending", "old", "reuse"])
+async def test_sold_historical_premium_receipt_is_readonly_and_never_rebought(rig, fault):
+    from datetime import datetime, timedelta
+
+    r = rig
+    from app.services.account_binding import bind_account
+
+    bind_account(r.store, "seller")
+    r.api.read_failure = True
+    op = await enqueue(r)
+    await r.worker.once()
+    r.api.read_failure = False
+    action = r.store.rows("SELECT * FROM outbox WHERE id=?", (op,))[0]
+    intent = r.store.setting(intent_key(op))
+    tx = {
+        "id": "receipt-1",
+        "user": {"id": "seller"},
+        "status": "CONFIRMED",
+        "direction": "OUT",
+        "operation": "ITEM_PREMIUM_PRIORITY",
+        "provider_id": "PENDING_INCOME",
+        "value": 10,
+        "created_at": intent["started_at"],
+    }
+    r.api.items["item"].update(
+        status="SOLD", status_payment={"id": "later-receipt", "value": 20, "status": "CONFIRMED"}
+    )
+    if fault == "id":
+        tx["id"] = "another"
+    if fault == "amount":
+        tx["value"] = 11
+    if fault == "owner":
+        tx["user"] = {"id": "other"}
+    if fault == "pending":
+        tx["status"] = "PENDING"
+    if fault == "old":
+        tx["created_at"] = (datetime.fromisoformat(intent["started_at"]) - timedelta(days=1)).isoformat()
+    if fault == "reuse":
+        r.store.set_setting(
+            "promotions:intent:another", {"operation_id": "another", "receipt_id": "receipt-1"}
+        )
+    original = r.api.call
+
+    async def boundary(method, **kwargs):
+        if method == "get_transactions":
+            return {"transactions": [deepcopy(tx)], "page_info": {"has_next_page": False}}
+        return await original(method, **kwargs)
+
+    r.api.call = boundary
+    service = Reconciliation(r.store, r.api)
+    if fault:
+        with pytest.raises((APIError, Conflict)):
+            await service.resolve(
+                7, op, signature(action), "CONFIRM_READ_STATE", "Проверка исторической оплаты"
+            )
+        assert r.store.rows("SELECT status FROM outbox WHERE id=?", (op,))[0]["status"] == "UNCERTAIN"
+    else:
+        result = await service.resolve(
+            7, op, signature(action), "CONFIRM_READ_STATE", "Проверка исторической оплаты"
+        )
+        assert result["historical_payment"] is True and result["status"] == "SOLD"
+        assert r.store.rows("SELECT status FROM promotion_expenses") == [{"status": "SUCCEEDED"}]
+        assert not r.store.setting(intent_key(op))["pending"]
+    assert len(r.api.charges) == 1
+    assert not await r.worker.once()

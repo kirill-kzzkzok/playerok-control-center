@@ -492,10 +492,27 @@ class CodeMigration:
     def confirm(self, action, observed, *, writes=True):
         product, row = self.guard(action, writes=writes)
         expected = json.loads(row["after_snapshot"])
+        actual = snapshot(observed)
+        separator_normalized = False
+        if not writes and actual != expected:
+            old = self.store.rows(
+                "SELECT old_code FROM logical_code_migrations WHERE product_id=?", (product["id"],)
+            )[0]["old_code"]
+            before = json.loads(row["before_snapshot"])["description"]
+            description = expected["description"]
+            separator = "\r\n" if description.endswith("\r\n") else "\n"
+            # Playerok can remove the final separator left by the deleted service
+            # line. Accept exactly that one boundary, never arbitrary strip().
+            separator_normalized = (
+                description.endswith(separator)
+                and before in {description + old, description + old + "\n", description + old + "\r\n"}
+                and actual["description"] == description[: -len(separator)]
+                and all(actual.get(k) == expected[k] for k in expected if k != "description")
+            )
         if (
             (observed.get("user") or {}).get("id") != product["account_id"]
             or observed.get("id") != action["target"]
-            or snapshot(observed) != expected
+            or (actual != expected and not separator_normalized)
             or title_code(observed["name"]) != product["code"]
         ):
             raise Conflict("Playerok не подтвердил точные поля переноса")
@@ -503,7 +520,8 @@ class CodeMigration:
             "product_id": product["id"],
             "item_id": row["item_id"],
             "hash": action["payload"]["code_migration"]["hash"],
-            "snapshot": expected,
+            "snapshot": actual,
+            "service_separator_normalized": separator_normalized,
             "status": observed.get("status"),
         }
 

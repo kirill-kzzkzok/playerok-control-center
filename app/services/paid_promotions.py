@@ -3,12 +3,12 @@
 import json
 import time
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from app.database.store import Conflict, now
-from app.playerok.adapter import APIError
+from app.playerok.adapter import APIError, validate_page
 from app.services.finance import money, quote_fresh
 from app.services.products import ValidationError, priority_price_basis
 from app.services.promotion_settings import PromotionSettings
@@ -475,4 +475,73 @@ class PaidPromotions:
         if not candidate:
             raise Conflict("Ответ платежа потерян. Нет однозначного ID квитанции; повтор запрещён")
         item = await self.settings.access.item(value["actor"], action["target"])
+        if item.get("status") == "SOLD":
+            return await self.historical_receipt(action, value, item, candidate)
         return self.receipt({**value, "operation_id": action["id"]}, item, candidate)
+
+    async def historical_receipt(self, action, value, item, candidate):
+        """A sold item no longer exposes the receipt of each earlier placement."""
+        from playerokapi.enums import TransactionOperations
+
+        intent = self.store.setting(intent_key(action["id"]), {})
+        try:
+            started = datetime.fromisoformat(intent["started_at"])
+            if started.tzinfo is None or candidate == value.get("before_payment_id"):
+                raise ValueError
+        except (KeyError, TypeError, ValueError):
+            raise Conflict("Не подтверждены квитанция и время начала платежа") from None
+        cursor, seen = None, []
+        for _ in range(4):
+            page = await self.api.call(
+                "get_transactions",
+                operation=TransactionOperations.ITEM_PREMIUM_PRIORITY,
+                count=24,
+                after_cursor=cursor,
+            )
+            transactions, following = validate_page(page, "transactions", seen)
+            matches = [t for t in transactions if t.get("id") == candidate]
+            if matches:
+                payment = matches[0]
+                try:
+                    created = datetime.fromisoformat(payment["created_at"])
+                    valid = (
+                        len(matches) == 1
+                        and payment.get("status") == "CONFIRMED"
+                        and payment.get("direction") == "OUT"
+                        and payment.get("operation") == "ITEM_PREMIUM_PRIORITY"
+                        and payment.get("provider_id") in {"LOCAL", "PENDING_INCOME"}
+                        and (payment.get("user") or {}).get("id")
+                        == value["account_id"]
+                        == self.api.account.id
+                        == self.store.setting("playerok:account_id")
+                        and money(payment.get("value")) == money(value["amount"])
+                        and created.tzinfo is not None
+                        and started <= created <= started + timedelta(minutes=10)
+                    )
+                except (KeyError, TypeError, ValueError):
+                    valid = False
+                if not valid:
+                    raise APIError("PREMIUM_HISTORICAL_RECEIPT_NOT_CONFIRMED", uncertain=True)
+                if self.store.rows(
+                    "SELECT 1 FROM outbox WHERE id<>? AND json_extract(result,'$.payment_id')=? LIMIT 1",
+                    (action["id"], candidate),
+                ):
+                    raise Conflict("Квитанция уже использована другой операцией")
+                for row in self.store.rows("SELECT value FROM settings WHERE key LIKE 'promotions:intent:%'"):
+                    prior = json.loads(row["value"])
+                    if prior.get("receipt_id") == candidate and prior.get("operation_id") != action["id"]:
+                        raise Conflict("Квитанция уже использована другой операцией")
+                return {
+                    "remote_id": item["id"],
+                    "name": item.get("name"),
+                    "status": item["status"],
+                    "priority": item.get("priority"),
+                    "paid_rub": str(money(payment["value"])),
+                    "payment_id": candidate,
+                    "historical_payment": True,
+                }
+            if not following:
+                break
+            cursor = following
+            seen.append(cursor)
+        raise Conflict("Историческая квитанция не найдена. Исход неизвестен; повтор платежа запрещён")
