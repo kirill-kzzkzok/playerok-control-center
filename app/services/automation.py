@@ -221,7 +221,17 @@ class Automation:
     def stop_all(self, actor):
         self.orders.owner(actor)
         with self.store.transaction() as db:
-            count = 0
+            count = db.execute(
+                "SELECT COUNT(*) FROM delivery_policies WHERE json_extract(payload,'$.enabled')=1"
+            ).fetchone()[0]
+            from app.services.logical_products import LogicalProducts
+
+            logical = LogicalProducts(self.store, self.api)
+            for product in db.execute(
+                "SELECT id FROM logical_products WHERE owner_id=? AND handler IN ('fixed_text','unique_stock') AND enabled=1",
+                (actor,),
+            ).fetchall():
+                logical.stop(actor, product["id"])
             for row in db.execute("SELECT item_id,payload FROM delivery_policies").fetchall():
                 payload = json.loads(row["payload"])
                 if payload.get("enabled"):
@@ -230,7 +240,6 @@ class Automation:
                         "UPDATE delivery_policies SET payload=?,revision=revision+1,actor=?,updated_at=? WHERE item_id=?",
                         (encode(payload), actor, now(), row["item_id"]),
                     )
-                    count += 1
             db.execute(
                 "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'STOP_ALL_DELIVERY_POLICIES','*',?,?)",
                 (actor, str(count), now()),

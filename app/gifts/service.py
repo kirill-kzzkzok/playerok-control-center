@@ -277,6 +277,14 @@ class GiftService:
     def stop(self, owner):
         self.owner(owner)
         with self.store.transaction() as db:
+            from app.services.logical_products import LogicalProducts
+
+            logical = LogicalProducts(self.store, self.api)
+            for product in db.execute(
+                "SELECT id FROM logical_products WHERE owner_id=? AND handler='telegram_gifts' AND enabled=1",
+                (owner,),
+            ).fetchall():
+                logical.stop(owner, product["id"])
             self.store.set_setting("gifts:stop_revision", self.store.setting("gifts:stop_revision", 0) + 1)
             db.execute("UPDATE gift_listings SET enabled=0,revision=revision+1")
             db.execute(

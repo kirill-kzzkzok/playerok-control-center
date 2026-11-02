@@ -153,3 +153,14 @@ async def test_intentionally_manual_product_is_not_reported_as_broken_automation
     await r.ui.click("item:lot")
     assert "Выдача: вручную" in r.session.last_panel.text
     assert "остановлена" not in r.session.last_panel.text
+
+
+@pytest.mark.parametrize("gifts", [False, True])
+async def test_global_stop_also_fences_the_permanent_product_for_a_clean_future_restart(shop, gifts):
+    r = await shop(gift=gifts)
+    await setup_ui(r, "telegram_gifts" if gifts else "fixed_text", "gift: heart" if gifts else "private-text")
+    await r.ui.click("gft:stop" if gifts else "auto:stop")
+    assert r.store.rows("SELECT enabled FROM logical_products") == [{"enabled": 0}]
+    await r.ui.click("lp:item:lot")
+    assert any(key.endswith(":arm") for key in buttons(r.session.last_panel))
+    assert not r.api.remote.payments and not r.api.messages

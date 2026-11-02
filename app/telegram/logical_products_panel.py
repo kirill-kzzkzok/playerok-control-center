@@ -161,6 +161,8 @@ class LogicalProductsPanel:
             problems.append("Запись Playerok выключена — проверьте подключения")
         if not getattr(self.api.account, "automation_enabled", False):
             problems.append("Автовыдача выключена в настройках подключения")
+        if getattr(self.api.account, "connection_verified", True) is not True:
+            problems.append("Аккаунт Playerok не подтверждён свежей проверкой — откройте профиль")
         if not self.store.setting("orders:last_complete_sync"):
             problems.append("Синхронизация заказов ещё не завершена")
         if self.store.setting("sync:health", {}).get("status") == "ERROR":
@@ -190,6 +192,10 @@ class LogicalProductsPanel:
                 "SELECT 1 FROM gift_jobs WHERE state IN ('SPENDING','UNCERTAIN') OR refund_state='UNCERTAIN' LIMIT 1"
             ):
                 problems.append("Предыдущий платёж или возврат требует сверки")
+            try:
+                await gifts.inspect_item(owner, item_id, preview_code=config["code"])
+            except (APIError, GiftFailure, ValueError, TimeoutError, ConnectionError) as error:
+                problems.append(error_text(error))
             try:
                 await gifts.refresh()
                 bundle = gifts.catalog_bundle(config["code"])

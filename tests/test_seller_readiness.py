@@ -53,3 +53,19 @@ async def test_item_offers_start_and_relisting_permission_without_claiming_platf
     assert "Наследовать настройки" in r.session.last_panel.text
     assert "Перевыставление включено" not in r.session.last_panel.text
     assert "private-text" not in r.session.last_panel.text
+
+
+async def test_gift_readiness_checks_receiving_field_before_offering_financial_confirmation(shop):
+    r = await shop(gift=True)
+    await setup_ui(r, "telegram_gifts", "gift: heart")
+    await stop(r)
+
+    async def missing_field(*args, **kwargs):
+        yield []
+
+    r.api.pages = missing_field
+    await r.ui.click("lp:item:lot")
+    await click(r, suffix=":arm")
+    assert "Запуск пока невозможен" in r.session.last_panel.text
+    assert not any(":enable:" in key for key in buttons(r.session.last_panel))
+    assert not r.api.remote.payments
