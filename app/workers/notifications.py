@@ -9,6 +9,7 @@ from aiogram.exceptions import TelegramBadRequest
 from app.database.store import encode
 from app.services.chat_events import system_event
 from app.services.notification_preferences import NotificationPreferences
+from app.telegram.chat_cards import ChatCards
 from app.telegram.errors import TERMINAL_EDIT, telegram_error
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
@@ -88,6 +89,29 @@ class Notifications:
                     )
                     continue
                 text, markup = message_notice(payload, chat_id)
+                if not event_label and chat_id:
+                    for owner in owners:
+                        user = owner["user_id"]
+                        invalid = False
+                        try:
+                            enabled = self.preferences.enabled(user, "message")
+                        except ValueError:
+                            enabled, invalid = False, True
+                            self.store.set_setting(
+                                f"notifications:{user}:preferences_error", "INVALID_PREFERENCES"
+                            )
+                        with self.store.transaction() as db:
+                            inserted = db.execute(
+                                "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) VALUES(?,?,?)",
+                                (
+                                    event["key"],
+                                    user,
+                                    "CARD" if enabled else "SUPPRESSED_INVALID" if invalid else "SUPPRESSED",
+                                ),
+                            ).rowcount
+                            if inserted and enabled:
+                                ChatCards(self.store, self.bot).touch(user, chat_id)
+                    continue
             elif event["kind"] == "order":
                 current = self.store.rows("SELECT status FROM orders WHERE id=?", (payload["id"],))
                 if not current or current[0]["status"] != payload["status"]:
@@ -250,9 +274,11 @@ class Notifications:
                         ),
                     )
 
+        await ChatCards(self.store, self.bot).flush()
+
     async def refresh_messages(self):
         rows = self.store.rows(
-            "SELECT n.*,i.payload,m.chat_id FROM notifications n JOIN inbox i ON i.key=n.event_key JOIN chat_messages m ON n.event_key='message:'||m.id WHERE n.status='SUCCEEDED' AND n.telegram_message_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM notification_actions a WHERE a.event_key=n.event_key AND a.owner_id=n.owner_id) AND n.refresh_failures>=0 AND n.refresh_after<=? LIMIT 100",
+            "SELECT n.*,i.payload,m.chat_id FROM notifications n JOIN inbox i ON i.key=n.event_key JOIN chat_messages m ON n.event_key='message:'||m.id WHERE n.status='SUCCEEDED' AND n.telegram_message_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM chat_cards c WHERE c.chat_id=m.chat_id AND c.owner_id=n.owner_id) AND NOT EXISTS(SELECT 1 FROM notification_actions a WHERE a.event_key=n.event_key AND a.owner_id=n.owner_id) AND n.refresh_failures>=0 AND n.refresh_after<=? LIMIT 100",
             (time.time(),),
         )
         for row in rows:

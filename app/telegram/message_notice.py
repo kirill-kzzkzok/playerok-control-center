@@ -9,7 +9,7 @@ def message_notice(payload, chat_id, note=""):
         return "🔔 <b>Событие Playerok</b>\n" + escaped(
             event, 300
         ) + "\nОткройте диалог и проверьте актуальную сделку.", keyboard(
-            [[("📖 Диалог", "chat:" + chat_id)]] if chat_id else []
+            [[("💬 Открыть переписку", "chat:" + chat_id)]] if chat_id else []
         )
     user = payload.get("user") or {}
     author = escaped(user.get("username") or "Неизвестный отправитель", 120)
@@ -29,13 +29,8 @@ def message_notice(payload, chat_id, note=""):
     if note:
         text += "\n\n" + note
     markup = (
-        keyboard(
-            [
-                [("✉️ Ответить", "reply:" + chat_id), ("📖 Диалог", "chat:" + chat_id)],
-                [("✅ Прочитано", "readchat:" + chat_id)],
-            ]
-        )
+        keyboard([[("✉️ Ответить", "compose:" + chat_id), ("✖️ Закрыть", "chatclose:" + chat_id)]], home=False)
         if chat_id
-        else keyboard([])
+        else keyboard([], home=False)
     )
     return text, markup

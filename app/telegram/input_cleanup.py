@@ -37,6 +37,7 @@ class InputCleanup(BaseMiddleware):
             and self.store.rows("SELECT 1 FROM administrators WHERE user_id=?", (event.from_user.id,))
             and not (event.text or "").startswith("/")
             and await state.get_state()
+            and await state.get_state() != "chatcard:reply"
         )
         token = service_input.set(event if consume else None)
         try:

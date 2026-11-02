@@ -303,7 +303,7 @@ class OperationResults:
 
     async def notify(self, bot):
         rows = self.store.rows(
-            "SELECT r.operation_id,r.owner_id,r.view_message_id,r.view_token FROM operation_receipts r JOIN outbox o ON o.id=r.operation_id WHERE r.notice_status='PENDING' AND NOT EXISTS(SELECT 1 FROM notification_actions a WHERE a.operation_id=o.id) AND o.status IN ('SUCCEEDED','UNCERTAIN','PERMANENT_FAILED') LIMIT 20"
+            "SELECT r.operation_id,r.owner_id,r.view_message_id,r.view_token FROM operation_receipts r JOIN outbox o ON o.id=r.operation_id WHERE r.notice_status='PENDING' AND NOT (o.status='SUCCEEDED' AND o.operation_key LIKE 'chat-card-reply:%') AND NOT EXISTS(SELECT 1 FROM notification_actions a WHERE a.operation_id=o.id) AND o.status IN ('SUCCEEDED','UNCERTAIN','PERMANENT_FAILED') LIMIT 20"
         )
         for row in rows:
             panel = self.store.setting(f"navigation:{getattr(bot, 'id', None)}:{row['owner_id']}", {})

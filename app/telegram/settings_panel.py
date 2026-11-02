@@ -44,7 +44,7 @@ class SettingsPanel:
                 keyboard(
                     [
                         [("🔔 Уведомления", "sp:notifications")],
-                        [("⚡ Быстрые ответы", "quickreplies"), ("💬 Автоответы", "ar:menu")],
+                        [("💬 Автоответы", "ar:menu")],
                         [("Подключения", "sp:connections"), ("Безопасность", "sp:security")],
                         [("Финансовые параметры", "providers")],
                         [("Подтверждение выполнения", "sp:fulfillment")],

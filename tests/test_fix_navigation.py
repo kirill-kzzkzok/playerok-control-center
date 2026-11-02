@@ -71,7 +71,8 @@ async def test_notification_buttons_authorized_by_exact_origin(ui):
     panel = r.store.setting("navigation:123:7")["id"]
     assert ident != panel
     await r.ui.click("readchat:chat", message_id=ident)
-    assert (await r.state.get_data())["pending"]["kind"] == "mark_read"
+    assert not (await r.state.get_data()).get("pending")
+    assert len(r.store.rows("SELECT * FROM chat_cards")) == 1
     assert not r.store.rows("SELECT * FROM outbox")
 
 

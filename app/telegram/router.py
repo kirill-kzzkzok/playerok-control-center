@@ -16,11 +16,13 @@ from app.localvpn import active_proxy
 from app.playerok.adapter import APIError
 from app.services.discounts import discount_plan
 from app.services.products import ValidationError, listing_price, listing_text, priority_price_basis
+from app.services.replies import Replies
 from app.telegram.agreements_panel import AgreementsPanel
 from app.telegram.auto_replies_panel import AutoRepliesPanel
 from app.telegram.automation_panel import AutomationPanel
 from app.telegram.automation_queue import AutomationQueue
 from app.telegram.callback_ack import ACTION_MAX_WAIT, acknowledge, navigation
+from app.telegram.chat_cards import ChatCards
 from app.telegram.chat_panel import ChatPanel
 from app.telegram.code_migration_panel import CodeMigrationPanel
 from app.telegram.drafts_panel import DraftsPanel
@@ -47,7 +49,6 @@ from app.telegram.presentation import error_text, local_time
 from app.telegram.profile_panel import ProfilePanel
 from app.telegram.promotions_panel import PromotionsPanel
 from app.telegram.quick_shop_panel import QuickShopPanel
-from app.telegram.replies_panel import RepliesPanel
 from app.telegram.settings_panel import SettingsPanel
 from app.telegram.statistics_panel import StatisticsPanel
 from app.telegram.stock_panel import StockPanel
@@ -78,7 +79,6 @@ def create_router(store, api, products, synchronizer):
     wizard = Wizard(store, api, products)
     finance = FinancePanel(store, api, products)
     chats = ChatPanel(store, api)
-    replies = RepliesPanel(store)
     operations = OperationsPanel(store, api)
     orders_panel = OrdersPanel(store, api)
     fulfillment_panel = FulfillmentPanel(store, api)
@@ -134,6 +134,19 @@ def create_router(store, api, products, synchronizer):
             )
         await message.answer(text, reply_markup=markup)
 
+    @router.message(Command("cancel"))
+    async def cancel_chat_reply(message, state):
+        data = await state.get_data()
+        if await state.get_state() == "chatcard:reply":
+            store.execute(
+                "UPDATE chat_cards SET hint='' WHERE token=? AND owner_id=?",
+                (data.get("chat_card"), message.from_user.id),
+            )
+            await state.clear()
+            await ChatCards(store, message.bot).flush()
+            return
+        await state.clear()
+
     @router.message(Command("panel_reset"))
     async def reset_navigation(message, state):
         key = navigator.key(message.bot, message.from_user.id)
@@ -157,6 +170,65 @@ def create_router(store, api, products, synchronizer):
         message = query.message
         if message is None or not hasattr(message, "answer"):
             return
+        if action.startswith(("cc:", "chat:", "compose:", "reply:", "readchat:", "chatmore:", "chatclose:")):
+            cards = ChatCards(store, message.bot)
+            token = action.split(":")[-1]
+            try:
+                if action.startswith("cc:"):
+                    if ack["status"] != "ok":
+                        return
+                    if action.startswith("cc:close:"):
+                        await cards.close(token, owner, message.message_id)
+                        if (await state.get_data()).get("chat_card") == token:
+                            await state.clear()
+                    elif action.startswith("cc:reply:"):
+                        await cards.compose(token, owner, message.message_id, state, api)
+                    return
+                ident = action.split(":", 1)[1]
+                if action.startswith("chatclose:"):
+                    rows = store.rows(
+                        "SELECT * FROM chat_cards WHERE chat_id=? AND owner_id=? AND account_id=?",
+                        (ident, owner, cards.account),
+                    )
+                    if rows and rows[0]["telegram_message_id"] == message.message_id:
+                        await cards.close(rows[0]["token"], owner, message.message_id)
+                    return
+                previous = (await state.get_data()).get("chat_card")
+                await state.clear()
+                if previous:
+                    store.execute(
+                        "UPDATE chat_cards SET hint='' WHERE token=? AND owner_id=?", (previous, owner)
+                    )
+                await chats.show("chat:" + ident, state)  # API history only; never mark read.
+                cards.touch(owner, ident)
+                await cards.flush()
+                if action.startswith(("compose:", "reply:")) and ack["status"] == "ok":
+                    row = store.rows(
+                        "SELECT * FROM chat_cards WHERE owner_id=? AND account_id=? AND chat_id=?",
+                        (owner, cards.account, ident),
+                    )[0]
+                    if row["state"] == "OPEN":
+                        await cards.compose(row["token"], owner, row["telegram_message_id"], state, api)
+            except (ValueError, APIError) as error:
+                if not action.startswith("cc:") and store.rows(
+                    "SELECT 1 FROM chat_messages WHERE chat_id=? LIMIT 1", (token,)
+                ):
+                    cards.touch(owner, token)
+                    store.execute(
+                        "UPDATE chat_cards SET hint=? WHERE chat_id=? AND owner_id=? AND account_id=?",
+                        (
+                            "Историю Playerok обновить не удалось. Показаны сохранённые сообщения.",
+                            token,
+                            owner,
+                            cards.account,
+                        ),
+                    )
+                store.execute(
+                    "UPDATE chat_cards SET hint=? WHERE token=? AND owner_id=?",
+                    (error_text(error), token, owner),
+                )
+                await cards.flush()
+            return
         if not navigator.allowed(message, owner, action):
             return await navigator.feedback(message, owner, "Экран закрыт или устарел. Откройте /start")
         if not navigation(action) and (
@@ -171,8 +243,9 @@ def create_router(store, api, products, synchronizer):
         preserve = bool(
             store.rows(
                 "SELECT 1 FROM notifications WHERE owner_id=? AND telegram_message_id=? "
-                "UNION ALL SELECT 1 FROM operation_receipts WHERE owner_id=? AND telegram_message_id=? LIMIT 1",
-                (owner, message.message_id, owner, message.message_id),
+                "UNION ALL SELECT 1 FROM operation_receipts WHERE owner_id=? AND telegram_message_id=? "
+                "UNION ALL SELECT 1 FROM chat_cards WHERE owner_id=? AND telegram_message_id=? LIMIT 1",
+                (owner, message.message_id, owner, message.message_id, owner, message.message_id),
             )
         )
         try:
@@ -265,12 +338,12 @@ def create_router(store, api, products, synchronizer):
                 text, markup = orders_panel.delivered(owner, int(action.split(":")[1]))
             elif action.startswith("ic:"):
                 text, markup = await interface_cleanup.callback(action, owner, state, message)
-            elif action == "quickreplies":
-                text, markup = await replies.menu(owner, state)
-            elif action.startswith("replypreview:"):
-                return await replies.preview(action, message, state)
-            elif action.startswith("quick:"):
-                text, markup = await replies.callback(action, owner, state)
+            elif action == "quickreplies" or action.startswith(("quick:", "replypreview:")):
+                await state.clear()
+                text, markup = (
+                    "Шаблоны больше не используются. Откройте переписку и нажмите «Ответить».",
+                    keyboard([[("💬 Сообщения", "chats")]]),
+                )
             elif action.startswith("ops:"):
                 text, markup = await operations.callback(action, owner, state)
             elif action.startswith("aq:"):
@@ -497,7 +570,12 @@ def create_router(store, api, products, synchronizer):
                 if not api.account.writes_enabled:
                     raise ValidationError("Записи Playerok отключены в локальном .env")
                 pending = data["pending"]
-                ident = replies.replies.enqueue(owner, "ui:" + data["confirm_token"], pending)
+                if pending["kind"] in {"reply", "mark_read"}:
+                    await state.clear()
+                    raise ValidationError(
+                        "Старое подтверждение больше не используется. Откройте переписку и нажмите «Ответить»"
+                    )
+                ident = Replies(store).enqueue(owner, "ui:" + data["confirm_token"], pending)
                 store.audit(owner, "QUEUE_" + pending["kind"], pending["target"], "PENDING")
                 await state.clear()
                 text, markup = (
@@ -511,21 +589,6 @@ def create_router(store, api, products, synchronizer):
                         order_filter=store.setting(f"ui:{owner}:order_filter", "ALL"),
                     )
                 text, markup = await orders_panel.callback(action, owner, state)
-            elif action.startswith("chatmore:"):
-                await state.clear()
-                ident = action.split(":", 1)[1]
-                await api.call("get_chat", chat_id=ident)
-                text, markup = (
-                    "💬 <b>Действия с диалогом</b>",
-                    keyboard(
-                        [
-                            [("⚡ Быстрый ответ", "reply:" + ident)],
-                            [("🔄 Обновить историю", "chat:" + ident)],
-                            [("Шаблоны ответов", "quickreplies")],
-                        ],
-                        back=("⬅️ К диалогу", "chat:" + ident),
-                    ),
-                )
             elif action.startswith(("chat:", "chatpage:")):
                 text, markup = await chats.show(action, state)
             elif action.startswith("chatmedia:"):
@@ -534,43 +597,6 @@ def create_router(store, api, products, synchronizer):
                     BufferedInputFile(data, filename="chat-image.jpg"), caption=caption, reply_markup=markup
                 )
                 return
-            elif action.startswith("readchat:"):
-                ident = action.split(":", 1)[1]
-                await api.call("get_chat", chat_id=ident)
-                nonce = secrets.token_hex(8)
-                await state.set_state(None)
-                await state.set_data(
-                    {
-                        "pending": {
-                            "kind": "mark_read",
-                            "target": ident,
-                            "payload": {},
-                            "origin_event": replies.replies.origin(owner, message.message_id, ident),
-                        },
-                        "confirm_token": nonce,
-                    }
-                )
-                text, markup = (
-                    "Отметить все сообщения этого диалога прочитанными в Playerok?",
-                    keyboard([[("✅ Подтвердить", "commit:" + nonce)]]),
-                )
-            elif action.startswith("compose:"):
-                ident = action.split(":", 1)[1]
-                await api.call("get_chat", chat_id=ident)
-                origin = replies.replies.origin(owner, message.message_id, ident)
-                await state.set_state("reply")
-                await state.set_data({"chat_id": ident, "origin_event": origin})
-                text, markup = (
-                    "✉️ <b>Ответ покупателю</b>\nПришлите текст или фото. Перед отправкой будет подтверждение.",
-                    keyboard(
-                        [[("⚡ Быстрый ответ", "reply:" + ident)]], back=("⬅️ К диалогу", "chat:" + ident)
-                    ),
-                )
-            elif action.startswith("reply:"):
-                ident = action.split(":", 1)[1]
-                await api.call("get_chat", chat_id=ident)
-                origin = replies.replies.origin(owner, message.message_id, ident)
-                text, markup = await replies.menu(owner, state, chat_id=ident, origin=origin)
             elif action == "sync":
                 await synchronizer.once()
                 text, markup = (
@@ -678,6 +704,18 @@ def create_router(store, api, products, synchronizer):
 
     @router.message(F.text | F.photo | F.document)
     async def input_message(message, state):
+        if await state.get_state() == "chatcard:reply":
+            cards = ChatCards(store, message.bot)
+            data = await state.get_data()
+            try:
+                await cards.reply(message, state, api)
+            except (ValueError, APIError) as error:
+                store.execute(
+                    "UPDATE chat_cards SET hint=? WHERE chat_id=? AND owner_id=? AND account_id=?",
+                    (error_text(error), data.get("chat_id"), message.from_user.id, cards.account),
+                )
+                await cards.flush()
+            return
         message, _ = await navigator.enter(message, message.from_user.id, state, "input")
         try:
             current = await state.get_state()
@@ -695,8 +733,12 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await gifts_panel.message(message, state)
             elif current and current.startswith("finance:"):
                 text, markup = await finance.message(message, state)
-            elif current and current.startswith("quick:"):
-                text, markup = await replies.message(message, state)
+            elif current == "reply" or current and current.startswith("quick:"):
+                await state.clear()
+                text, markup = (
+                    "Откройте переписку и нажмите «Ответить».",
+                    keyboard([[("💬 Сообщения", "chats")]]),
+                )
             elif current and current.startswith("itemlist:"):
                 text, markup = await listings_panel.filter_message(message, state)
             elif current == "draftlist:search":
@@ -717,11 +759,6 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await fulfillment_panel.message(message, state)
             elif current and current.startswith("resolve:"):
                 text, markup = await operations.message(message, state)
-            elif current == "reply" and (message.photo or message.document):
-                result = await replies.photo(message, state)
-                if result is None:
-                    return
-                text, markup = result
             elif current == "discount":
                 data = await state.get_data()
                 item = await products.owned_item(data["item_id"])
@@ -769,31 +806,25 @@ def create_router(store, api, products, synchronizer):
                     reply_markup=keyboard([[("✅ Подтвердить изменение фото", "commit:" + nonce)]]),
                 )
                 return
-            elif current in {"reply", "edit"}:
+            elif current == "edit":
                 data = await state.get_data()
                 value = message.text or ""
                 if not value.strip() or len(value) > 3500:
                     raise ValidationError("Введите текст длиной 1–3500 символов")
-                if current == "reply":
-                    text, markup = await replies.confirm(
-                        state, data["chat_id"], value, data.get("origin_event")
-                    )
-                    return await display(message, text, markup)
+                if data["field"] == "price":
+                    value = listing_price(value, getattr(api.account, "role", None))
                 else:
-                    if data["field"] == "price":
-                        value = listing_price(value, getattr(api.account, "role", None))
-                    else:
-                        value = listing_text(value, data["field"])
-                    pending = {"kind": "edit", "target": data["item_id"], "payload": {data["field"]: value}}
-                    if data["field"] == "name" and data.get("title_code"):
-                        from app.services.product_codes import titled
+                    value = listing_text(value, data["field"])
+                pending = {"kind": "edit", "target": data["item_id"], "payload": {data["field"]: value}}
+                if data["field"] == "name" and data.get("title_code"):
+                    from app.services.product_codes import titled
 
-                        value = titled(value, data["title_code"])
-                        pending["payload"]["name"] = value
-                    if data["field"] == "name":
-                        pending["payload"]["expected_name"] = data.get("expected_name")
-                    if data["field"] == "description":
-                        pending["payload"]["expected_description"] = data["expected_description"]
+                    value = titled(value, data["title_code"])
+                    pending["payload"]["name"] = value
+                if data["field"] == "name":
+                    pending["payload"]["expected_name"] = data.get("expected_name")
+                if data["field"] == "description":
+                    pending["payload"]["expected_description"] = data["expected_description"]
                 nonce = secrets.token_hex(8)
                 await state.set_state(None)
                 await state.set_data({"pending": pending, "confirm_token": nonce})

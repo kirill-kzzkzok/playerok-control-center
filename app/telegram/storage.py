@@ -3,7 +3,7 @@ import json
 from aiogram.fsm.state import State
 from aiogram.fsm.storage.base import BaseStorage, StateType, StorageKey
 
-from app.database.store import encode
+from app.database.store import Conflict, encode
 
 
 class SQLiteStorage(BaseStorage):
@@ -32,6 +32,17 @@ class SQLiteStorage(BaseStorage):
     async def get_state(self, key):
         rows = self.store.rows("SELECT state FROM fsm WHERE key=?", (self.key(key),))
         return rows[0]["state"] if rows else None
+
+    def consume(self, db, key, expected_state, expected_data):
+        """Consume one durable input in the caller's business COMMIT transaction."""
+        if (
+            db.execute(
+                "UPDATE fsm SET state=NULL,data='{}' WHERE key=? AND state=? AND data=?",
+                (self.key(key), expected_state, encode(expected_data)),
+            ).rowcount
+            != 1
+        ):
+            raise Conflict("Сценарий изменился. Откройте переписку и нажмите «Ответить»")
 
     async def set_data(self, key, data):
         self.store.execute(

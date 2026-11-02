@@ -46,7 +46,6 @@ def safe_route(action):
     } or action.startswith(
         (
             "codes:home",
-            "codes:prepare",
             "codes:page:",
             "codes:results:",
             "item:",
@@ -115,8 +114,9 @@ class Navigation:
         return bool(
             self.store.rows(
                 "SELECT 1 FROM notifications WHERE owner_id=? AND telegram_message_id=? "
-                "UNION ALL SELECT 1 FROM operation_receipts WHERE owner_id=? AND telegram_message_id=? LIMIT 1",
-                (owner, ident, owner, ident),
+                "UNION ALL SELECT 1 FROM operation_receipts WHERE owner_id=? AND telegram_message_id=? "
+                "UNION ALL SELECT 1 FROM chat_cards WHERE owner_id=? AND telegram_message_id=? LIMIT 1",
+                (owner, ident, owner, ident, owner, ident),
             )
         )
 

@@ -276,7 +276,7 @@ class Orders:
                 db.execute("UPDATE notifications SET rendered_payload=NULL WHERE event_key=?", (key,))
             db.execute("UPDATE inbox SET payload=? WHERE key=?", (encode(message), key))
             db.execute(
-                "INSERT INTO chat_messages VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+                "INSERT INTO chat_messages VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,created_at=COALESCE(excluded.created_at,chat_messages.created_at)",
                 (message["id"], chat_id, message.get("created_at"), encode(message)),
             )
             db.execute("UPDATE inbox SET processed_at=? WHERE key=?", (now(), key))

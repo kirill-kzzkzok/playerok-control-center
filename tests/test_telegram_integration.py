@@ -247,78 +247,76 @@ async def test_financial_panel_through_real_dispatcher_is_read_only(tmp_path):
 async def test_notification_reply_keeps_original_and_updates_after_durable_completion(tmp_path):
     from app.services.orders import Orders
     from app.workers.notifications import Notifications
-    from app.workers.outbox import OutboxWorker
+    from app.workers.outbox import Executor, OutboxWorker
+    from tests.stateful_telegram import StatefulTelegram
+    from tests.test_logical_products import ReadAPI
 
-    class ChatAPI(CatalogAPI):
-        account = SimpleNamespace(id="seller", writes_enabled=True)
+    api = ReadAPI()
+    sent = []
 
-        async def call(self, method, **kwargs):
-            assert method == "get_chat"
-            return {"id": kwargs["chat_id"]}
+    async def boundary(method, **kwargs):
+        if method == "get_chat_messages":
+            return {"messages": [], "page_info": {"has_next_page": False}}
+        assert method == "get_chat"
+        return {"id": kwargs["chat_id"], "is_texting_allowed": True}
 
+    def send_message(chat_id, text):
+        sent.append((chat_id, text))
+        return {"id": "remote-answer"}
+
+    api.call, api.account.send_message = boundary, send_message
     store = Store(tmp_path / "notification-reply.sqlite")
-    session = TelegramSession()
+    store.set_setting("playerok:account_id", "seller")
+    session = StatefulTelegram()
     bot = Bot("123:" + "x" * 35, session=session)
-    ui = Interaction(bot, dispatcher(store, ChatAPI()))
+    ui = Interaction(bot, dispatcher(store, api))
     state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
     try:
         await ui.message("/start")
+        old = await bot.send_message(7, "Original question")
         Orders(store).ingest_message("chat", {"id": "incoming", "text": "Original question"})
         store.execute(
-            "INSERT INTO notifications(event_key,owner_id,telegram_message_id,status) VALUES('message:incoming',7,1,'SUCCEEDED')"
+            "INSERT INTO notifications(event_key,owner_id,telegram_message_id,status) VALUES('message:incoming',7,?,'SUCCEEDED')",
+            (old.message_id,),
         )
         store.set_setting("notifications:initialized", True)
-        await ui.click("reply:chat")
-        assert session.calls[-1].__api_method__ == "sendMessage"
-        assert await state.get_state() == "reply"
+        await ui.click("reply:chat", message_id=old.message_id)
+        assert await state.get_state() == "chatcard:reply"
+        ui.dp = dispatcher(store, api)
         await ui.message("Answer <buyer>")
-        token = (await state.get_data())["confirm_token"]
-        assert not store.rows("SELECT * FROM outbox")
-        # Restore dispatcher, keeping confirmation and origin mapping in SQLite.
-        ui.dp = dispatcher(store, ChatAPI())
-        await ui.click("commit:" + token)
-        await ui.click("commit:" + token)
-        assert len(store.rows("SELECT * FROM outbox")) == 1
-        assert len(store.rows("SELECT * FROM notification_actions")) == 1
-        executed = []
-
-        async def successful(action):
-            executed.append(action)
-            return {"message_id": "remote-answer"}
-
-        worker = OutboxWorker(store, successful)
+        assert len(store.rows("SELECT * FROM outbox")) == 1 and not sent
+        worker = OutboxWorker(store, Executor(store, api, Products(store, api)))
         await worker.once()
-        await worker.once()
-        assert len(executed) == 1
+        assert not await worker.once()
         await Notifications(store, bot).once()
-        edits = [
-            call
-            for call in session.calls
-            if call.__api_method__ == "editMessageText" and call.message_id == 1
-        ]
-        assert edits, "Original notification must receive its confirmed result"
-        edit = edits[-1]
-        assert "Original question" in edit.text and "remote-answer" in edit.text
-        assert "подтверждено API" in edit.text
+        card = store.rows("SELECT * FROM chat_cards")[0]
+        shown = session.messages[card["telegram_message_id"]]["text"]
+        assert "Original question" in shown and "Answer &lt;buyer&gt;" in shown
+        assert "подтверждён Playerok" in shown
+        assert session.messages[old.message_id]["exists"]
+        assert sent == [("chat", "Answer <buyer>")]
     finally:
         await bot.session.close()
         store.close()
 
 
-async def test_photo_reply_preview_requires_confirmation_and_survives_restart(tmp_path, monkeypatch):
-    class ChatAPI(CatalogAPI):
-        account = SimpleNamespace(id="seller", writes_enabled=True)
+async def test_text_reply_card_rejects_document_and_preserves_context_after_restart(tmp_path):
+    from tests.stateful_telegram import StatefulTelegram
+    from tests.test_logical_products import ReadAPI
 
-        async def call(self, method, **kwargs):
-            assert method == "get_chat"
-            return {"id": kwargs["chat_id"]}
+    api = ReadAPI()
 
+    async def boundary(method, **kwargs):
+        if method == "get_chat_messages":
+            return {"messages": [], "page_info": {"has_next_page": False}}
+        assert method == "get_chat"
+        return {"id": kwargs["chat_id"], "is_texting_allowed": True}
+
+    api.call = boundary
     store = Store(tmp_path / "photo-ui.sqlite")
-    session = TelegramSession()
+    store.set_setting("playerok:account_id", "seller")
+    session = StatefulTelegram()
     bot = Bot("123:" + "x" * 35, session=session)
-    api = ChatAPI()
-    uploads = Attachments(tmp_path / "uploads")
-    monkeypatch.setattr("app.telegram.replies_panel.Attachments", lambda: uploads)
     ui = Interaction(bot, dispatcher(store, api))
     state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
     try:
@@ -330,20 +328,14 @@ async def test_photo_reply_preview_requires_confirmation_and_survives_restart(tm
             ),
             caption="<photo caption>",
         )
-        pending = (await state.get_data())["pending"]
-        assert pending["target"] == "chat"
-        assert pending["payload"]["text"] == "<photo caption>"
-        assert len(pending["payload"]["photos"]) == 1
-        assert (await uploads.read(pending["payload"]["photos"][0])).startswith(b"\xff\xd8\xff")
-        assert "&lt;photo caption&gt;" in session.calls[-1].media.caption
-        assert session.calls[-1].__api_method__ == "editMessageMedia"
+        assert await state.get_state() == "chatcard:reply"
         assert not store.rows("SELECT * FROM outbox")
-        token = (await state.get_data())["confirm_token"]
+        assert not store.rows("SELECT * FROM chat_uploads")
         ui.dp = dispatcher(store, api)
-        await ui.click("commit:" + token)
-        await ui.click("commit:" + token)
-        assert len(store.rows("SELECT * FROM outbox")) == 1
-        assert not store.rows("SELECT * FROM chat_uploads")  # worker/network not run
+        await ui.message("Text reply after restart")
+        assert len(store.rows("SELECT * FROM outbox WHERE kind='reply'")) == 1
+        assert not store.rows("SELECT * FROM chat_uploads")
+        assert await state.get_state() is None
     finally:
         await bot.session.close()
         store.close()

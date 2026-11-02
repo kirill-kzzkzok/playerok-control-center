@@ -148,7 +148,6 @@ class AutoRepliesPanel:
                 keyboard(
                     [
                         [("⛔ Выключить все", "ar:stop")],
-                        [("Ручные быстрые ответы", "quickreplies")],
                         [("Подключение и разрешения", "profile")],
                     ],
                     back=("⬅️ Автоответы", "ar:menu"),
