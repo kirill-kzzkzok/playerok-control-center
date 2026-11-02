@@ -50,7 +50,7 @@ async def test_deleted_notification_cannot_commit_old_read_confirmation(ui):
     await Notifications(r.store, r.bot).once()
     ident = r.store.rows("SELECT telegram_message_id FROM notifications")[0]["telegram_message_id"]
     await r.ui.click("readchat:chat", message_id=ident)
-    token = (await r.state.get_data())["confirm_token"]
+    assert not (await r.state.get_data()).get("pending")
     Orders(r.store).ingest_message(
         "chat",
         {
@@ -60,5 +60,5 @@ async def test_deleted_notification_cannot_commit_old_read_confirmation(ui):
             "user": {"id": "buyer", "username": "Buyer"},
         },
     )
-    await r.ui.click("commit:" + token)
+    await r.ui.click("commit:obsolete")
     assert not r.store.rows("SELECT * FROM outbox")

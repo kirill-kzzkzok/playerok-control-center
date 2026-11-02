@@ -175,7 +175,7 @@ def create_router(store, api, products, synchronizer):
             token = action.split(":")[-1]
             try:
                 if action.startswith("cc:"):
-                    if ack["status"] != "ok":
+                    if ack["status"] not in {"ok", "transport"}:
                         return
                     if action.startswith("cc:close:"):
                         await cards.close(token, owner, message.message_id)
@@ -202,7 +202,7 @@ def create_router(store, api, products, synchronizer):
                 await chats.show("chat:" + ident, state)  # API history only; never mark read.
                 cards.touch(owner, ident)
                 await cards.flush()
-                if action.startswith(("compose:", "reply:")) and ack["status"] == "ok":
+                if action.startswith(("compose:", "reply:")) and ack["status"] in {"ok", "transport"}:
                     row = store.rows(
                         "SELECT * FROM chat_cards WHERE owner_id=? AND account_id=? AND chat_id=?",
                         (owner, cards.account, ident),

@@ -316,3 +316,17 @@ async def test_opening_another_dialog_cancels_previous_reply_target(cards):
     await r.ui.message("Not a reply to the old buyer")
     assert not r.store.rows("SELECT * FROM outbox")
     assert not r.sent
+
+
+async def test_more_than_one_batch_of_dialogs_does_not_starve_later_card_updates(cards):
+    r = cards
+    for n in range(101):
+        incoming(r, n, chat="chat-" + str(n))
+    await r.notifications.once()
+    await r.notifications.once()
+    assert len(calls(r, "sendMessage")) == 101
+    incoming(r, 200, chat="chat-100", text="Latest message must appear")
+    await r.notifications.once()
+    await r.notifications.once()
+    row = r.store.rows("SELECT * FROM chat_cards WHERE chat_id='chat-100'")[0]
+    assert "Latest message must appear" in r.session.messages[row["telegram_message_id"]]["text"]

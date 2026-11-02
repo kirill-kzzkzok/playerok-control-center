@@ -11,7 +11,7 @@ import time
 
 from app.database.store import Conflict, encode, now
 from app.services.replies import Replies
-from app.telegram.errors import telegram_error
+from app.telegram.errors import REJECTED_CONTENT, telegram_error
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 from app.telegram.panel_tracking import panel_owner
@@ -52,14 +52,16 @@ class ChatCards:
             (row["chat_id"],),
         )
         name = self.store.setting("ui:chat:" + row["chat_id"] + ":name") or "покупателем"
+        named = name not in {"покупателем", "Собеседник не указан"}
         blocks = []
         budget = 3200
         for entry in messages:
             payload = json.loads(entry["payload"])
             user = payload.get("user") or {}
             mine = user.get("id") == row["account_id"] and bool(row["account_id"])
-            if not mine and user.get("username"):
+            if not named and not mine and user.get("username"):
                 name = user["username"]
+                named = True
             text = (
                 "[сообщение удалено]"
                 if payload.get("deleted_at")
@@ -132,7 +134,7 @@ class ChatCards:
         async with self.store.chat_card_lock:
             self.confirmed_replies()
             for row in self.store.rows(
-                "SELECT * FROM chat_cards WHERE account_id=? AND state IN ('NEW','OPEN') AND busy_until<=? AND retry_after<=? AND failures<8 ORDER BY updated_at LIMIT 100",
+                "SELECT * FROM chat_cards WHERE account_id=? AND state IN ('NEW','OPEN') AND busy_until<=? AND retry_after<=? AND failures<8 ORDER BY CASE state WHEN 'NEW' THEN 0 ELSE 1 END,updated_at LIMIT 100",
                 (self.account, time.time(), time.time()),
             ):
                 await self.update(row)
@@ -141,6 +143,7 @@ class ChatCards:
         text, markup = self.render(row)
         fingerprint = hashlib.sha256((text + markup.model_dump_json()).encode()).hexdigest()
         if row["state"] == "OPEN" and row["fingerprint"] == fingerprint:
+            self.store.execute("UPDATE chat_cards SET updated_at=? WHERE token=?", (now(), row["token"]))
             return
         token = secrets.token_hex(12)
         sending = row["state"] == "NEW"
@@ -186,10 +189,11 @@ class ChatCards:
             else:
                 rejected = code == "RATE_LIMITED"
                 self.store.execute(
-                    "UPDATE chat_cards SET state=?,busy_until=0,retry_after=?,failures=failures+1 WHERE token=? AND busy_token=?",
+                    "UPDATE chat_cards SET state=?,busy_until=0,retry_after=?,failures=? WHERE token=? AND busy_token=?",
                     (
                         "NEW" if sending and rejected else "UNCERTAIN" if sending else "OPEN",
                         time.time() + max(5 * 2 ** min(row["failures"], 8), getattr(error, "retry_after", 0)),
+                        8 if code in REJECTED_CONTENT else row["failures"] + 1,
                         row["token"],
                         token,
                     ),
@@ -204,8 +208,8 @@ class ChatCards:
         finally:
             panel_owner.reset(tracking)
         saved = self.store.execute(
-            "UPDATE chat_cards SET state='OPEN',telegram_message_id=?,fingerprint=?,busy_until=0,busy_token=NULL,retry_after=0,failures=0 WHERE token=? AND busy_token=? AND state!='CLOSED'",
-            (ident, fingerprint, row["token"], token),
+            "UPDATE chat_cards SET state='OPEN',telegram_message_id=?,fingerprint=?,busy_until=0,busy_token=NULL,retry_after=0,failures=0,updated_at=? WHERE token=? AND busy_token=? AND state!='CLOSED'",
+            (ident, fingerprint, now(), row["token"], token),
         )
         if saved:
             self.store.execute(

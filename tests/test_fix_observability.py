@@ -46,18 +46,19 @@ async def test_commit_worker_updates_same_panel_and_authorized_result(case, kind
     await r.ui.click(("compose:" if kind == "reply" else "readchat:") + "chat")
     if kind == "reply":
         await r.ui.message("Exactly one buyer response")
-    state = r.ui.dp.storage.store.rows("SELECT data FROM fsm")[0]
-    token = json.loads(state["data"])["confirm_token"]
-    await r.ui.click("commit:" + token)
+    if kind == "mark_read":
+        assert not r.store.rows("SELECT * FROM outbox")
+        assert not reads  # Retired button may open history, never fake read.
+        return
     ident = r.store.rows("SELECT id FROM outbox")[0]["id"]
-    OperationResults(r.store).show(7, ident)
+    await r.ui.click("result:show:" + ident)
     panel = r.store.setting("navigation:123:7")["id"]
     await r.worker.once()
     await Notifications(r.store, r.bot).once()
     assert "подтверждено" in r.session.messages[panel]["text"]
     await r.ui.click("result:show:" + ident)
     assert "подтверждено" in r.session.messages[panel]["text"]
-    await r.ui.click("commit:" + token)
+    await r.ui.click("commit:obsolete")
     assert not await r.worker.once()
     assert len(r.api.messages) == (1 if kind == "reply" else 0)
     assert len(reads) == (1 if kind == "mark_read" else 0)
@@ -105,9 +106,8 @@ async def test_deleted_operation_view_stops_refresh_and_new_panel_recovers(case)
     r = case
     await r.ui.click("compose:chat")
     await r.ui.message("One confirmed buyer response")
-    token = json.loads(r.store.rows("SELECT data FROM fsm")[0]["data"])["confirm_token"]
-    await r.ui.click("commit:" + token)
     ident = r.store.rows("SELECT id FROM outbox")[0]["id"]
+    await r.ui.click("result:show:" + ident)
     old = r.store.setting("navigation:123:7")["id"]
     await r.worker.once()
     r.session.messages[old]["exists"] = False

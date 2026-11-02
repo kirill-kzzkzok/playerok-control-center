@@ -115,21 +115,19 @@ async def test_stale_ack_read_survives_mutation_preserves_state(ui, action):
 
 async def test_fresh_ack_waiting_for_fsm_does_not_expire_valid_send_confirmation(case):
     r = case
-    await r.ui.click("compose:chat")
-    await r.ui.message("Confirmed after FSM wait")
-    data = r.store.rows("SELECT data FROM fsm")[0]["data"]
-    token = json.loads(data)["confirm_token"]
 
     class QueuedAfterAck(BaseMiddleware):
         async def __call__(self, handler, event, data):
-            data["callback_ack"]["checked_at"] -= 11
+            if "callback_ack" in data:
+                data["callback_ack"]["checked_at"] -= 11
             return await handler(event, data)
 
     r.ui.dp.update.outer_middleware(QueuedAfterAck())
-    await r.ui.click("commit:" + token)
+    await r.ui.click("compose:chat")
+    await r.ui.message("Confirmed after FSM wait")
     assert len(r.store.rows("SELECT * FROM outbox")) == 1
     await r.worker.once()
-    await r.ui.click("commit:" + token)
+    await r.ui.click("commit:obsolete")
     assert not await r.worker.once()
     assert len(r.api.messages) == 1
 

@@ -35,7 +35,8 @@ async def test_real_chat_schema_names_peer_without_ids_or_extra_requests(ux):
     assert "Собеседник не указан" in labels["chat:unknown-chat-uuid"]
     assert "uuid" not in " ".join(labels.values())
     await r.ui.click("chat:private-chat-uuid")
-    assert "Переписка с &lt;myxa1345&gt;" in r.session.calls[-1].text
+    assert "&lt;myxa1345&gt;" in r.session.calls[-1].text
+    assert "Переписка с покупателем" in r.session.calls[-1].text
     assert "03:00" in r.session.calls[-1].text  # fixture message UTC -> Moscow
     assert not r.store.rows("SELECT * FROM outbox")
 

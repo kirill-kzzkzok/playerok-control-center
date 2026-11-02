@@ -36,9 +36,13 @@ async def test_rejected_notification_edit_is_terminal_without_losing_history(tmp
     worker = Notifications(store, bot)
     await worker.once()
     orders.ingest_message("chat", {"id": "m", "text": "changed"})
-    await worker.refresh_messages()
-    store.execute("UPDATE notifications SET refresh_after=0")
-    await worker.refresh_messages()
+    from app.telegram.chat_cards import ChatCards
+
+    await ChatCards(store, bot).flush()
+    store.execute("UPDATE chat_cards SET retry_after=0")
+    from app.telegram.chat_cards import ChatCards
+
+    await ChatCards(store, bot).flush()
     assert bot.edit_message_text.await_count == 1
     assert store.rows("SELECT status FROM notifications")[0]["status"] == "SUCCEEDED"
     assert not store.rows("SELECT * FROM outbox")
@@ -211,8 +215,10 @@ async def test_unknown_notification_rejection_has_finite_refresh_budget(tmp_path
     await worker.once()
     orders.ingest_message("chat", {"id": "m", "text": "after"})
     for _ in range(10):
-        store.execute("UPDATE notifications SET refresh_after=0")
-        await worker.refresh_messages()
+        store.execute("UPDATE chat_cards SET retry_after=0")
+        from app.telegram.chat_cards import ChatCards
+
+        await ChatCards(store, bot).flush()
     assert bot.edit_message_text.await_count == 8
     assert store.rows("SELECT status FROM notifications") == [{"status": "SUCCEEDED"}]
     store.close()

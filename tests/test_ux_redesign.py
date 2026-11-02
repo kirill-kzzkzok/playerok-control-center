@@ -50,7 +50,7 @@ class ShopAPI(CatalogAPI):
                 "chat": {"id": "chat"},
             }
         if method == "get_chat":
-            return {"id": "chat"}
+            return {"id": "chat", "is_texting_allowed": True}
         if method == "get_chat_messages":
             return {
                 "messages": [
@@ -238,21 +238,20 @@ async def test_filters_survive_card_home_and_dispatcher_restart(ux):
 
 async def test_chat_chronology_without_ids_and_reply_confirmation(ux):
     r = ux
+    r.store.set_setting("playerok:account_id", r.api.account.id)
     await r.ui.click("chat:chat")
     shown = r.session.calls[-1]
     assert "secret-message-id" not in shown.text
     assert "&lt;hello&gt;" in shown.text
-    assert {"compose:chat", "reply:chat", "readchat:chat", "chatmore:chat", "chats"} <= buttons(shown).keys()
-    await r.ui.click("compose:chat")
+    labels = buttons(shown)
+    assert set(labels.values()) == {"✉️ Ответить", "✖️ Закрыть"}
+    reply = next(key for key in labels if key.startswith("cc:reply:"))
+    row = r.store.rows("SELECT * FROM chat_cards")[0]
+    await r.ui.click(reply, message_id=row["telegram_message_id"])
     await r.ui.message("<my reply>")
-    preview = r.session.calls[-1]
-    assert "Отправить покупателю?" in preview.text and "&lt;my reply&gt;" in preview.text
-    token = next(k for k in buttons(preview) if k.startswith("commit:"))
+    # Read-only installation never enqueues or pretends the reply succeeded.
     assert not r.store.rows("SELECT * FROM outbox")
-    # Read-only installation must never enqueue a send even with a current confirmation.
-    await r.ui.click(token)
-    assert not r.store.rows("SELECT * FROM outbox")
-    assert "отключены" in r.session.calls[-1].text
+    assert "не разрешает" in r.session.last_panel.text
 
 
 async def test_gifts_stop_visible_and_no_implicit_enable(ux):
