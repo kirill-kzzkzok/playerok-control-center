@@ -123,7 +123,7 @@ class GiftsPanel:
                 + str(b.get("stars", "неизвестен"))
                 + " ⭐"
                 + "\nПроверено: "
-                + escape(b.get("at") or "ещё не проверялось")
+                + (checked_time(b["at"]) if b.get("at") else "ещё не проверялось")
                 + "\nАвтовыдача: "
                 + ("разрешена для включённых товаров" if active else "выключена"),
                 keyboard(rows, back=("⬅️ Мой магазин", "home")),

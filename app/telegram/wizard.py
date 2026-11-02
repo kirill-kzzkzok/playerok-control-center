@@ -157,9 +157,7 @@ class Wizard:
                 )
             else:
                 lines.append("Подготовленный запас пуст.")
-            lines.append(
-                "После создания предложим однократный перенос в склад этого лота. Автовыдача потребует отдельного включения."
-            )
+            lines.append("Запас будет подготовлен при итоговом запуске. Повторно вводить его не нужно.")
         elif mode == "text":
             lines.append(
                 "Текст выдачи: " + ("подготовлен (скрыт)" if payload.get("delivery_data") else "не задан")
@@ -366,7 +364,7 @@ class Wizard:
         elif step == "delivery_data":
             text = "🔐 Пришлите текст выдачи или уникальные значения (одно на строку). Данные сохраняются только в локальной БД."
         elif step == "confirm":
-            text = "✅ <b>Подтверждение сделки</b>\nАвтоматическое SENT выключено. SENT продавца и подтверждение покупателя — разные действия."
+            text = "✅ <b>Завершение заказа</b>\nСпособ завершения настроите перед публикацией. Покупатель подтверждает получение отдельно."
             rows = [[("Продолжить", f"w:{nonce}:confirm_done")]]
         elif step == "finance":
             snapshot = payload.get("withdrawal") or {}
@@ -412,7 +410,7 @@ class Wizard:
                 current = min(max(payload.get("preview_page", 0), 0), len(pages) - 1)
                 text = f"📦 <b>Полное превью · {current + 1}/{len(pages)}</b>\n\n" + pages[current]
                 rows = [
-                    [("Создать серверный черновик", f"w:{nonce}:submit")],
+                    [("Продолжить настройку", f"w:{nonce}:submit")],
                     [("📝 Название", f"w:{nonce}:edit:name"), ("📋 Описание", f"w:{nonce}:edit:description")],
                     [("🖼 Фото", f"w:{nonce}:edit:photos"), ("💰 Цена", f"w:{nonce}:edit:price")],
                     [("⚡ Выдача", f"w:{nonce}:edit:delivery")],
@@ -827,7 +825,7 @@ class Wizard:
             ident = await method(draft["id"], owner, draft["revision"])
             await state.clear()
             return (
-                "⏳ Готовим неопубликованный черновик Playerok. Затем продолжите здесь настройку выдачи и публикации; продаж ещё нет.",
+                "⏳ Подготавливаем товар на Playerok. Продажи ещё не открыты. Настройка выдачи и публикации продолжится здесь.",
                 keyboard(
                     [
                         [("Открыть результат", "result:show:" + ident)],

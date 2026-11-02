@@ -42,6 +42,7 @@ async def fill(h, mode=3):
         await h.wizard_action("gift_done")
     elif mode in {1, 2}:
         await h.ui.message("private-delivery-one" if mode == 1 else "private-one\nprivate-two")
+    assert "SENT" not in h.session.last_panel.text
     await h.wizard_action("confirm_done")
     ident = (await h.state.get_data())["draft_id"]
     assert h.store.get_draft(ident, 7)["payload"]["step"] == "preview"
