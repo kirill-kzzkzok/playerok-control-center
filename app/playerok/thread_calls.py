@@ -1,6 +1,9 @@
 import asyncio
 import logging
 import threading
+import time
+
+from app.telemetry import record
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +35,9 @@ class ThreadCalls:
         reported = False
 
         async def execute():
+            waiting = time.perf_counter()
             async with self.lock:
+                record("playerok_lock", time.perf_counter() - waiting)
                 if self.closing:
                     raise CallsClosedError
                 if cancelled.is_set():
@@ -46,7 +51,11 @@ class ThreadCalls:
                         return None
                     return function(cancelled)
 
-                return await asyncio.to_thread(invoke)
+                started = time.perf_counter()
+                try:
+                    return await asyncio.to_thread(invoke)
+                finally:
+                    record("playerok", time.perf_counter() - started)
 
         def complete(task):
             nonlocal reported

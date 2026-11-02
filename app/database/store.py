@@ -8,6 +8,8 @@ from contextlib import closing, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.telemetry import record
+
 
 def now():
     return datetime.now(UTC).isoformat()
@@ -91,8 +93,12 @@ class Store:
                 raise
 
     def rows(self, sql, args=()):
-        with self.lock:
-            return [dict(r) for r in self.db.execute(sql, args).fetchall()]
+        started = time.perf_counter()
+        try:
+            with self.lock:
+                return [dict(r) for r in self.db.execute(sql, args).fetchall()]
+        finally:
+            record("sqlite", time.perf_counter() - started)
 
     def execute(self, sql, args=()):
         with self.lock:
@@ -586,8 +592,12 @@ class Store:
     def backup(self, destination):
         destination = Path(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        with self.lock, closing(sqlite3.connect(destination)) as target:
-            self.db.backup(target)
+        # Independent committed WAL snapshot: copying must not hold the shared
+        # connection's RLock and stall synchronous UI reads on the event loop.
+        if destination.resolve() == self.path.resolve():
+            raise ValueError("Нельзя записать резервную копию поверх рабочей базы")
+        with closing(sqlite3.connect(self.path)) as source, closing(sqlite3.connect(destination)) as target:
+            source.backup(target, pages=256)
 
     def close(self):
         with self.lock:

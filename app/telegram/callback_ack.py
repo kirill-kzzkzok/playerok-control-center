@@ -8,6 +8,7 @@ from aiogram import BaseMiddleware
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramNetworkError
 
 from app.security.logging import event as log_event
+from app.telemetry import finish, measurements, record
 
 ACK_TIMEOUT = 2
 ACTION_MAX_WAIT = 10
@@ -126,12 +127,25 @@ class CallbackAcknowledgements(BaseMiddleware):
         self.access = access
 
     async def __call__(self, handler, event, data):
+        started = time.perf_counter()
+        values = {}
+        token = measurements.set(values)
+        try:
+            return await self.dispatch(handler, event, data)
+        finally:
+            finish(started, values)
+            measurements.reset(token)
+
+    async def dispatch(self, handler, event, data):
         query = getattr(event, "callback_query", None)
         if query is not None:
             if not self.access.authorized(query):
                 await acknowledge(query, text="Доступ закрыт", show_alert=True)
                 return None
+            started = time.perf_counter()
             data["callback_ack"] = await acknowledge(query)
+            record("ack", time.perf_counter() - started)
+            data["callback_ack"]["isolation_started"] = time.perf_counter()
         try:
             return await handler(event, data)
         except TelegramNetworkError:
@@ -148,6 +162,8 @@ class CallbackAdmission(BaseMiddleware):
     async def __call__(self, handler, event, data):
         if data.get("callback_ack") is not None:
             data["callback_ack"]["admitted_at"] = time.monotonic()
+            if "isolation_started" in data["callback_ack"]:
+                record("fsm", time.perf_counter() - data["callback_ack"]["isolation_started"])
         return await handler(event, data)
 
 

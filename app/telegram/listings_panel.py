@@ -1,5 +1,6 @@
 import json
 import secrets
+import time
 
 from app.database.store import now
 from app.playerok.adapter import APIError, validate_page
@@ -29,7 +30,10 @@ class ListingsPanel:
             cache = {"at": now(), "items": [], "cursor": None, "seen": [], "complete": False}
         if not cache["complete"]:
             indexed = {item["id"]: item for item in cache["items"]}
-            for _ in range(20):
+            started = time.monotonic()
+            for _ in range(3):
+                if time.monotonic() - started >= 5:
+                    break
                 try:
                     page = await self.api.call(
                         "get_my_items", count=24, after_cursor=cache["cursor"], statuses=None

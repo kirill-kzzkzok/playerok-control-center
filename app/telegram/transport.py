@@ -15,6 +15,7 @@ from aiohttp_socks import ProxyConnectionError, ProxyError, ProxyTimeoutError
 from app.localvpn import ProxyUnavailable, require_proxy
 from app.security.logging import event
 from app.telegram.errors import telegram_error
+from app.telemetry import record
 
 request_evidence = ContextVar("telegram_request_evidence", default=None)
 
@@ -129,6 +130,7 @@ class TelegramNetworkSession(AiohttpSession):
     def _finish(self, state, token, started, outcome):
         request_evidence.reset(token)
         state.update(seconds=round(time.monotonic() - started, 3), outcome=outcome)
+        record("telegram", time.monotonic() - started)
         self.results[state["method"]] = state
         # Structured evidence remains available in results; no URL/payload or raw errors.
         logging.getLogger(__name__).debug(

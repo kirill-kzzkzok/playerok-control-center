@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import secrets
+import time
 from copy import deepcopy
 
 from aiogram.exceptions import TelegramBadRequest
@@ -14,6 +15,7 @@ from app.security.logging import event
 from app.telegram.errors import telegram_error
 from app.telegram.input_cleanup import cleanup_input
 from app.telegram.keyboards import keyboard
+from app.telemetry import record
 
 
 def safe_route(action):
@@ -322,7 +324,9 @@ class Navigation:
         await cleanup_input()
         bot, key = message.bot, self.key(message.bot, owner)
         lock = self.store.navigation_locks.setdefault((bot.id, owner), asyncio.Lock())
+        waiting = time.perf_counter()
         async with lock:
+            record("navigation_lock", time.perf_counter() - waiting)
             panel = self.store.setting(key, {})
             if panel.get("sending"):
                 event(

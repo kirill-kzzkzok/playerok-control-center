@@ -185,7 +185,7 @@ async def test_dispatcher_full_draft_with_upload_restart_and_double_submit(tmp_p
         await ui.click(f"w:{nonce}:submit")
         assert not store.rows("SELECT * FROM outbox")  # read-only config truly blocks network writes
         assert store.get_draft(ident, 7)["state"] == "DRAFT"
-        assert "отключены" in session.calls[-1].text
+        assert "отключены" in session.last_panel.text
     finally:
         await bot.session.close()
         store.close()
@@ -291,9 +291,13 @@ async def test_notification_reply_keeps_original_and_updates_after_durable_compl
         await worker.once()
         assert len(executed) == 1
         await Notifications(store, bot).once()
-        edit = session.calls[-1]
-        assert edit.__api_method__ == "editMessageText"
-        assert edit.message_id == 1
+        edits = [
+            call
+            for call in session.calls
+            if call.__api_method__ == "editMessageText" and call.message_id == 1
+        ]
+        assert edits, "Original notification must receive its confirmed result"
+        edit = edits[-1]
         assert "Original question" in edit.text and "remote-answer" in edit.text
         assert "подтверждено API" in edit.text
     finally:
@@ -455,7 +459,7 @@ async def test_order_notes_search_stock_and_guarded_delivery_ui(tmp_path):
         await ui.click("od:prepare:order")
         token = (await state.get_data())["order_token"]
         await ui.click("od:apply:" + token)
-        assert "отключены" in session.calls[-1].text and not store.rows("SELECT * FROM outbox")
+        assert "отключены" in session.last_panel.text and not store.rows("SELECT * FROM outbox")
         api.account.writes_enabled = True  # mock account only, never the real configuration
         await ui.click("od:apply:" + token)
         assert not store.rows("SELECT * FROM outbox")  # Local problem still blocks delivery.
@@ -517,7 +521,7 @@ async def test_fulfillment_checklist_router_requires_attestation_and_restores_co
         nonce = (await state.get_data())["fulfillment"]["nonce"]
         ui.dp = dispatcher(store, api)
         await ui.click("ff:" + nonce + ":submit")
-        assert "отключены" in session.calls[-1].text and not store.rows("SELECT * FROM outbox")
+        assert "отключены" in session.last_panel.text and not store.rows("SELECT * FROM outbox")
         api.account.writes_enabled = True
         await ui.click("ff:" + nonce + ":submit")
         await ui.click("ff:" + nonce + ":submit")
