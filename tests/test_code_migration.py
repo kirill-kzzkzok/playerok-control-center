@@ -328,3 +328,41 @@ async def test_automatic_migration_continues_independent_product_after_block(leg
     assert api.mutations == ["good"]
     assert service.logical.product("stable")["code"] == "#2163148"
     assert service.logical.product("second")["state"] == "VERIFIED"
+
+
+async def test_archived_old_code_discovered_later_keeps_reserved_new_code(legacy):
+    import copy
+
+    store, api, service = legacy
+    archive = {**copy.deepcopy(api.item), "id": "archive"}
+    archive["is_editable"] = False
+    # Keep the old description as evidence of a known immutable archive.
+    store.execute(
+        "INSERT INTO logical_listings(item_id,product_id,config_revision,description_sha256,server_status) VALUES('archive','stable',1,?,'SOLD')",
+        (digest(archive["description"]),),
+    )
+    original = api.call
+
+    async def before(method, **kwargs):
+        if kwargs.get("id") == "archive":
+            return copy.deepcopy(archive)
+        return await original(method, **kwargs)
+
+    api.call = before
+    assert (await service.run(7))["verified"] == 1
+    code = service.logical.product("stable")["code"]
+    relisted = {**copy.deepcopy(archive), "id": "new-old-title", "is_editable": True}
+
+    async def after(method, **kwargs):
+        if method == "get_my_items":
+            return {"items": [relisted], "page_info": {"has_next_page": False}}
+        if kwargs.get("id") == relisted["id"]:
+            return copy.deepcopy(relisted)
+        return await before(method, **kwargs)
+
+    api.call = after
+    assert await service.discover(7) == []
+    plan = await service.prepare(7)
+    assert plan["products"][0]["code"] == code
+    assert any(i["id"] == relisted["id"] and i["ready"] for i in plan["products"][0]["items"])
+    assert len(store.rows("SELECT * FROM logical_code_reservations")) == 1

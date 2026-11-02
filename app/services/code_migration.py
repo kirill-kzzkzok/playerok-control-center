@@ -86,8 +86,8 @@ class CodeMigration:
                 if not codes:
                     continue
                 parents = self.store.rows(
-                    "SELECT * FROM logical_products WHERE owner_id=? AND account_id=? AND code=?",
-                    (owner, account, codes[-1]),
+                    "SELECT p.* FROM logical_products p LEFT JOIN logical_code_migrations m ON m.product_id=p.id WHERE p.owner_id=? AND p.account_id=? AND (p.code=? OR m.old_code=?)",
+                    (owner, account, codes[-1], codes[-1]),
                 )
                 try:
                     if (
@@ -119,6 +119,10 @@ class CodeMigration:
                                 item.get("status"),
                                 item["name"],
                             ),
+                        )
+                        db.execute(
+                            "UPDATE logical_code_migrations SET state='REQUIRED',updated_at=? WHERE product_id=? AND state IN ('VERIFIED','MANUAL_REVIEW_REQUIRED')",
+                            (now(), parent["id"]),
                         )
                 except ValueError as error:
                     problems.append({"item_id": ident, "reason": str(error)})

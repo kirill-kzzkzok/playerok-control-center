@@ -5,6 +5,7 @@ Run from the store directory: python -m app.migrate_codes
 
 import asyncio
 import json
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -19,6 +20,18 @@ from app.services.playerok_connection import PlayerokConnection
 
 
 async def migrate(config):
+    if not config.writes_enabled:
+        raise RuntimeError("PLAYEROK_WRITES_ENABLED выключен; миграция не начата")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+    backup = config.database_path.parent / "backups" / ("before-title-codes-" + stamp + ".sqlite3")
+    # Preserve the original schema too, before Store applies any upgrade.
+    with sqlite3.connect(config.database_path.resolve().as_uri() + "?mode=ro", uri=True) as source:
+        expected = source.execute("SELECT value FROM settings WHERE key='playerok:account_id'").fetchone()
+        if not expected or not json.loads(expected[0]):
+            raise RuntimeError("Привязка аккаунта отсутствует; миграция не начата")
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(backup) as destination:
+            source.backup(destination)
     store = Store(config.database_path)
     account = SafeAccount(config.playerok_header, writes_enabled=config.writes_enabled)
     api = Playerok(account)
@@ -27,9 +40,6 @@ async def migrate(config):
         result = await connection.check(cooldown=0)
         if result["status"] != "CONNECTED" or not account.writes_enabled:
             raise RuntimeError("Нужны подтверждённый аккаунт и PLAYEROK_WRITES_ENABLED=true")
-        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
-        backup = config.database_path.parent / "backups" / ("before-title-codes-" + stamp + ".sqlite3")
-        store.backup(backup)
         owners = store.rows(
             "SELECT DISTINCT owner_id FROM logical_products WHERE account_id=?", (account.id,)
         )
