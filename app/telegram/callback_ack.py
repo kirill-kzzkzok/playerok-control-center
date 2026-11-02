@@ -81,6 +81,7 @@ def navigation(action):
             "finance:",
             "fin:options:",
             "auto:item:",
+            "platform:item:",
             "auto:check:",
             "stock:view:",
             "lp:item:",

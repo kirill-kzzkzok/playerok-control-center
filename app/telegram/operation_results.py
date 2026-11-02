@@ -80,6 +80,9 @@ class OperationResults:
                 reason = "Playerok не подтвердил сессию. Проверьте подключение; обход защиты не выполняется."
             if code.startswith("HTTP_"):
                 reason = "Playerok отклонил запрос. Проверьте данные и фактическое состояние объекта перед новым действием."
+            from app.services.platform_orders import REASONS
+
+            reason = REASONS.get(code, reason)
             text += "\n" + reason
         if status == "SUCCEEDED":
             if kind in {"delivery", "delivery_text"}:
@@ -96,7 +99,9 @@ class OperationResults:
                     text += "\nID: <code>" + escaped(result["remote_id"], 100) + "</code>"
                 if result.get("status") or result.get("remote_status"):
                     actual = result.get("status") or result["remote_status"]
-                    text += "\nСтатус в ответе сервера: " + human_status(actual, "item")
+                    text += "\nСтатус в ответе сервера: " + human_status(
+                        actual, "order" if kind == "fulfill" else "item"
+                    )
                     if actual in {"PENDING_APPROVAL", "PENDING_MODERATION"}:
                         text += "\nОжидает модерации; активным пока не считается."
                 if result.get("price") is not None:

@@ -101,8 +101,26 @@ class LogicalProductWorker:
         # ownership or payment authority by itself.
         paid_items, snapshot_orders = {}, {}
         cursor = self.store.setting(key + ":paid_cursor", "")
+
+        def validate_candidate_order(deal, ident):
+            if deal.get("is_automated") is not True:
+                return deliverable(deal, ident, account)
+            from app.services.platform_orders import platform_sale
+
+            code = marker((deal.get("item") or {}).get("description"))
+            candidates = [
+                p
+                for p in products
+                if json.loads(p["config"]).get("platform_only") is True
+                and p["code"] == code
+                and future_order(deal.get("created_at"), p["armed_at"])
+            ]
+            if len(candidates) != 1:
+                raise Conflict("Не подтверждена постоянная привязка выдачи Playerok")
+            return platform_sale(deal, ident, account)
+
         pending_orders = self.store.rows(
-            "SELECT o.id,o.item_id,o.payload FROM orders o WHERE o.status='PAID' AND o.id>? "
+            "SELECT o.id,o.item_id,o.payload FROM orders o WHERE (o.status='PAID' OR (o.status IN ('SENT','CONFIRMED','CONFIRMED_AUTOMATICALLY') AND json_extract(o.payload,'$.is_automated')=1)) AND o.id>? "
             "AND NOT EXISTS(SELECT 1 FROM logical_listings l WHERE l.item_id=o.item_id) ORDER BY o.id LIMIT 20",
             (cursor,),
         )
@@ -113,7 +131,9 @@ class LogicalProductWorker:
                 continue
             try:
                 deal = await self.api.call("get_deal", deal_id=row["id"])
-                deliverable(deal, row["id"], account)
+                if deal.get("is_automated") is True:
+                    deal = await self.api.call("get_delivery_deal", deal_id=row["id"])
+                validate_candidate_order(deal, row["id"])
                 if (deal.get("item") or {}).get("id") != row["item_id"]:
                     raise Conflict("Предмет сделки изменился")
                 try:
@@ -124,7 +144,7 @@ class LogicalProductWorker:
                     # Playerok deal.item can be a purchased snapshot whose ID
                     # is not a public item route. Read its full, exact deal.
                     deal = await self.api.call("get_delivery_deal", deal_id=row["id"])
-                    deliverable(deal, row["id"], account)
+                    validate_candidate_order(deal, row["id"])
                     observed = deal.get("item") or {}
                     if observed.get("id") != row["item_id"]:
                         raise Conflict("Снимок относится к другому предмету сделки")
@@ -183,7 +203,7 @@ class LogicalProductWorker:
                     source_order = snapshot_orders.get(item["id"])
                     if source_order:
                         current_deal = await self.api.call("get_delivery_deal", deal_id=source_order)
-                        deliverable(current_deal, source_order, account)
+                        validate_candidate_order(current_deal, source_order)
                         fresh = current_deal.get("item") or {}
                         Orders(self.store).ingest(current_deal)
                         paid_items[item["id"]] = current_deal

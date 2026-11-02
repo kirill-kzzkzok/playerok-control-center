@@ -63,10 +63,13 @@ class LogicalProductsPanel:
         rows = []
         if product:
             config = json.loads(product["config"])
+            platform = config.get("platform_only") is True
             text += "\nПостоянный код: " + escaped(product["code"], 20)
-            text += "\nСпособ: " + MODES[product["handler"]]
+            text += "\nСпособ: " + ("📦 Выдаёт Playerok" if platform else MODES[product["handler"]])
             text += "\nРазрешение выдачи: " + ("включено" if product["enabled"] else "выключено")
-            if product["handler"] == "telegram_gifts":
+            if platform:
+                text += "\nБот не отправляет товар повторно."
+            elif product["handler"] == "telegram_gifts":
                 bundle = config.get("bundle", [])
                 text += "\n" + escaped(gift_summary(bundle), 250)
                 text += f"\nСогласовано: {sum(g['stars'] for g in bundle)} ⭐"
@@ -114,15 +117,17 @@ class LogicalProductsPanel:
             )
             if product["enabled"] or active_projection:
                 rows.append([("⛔ Остановить выдачу товара", prefix + "stop")])
-            elif product["state"] == "VERIFIED" and product["handler"] != "manual":
+            elif product["state"] == "VERIFIED" and product["handler"] != "manual" and not platform:
                 rows.append([("▶️ Включить выдачу", prefix + "arm")])
             rows += [
-                [("Изменить настройки", prefix + "configure")],
+                [("Изменить настройки", "platform:item:" + item_id if platform else prefix + "configure")],
                 [("Связанные объявления", prefix + "links"), ("История заказов", prefix + "orders:0")],
                 [("🔄 Проверить перевыставление", prefix + "check")],
                 [("Отвязать товар", prefix + "detach")],
             ]
-            if product["handler"] != "manual":
+            if platform:
+                rows.append([("Сменить способ выдачи", prefix + "configure")])
+            elif product["handler"] != "manual":
                 rows.insert(1, [("Сообщение после выдачи", prefix + "editafter")])
             delivered = self.store.rows(
                 "SELECT o.id,o.created_at FROM logical_order_scopes s JOIN orders o ON o.id=s.order_id "
@@ -266,6 +271,7 @@ class LogicalProductsPanel:
             if value not in MODES:
                 raise Conflict("Неизвестный способ выдачи")
             config = json.loads(product["config"]) if product and product["handler"] == value else {}
+            config.pop("platform_only", None)
             if value == "telegram_gifts":
                 config.setdefault("after", config.get("options", {}).get("after", ""))
             await state.update_data(logical_setup={"handler": value, "config": config})

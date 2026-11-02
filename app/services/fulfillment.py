@@ -77,14 +77,29 @@ class Fulfillment:
         self.store, self.api = store, api
         self.orders = OrderManagement(store, api)
 
-    async def load(self, ident):
+    async def load(self, ident, *, platform=False):
         order = await self.api.call("get_deal", deal_id=ident)
-        deliverable(order, ident, self.api.account.id)
+        if platform:
+            from app.services.platform_orders import platform_sale
+
+            platform_sale(order, ident, self.api.account.id)
+            if order["status"] != "PAID":
+                raise ValidationError("Отметка продавца уже не требуется")
+        else:
+            deliverable(order, ident, self.api.account.id)
         self.orders.orders.ingest(order)
         if (order.get("item") or {}).get("seller_type") == "SYSTEM":
+            if platform:
+                from app.playerok.adapter import APIError
+
+                raise APIError("PLATFORM_SYSTEM_FULFILLMENT")
             raise ValidationError("Системный товар выполняется средствами Playerok")
         role = order["item"]["user"].get("role")
         if not isinstance(role, str) or role not in KNOWN_ROLES:
+            if platform:
+                from app.playerok.adapter import APIError
+
+                raise APIError("PLATFORM_ROLE_UNCONFIRMED")
             raise ValidationError("Роль продавца не подтверждена; старый способ не выбирается автоматически")
         mode = "legacy"
         if role == "OFFICIAL_SELLER":
@@ -99,6 +114,10 @@ class Fulfillment:
                     raise Conflict(
                         "Отчёт уже существует или его отсутствие не подтверждено; повтор не создаётся"
                     )
+        if platform and mode != "legacy":
+            from app.playerok.adapter import APIError
+
+            raise APIError("PLATFORM_REPORT_REQUIRED")
         state = {"order": order_snapshot(order), "role": role, "mode": mode, "checklist": SELLER_CHECK}
         snapshot = hashlib.sha256(encode(state).encode()).hexdigest()
         return {"id": ident, "snapshot": snapshot, "mode": mode, "order": order}

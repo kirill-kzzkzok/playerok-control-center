@@ -20,7 +20,7 @@ class EnrollmentWorker:
         with self.store.transaction() as db:
             rows = db.execute(
                 "SELECT o.id,o.payload,p.updated_at,p.revision FROM orders o JOIN delivery_policies p ON p.item_id=o.item_id "
-                "WHERE o.status='PAID' AND json_extract(p.payload,'$.enabled')=1 AND json_extract(p.payload,'$.auto_enroll')=1 "
+                "WHERE (o.status='PAID' OR (json_extract(p.payload,'$.mode')='playerok' AND o.status IN ('SENT','CONFIRMED','CONFIRMED_AUTOMATICALLY'))) AND json_extract(p.payload,'$.enabled')=1 AND json_extract(p.payload,'$.auto_enroll')=1 "
                 "AND NOT EXISTS(SELECT 1 FROM auto_enrollment e WHERE e.order_id=o.id AND e.policy_revision=p.revision) "
                 "AND NOT EXISTS(SELECT 1 FROM delivery_chains c WHERE c.order_id=o.id) ORDER BY o.created_at,o.id LIMIT 20"
             ).fetchall()

@@ -41,6 +41,7 @@ from app.telegram.operations_panel import OperationsPanel
 from app.telegram.order_finance_panel import OrderFinancePanel
 from app.telegram.orders_panel import OrdersPanel
 from app.telegram.paid_promotions_panel import PaidPromotionsPanel
+from app.telegram.platform_panel import PlatformPanel
 from app.telegram.presentation import error_text, local_time
 from app.telegram.profile_panel import ProfilePanel
 from app.telegram.promotions_panel import PromotionsPanel
@@ -79,6 +80,7 @@ def create_router(store, api, products, synchronizer):
     orders_panel = OrdersPanel(store, api)
     fulfillment_panel = FulfillmentPanel(store, api)
     automation_panel = AutomationPanel(store, api)
+    platform_panel = PlatformPanel(store, api)
     auto_replies_panel = AutoRepliesPanel(store, api)
     promotions_panel = PromotionsPanel(store, api)
     paid_promotions = PaidPromotionsPanel(store, api)
@@ -261,6 +263,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await listings_panel.show("items", state, restore=message.navigation_restoring)
             elif action == "promotions" or action.startswith(("promo:", "pp:", "pi:")):
                 text, markup = await promotions_panel.callback(action, owner, state)
+            elif action.startswith("platform:"):
+                text, markup = await platform_panel.callback(action, owner, state)
             elif action == "automation" or action.startswith(("auto:", "ap:")):
                 text, markup = await automation_panel.callback(action, owner, state)
             elif action.startswith("ff:"):
@@ -671,6 +675,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await orders_panel.message(message, state)
             elif current and current.startswith("profit:"):
                 text, markup = await order_finance_panel.message(message, state)
+            elif current and current.startswith("platform:"):
+                text, markup = await platform_panel.message(message, state)
             elif current and current.startswith("automation:"):
                 text, markup = await automation_panel.message(message, state)
             elif current and current.startswith("autoreply:"):

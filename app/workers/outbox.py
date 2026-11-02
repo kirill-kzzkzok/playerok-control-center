@@ -90,7 +90,9 @@ class Executor:
             DeliveryChains(self.store, self.api).dispatchable(action)
         if action["payload"].get("auto_reply"):
             AutoReplies(self.store, self.api).dispatchable(action)
-        if action["kind"] in {"delivery", "delivery_text", "chain_message"}:
+        if action["kind"] in {"delivery", "delivery_text", "chain_message"} and not action["payload"].get(
+            "platform_followup"
+        ):
             from app.services.logical_products import LogicalProducts
 
             local = self.store.rows("SELECT item_id FROM orders WHERE id=?", (action["target"],))
@@ -115,7 +117,7 @@ class Executor:
                 or j["listing_revision"] != l["revision"]
             ):
                 raise ValidationError("Подтверждение подарочной доставки больше не разрешает выполнение")
-        if action["kind"] in {"delivery", "fulfill"}:
+        if action["kind"] in {"delivery", "fulfill"} and not action["payload"].get("platform_followup"):
             orders = self.store.rows("SELECT payload,status FROM orders WHERE id=?", (action["target"],))
             if not orders or orders[0]["status"] != "PAID":
                 raise ValidationError("Сохранённое состояние продажи запрещает выполнение")
@@ -253,11 +255,25 @@ class Executor:
             return {"message_id": result["id"]}
         if kind == "fulfill":
             service = Fulfillment(self.store, self.api)
-            prepared = await service.load(target)
-            if prepared["snapshot"] != payload.get("snapshot") or prepared["mode"] != payload.get("mode"):
+            platform = payload.get("platform_followup") is True
+            if platform and not payload.get("chain_id"):
+                raise ValidationError("Нужно разрешение сохранённого сценария заказа")
+            if platform:
+                from app.services.platform_orders import PlatformOrders
+
+                current = await PlatformOrders(self.store, self.api).verify(action)
+                if current["status"] != "PAID":
+                    confirmed = await service.result(action)
+                    if confirmed:
+                        return confirmed
+                    raise ValidationError("Отметка не требуется; статус изменился")
+            prepared = await service.load(target, platform=platform)
+            if (not platform and prepared["snapshot"] != payload.get("snapshot")) or prepared[
+                "mode"
+            ] != payload.get("mode"):
                 raise ValidationError("Сделка или требование исполнения изменились")
             values = {key: value for key, value in payload.get("report", {}).items() if key != "state"}
-            report = await service.validate(prepared, values, payload.get("attested"))
+            report = {} if platform else await service.validate(prepared, values, payload.get("attested"))
             if report != payload.get("report"):
                 raise ValidationError("Снимок отчёта не соответствует подтверждению")
             if prepared["mode"] == "legacy":

@@ -79,6 +79,8 @@ class ItemPanel:
         binding = gifts.service.listing(ident)
         product = LogicalProducts(self.store, self.api).listing(ident)
         policy = self.store.rows("SELECT 1 FROM delivery_policies WHERE item_id=?", (ident,))
+        _, saved_policy = Automation(self.store, self.api).get(ident)
+        platform = saved_policy.mode == "playerok"
         gift_applicable = binding or (
             (item.get("category") or {}).get("id") == gifts.service.settings.category_id
             and (item.get("obtaining_type") or {}).get("id") == gifts.service.settings.obtaining_type_id
@@ -113,6 +115,19 @@ class ItemPanel:
                 + "\nВыдача: "
                 + delivery
             )
+            if platform:
+                text = (
+                    title
+                    + f"\nЦена: {escaped(item.get('price'), 40)} ₽\nСтатус: "
+                    + status(item.get("status"), "item")
+                )
+                text += "\nВыдача: 📦 Playerok"
+                text += "\nАвтоответ: " + (
+                    "🟢 Включён" if saved_policy.enabled and saved_policy.paid_reply else "выключен"
+                )
+                text += "\nАвтовыполнение: " + (
+                    "🟢 Включено" if saved_policy.enabled and saved_policy.mark_sent else "выключено"
+                )
             if product:
                 text += "\nКод товара: " + escaped(product["code"], 20)
                 text += "\nНаследовать настройки: " + (
@@ -150,7 +165,7 @@ class ItemPanel:
             ]
             if item.get("status") == "DRAFT":
                 rows.insert(0, [("🚀 Запустить продажи", "launch:item:" + ident)])
-            elif product and not product["enabled"] and product["handler"] != "manual":
+            elif product and not platform and not product["enabled"] and product["handler"] != "manual":
                 rows.insert(0, [("🚀 Запустить продажи", "lp:ready:" + ident)])
         elif section == "edit":
             text = title + "\nЧто изменить?"
@@ -162,6 +177,17 @@ class ItemPanel:
                 [("Характеристики и данные", "editfields:" + ident)],
             ] + photos
         elif section == "delivery":
+            if platform:
+                return (
+                    title + "\n📦 Товар выдаёт Playerok. Бот управляет только ответом и отметкой продавца.",
+                    keyboard(
+                        [
+                            [("📦 Выдаёт Playerok", "platform:item:" + ident)],
+                            [("Другой способ выдачи", "lp:item:" + ident)],
+                        ],
+                        back=("⬅️ К товару", "item:" + ident),
+                    ),
+                )
             text = (
                 title
                 + "\n"
@@ -188,6 +214,7 @@ class ItemPanel:
             for draft in stock.service.prepared(owner, ident):
                 rows.append([("📥 Перенести запас из мастера", "stock:transfer:" + draft)])
             rows.insert(0, [("⚡ Настроить выдачу товара", "lp:item:" + ident)])
+            rows.append([("📦 Выдаёт Playerok", "platform:item:" + ident)])
         elif section == "other":
             text = title + "\nДругие действия"
             rows = [

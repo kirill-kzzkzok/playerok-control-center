@@ -18,6 +18,15 @@ class DeliveryChains:
         self.policies.orders.owner(actor)
         if not self.api.account.writes_enabled or not getattr(self.api.account, "automation_enabled", False):
             raise ValidationError("Исполнение цепочек выключено в локальной конфигурации")
+        # Platform fulfilment does not transfer inventory/text a second time.
+        candidate = self.store.rows("SELECT item_id FROM orders WHERE id=?", (ident,))
+        revision, candidate_policy = self.policies.get(candidate[0]["item_id"] if candidate else "")
+        if candidate_policy.mode == "playerok":
+            from app.services.platform_orders import PlatformOrders
+
+            if not automatic or expected_revision != revision:
+                raise Conflict("Нужно действующее разрешение будущих покупок")
+            return await PlatformOrders(self.store, self.api).create(actor, ident, revision)
         order = await self.policies.orders.prepare_delivery(actor, ident)
         revision, policy = self.policies.get(order["item"]["id"])
         if expected_revision is not None and revision != expected_revision:
@@ -159,6 +168,8 @@ class DeliveryChains:
                         return False
                     continue
                 payload = {"chain_id": ident, "chain_position": step["position"], "text": step["text"]}
+                if json.loads(chain["policy"]).get("mode") == "playerok":
+                    payload.update(platform_followup=True, mode="legacy", report={})
                 if step["kind"] == "delivery":
                     payload["inventory_id"] = db.execute(
                         "SELECT inventory_id FROM reservations WHERE order_id=?", (ident,)
@@ -172,7 +183,12 @@ class DeliveryChains:
                     (operation, ident, step["position"]),
                 )
                 return True
-            status = "NEEDS_FULFILLMENT" if json.loads(chain["policy"]).get("mark_sent") else "SUCCEEDED"
+            saved = json.loads(chain["policy"])
+            status = (
+                "NEEDS_FULFILLMENT"
+                if saved.get("mark_sent") and saved.get("mode") != "playerok"
+                else "SUCCEEDED"
+            )
             db.execute("UPDATE delivery_chains SET status=? WHERE order_id=?", (status, ident))
             return True
 
@@ -189,7 +205,15 @@ class DeliveryChains:
         step = rows[0]
         from app.services.logical_products import LogicalProducts
 
-        LogicalProducts(self.store, self.api).require_delivery(step["item_id"], order_id=ident)
+        platform = json.loads(step["policy"]).get("mode") == "playerok"
+        if platform:
+            from app.services.platform_orders import PlatformOrders
+
+            PlatformOrders(self.store, self.api).guard(action)
+            if payload.get("platform_followup") is not True:
+                raise ValidationError("Не подтверждён режим выдачи Playerok")
+        else:
+            LogicalProducts(self.store, self.api).require_delivery(step["item_id"], order_id=ident)
         if (
             step["status"] != "ACTIVE"
             or step["operation_id"] != action["id"]
@@ -210,13 +234,32 @@ class DeliveryChains:
         if self.store.rows("SELECT 1 FROM order_annotations WHERE order_id=? AND problem=1", (ident,)):
             raise ValidationError("Локальная проблема блокирует автоматическую отправку")
         current = self.store.rows("SELECT status,payload FROM orders WHERE id=?", (ident,))
-        if not current or current[0]["status"] != "PAID":
+        if not current or (not platform and current[0]["status"] != "PAID"):
             raise ValidationError("Сохранённая история запрещает автоматическую отправку")
-        deliverable(json.loads(current[0]["payload"]), ident, self.api.account.id)
+        if not platform:
+            deliverable(json.loads(current[0]["payload"]), ident, self.api.account.id)
         return step
 
     async def verify_step(self, action):
         step = self.dispatchable(action)
+        if json.loads(step["policy"]).get("mode") == "playerok":
+            from app.services.platform_orders import PlatformOrders
+
+            order = await PlatformOrders(self.store, self.api).verify(action)
+            if action["kind"] == "fulfill":
+                return None
+            chat_id = (order.get("chat") or {}).get("id")
+            if not chat_id:
+                from app.playerok.adapter import APIError
+
+                raise APIError("PLATFORM_CHAT_UNAVAILABLE")
+            chat = await self.api.call("get_chat", chat_id=chat_id)
+            if chat.get("id") != chat_id or chat.get("is_texting_allowed") is not True:
+                from app.playerok.adapter import APIError
+
+                raise APIError("PLATFORM_CHAT_UNAVAILABLE")
+            self.dispatchable(action)
+            return chat_id
         from app.services.logical_products import LogicalProducts
 
         await LogicalProducts(self.store, self.api).fresh_delivery_item(step["item_id"])

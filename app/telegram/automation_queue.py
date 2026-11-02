@@ -83,7 +83,8 @@ class AutomationQueue:
 
     def chain_snapshot(self, ident):
         rows = self.store.rows(
-            "SELECT order_id,item_id,status,policy_revision FROM delivery_chains WHERE order_id=?", (ident,)
+            "SELECT order_id,item_id,status,policy_revision,json_extract(policy,'$.mode') AS mode FROM delivery_chains WHERE order_id=?",
+            (ident,),
         )
         if not rows:
             raise Conflict("Цепочка не найдена")
@@ -197,9 +198,24 @@ class AutomationQueue:
             )
             rows = []
             for step in steps:
-                text += f"\n{step['position'] + 1}. {step['kind']} · {step['status'] or 'ещё не поставлен'}"
+                platform = chain["mode"] == "playerok"
+                if platform:
+                    from app.services.platform_orders import REASONS
+                    from app.telegram.presentation import status
+
+                    label = "Ответ покупателю" if step["kind"] == "chain_message" else "Отметка продавца"
+                    text += f"\n{step['position'] + 1}. {label} · " + status(step["status"] or "PENDING")
+                else:
+                    text += (
+                        f"\n{step['position'] + 1}. {step['kind']} · {step['status'] or 'ещё не поставлен'}"
+                    )
                 if step["error_code"]:
-                    text += " · " + escaped(step["error_code"], 80)
+                    text += " · " + escaped(
+                        REASONS.get(step["error_code"], "Откройте операцию для проверки")
+                        if platform
+                        else step["error_code"],
+                        250,
+                    )
                 if step["operation_id"]:
                     rows.append(
                         [("Операция шага " + str(step["position"] + 1), "ops:show:" + step["operation_id"])]

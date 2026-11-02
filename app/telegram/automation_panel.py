@@ -144,6 +144,12 @@ class AutomationPanel:
             await state.set_data({"automation": data})
             return await self.callback(f"ap:{data['nonce']}:orders", owner, state)
         if len(parts) == 3 and parts[:2] == ["auto", "item"]:
+            if self.service.get(parts[2])[1].mode == "playerok":
+                from app.telegram.platform_panel import PlatformPanel
+
+                return await PlatformPanel(self.store, self.service.api).callback(
+                    "platform:item:" + parts[2], owner, state
+                )
             if LogicalProducts(self.store, self.service.api).listing(parts[2]):
                 from app.telegram.logical_products_panel import LogicalProductsPanel
 

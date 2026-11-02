@@ -626,6 +626,8 @@ class LogicalProducts:
 
     async def arm(self, owner, product_id, revision, *, inherit=False, item_id=None):
         product = self.product(product_id, owner)
+        if json.loads(product["config"]).get("platform_only"):
+            raise Conflict("Товар выдаёт Playerok. Включите нужные действия в настройках этого режима")
         self.authority(owner, product["account_id"], writes=True)
         if not getattr(self.api.account, "automation_enabled", False):
             raise Conflict("Автоматизация выключена в настройках подключения")
@@ -753,6 +755,7 @@ class LogicalProducts:
             not paid_order
             or paid_order.get("id") != source_order_id
             or product["handler"] != "telegram_gifts"
+            and not json.loads(product["config"]).get("platform_only")
         ):
             raise Conflict("Снимок сделки не разрешает этот способ выдачи")
         active = []
@@ -769,7 +772,12 @@ class LogicalProducts:
         if paid_order is not None:
             from app.services.order_management import deliverable
 
-            deliverable(paid_order, paid_order.get("id"), product["account_id"])
+            if json.loads(product["config"]).get("platform_only"):
+                from app.services.platform_orders import platform_sale
+
+                platform_sale(paid_order, paid_order.get("id"), product["account_id"])
+            else:
+                deliverable(paid_order, paid_order.get("id"), product["account_id"])
             if (paid_order.get("item") or {}).get("id") != item["id"] or not future_order(
                 paid_order.get("created_at"), product["armed_at"]
             ):
@@ -798,7 +806,8 @@ class LogicalProducts:
         if not links or any(link["description_sha256"] != digest(item["description"]) for link in links):
             raise Conflict("Описание нового объявления отличается от подтверждённого")
         config = json.loads(product["config"])
-        if product["handler"] == "telegram_gifts":
+        platform = config.get("platform_only") is True
+        if product["handler"] == "telegram_gifts" and not platform:
             gifts = self.gift_service()
             await gifts.refresh()
             if gifts.catalog_bundle(config["code"]) != config["bundle"]:
@@ -819,7 +828,12 @@ class LogicalProducts:
                 if not row:
                     raise Conflict("Сделка не найдена")
                 local_order = json.loads(row[0])
-                deliverable(local_order, source_order_id, product["account_id"])
+                if platform:
+                    from app.services.platform_orders import platform_sale
+
+                    platform_sale(local_order, source_order_id, product["account_id"])
+                else:
+                    deliverable(local_order, source_order_id, product["account_id"])
                 if (local_order.get("item") or {}).get("id") != item["id"]:
                     raise Conflict("Снимок относится к другой сделке")
             source = product["stock_item_id"]
@@ -827,7 +841,18 @@ class LogicalProducts:
             target_cost = self.store.setting(f"finance:{owner}:cost:{item['id']}")
             if source_cost is not None and target_cost is None:
                 self.store.set_setting(f"finance:{owner}:cost:{item['id']}", source_cost)
-            if product["handler"] == "telegram_gifts":
+            if platform:
+                old = db.execute(
+                    "SELECT p.* FROM delivery_policies p JOIN logical_listings l ON l.item_id=p.item_id WHERE l.product_id=? AND json_extract(p.payload,'$.mode')='playerok' AND json_extract(p.payload,'$.enabled')=1 ORDER BY p.updated_at DESC LIMIT 1",
+                    (product_id,),
+                ).fetchone()
+                if not old or self.store.setting(f"delivery:{old['item_id']}:enabled") is False:
+                    raise Conflict("Автоматизация Playerok исходного товара остановлена")
+                db.execute(
+                    "INSERT INTO delivery_policies VALUES(?,?,?,?,?)",
+                    (item["id"], old["revision"], owner, old["payload"], product["armed_at"]),
+                )
+            elif product["handler"] == "telegram_gifts":
                 sources = db.execute(
                     "SELECT l.item_id FROM logical_listings l JOIN gift_listings g ON g.item_id=l.item_id "
                     "WHERE l.product_id=? AND l.config_revision=? AND l.verified_at IS NOT NULL AND g.enabled=1 "
@@ -932,12 +957,16 @@ class LogicalProducts:
         if not binding or binding["state"] == "LEGACY":
             return None
         self.authority(binding["owner_id"], binding["account_id"])
+        platform = json.loads(binding["config"]).get("platform_only") is True
+        if platform and handler != "playerok":
+            raise Conflict("Товар выдаёт Playerok; повторная передача ботом запрещена")
         if (
             binding["state"] != "VERIFIED"
             or not binding["enabled"]
             or not binding["verified_at"]
             or binding["revision"] != binding["config_revision"]
             or handler
+            and not (platform and handler == "playerok")
             and binding["handler"] != handler
             or not order_id
             and binding["error_code"] is not None

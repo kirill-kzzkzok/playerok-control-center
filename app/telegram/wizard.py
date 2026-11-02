@@ -825,7 +825,7 @@ class Wizard:
             ident = await method(draft["id"], owner, draft["revision"])
             await state.clear()
             return (
-                "⏳ Подготавливаем товар на Playerok. Продажи ещё не открыты. Настройка выдачи и публикации продолжится здесь.",
+                "⏳ Ожидает выполнения: подготовка товара на Playerok. Продажи ещё не открыты. Настройка выдачи и публикации продолжится здесь.",
                 keyboard(
                     [
                         [("Открыть результат", "result:show:" + ident)],

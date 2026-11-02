@@ -173,6 +173,18 @@ class Store:
                 if (
                     chain
                     and kind == "fulfill"
+                    and not (
+                        payload.get("platform_followup") is True
+                        and payload.get("chain_id") == target
+                        and connection.execute(
+                            "SELECT 1 FROM delivery_chains c JOIN delivery_chain_steps s ON s.order_id=c.order_id WHERE c.order_id=? AND c.status='ACTIVE' AND json_extract(c.policy,'$.mode')='playerok' AND s.position=? AND s.kind='fulfill' AND s.operation_id IS NULL",
+                            (target, payload.get("chain_position")),
+                        ).fetchone()
+                        and not connection.execute(
+                            "SELECT 1 FROM delivery_chain_steps s LEFT JOIN outbox o ON o.id=s.operation_id WHERE s.order_id=? AND s.position<? AND (o.status IS NULL OR o.status!='SUCCEEDED')",
+                            (target, payload.get("chain_position")),
+                        ).fetchone()
+                    )
                     and connection.execute(
                         "SELECT 1 FROM delivery_chains WHERE order_id=? AND status!='NEEDS_FULFILLMENT' AND status!='SUCCEEDED'",
                         (target,),

@@ -135,7 +135,7 @@ class OrdersPanel:
         chat = (order.get("chat") or {}).get("id")
         if chat:
             rows.append([("💬 Диалог", "chat:" + chat), ("✉️ Написать", "compose:" + chat)])
-        if not cached and order["status"] == "PAID":
+        if not cached and order["status"] == "PAID" and order.get("is_automated") is not True:
             rows.append([("✅ Подтвердить выполнение", "ff:start:" + ident)])
             can_deliver = False
             try:
@@ -183,6 +183,8 @@ class OrdersPanel:
                 text += "\nВыдача: " + (
                     "подарок ожидает обработки"
                     if gift_listing
+                    else "📦 Playerok"
+                    if policy.mode == "playerok"
                     else "вручную"
                     if revision and policy.mode == "manual"
                     else "способ ещё не подтверждён — ожидается сверка"
@@ -193,6 +195,18 @@ class OrdersPanel:
                     text += "\nАвтовыдача: " + readiness["status"] + " · " + MODES[readiness["mode"]]
             if cached:
                 text += "\n⚠️ Сохранённые данные. Связь с Playerok не подтверждена."
+            followup = self.store.rows(
+                "SELECT s.kind,o.status,o.error_code FROM delivery_chains c JOIN delivery_chain_steps s ON s.order_id=c.order_id LEFT JOIN outbox o ON o.id=s.operation_id WHERE c.order_id=? AND json_extract(c.policy,'$.mode')='playerok' ORDER BY s.position",
+                (ident,),
+            )
+            if followup:
+                from app.services.platform_orders import REASONS
+
+                for step in followup:
+                    label = "Ответ покупателю" if step["kind"] == "chain_message" else "Отметка продавца"
+                    text += "\n" + label + ": " + status(step["status"] or "PENDING")
+                    if step["error_code"] in REASONS:
+                        text += "\n⚠️ " + REASONS[step["error_code"]]
             if order.get("has_problem") or annotation["problem"]:
                 text += "\n⚠️ Требует внимания — откройте подробности."
             # Keep availability from the existing guarded action list, never infer permission from UI state.
@@ -214,7 +228,20 @@ class OrdersPanel:
                 [("⋯ Подробнее", "od:details:" + ident)],
                 [("⬅️ К заказам", "orders")],
             ]
-            return text, keyboard(rows, home=False)
+            if followup:
+                rows.insert(0, [("Действия по заказу / проверка", "aq:chain:" + ident)])
+            markup = keyboard(rows, home=False)
+            if followup and any(step["error_code"] for step in followup):
+                markup.inline_keyboard.insert(
+                    1,
+                    [
+                        InlineKeyboardButton(
+                            text="🔗 Решить в Playerok",
+                            url="https://playerok.com/deal/" + quote(ident, safe=""),
+                        )
+                    ],
+                )
+            return text, markup
         markup = keyboard(rows)
         markup.inline_keyboard.insert(
             -1,

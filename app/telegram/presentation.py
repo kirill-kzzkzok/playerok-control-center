@@ -51,7 +51,7 @@ ITEM = {
     "DELETED": "Удалён",
     "BLOCKED": "Заблокирован",
 }
-MODES = {"manual": "Ручная", "stock": "Со склада", "text": "Постоянный текст"}
+MODES = {"manual": "Ручная", "stock": "Со склада", "text": "Постоянный текст", "playerok": "Выдаёт Playerok"}
 
 
 def status(value, context="operation"):

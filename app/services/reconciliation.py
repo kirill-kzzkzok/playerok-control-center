@@ -347,7 +347,10 @@ class Reconciliation:
                 # Finish a fully verified sequence, never resume pending/unknown sends.
                 if chain and steps and all(step["status"] == "SUCCEEDED" for step in steps):
                     state = (
-                        "NEEDS_FULFILLMENT" if json.loads(chain["policy"]).get("mark_sent") else "SUCCEEDED"
+                        "NEEDS_FULFILLMENT"
+                        if json.loads(chain["policy"]).get("mark_sent")
+                        and json.loads(chain["policy"]).get("mode") != "playerok"
+                        else "SUCCEEDED"
                     )
                     db.execute(
                         "UPDATE delivery_chains SET status=? WHERE order_id=? AND status='BLOCKED'",

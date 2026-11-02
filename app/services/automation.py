@@ -38,13 +38,17 @@ class DeliveryPolicy:
     after: str = ""
     mark_sent: bool = False
     auto_enroll: bool = False
+    paid_reply: bool = False
+    account_id: str = ""
 
     def __post_init__(self):
         if (
             type(self.enabled) is not bool
             or type(self.mark_sent) is not bool
             or type(self.auto_enroll) is not bool
-            or self.mode not in {"manual", "text", "stock"}
+            or type(self.paid_reply) is not bool
+            or not isinstance(self.account_id, str)
+            or self.mode not in {"manual", "text", "stock", "playerok"}
         ):
             raise ValidationError("Некорректная политика выдачи")
         message_text(self.text, required=self.mode == "text")
@@ -98,7 +102,12 @@ class Automation:
 
         try:
             LogicalProducts(self.store, self.api).require_delivery(
-                ident, "unique_stock" if policy.mode == "stock" else "fixed_text"
+                ident,
+                "playerok"
+                if policy.mode == "playerok"
+                else "unique_stock"
+                if policy.mode == "stock"
+                else "fixed_text",
             )
         except Conflict as error:
             reasons.append(str(error))
@@ -122,6 +131,8 @@ class Automation:
             reasons.append("последняя сверка завершилась ошибкой")
         if not getattr(self.api.account, "id", None):
             reasons.append("сессия Playerok не подтверждена")
+        if policy.mode == "playerok" and policy.account_id != getattr(self.api.account, "id", None):
+            reasons.append("подключён другой аккаунт Playerok")
         if policy.mode == "stock" and not counts["AVAILABLE"]:
             reasons.append("нет доступного запаса")
         stopped = (revision and not policy.enabled) or guard is False
@@ -138,6 +149,20 @@ class Automation:
         }
 
     def status_text(self, ident):
+        _, policy = self.get(ident)
+        if policy.mode == "playerok":
+            return (
+                "📦 Выдача: Playerok\nАвтоответ: "
+                + ("включён" if policy.enabled and policy.paid_reply else "выключен")
+                + "\nАвтоматическая отметка продавца: "
+                + (
+                    "включена, если отчёт не требуется"
+                    if policy.enabled and policy.mark_sent
+                    else "выключена"
+                )
+                + "\nАвтоматизация: "
+                + self.readiness(ident)["status"]
+            )
         if self.store.rows("SELECT 1 FROM gift_listings WHERE item_id=?", (ident,)):
             from app.gifts.service import GiftService
             from app.gifts.settings import GiftSettings
@@ -146,7 +171,12 @@ class Automation:
                 self.store, self.api, getattr(self.api, "gift_settings", None) or GiftSettings.load()
             ).status_text(ident)
         v = self.readiness(ident)
-        mode = {"manual": "Ручной", "text": "Постоянный текст", "stock": "Уникальный запас"}[v["mode"]]
+        mode = {
+            "manual": "Ручной",
+            "text": "Постоянный текст",
+            "stock": "Уникальный запас",
+            "playerok": "Выдаёт Playerok",
+        }[v["mode"]]
         text = f"⚡ Автоматизация: {v['status']}\nДействующий режим: {mode} · политика v{v['revision']}"
         text += f"\nЗапас: {v['counts']['AVAILABLE']} доступно · {v['counts']['RESERVED']} в резерве · {v['counts']['DELIVERED']} выдано · {v['counts']['QUARANTINED']} в карантине"
         text += f"\nГлобальные разрешения: записи {'да' if v['writes'] else 'нет'}, автоматика {'да' if v['runtime'] else 'нет'}"
@@ -164,6 +194,8 @@ class Automation:
         from app.services.logical_products import stock_scope
 
         policy = DeliveryPolicy(**payload)
+        if policy.mode == "playerok":
+            raise ValidationError("Настройте режим «Выдаёт Playerok» в карточке товара")
         if policy.enabled and policy.auto_enroll and future_confirmed is not True:
             raise ValidationError("Нужно отдельно подтвердить автоматическую выдачу будущим заказам")
         item = await self.item(actor, ident)
@@ -228,7 +260,7 @@ class Automation:
 
             logical = LogicalProducts(self.store, self.api)
             for product in db.execute(
-                "SELECT id FROM logical_products WHERE owner_id=? AND handler IN ('fixed_text','unique_stock') AND enabled=1",
+                "SELECT id FROM logical_products WHERE owner_id=? AND enabled=1 AND (handler IN ('fixed_text','unique_stock') OR json_extract(config,'$.platform_only')=1)",
                 (actor,),
             ).fetchall():
                 logical.stop(actor, product["id"])
