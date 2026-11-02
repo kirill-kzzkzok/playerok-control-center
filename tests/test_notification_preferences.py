@@ -138,7 +138,7 @@ async def test_settings_dispatcher_toggle_restart_stale_callback_and_foreign_acc
         dp = dispatcher(store, api)
         ui = Interaction(bot, dp)
         await ui.click("sp:notifications")
-        assert "🔕 Сообщения" in session.calls[-1].reply_markup.inline_keyboard[0][0].text
+        assert "🔕 Сообщения" in session.last_panel.reply_markup.inline_keyboard[0][0].text
         await ui.click("sp:notify:0:messages:1")
         assert "изменились" in session.calls[-1].text
         await ui.click("sp:notify:1:messages:1", owner=8)

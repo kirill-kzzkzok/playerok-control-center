@@ -85,7 +85,7 @@ async def test_dispatcher_filters_compose_persist_restart_validate_and_reset(tmp
     def item_buttons():
         return {
             button.callback_data
-            for row in session.calls[-1].reply_markup.inline_keyboard
+            for row in session.last_panel.reply_markup.inline_keyboard
             for button in row
             if button.callback_data.startswith("item:")
         }

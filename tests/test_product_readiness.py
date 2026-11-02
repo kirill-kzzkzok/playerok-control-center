@@ -166,6 +166,7 @@ async def test_network_failure_keeps_last_success_and_does_not_mask_internal_err
     r.api.call = broken_call
     with pytest.raises(RuntimeError):
         await service.check(7, "lot")
+    assert not service.snapshot("lot", item=r.api.item)["ready"]
     assert not r.api.remote.payments
 
 
@@ -200,3 +201,13 @@ async def test_repeated_identical_status_does_not_attempt_same_message_edit(shop
         await r.ui.click("status:view:0")
     after = sum(c.__api_method__ in {"editMessageText", "sendMessage"} for c in r.session.calls)
     assert after == before
+
+
+async def test_partial_catalog_card_is_unknown_not_changed_description(shop):
+    r = await shop()
+    await configure(r)
+    partial = {key: r.api.item[key] for key in ("id", "name", "price", "status", "user")}
+    result = ProductReadiness(r.store, r.api).snapshot("lot", item=partial)
+    codes = {p["code"] for p in result["problems"]}
+    assert "ITEM_CHANGED" not in codes
+    assert "ITEM_UNCHECKED" in codes and result["state"] == "UNKNOWN"

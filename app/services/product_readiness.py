@@ -42,9 +42,9 @@ class ProductReadiness:
         product = self.logical.listing(ident)
         policy_error = False
         try:
-            _, policy = self.automation.get(ident)
+            revision, policy = self.automation.get(ident)
         except ValidationError:
-            policy, policy_error = DeliveryPolicy(), True
+            revision, policy, policy_error = 0, DeliveryPolicy(), True
         gift = self.gifts.listing(ident)
         config = json.loads(product["config"]) if product else {}
         mode = (
@@ -56,6 +56,7 @@ class ProductReadiness:
             if product
             else {"stock": "unique_stock", "text": "fixed_text"}.get(policy.mode, "manual")
         )
+        unconfigured = not revision and not product and not gift
         enabled = bool(gift["enabled"]) if mode == "telegram_gifts" and gift else bool(policy.enabled)
         problems = []
 
@@ -157,7 +158,19 @@ class ProductReadiness:
                     "lp:item:" + ident,
                     terminal=True,
                 )
-            if item and product["state"] == "VERIFIED":
+            complete_item = item and all(
+                item.get(key) is not None
+                for key in ("description", "category", "obtaining_type", "price", "name")
+            )
+            if item and product["state"] == "VERIFIED" and not complete_item:
+                add(
+                    "ITEM_UNCHECKED",
+                    "В списке товаров нет полного описания и параметров. Для проверки привязки откройте товар или выполните проверку.",
+                    "Проверить объявление",
+                    "rd:check:" + ident,
+                    unknown=True,
+                )
+            if complete_item and product["state"] == "VERIFIED":
                 try:
                     self.logical.verify_listing(product, item)
                 except (Conflict, ValueError):
@@ -392,6 +405,8 @@ class ProductReadiness:
             if blocking
             else "READY"
         )
+        if unconfigured:
+            mode, state = "unconfigured", "UNKNOWN"
         return {
             "item_id": ident,
             "product_id": product["id"] if product else None,
@@ -476,6 +491,19 @@ class ProductReadiness:
                         "сервер или подключение не подтвердили данные. Сохранённые замеры не считаются свежим подтверждением.",
                     )
                 )
+            except Exception as exc:
+                self.store.set_setting(
+                    "readiness:" + ident,
+                    {
+                        **self.store.setting("readiness:" + ident, {}),
+                        "error": "Внутренняя ошибка проверки. Готовность не подтверждена; откройте диагностику и передайте разработчику время ошибки.",
+                        "success": old.get("success"),
+                    },
+                )
+                event(
+                    "ERROR", f"Readiness stage=check type={type(exc).__name__} code=INTERNAL_ERROR", level=40
+                )
+                raise
             record = self.store.setting("readiness:" + ident, {})
             self.store.set_setting(
                 "readiness:" + ident,
