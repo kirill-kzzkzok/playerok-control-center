@@ -59,6 +59,27 @@ class CodeMigrationPanel:
         )
         text = "📋 <b>Результаты переноса</b>"
         buttons = []
+        report = self.store.setting(f"title_codes:report:{account}:{owner}", {})
+        problems = report.get("problems", [])
+        if problems and page == 0:
+            text += "\n\n⚠️ <b>Проблемы переноса</b>"
+            for problem in problems[:6]:
+                reason = {
+                    "RATE_LIMITED": "Playerok ограничил запросы. Дождитесь снятия ограничения.",
+                    "NETWORK_ERROR": "Не удалось прочитать Playerok. Изменение не подтверждено.",
+                    "TimeoutError": "Проверка не завершилась. Требуется сверка результата.",
+                }.get(problem["reason"], problem["reason"])
+                name = "Каталог Playerok"
+                links = self.store.rows(
+                    "SELECT l.item_id,l.title_snapshot,p.baseline FROM logical_listings l JOIN logical_products p ON p.id=l.product_id WHERE l.product_id=? LIMIT 1",
+                    (problem.get("product_id"),),
+                )
+                if links:
+                    name = (
+                        links[0]["title_snapshot"] or json.loads(links[0]["baseline"]).get("name") or "Товар"
+                    )
+                    buttons.append([("Открыть · " + name[:22], "item:" + links[0]["item_id"])])
+                text += "\n• " + escaped(name, 70) + ": " + escaped(reason, 240)
         for row in rows[:10]:
             name = json.loads(row["after_snapshot"])["name"]
             state = row["external_status"] or row["state"]
@@ -67,8 +88,8 @@ class CodeMigrationPanel:
                 buttons.append([("🔎 Сверить " + name[:22], "codes:reconcile:" + row["item_id"])])
             if row["operation_id"]:
                 buttons.append([("Подробнее · " + name[:22], "result:show:" + row["operation_id"])])
-        if not rows:
-            text += "\nЗаписей пока нет. Начните с предварительной проверки."
+        if not rows and not problems:
+            text += "\nЗаписей пока нет. Запустите безопасный перенос из предыдущего экрана."
         if page:
             buttons.append([("←", f"codes:results:{page - 1}")])
         if len(rows) > 10:

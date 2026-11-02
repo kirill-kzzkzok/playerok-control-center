@@ -402,3 +402,16 @@ async def test_stopping_unknown_premium_does_not_make_product_safe_to_rename(leg
     plan = await service.prepare(7)
     assert not plan["products"][0]["ready"]
     assert not api.mutations
+
+
+async def test_automatic_migration_surfaces_blockers_in_telegram_without_confirmation(legacy):
+    from app.telegram.code_migration_panel import CodeMigrationPanel
+
+    store, api, service = legacy
+    api.item["is_editable"] = False
+    report = await service.run(7)
+    assert report["problems"]
+    text, _ = CodeMigrationPanel(store, api).results(7, 0)
+    assert "Проблемы переноса" in text
+    assert "ограничения" in text
+    assert not api.mutations

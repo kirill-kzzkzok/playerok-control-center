@@ -150,7 +150,16 @@ class CodeMigration:
                 try:
                     await self.reconcile(owner, row["item_id"])
                 except (ValueError, APIError, TimeoutError) as error:
-                    problems.append({"item_id": row["item_id"], "reason": type(error).__name__})
+                    problems.append(
+                        {
+                            "item_id": row["item_id"],
+                            "reason": error.code
+                            if isinstance(error, APIError)
+                            else str(error)
+                            if isinstance(error, ValueError)
+                            else type(error).__name__,
+                        }
+                    )
 
         await reconcile_unknown()
         plan = await self.prepare(owner)
@@ -161,7 +170,16 @@ class CodeMigration:
             try:
                 self.queue(owner, {**plan, "products": [value]})
             except (ValueError, APIError) as error:
-                problems.append({"product_id": value["product_id"], "reason": type(error).__name__})
+                problems.append(
+                    {
+                        "product_id": value["product_id"],
+                        "reason": error.code
+                        if isinstance(error, APIError)
+                        else str(error)
+                        if isinstance(error, ValueError)
+                        else type(error).__name__,
+                    }
+                )
         worker = OutboxWorker(self.store, Executor(self.store, self.api, Products(self.store, self.api)))
         # Include durable unstarted operations left by a previous process. Each is
         # attempted at most once in this invocation; unknown results are reads only.
@@ -176,7 +194,14 @@ class CodeMigration:
             "SELECT m.item_id,m.state,m.error_code FROM logical_code_migration_items m JOIN logical_products p ON p.id=m.product_id WHERE p.owner_id=? AND p.account_id=?",
             (owner, self.api.account.id),
         )
-        return {"verified": sum(r["state"] == "VERIFIED" for r in rows), "items": rows, "problems": problems}
+        report = {
+            "verified": sum(r["state"] == "VERIFIED" for r in rows),
+            "items": rows,
+            "problems": problems,
+            "at": now(),
+        }
+        self.store.set_setting(f"title_codes:report:{self.api.account.id}:{owner}", report)
+        return report
 
     def idle(self, product_id):
         args = (product_id,)
