@@ -4,7 +4,10 @@ import asyncio
 
 from app.database.store import Conflict
 from app.gifts.service import GiftService
+from app.playerok.adapter import APIError
 from app.services.fulfillment import Fulfillment
+from app.services.order_management import deal_details, deliverable
+from app.services.orders import Orders
 
 
 class GiftWorker:
@@ -14,6 +17,20 @@ class GiftWorker:
 
     async def once(self):
         service = self.service
+        if service.runtime():
+            for row in self.store.rows(
+                "SELECT o.id,o.item_id FROM orders o JOIN gift_listings l ON l.item_id=o.item_id WHERE o.status='PAID' AND l.enabled=1 AND json_extract(o.payload,'$.chat.id') IS NULL AND NOT EXISTS(SELECT 1 FROM gift_jobs g WHERE g.order_id=o.id) ORDER BY o.created_at DESC LIMIT 10"
+            ):
+                try:
+                    order = await deal_details(self.api, row["id"])
+                    deliverable(order, row["id"], self.api.account.id)
+                    if order["item"]["id"] != row["item_id"]:
+                        raise Conflict("Предмет сделки изменился")
+                    Orders(self.store).ingest(order)
+                except (ValueError, APIError) as error:
+                    self.store.audit(
+                        None, "GIFT_DEAL_DETAILS", row["id"], getattr(error, "code", "DETAILS_NOT_CONFIRMED")
+                    )
         created = service.discover()
         for j in self.store.rows(
             "SELECT g.* FROM gift_jobs g WHERE "

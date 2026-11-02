@@ -18,7 +18,7 @@ from app.gifts.core import (
 from app.gifts.mtproto import GiftFailure, InvalidRecipient
 from app.localvpn import active_proxy
 from app.security.logging import event
-from app.services.order_management import deliverable, sale
+from app.services.order_management import deal_details, deliverable, sale
 from app.services.orders import Orders
 
 
@@ -508,8 +508,11 @@ class GiftService:
         from app.services.logical_products import LogicalProducts
 
         binding = LogicalProducts(self.store, self.api).listing(job["item_id"])
-        method = "get_delivery_deal" if binding and binding["source_order_id"] else "get_deal"
-        order = await self.api.call(method, deal_id=job["order_id"])
+        order = (
+            await self.api.call("get_delivery_deal", deal_id=job["order_id"])
+            if binding and binding["source_order_id"]
+            else await deal_details(self.api, job["order_id"])
+        )
         deliverable(order, job["order_id"], self.api.account.id)
         if order["item"]["id"] != job["item_id"]:
             raise GiftFailure("ORDER_ITEM_CHANGED")
@@ -760,7 +763,7 @@ class GiftService:
             "UPDATE gift_jobs SET state='INVALID_RECIPIENT',error_code=?,refund_state='MANUAL',updated_at=? WHERE order_id=? AND state='CHECKING'",
             (code, now(), job["order_id"]),
         )
-        order = await self.api.call("get_deal", deal_id=job["order_id"])
+        order = await deal_details(self.api, job["order_id"])
         deliverable(order, job["order_id"], self.api.account.id)
         listing = self.listing(job["item_id"])
         if (order.get("item") or {}).get("id") != job["item_id"] or buyer_recipient(

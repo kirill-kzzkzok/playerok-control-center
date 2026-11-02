@@ -36,6 +36,29 @@ def deliverable(order, ident, account_id):
     return order
 
 
+async def deal_details(api, ident, *, full_item=False, need_chat=True):
+    """Persisted/list deals may omit chat and item fields; omissions are not refusals.
+
+    Read the SAME deal through the full contract before applying delivery guards.
+    Never infer a chat or switch a purchased item to a different public listing.
+    """
+    order = await api.call("get_deal", deal_id=ident)
+    sale(order, ident, api.account.id)
+    item = order.get("item") or {}
+    if (
+        need_chat
+        and not (order.get("chat") or {}).get("id")
+        or full_item
+        and (not item.get("description") or not (item.get("category") or {}).get("id"))
+    ):
+        detailed = await api.call("get_delivery_deal", deal_id=ident)
+        sale(detailed, ident, api.account.id)
+        if (detailed.get("item") or {}).get("id") != item["id"]:
+            raise Conflict("Полная сделка относится к другому товару; выдача остановлена")
+        order = detailed
+    return order
+
+
 def order_snapshot(order):
     value = {key: order.get(key) for key in ("id", "direction", "status", "has_problem", "is_automated")}
     value.update(item_id=(order.get("item") or {}).get("id"), chat_id=(order.get("chat") or {}).get("id"))

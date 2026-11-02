@@ -75,7 +75,9 @@ async def execute_followup(executor, action):
     service = executor.gifts()
     target = action["target"]
     j = service.job(target)
-    order = await executor.api.call("get_deal", deal_id=target)
+    from app.services.order_management import deal_details
+
+    order = await deal_details(executor.api, target)
     sale(order, target, executor.api.account.id)
     if (
         ((order.get("item") or {}).get("user") or {}).get("id") != executor.api.account.id

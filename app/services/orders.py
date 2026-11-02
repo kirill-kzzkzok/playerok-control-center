@@ -31,6 +31,15 @@ class Orders:
                 db.execute("UPDATE inbox SET processed_at=? WHERE key=?", (now(), key))
                 return False
             old_payload = json.loads(previous["payload"]) if previous else {}
+            # Chat identity is immutable for the same order/item. A partial list
+            # response omitting it must not erase a previously observed detail.
+            # Real chat availability is still checked freshly before sending.
+            if (
+                not (order.get("chat") or {}).get("id")
+                and (old_payload.get("chat") or {}).get("id")
+                and (old_payload.get("item") or {}).get("id") == item["id"]
+            ):
+                order = {**order, "chat": old_payload["chat"]}
             # List responses can omit the immutable upstream date supplied by get_deal.
             # Preserve that date in the payload; the SQL ingest fallback is not evidence.
             if (

@@ -62,6 +62,7 @@ async def test_paid_snapshot_404_binds_exact_order_and_bundle_survives_restart(c
     reopen(r)
     await r.worker.once()
     assert len(r.api.remote.payments) == 2
+
     assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "SUCCEEDED"}]
     assert not await r.worker.once()
     assert r.store.rows("SELECT status FROM orders WHERE id='snapshot-paid'") == [{"status": "PAID"}]
@@ -71,6 +72,90 @@ async def test_paid_snapshot_404_binds_exact_order_and_bundle_survives_restart(c
     await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
     assert not r.store.rows("SELECT 1 FROM gift_jobs WHERE order_id='other-order'")
     assert len(r.api.remote.payments) == 2
+
+
+async def test_real_partial_without_chat_is_hydrated_before_validation_and_sync_cannot_erase_chat(case):
+    r = case
+    r.partial["chat"] = None
+    r.partial["item"]["category"] = None
+    Orders(r.store).ingest(r.partial)
+    await LogicalProductWorker(r.store, r.api).once()
+    link = LogicalProducts(r.store, r.api).listing("deal-item-copy")
+    assert link is not None, "An incomplete list deal must not stop the authoritative read"
+    # A polling response may overwrite the detail right before gift enrollment/dispatch.
+    Orders(r.store).ingest(r.partial)
+    gifts = GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender)
+    await gifts.once()
+    assert r.store.rows("SELECT order_id FROM gift_jobs") == [{"order_id": "snapshot-paid"}]
+    Orders(r.store).ingest(r.partial)
+    await r.worker.once()
+    Orders(r.store).ingest(r.partial)
+    await r.worker.once()
+    assert len(r.api.remote.payments) == 2
+    assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "SUCCEEDED"}]
+    assert not await r.worker.once()
+
+
+async def test_manually_completed_partial_purchase_never_gets_catchup_gift(case):
+    r = case
+    r.partial.update(chat=None, status="CONFIRMED")
+    r.full["status"] = "CONFIRMED"
+    Orders(r.store).ingest(r.partial)
+    await LogicalProductWorker(r.store, r.api).once()
+    await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+    assert not r.store.rows("SELECT * FROM gift_jobs")
+    assert not r.api.remote.payments
+
+
+async def test_known_gift_listing_also_hydrates_missing_chat_before_payment(case):
+    r = case
+    full = {**copy.deepcopy(r.full), "id": "known-paid", "item": copy.deepcopy(r.original)}
+    partial = {**copy.deepcopy(full), "chat": None}
+    partial["item"].update(description=None, category=None)
+    original = r.api.call
+
+    async def call(method, **kwargs):
+        if method == "get_deal" and kwargs["deal_id"] == "known-paid":
+            return copy.deepcopy(partial)
+        if method == "get_delivery_deal" and kwargs["deal_id"] == "known-paid":
+            return copy.deepcopy(full)
+        return await original(method, **kwargs)
+
+    r.api.call = call
+    Orders(r.store).ingest(partial)
+    await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+    assert r.store.rows("SELECT order_id FROM gift_jobs") == [{"order_id": "known-paid"}]
+    await r.worker.once()
+    await r.worker.once()
+    assert len(r.api.remote.payments) == 2
+
+
+@pytest.mark.parametrize("fault", ["missing-chat", "other-order", "other-item", "other-owner"])
+async def test_incomplete_paid_deal_never_uses_an_unconfirmed_full_response(case, fault):
+    r = case
+    r.partial["chat"] = None
+    if fault == "missing-chat":
+        r.full["chat"] = None
+    elif fault == "other-order":
+        r.full["id"] = "wrong-order"
+    elif fault == "other-item":
+        r.full["item"]["id"] = "wrong-item"
+    else:
+        r.full["item"]["user"]["id"] = "wrong-owner"
+    Orders(r.store).ingest(r.partial)
+    for _ in range(2):
+        await LogicalProductWorker(r.store, r.api).once()
+        await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+    assert not r.store.rows("SELECT * FROM gift_jobs")
+    assert not r.api.remote.payments
+    assert (
+        len(
+            r.store.rows(
+                "SELECT outcome FROM audit_log WHERE action='DEAL_BINDING_BLOCKED' AND target='snapshot-paid'"
+            )
+        )
+        == 1
+    )
 
 
 @pytest.mark.parametrize("fault", ["closed", "owner", "price", "attributes", "description", "stopped"])

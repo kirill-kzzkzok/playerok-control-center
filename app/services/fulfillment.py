@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from app.database.store import Conflict, encode
-from app.services.order_management import OrderManagement, deliverable, order_snapshot
+from app.services.order_management import OrderManagement, deal_details, deliverable, order_snapshot
 from app.services.products import ValidationError
 
 SELLER_CHECK = "Я передал(а) товар покупателю и выполнил(а) заказ"
@@ -78,7 +78,7 @@ class Fulfillment:
         self.orders = OrderManagement(store, api)
 
     async def load(self, ident, *, platform=False):
-        order = await self.api.call("get_deal", deal_id=ident)
+        order = await deal_details(self.api, ident, need_chat=not platform)
         if platform:
             from app.services.platform_orders import platform_sale
 

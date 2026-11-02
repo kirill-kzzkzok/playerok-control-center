@@ -10,7 +10,7 @@ from app.playerok.adapter import APIError
 from app.security.logging import event
 from app.services.automation import future_order
 from app.services.logical_products import LogicalProducts, critical, marker
-from app.services.order_management import deliverable
+from app.services.order_management import deal_details, deliverable
 from app.services.orders import Orders
 from app.workers.pagination import PageScanner
 from playerokapi.enums import ItemStatuses
@@ -130,9 +130,7 @@ class LogicalProductWorker:
             if not any(future_order(local.get("created_at"), p["armed_at"]) for p in products):
                 continue
             try:
-                deal = await self.api.call("get_deal", deal_id=row["id"])
-                if deal.get("is_automated") is True:
-                    deal = await self.api.call("get_delivery_deal", deal_id=row["id"])
+                deal = await deal_details(self.api, row["id"], full_item=True)
                 validate_candidate_order(deal, row["id"])
                 if (deal.get("item") or {}).get("id") != row["item_id"]:
                     raise Conflict("Предмет сделки изменился")
@@ -155,7 +153,18 @@ class LogicalProductWorker:
                 paid_items[row["item_id"]] = deal
                 if not any(item["id"] == row["item_id"] for item in snapshot):
                     snapshot.append(observed)
-            except ValueError:
+            except ValueError as error:
+                code = "FULL_DEAL_VALIDATION_" + type(error).__name__.upper()
+                if not self.store.rows(
+                    "SELECT 1 FROM audit_log WHERE action='DEAL_BINDING_BLOCKED' AND target=? AND outcome=? LIMIT 1",
+                    (row["id"], code),
+                ):
+                    self.store.audit(None, "DEAL_BINDING_BLOCKED", row["id"], code)
+                    event(
+                        "WARNING",
+                        "Не удалось подтвердить полную карточку покупки; выдача не запускалась · " + code,
+                        order=row["id"],
+                    )
                 continue
             except APIError as error:
                 self.store.audit(None, "DEAL_ITEM_READ", row["id"], error.code)
