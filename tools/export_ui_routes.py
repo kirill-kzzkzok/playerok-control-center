@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HANDLERS = {}
 for prefixes, handler in [
     ("gft", "GiftsPanel.callback"),
+    ("lp", "LogicalProductsPanel.callback"),
     ("fin finance providers", "FinancePanel.callback"),
     ("sg stats st sd sr", "StatisticsPanel.handle"),
     ("payp", "PaidPromotionsPanel.callback"),
@@ -18,7 +19,7 @@ for prefixes, handler in [
     ("dl drafts", "DraftsPanel.callback"),
     ("draft launch ln", "LaunchPanel / Wizard / router"),
     ("il icp listnext itemfilter itemfilters items chats", "ListingsPanel / ItemCategoryPicker / router"),
-    ("iv item itemmedia", "ItemPanel / router"),
+    ("iv item itemmedia ipe", "ItemPanel / router"),
     ("chat chatpage chatmore chatmedia", "ChatPanel / router"),
     ("stock", "StockPanel.callback"),
     ("ff", "FulfillmentPanel.callback"),
