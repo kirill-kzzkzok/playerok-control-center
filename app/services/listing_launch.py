@@ -72,6 +72,9 @@ class ListingLaunch:
             mode = value.get("delivery", "manual")
             if mode not in {"manual", "text", "stock", "gifts"}:
                 mode = "manual"
+            imported = mode == "stock" and self.store.rows(
+                "SELECT 1 FROM draft_stock_imports WHERE item_id=? AND owner_id=?", (target, owner)
+            )
             ident = self.store.draft(
                 owner,
                 {
@@ -80,7 +83,7 @@ class ListingLaunch:
                     "mode": mode,
                     "gift_code": value.get("gift_code"),
                     "inherit": False,
-                    "data": value.get("delivery_data", ""),
+                    "data": "" if imported else value.get("delivery_data", ""),
                     "greeting": "",
                     "after": "",
                     "auto_complete": False,
@@ -204,7 +207,11 @@ class ListingLaunch:
                 auto_enroll=True,
             )
             if mode == "stock":
-                preview = Inventory(self.store, self.api).preview(item["id"], value["data"])
+                preview = (
+                    Inventory(self.store, self.api).preview(item["id"], value["data"])
+                    if value["data"].strip()
+                    else {"empty": 0, "duplicates": 0, "new": 0}
+                )
                 if preview["empty"] or preview["duplicates"]:
                     raise ValidationError("В запасе есть пустые строки или повторы. Исправьте загрузку")
                 result["units"] = (
@@ -273,7 +280,7 @@ class ListingLaunch:
             if amount <= 0:
                 raise ValidationError("Цена PREMIUM не подтверждена")
             policy = PromotionPolicy(**value["promotion_policy"])
-            if (
+            if (not value.get("manual_premium") or value["promotion"]) and (
                 min(money(policy.per_operation), money(policy.daily), money(policy.monthly)) < amount
                 or policy.max_operations_per_item < 1
             ):
@@ -563,7 +570,7 @@ class ListingLaunch:
             "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (f"delivery:{item}:enabled", encode(True)),
         )
-        if value["mode"] == "stock":
+        if value["mode"] == "stock" and value["data"].strip():
             # Idempotent stock import (fingerprint INSERT OR IGNORE), synchronous.
             for unit in stock_values(value["data"])[0]:
                 db.execute(
@@ -590,7 +597,7 @@ class ListingLaunch:
             replace(policy, enabled=True),
             datetime.now(UTC),
         )
-        if checked["reasons"]:
+        if checked["reasons"] and (not value.get("manual_premium") or value["promotion"]):
             raise ValidationError("Расход не разрешён: " + "; ".join(checked["reasons"]))
         # The fresh balance is checked again by the worker before any RPC. At
         # COMMIT, serialise reservations against the observation from PREPARE.
@@ -662,6 +669,16 @@ class ListingLaunch:
             "launch_revision": revision,
             "delivery_revision": delivery_revision,
         }
+        if value.get("manual_premium") and not value["promotion"]:
+            payload["manual_authority"] = {
+                "owner": owner,
+                "limit": preview["amount"],
+                "item": item,
+                "quote": preview["quote_id"],
+                "account": preview["account_id"],
+                "key": key,
+                "revision": preview["policy_revision"],
+            }
         op = self.store.enqueue(key, "premium_publish", item, payload, db, actor=owner)
         self.store.set_setting("launch:prepared:" + item, {**launch, "operation": op})
         db.execute(

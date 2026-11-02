@@ -123,20 +123,23 @@ class ItemPanel:
             from app.services.withdrawals import draft_calculation
 
             cost = self.store.setting(f"finance:{owner}:cost:{ident}")
-            estimate = draft_calculation(
-                {
-                    "price": item["price"],
-                    "cost": cost,
-                    "fee_multiplier": selected_fee_multiplier(
-                        item.get("fee_multiplier"), (item.get("obtaining_type") or {}).get("fee_multiplier")
-                    ),
-                    "fee_checked_at": now(),
-                }
+            estimate = (
+                draft_calculation(
+                    {
+                        "price": item.get("price"),
+                        "cost": cost,
+                        "fee_multiplier": selected_fee_multiplier(
+                            item.get("fee_multiplier"),
+                            (item.get("obtaining_type") or {}).get("fee_multiplier"),
+                        ),
+                        "fee_checked_at": now(),
+                    }
+                )
+                if item.get("price") is not None
+                else None
             )
-            text += "\nСебестоимость: " + (
-                str(estimate.cost) + " ₽" if estimate.cost is not None else "не задана"
-            )
-            if estimate.after_platform is not None and estimate.cost is not None:
+            text += "\nСебестоимость: " + (str(cost) + " ₽" if cost is not None else "не задана")
+            if estimate is not None and estimate.after_platform is not None and estimate.cost is not None:
                 text += f"\nДо вывода и размещения: ≈ {estimate.after_platform - estimate.cost} ₽"
             rows = [
                 [("💰 Сколько получу чистыми", "finance:" + ident)],

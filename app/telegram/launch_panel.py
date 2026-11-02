@@ -246,6 +246,7 @@ class LaunchPanel:
                 raise Conflict("Тариф устарел")
             selected = choices[int(parts[3])]
             value.update(publication=selected["type"], quote_id=selected["id"])
+            value["manual_premium"] = selected["type"] == "PREMIUM"
             if selected["type"] == "DEFAULT":
                 value["promotion"] = False
         elif command == "catalog":

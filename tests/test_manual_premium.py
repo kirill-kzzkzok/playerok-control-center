@@ -14,6 +14,7 @@ from app.workers.outbox import Executor, OutboxWorker
 from tests.test_paid_promotions import PaidAPI
 from tests.test_telegram_integration import Interaction, TelegramSession
 from tests.test_telegram_transport import production_dispatcher
+from tests.test_unified_delivery_controls import state
 from tests.test_ux_redesign import buttons
 
 
@@ -93,3 +94,22 @@ async def test_manual_reservations_compete_for_real_balance_without_enabling_sch
     assert len(r.store.rows("SELECT * FROM outbox")) == 1
     assert len(r.store.rows("SELECT * FROM promotion_expenses WHERE status='RESERVED'")) == 1
     assert not r.api.charges
+
+
+async def test_wizard_one_off_premium_does_not_require_an_automatic_budget(manual):
+    r = manual
+    await r.ui.click("launch:item:item")
+    pending = (await state(r).get_data())["launch"]
+    await r.ui.click("ln:" + pending["nonce"] + ":quotes")
+    await r.ui.click(next(key for key in buttons(r.session.last_panel) if ":quote:" in key))
+    pending = (await state(r).get_data())["launch"]
+    await r.ui.click("ln:" + pending["nonce"] + ":check")
+    action = next(
+        key for key, label in buttons(r.session.last_panel).items() if "Опубликовать и запустить" in label
+    )
+    await r.ui.click(action)
+    await r.worker.once()
+    assert len(r.api.charges) == 1
+    assert r.store.rows("SELECT status FROM outbox") == [{"status": "SUCCEEDED"}]
+    _, policy, _ = PaidPromotions(r.store, r.api).settings.get()
+    assert policy.enabled is False and policy.daily == "0"

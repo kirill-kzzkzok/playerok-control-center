@@ -227,7 +227,6 @@ class PaidPromotions:
             raise ValidationError("Настройки расходов изменились; платёж остановлен")
         if "manual_authority" in value and (
             value["automatic"]
-            or value.get("launch_id")
             or self.store.rows(
                 "SELECT owner_id FROM operation_receipts WHERE operation_id=?", (action["id"],)
             )

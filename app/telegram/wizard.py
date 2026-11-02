@@ -28,8 +28,6 @@ class Wizard:
             and payload.get("category_id") == settings.category_id
             and payload.get("obtaining_type_id") == settings.obtaining_type_id
         ):
-            if payload.get("delivery") != "gifts":
-                return
             if payload.get("managed_delivery") and payload.get("gift_code"):
                 gift_code_from_description("gift: " + payload["gift_code"], max_count=settings.max_gifts)
                 return
@@ -819,7 +817,8 @@ class Wizard:
             if target == "fields":
                 payload["field_index"] = 0
         elif action == "submit" and step == "preview":
-            self.validate_gift(payload)
+            if payload.get("delivery") == "gifts":
+                self.validate_gift(payload)
             if not self.api.account.writes_enabled:
                 raise ValidationError("Записи Playerok отключены в .env. Локальный черновик сохранён.")
             method = (

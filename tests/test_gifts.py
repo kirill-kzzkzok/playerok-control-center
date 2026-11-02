@@ -728,7 +728,7 @@ async def test_dispatcher_wizard_gift_description_validation_survives_restart(ri
     await state.set_state("wizard")
     await state.set_data({"draft_id": ident, "revision": 0})
     try:
-        await ui.message("Valid description without gift marker")
+        await ui.message("Valid description\ngift: unknown")
         assert r.store.get_draft(ident, 7)["payload"]["step"] == "description"
         ui.dp = dispatcher(r.store, r.api)
         await ui.message("Valid description\ngift: heart")

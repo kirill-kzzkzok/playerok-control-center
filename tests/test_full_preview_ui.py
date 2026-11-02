@@ -60,9 +60,37 @@ class CategoryAPI(FakeAPI):
 
 @pytest.fixture
 async def rig(tmp_path, monkeypatch):
+    from copy import deepcopy
+
+    from app.playerok.adapter import plain
+
     monkeypatch.chdir(tmp_path)
     store, api, session = Store(tmp_path / "preview.sqlite"), CategoryAPI(), TelegramSession()
     store.claim_first_owner(7)
+    store.set_setting("playerok:account_id", "seller")
+    from app.database.store import now
+
+    store.set_setting("orders:last_complete_sync", now())
+    store.set_setting("sync:health", {"status": "OK"})
+    original_create, original_read = api.account.create_item, api.call
+    created = {}
+
+    def create(**kwargs):
+        created.update(
+            plain(original_create(**kwargs)),
+            raw_price=kwargs["price"],
+            obtaining_type={"id": kwargs["obtaining_type_id"]},
+            attributes=kwargs.get("attributes") or {},
+            data_fields=[{"id": f.id, "value": f.value} for f in kwargs.get("data_fields", [])],
+        )
+        return deepcopy(created)
+
+    async def read(method, **kwargs):
+        if method == "get_item" and created:
+            return deepcopy(created)
+        return await original_read(method, **kwargs)
+
+    api.account.create_item, api.call = create, read
     bot = Bot("123:" + "x" * 35, session=session)
     ui = Interaction(bot, dispatcher(store, api))
     state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
@@ -234,14 +262,16 @@ async def test_audit_connected_create_stock_policy_publish_edit_and_discounts(ri
     await ui.click("stock:transfer:" + draft)
     ui.dp = dispatcher(store, api)
     await ui.click("stock:commit:" + (await state.get_data())["stock_pending"]["nonce"])
-    await ui.click("auto:item:remote1")
-    for action in ("toggle:enabled", "toggle:auto_enroll", "save", "arm"):
-        await ui.click("ap:" + (await state.get_data())["automation"]["nonce"] + ":" + action)
+    # The unified launch now configures and arms the existing permanent binding
+    # before publication; the old AP editor intentionally redirects there.
+    await ui.click("launch:from:" + draft)
+    launch = (await state.get_data())["launch"]
+    await ui.click("ln:" + launch["nonce"] + ":check")
+    assert store.get_draft(launch["id"], 7)["payload"].get("ready"), session.last_panel.text
     assert len(store.rows("SELECT * FROM inventory")) == 2
-    await ui.click("publish:remote1")
-    token = (await state.get_data())["confirm_token"]
-    await ui.click("commit:" + token)
-    await ui.click("commit:" + token)
+    token = (await state.get_data())["launch"]["nonce"]
+    await ui.click("ln:" + token + ":commit")
+    await ui.click("ln:" + token + ":commit")
     await worker.once()
     assert remote["status"] == "APPROVED"
     for action, value in (("editname", "Updated product name"), ("discount", "900"), ("discount", "749")):
