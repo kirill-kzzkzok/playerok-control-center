@@ -21,7 +21,8 @@ async def test_normal_description_edit_preserves_code_and_confirms_real_worker_r
     assert code not in r.session.last_panel.text
     await r.ui.message("Новое описание покупателю")
     payload = (await state(r).get_data())["pending"]["payload"]
-    assert payload["description"] == "Новое описание покупателю\n" + code
+    assert payload["description"] == "Новое описание покупателю"
+    assert r.api.item["name"].endswith("[" + code + "]")
     data = await state(r).get_data()
     await r.ui.click("commit:" + data["confirm_token"])
     await r.worker.once()
@@ -33,8 +34,8 @@ async def test_normal_description_edit_preserves_code_and_confirms_real_worker_r
 
 async def test_foreign_marker_cannot_replace_a_permanent_product_code(shop):
     r = await configured(shop)
-    await r.ui.click("editdesc:lot")
-    await r.ui.message("Описание\n#9999999")
+    await r.ui.click("editname:lot")
+    await r.ui.message("Чужой код [ZZZ]")
     assert not (await state(r).get_data()).get("pending")
     assert len(r.store.rows("SELECT * FROM outbox")) == 1
 

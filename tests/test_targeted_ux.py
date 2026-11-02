@@ -24,7 +24,7 @@ async def legacy(tmp_path, monkeypatch):
         r.service.disarm(7, "item")
         r.store.set_setting("playerok:account_id", "shop")
         registry = LogicalProducts(r.store, r.api)
-        monkeypatch.setattr("app.services.logical_products.secrets.randbelow", lambda _: 1163148)
+        monkeypatch.setattr("app.services.product_codes.secrets.choice", lambda _: "A")
         registry.migrate_legacy()
         r.registry = registry
         r.session = StatefulTelegram()
@@ -66,7 +66,7 @@ async def test_legacy_description_one_confirmation_no_payment_or_history_rewrite
     await r.ui.click("lp:item:item")
     migrate = action(r, ":migrate")
     await r.ui.click(migrate)
-    assert "#2163148" in r.session.last_panel.text
+    assert "[AAA]" in r.session.last_panel.text
     assert "gift: zombie_bear" not in r.session.last_panel.text
     assert not r.edits
     confirm = action(r, ":commit")
@@ -75,7 +75,10 @@ async def test_legacy_description_one_confirmation_no_payment_or_history_rewrite
     await r.ui.click(confirm)
     await r.ui.click(confirm)
     await r.worker.once()
-    assert len(r.edits) == 1 and r.edits[0] == ("item", {"description": "Real bundle\n#2163148"})
+    assert len(r.edits) == 1
+    assert r.edits[0][0] == "item"
+    assert r.edits[0][1]["description"] == "Real bundle"
+    assert r.edits[0][1]["name"].endswith(" [AAA]")
     product = r.registry.listing("item")
     assert product["state"] == ("PENDING" if lost else "VERIFIED")
     assert product["enabled"] == 0 and product["config"] == config

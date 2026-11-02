@@ -74,7 +74,11 @@ class PaidPromotions:
         if native_relist:
             from app.services.logical_products import LogicalProducts
 
-            LogicalProducts(self.store, self.api).authority(owner)
+            logical = LogicalProducts(self.store, self.api)
+            logical.authority(owner)
+            binding = logical.listing(ident)
+            if binding:
+                logical.verify_listing(binding, item)
         if native_relist and (item.get("status") != "SOLD" or item.get("may_be_published") is not True):
             raise ValidationError("Playerok не разрешил штатное повторное размещение этого товара")
         if item.get("status") not in ({"SOLD"} if native_relist else {"DRAFT", "APPROVED"}):

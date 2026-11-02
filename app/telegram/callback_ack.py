@@ -77,6 +77,10 @@ def navigation(action):
         "gft:choose",
     } or action.startswith(
         (
+            "codes:home",
+            "codes:prepare",
+            "codes:page:",
+            "codes:results:",
             "item:",
             "rd:check:",
             "rd:balance:",

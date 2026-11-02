@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.database.store import Store
-from app.services.logical_products import LogicalProducts, configuration, marked_description, marker
+from app.services.logical_products import LogicalProducts, configuration, marked_title, marker
 from app.services.products import Products
 from app.workers.outbox import Executor, OutboxWorker
 
@@ -57,22 +57,16 @@ def logical(tmp_path):
     store.close()
 
 
-def test_marker_is_exact_last_line_and_preserves_text():
-    assert marker("Text\n\n#1234567\n") == "#1234567"
-    assert marked_description("Text\n\n", "#1234567") == "Text\n#1234567"
-    assert marked_description("Text\n#1234567", "#1234567") == "Text\n#1234567"
-    for value in (
-        "#1234567\nText",
-        "Text\n#1234567\n#7654321",
-        "Text\n#123456",
-        "Text\n#12345678",
-        "Text #1234567",
-        "Text\n#1234567 extra",
-    ):
+def test_marker_is_exact_title_suffix_and_preserves_text():
+    assert marker("Text [ab6]") == "AB6"
+    assert marker("Description\n#1234567") is None
+    assert marked_title("Text", "ab6") == "Text [AB6]"
+    assert marked_title("Text [ab6]", "AB6") == "Text [AB6]"
+    for value in ("[AB6] Text", "Text [AB6] [LF9]", "Text [AB!]", "Text [ABCD]"):
         with pytest.raises(ValueError):
             marker(value)
     with pytest.raises(ValueError):
-        marked_description("Text\n#7654321", "#1234567")
+        marked_title("Text [LF9]", "AB6")
 
 
 def test_internal_gift_configuration_uses_existing_strict_parser():
@@ -88,7 +82,7 @@ async def test_prepare_is_read_only_commit_queues_exact_description_and_stays_of
     assert not store.rows("SELECT * FROM outbox")
     result = service.commit(7, prepared)
     product = service.product(result["product_id"], 7)
-    assert marker("Text\n" + product["code"]) == product["code"]
+    assert marker("Text [" + product["code"] + "]") == product["code"]
     assert product["enabled"] == 0
     assert product["state"] == "PENDING"
     op = store.rows("SELECT * FROM outbox")[0]
@@ -137,7 +131,7 @@ async def test_binding_runs_real_outbox_and_independent_readback(logical, case):
         assert op == "SUCCEEDED"
         assert product["state"] == "VERIFIED"
         assert product["enabled"] == 0
-        assert marker(api.item["description"]) == product["code"]
+        assert marker(api.item["name"]) == product["code"]
         assert len(api.calls) >= 3
     elif case in {"changed", "wrong_item"}:
         assert op == "PERMANENT_FAILED"

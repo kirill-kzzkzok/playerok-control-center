@@ -111,7 +111,9 @@ class ItemPanel:
                 + status(item.get("status"), "item")
             )
             if product:
-                text += "\n🔐 Код товара: " + escaped(product["code"], 20)
+                text += "\n🔐 Код товара: " + (
+                    escaped(product["code"], 3) if len(product["code"]) == 3 else "требуется перенос"
+                )
                 text += "\nНаследовать настройки: " + (
                     "разрешено" if product["inherit_enabled"] else "выключено"
                 )

@@ -62,7 +62,7 @@ async def test_new_gift_wizard_prepares_code_and_automation_before_first_sale(sh
     await h.worker.once()
     product = LogicalProducts(h.store, h.api).listing(h.api.item["id"])
     assert product and product["state"] == "VERIFIED" and product["enabled"] == 0
-    assert h.api.item["description"].endswith(product["code"])
+    assert h.api.item["name"].endswith("[" + product["code"] + "]")
     assert "gift:" not in h.api.item["description"]
     await h.ui.click("launch:from:" + draft)
     await h.launch_action("check")

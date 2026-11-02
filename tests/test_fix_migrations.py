@@ -1,5 +1,7 @@
 """Pre-025 SQLite backup upgrade with real service-created data; no live database."""
 
+import json
+
 import pytest
 
 from app.database.store import Store
@@ -63,6 +65,7 @@ async def test_prechange_backup_reopens_wal_preserves_gifts_stock_policies_and_l
             r.store.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
     r.store.execute("DROP INDEX logical_listing_order_snapshot")
     r.store.execute("ALTER TABLE logical_listings DROP COLUMN source_order_id")
+    r.store.execute("ALTER TABLE logical_listings DROP COLUMN title_snapshot")
     r.store.execute("DROP TABLE chat_message_versions")
     r.store.execute("DELETE FROM schema_migrations WHERE version>=25")
     path = tmp_path / "prechange-copy.sqlite"
@@ -72,6 +75,16 @@ async def test_prechange_backup_reopens_wal_preserves_gifts_stock_policies_and_l
         assert upgraded.rows("PRAGMA journal_mode") == [{"journal_mode": "wal"}]
         assert upgraded.rows("PRAGMA integrity_check") == [{"integrity_check": "ok"}]
         assert not upgraded.rows("PRAGMA foreign_key_check")
+        for row in expected["logical_listings"]:
+            parent = next(p for p in expected["logical_products"] if p["id"] == row["product_id"])
+            row["title_snapshot"] = json.loads(parent["baseline"]).get("name")
+        for parent in expected["logical_products"]:
+            baseline = json.loads(parent["baseline"])
+            if len(parent["code"]) == 3 and baseline.get("name"):
+                baseline["name"] = parent["code"]
+                from app.database.store import encode
+
+                parent["baseline"] = encode(baseline)
         for table in tables:
             assert upgraded.rows("SELECT * FROM " + table) == expected[table], table
         assert upgraded.rows("SELECT id,operation_key,status,payload,attempts FROM outbox") == operations

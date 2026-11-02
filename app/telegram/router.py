@@ -22,6 +22,7 @@ from app.telegram.automation_panel import AutomationPanel
 from app.telegram.automation_queue import AutomationQueue
 from app.telegram.callback_ack import ACTION_MAX_WAIT, acknowledge, navigation
 from app.telegram.chat_panel import ChatPanel
+from app.telegram.code_migration_panel import CodeMigrationPanel
 from app.telegram.drafts_panel import DraftsPanel
 from app.telegram.finance_panel import FinancePanel
 from app.telegram.formatting import escaped
@@ -97,6 +98,7 @@ def create_router(store, api, products, synchronizer):
     item_panel = ItemPanel(api, store)
     listings_panel = ListingsPanel(api, store)
     logical_panel = LogicalProductsPanel(store, api)
+    code_migration_panel = CodeMigrationPanel(store, api)
     stock_panel = StockPanel(store, api)
     gifts_panel = GiftsPanel(store, api)
     launch_panel = LaunchPanel(store, api, gifts_panel.service)
@@ -232,6 +234,8 @@ def create_router(store, api, products, synchronizer):
             if action in {"more", "attention", "tools"} or action.startswith("tools:"):
                 await state.clear()
                 text, markup = home_panel.show(action, owner)
+            elif action.startswith("codes:"):
+                text, markup = await code_migration_panel.callback(action, owner, state)
             elif action == "create":
                 text, markup = await wizard.start(owner, state)
             elif action.startswith(("rd:check:", "rd:balance:")):
@@ -442,20 +446,20 @@ def create_router(store, api, products, synchronizer):
                         }[kind],
                         "attachment_ids": [a.get("id") for a in item.get("attachments") or []],
                         "expected_description": item.get("description"),
+                        "expected_name": item.get("name"),
                     }
                 )
                 shown_description = item.get("description") or ""
-                if kind == "editdesc":
+                if kind == "editname":
                     from app.services.logical_products import LogicalProducts, marker
 
                     product = LogicalProducts(store, api).listing(ident)
-                    if (
-                        product
-                        and product["state"] != "LEGACY"
-                        and marker(shown_description) == product["code"]
-                    ):
-                        await state.update_data(description_code=product["code"])
-                        shown_description = "\n".join(shown_description.rstrip().splitlines()[:-1]).rstrip()
+                    if product:
+                        if len(product["code"]) != 3 or marker(item.get("name")) != product["code"]:
+                            raise ValidationError(
+                                "Постоянный код названия не подтверждён. Откройте привязку товара"
+                            )
+                        await state.update_data(title_code=product["code"])
                 text, markup = (
                     "Пришлите одно новое изображение. После подтверждения оно заменит все текущие фотографии."
                     if kind == "editphoto"
@@ -781,12 +785,14 @@ def create_router(store, api, products, synchronizer):
                     else:
                         value = listing_text(value, data["field"])
                     pending = {"kind": "edit", "target": data["item_id"], "payload": {data["field"]: value}}
-                    if data["field"] == "description":
-                        from app.services.logical_products import marked_description
+                    if data["field"] == "name" and data.get("title_code"):
+                        from app.services.product_codes import titled
 
-                        if data.get("description_code"):
-                            value = marked_description(value, data["description_code"])
-                            pending["payload"]["description"] = value
+                        value = titled(value, data["title_code"])
+                        pending["payload"]["name"] = value
+                    if data["field"] == "name":
+                        pending["payload"]["expected_name"] = data.get("expected_name")
+                    if data["field"] == "description":
                         pending["payload"]["expected_description"] = data["expected_description"]
                 nonce = secrets.token_hex(8)
                 await state.set_state(None)

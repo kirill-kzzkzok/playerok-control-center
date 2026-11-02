@@ -26,8 +26,8 @@ def listing(ident):
     return {
         "id": ident,
         "user": {"id": "seller"},
-        "name": "Steam account product",
-        "description": "Actual product description\n#1234567",
+        "name": "Steam account product [AB6]",
+        "description": "Actual product description",
         "price": 100,
         "category": {"id": "steam-category"},
         "obtaining_type": {"id": "account-transfer"},
@@ -88,7 +88,7 @@ def registry(store):
     config = encode({"after": "Thank you for this purchase"})
     store.execute(
         "INSERT INTO logical_products(id,code,owner_id,account_id,handler,config,state,enabled,armed_at,stock_item_id,baseline,original_description,created_at,updated_at) "
-        "VALUES('stock-product','#1234567',1,'seller','unique_stock',?,'VERIFIED',1,?,'original',?,?,?,?)",
+        "VALUES('stock-product','AB6',1,'seller','unique_stock',?,'VERIFIED',1,?,'original',?,?,?,?)",
         (
             config,
             armed,
@@ -108,6 +108,9 @@ def registry(store):
             "INSERT INTO logical_listings(item_id,product_id,config_revision,description_sha256,server_status,verified_at) "
             "VALUES(?,'stock-product',1,?,'APPROVED',?)",
             (ident, digest(listing(ident)["description"]), now()),
+        )
+        store.execute(
+            "UPDATE logical_listings SET title_snapshot=? WHERE item_id=?", (listing(ident)["name"], ident)
         )
         store.execute("INSERT INTO delivery_policies VALUES(?,1,1,?,?)", (ident, encode(policy), armed))
 

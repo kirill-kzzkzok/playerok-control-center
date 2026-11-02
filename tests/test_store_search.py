@@ -30,7 +30,7 @@ async def catalog(ux):
                     {
                         **base,
                         "id": "match",
-                        "name": "Zombie Bear",
+                        "name": "Zombie Bear [AB6]",
                         "description": "Public product\n#2163148",
                         "status": "DRAFT",
                     }
@@ -43,7 +43,7 @@ async def catalog(ux):
     return r
 
 
-@pytest.mark.parametrize("query", ["zombie", "#2163148"])
+@pytest.mark.parametrize("query", ["zombie", "AB6"])
 async def test_search_finds_a_server_draft_beyond_first_page_without_manual_next(catalog, query):
     r = catalog
     await r.ui.click("il:search")

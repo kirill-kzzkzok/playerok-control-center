@@ -56,9 +56,7 @@ class ListingsPanel:
                     from app.services.logical_products import marker
 
                     try:
-                        item["search_code"] = (
-                            code[0]["code"] if code else marker(value.get("description") or "")
-                        )
+                        item["search_code"] = code[0]["code"] if code else marker(value.get("name") or "")
                     except ValueError:
                         item["search_code"] = None
                     indexed[item["id"]] = item

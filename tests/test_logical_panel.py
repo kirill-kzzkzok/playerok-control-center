@@ -204,7 +204,7 @@ async def test_explicit_enable_stop_and_confirmed_detach_preserve_listing(panel)
     )
     assert r.store.rows("SELECT state FROM logical_products")[0]["state"] == "DETACHED"
     assert len(r.api.mutations) == 1
-    assert r.api.item["description"].endswith(product["code"])
+    assert r.api.item["name"].endswith("[" + product["code"] + "]")
 
 
 async def test_gift_refund_toggle_is_explicit_local_policy_and_does_not_spend(gifts):

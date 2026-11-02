@@ -213,7 +213,13 @@ class Products:
     def native_relist_guard(self, value):
         from app.services.logical_products import LogicalProducts
 
-        LogicalProducts(self.store, self.api).authority(value["actor"], value["account_id"], writes=True)
+        logical = LogicalProducts(self.store, self.api)
+        logical.authority(value["actor"], value["account_id"], writes=True)
+        binding = logical.listing(value["item_id"])
+        if binding and (
+            len(binding["code"]) != 3 or binding["state"] != "VERIFIED" or not binding["verified_at"]
+        ):
+            raise Conflict("Сначала подтвердите код в названии. Неперенесённый архив публиковать небезопасно")
 
     async def native_relist_preview(self, owner, item_id, quote_id):
         from app.services.automation import Automation
@@ -221,6 +227,9 @@ class Products:
 
         LogicalProducts(self.store, self.api).authority(owner)
         item = await Automation(self.store, self.api).item(owner, item_id)
+        binding = LogicalProducts(self.store, self.api).listing(item_id)
+        if binding:
+            LogicalProducts(self.store, self.api).verify_listing(binding, item)
         if item.get("status") != "SOLD" or item.get("may_be_published") is not True:
             raise ValidationError("Playerok не разрешил повторное размещение этого товара")
         quotes = await self.priority_preview(item_id, priority_price_basis(item))

@@ -32,7 +32,7 @@ async def bind_logical(r):
     product = registry.product(result["product_id"])
     assert product["state"] == "VERIFIED"
     assert "gift:" not in r.api.item["description"]
-    assert r.api.item["description"].endswith(product["code"])
+    assert r.api.item["name"].endswith("[" + product["code"] + "]")
     await registry.arm(7, product["id"], product["revision"], inherit=True)
     assert not r.remote.payments
     return registry, product

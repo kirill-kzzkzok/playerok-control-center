@@ -8,7 +8,7 @@ from app.database.store import Conflict
 from app.gifts.core import gift_code_from_description, gift_codes, gift_name
 from app.services.automation import message_text
 from app.services.inventory import Inventory
-from app.services.logical_products import PROBLEMS, LogicalProducts, marked_description
+from app.services.logical_products import PROBLEMS, LogicalProducts
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 from app.telegram.presentation import local_time, order_label, status
@@ -61,7 +61,9 @@ class LogicalProductsPanel:
         if product:
             config = json.loads(product["config"])
             platform = config.get("platform_only") is True
-            text += "\nПостоянный код: " + escaped(product["code"], 20)
+            text += "\nПостоянный код: " + (
+                escaped(product["code"], 3) if len(product["code"]) == 3 else "требуется перенос"
+            )
             text += "\nСпособ: " + ("📦 Выдаёт Playerok" if platform else MODES[product["handler"]])
             text += "\nРазрешение выдачи: " + ("включено" if product["enabled"] else "выключено")
             if platform:
@@ -619,11 +621,12 @@ class LogicalProductsPanel:
             text += f"\nЗапас: {Inventory(self.store, self.api).counts(view['item'])['AVAILABLE']} доступно"
         elif prepared["handler"] == "fixed_text":
             text += f"\nТекст выдачи сохранён: {len(config['text'])} символов"
-        description = marked_description(prepared["cleaned"], prepared["code"])
-        text += "\n\nОписание после изменения:\n<blockquote>" + escaped(description, 2050) + "</blockquote>"
-        text += "\nНе редактируйте объявление одновременно. Изменившиеся после проверки данные остановят запись.\nПодтверждение изменит описание, но не включит выдачу и не разрешит расходы Stars."
+        name = prepared["name"]
+        text += "\n\nНазвание после изменения:\n<blockquote>" + escaped(name, 150) + "</blockquote>"
+        text += "\nОписание:\n<blockquote>" + escaped(prepared["cleaned"], 1800) + "</blockquote>"
+        text += "\nНе редактируйте объявление одновременно. Изменившиеся после проверки данные остановят запись.\nПодтверждение сохранит код в названии, но не включит выдачу и не разрешит расходы Stars."
         return text, keyboard(
-            [[("✅ Подтвердить изменение описания", "lp:" + view["nonce"] + ":commit")]],
+            [[("✅ Подтвердить привязку", "lp:" + view["nonce"] + ":commit")]],
             back=("Исправить настройки", "lp:" + view["nonce"] + ":setup"),
         )
 

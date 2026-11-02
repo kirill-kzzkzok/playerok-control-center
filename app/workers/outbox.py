@@ -64,6 +64,10 @@ class Executor:
             from app.services.logical_products import LogicalProducts
 
             LogicalProducts(self.store, self.api).binding_guard(action)
+        if action["kind"] == "edit" and action["payload"].get("code_migration"):
+            from app.services.code_migration import CodeMigration
+
+            CodeMigration(self.store, self.api).guard(action)
         if action["kind"] in {"publish", "premium_publish"} and not action["payload"].get("native_relist"):
             from app.services.listing_launch import ListingLaunch
 
@@ -512,6 +516,10 @@ class Executor:
                 return {"removed": True}
             if getattr(self.api.account, "auto_accept_agreements", False):
                 await self.products.prepare_item_agreements(current)
+            if payload.get("code_migration"):
+                from app.services.code_migration import CodeMigration
+
+                CodeMigration(self.store, self.api).guard(action, current)
             if payload.get("logical_binding"):
                 from app.services.logical_products import LogicalProducts
 
@@ -538,7 +546,9 @@ class Executor:
                 "keep_attachment_ids",
                 "logical_binding",
                 "expected_description",
+                "expected_name",
                 "platform_settings",
+                "code_migration",
             }:
                 raise ValidationError("Изменение содержит неподдерживаемые поля")
             if payload.get("platform_settings") and not (payload.get("logical_binding") or {}).get(
@@ -549,23 +559,36 @@ class Executor:
                 changes["price"] = listing_price(changes["price"], getattr(self.api.account, "role", None))
             for field in ("name", "description"):
                 if field in changes:
-                    changes[field] = listing_text(changes[field], field)
+                    validated = listing_text(changes[field], field)
+                    if not payload.get("code_migration"):
+                        changes[field] = validated
             protected_description = False
-            if "description" in changes and not payload.get("logical_binding"):
-                from app.services.logical_products import LogicalProducts, marked_description, marker
+            if {"name", "description"} & changes.keys() and not (
+                payload.get("logical_binding") or payload.get("code_migration")
+            ):
+                from app.services.logical_products import LogicalProducts, marker
+                from app.services.product_codes import titled
 
                 if (
-                    "expected_description" in payload
+                    "description" in changes
+                    and "expected_description" in payload
                     and current.get("description") != payload["expected_description"]
                 ):
                     raise ValidationError("Описание изменилось на Playerok. Откройте редактирование заново")
+                if (
+                    "name" in changes
+                    and "expected_name" in payload
+                    and current.get("name") != payload["expected_name"]
+                ):
+                    raise ValidationError("Название изменилось на Playerok. Откройте редактирование заново")
                 product = LogicalProducts(self.store, self.api).listing(target)
-                if product and product["state"] != "LEGACY":
-                    if marker(current.get("description")) != product["code"]:
-                        raise ValidationError("Постоянный код товара изменился. Сначала проверьте привязку")
-                    changes["description"] = listing_text(
-                        marked_description(changes["description"], product["code"]), "description"
-                    )
+                if product:
+                    if len(product["code"]) != 3 or marker(current.get("name")) != product["code"]:
+                        raise ValidationError(
+                            "Код товара не подтверждён. Сначала выполните перенос или сверку"
+                        )
+                    if "name" in changes:
+                        changes["name"] = titled(changes["name"], product["code"])
                     protected_description = True
             keep = []
             if "add_photos" in payload or "keep_attachment_ids" in payload:
@@ -617,6 +640,15 @@ class Executor:
                         raise APIError("EDIT_READBACK_UNKNOWN", uncertain=True)
                 except APIError:
                     raise APIError("EDIT_READBACK_UNKNOWN", uncertain=True) from None
+            if payload.get("code_migration"):
+                from app.services.code_migration import CodeMigration
+
+                try:
+                    observed = await self.owned_item(target)
+                    receipt = CodeMigration(self.store, self.api).confirm(action, observed)
+                except (APIError, ValueError, TypeError):
+                    raise APIError("CODE_MIGRATION_READBACK_UNKNOWN", uncertain=True) from None
+                return {**self.item_result(observed), "code_migration": receipt}
             if payload.get("logical_binding"):
                 try:
                     observed = await self.owned_item(target)
@@ -624,6 +656,27 @@ class Executor:
                 except (APIError, ValueError, TypeError):
                     raise APIError("LOGICAL_BINDING_READBACK_UNKNOWN", uncertain=True) from None
                 return {**self.item_result(observed), "logical_binding": receipt}
+            if protected_description and "name" in changes:
+                from app.services.logical_products import critical, marked_title
+
+                try:
+                    if critical(observed) != critical(current):
+                        raise ValueError
+                    title = marked_title(observed["name"], product["code"])
+                except ValueError:
+                    raise APIError("TITLE_EDIT_READBACK_UNKNOWN", uncertain=True) from None
+                return {
+                    **self.item_result(observed),
+                    "identity_title": {
+                        "product_id": product["id"],
+                        "item_id": target,
+                        "code": product["code"],
+                        "revision": product["revision"],
+                        "control_revision": product["control_revision"],
+                        "prior_title": product["title_snapshot"],
+                        "title": title,
+                    },
+                }
             return self.item_result(result)
         if kind == "mark_read":
             await self.api.call("get_chat", chat_id=target)

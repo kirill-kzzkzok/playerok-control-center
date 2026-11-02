@@ -317,7 +317,8 @@ class Store:
                 filters += " AND id=?"
                 args.append(operation_id)
             row = db.execute(
-                "SELECT * FROM outbox WHERE status IN ('PENDING','RETRYABLE_FAILED') AND retry_at<=?"
+                "SELECT * FROM outbox WHERE status IN ('PENDING','RETRYABLE_FAILED') AND retry_at<=? "
+                "AND (json_extract(payload,'$.code_migration.product_id') IS NULL OR NOT EXISTS(SELECT 1 FROM outbox active WHERE active.id<>outbox.id AND active.status IN ('PROCESSING','UNCERTAIN') AND json_extract(active.payload,'$.code_migration.product_id')=json_extract(outbox.payload,'$.code_migration.product_id')))"
                 + filters
                 + " ORDER BY CASE WHEN created_at<=? THEN 0 "
                 "WHEN kind IN ('gift_send','delivery','delivery_text','chain_message') THEN 1 ELSE 2 END,created_at,id LIMIT 1",
@@ -471,6 +472,29 @@ class Store:
                     "UPDATE drafts SET state='UPDATED' WHERE id=? AND state='QUEUED'",
                     (json.loads(row["payload"])["draft_id"],),
                 )
+            if (
+                row["kind"] == "edit"
+                and status == "SUCCEEDED"
+                and isinstance(result, dict)
+                and result.get("identity_title")
+            ):
+                title = result["identity_title"]
+                db.execute(
+                    "UPDATE logical_listings SET title_snapshot=? WHERE item_id=? AND product_id=? AND title_snapshot IS ? AND EXISTS(SELECT 1 FROM logical_products p WHERE p.id=logical_listings.product_id AND p.code=? AND p.revision=? AND p.control_revision=?)",
+                    (
+                        title["title"],
+                        title["item_id"],
+                        title["product_id"],
+                        title["prior_title"],
+                        title["code"],
+                        title["revision"],
+                        title["control_revision"],
+                    ),
+                )
+            if row["kind"] == "edit" and json.loads(row["payload"]).get("code_migration"):
+                from app.services.code_migration import finish_migration
+
+                finish_migration(db, {**dict(row), "id": ident}, status, result)
             if row["kind"] == "edit" and json.loads(row["payload"]).get("logical_binding"):
                 from app.services.logical_products import finish_binding
 

@@ -45,6 +45,10 @@ def safe_route(action):
         "ar:list",
     } or action.startswith(
         (
+            "codes:home",
+            "codes:prepare",
+            "codes:page:",
+            "codes:results:",
             "item:",
             "rd:check:",
             "rd:balance:",

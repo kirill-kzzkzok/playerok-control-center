@@ -2,8 +2,6 @@
 
 import hashlib
 import json
-import re
-import secrets
 import sqlite3
 import uuid
 from dataclasses import asdict
@@ -11,10 +9,11 @@ from dataclasses import asdict
 from app.database.store import Conflict, encode, now
 from app.gifts.core import gift_code_from_description
 from app.services.automation import Automation, DeliveryPolicy, future_order, message_text
+from app.services.product_codes import choose_code, reserve_code, title_code, titled
 from app.services.products import field_baseline, listing_text
 
 PROBLEMS = {
-    "CATALOG_MARKER_INVALID": "В описании обнаружен некорректный код. Проверьте связанные объявления.",
+    "CATALOG_MARKER_INVALID": "В названии обнаружен некорректный код. Проверьте связанные объявления.",
     "DUPLICATE_ACTIVE_MARKER": "Найдено несколько активных объявлений с одним кодом. Разрешите конфликт.",
     "RELIST_CONFIRMATION_REQUIRED": "Новое объявление не прошло проверку. Проверьте его параметры и настройки.",
 }
@@ -26,26 +25,12 @@ def digest(value):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def marker(description):
-    if not isinstance(description, str):
-        raise Conflict("Playerok не вернул описание товара")
-    lines = description.splitlines()
-    candidates = [line.strip() for line in lines if re.search(r"#\d", line)]
-    if not candidates:
-        return None
-    nonempty = [line.strip() for line in lines if line.strip()]
-    if len(candidates) != 1 or not re.fullmatch(r"#[0-9]{7}", candidates[0]) or nonempty[-1] != candidates[0]:
-        raise ValueError("В описании нужен один постоянный код из семи цифр в последней строке")
-    return candidates[0]
+def marker(name):
+    return title_code(name)
 
 
-def marked_description(description, code):
-    if not re.fullmatch(r"#[0-9]{7}", code):
-        raise ValueError("Некорректный постоянный код")
-    existing = marker(description)
-    if existing and existing != code:
-        raise Conflict("В описании уже указан код другого товара")
-    return description.rstrip() if existing else description.rstrip() + "\n" + code
+def marked_title(name, code):
+    return titled(name, code)
 
 
 def critical(item):
@@ -58,7 +43,7 @@ def critical(item):
         "account": account,
         "category": category,
         "obtaining": obtaining,
-        "name": item["name"],
+        "name": marker(item["name"]) or item["name"],
         "price": str(item["price"]),
         "fields": field_baseline(item),
     }
@@ -104,7 +89,7 @@ class LogicalProducts:
 
     def listing(self, item_id):
         rows = self.store.rows(
-            "SELECT p.*,l.item_id,l.config_revision,l.description_sha256,l.server_status,l.verified_at,l.operation_id,l.source_order_id "
+            "SELECT p.*,l.item_id,l.config_revision,l.description_sha256,l.server_status,l.verified_at,l.operation_id,l.source_order_id,l.title_snapshot "
             "FROM logical_listings l JOIN logical_products p ON p.id=l.product_id WHERE l.item_id=?",
             (item_id,),
         )
@@ -122,14 +107,17 @@ class LogicalProducts:
 
     def configured_gifts(self, item):
         listing = self.listing(item["id"])
-        if not listing or listing["state"] == "LEGACY":
+        if not listing:
             return None
+        if listing["state"] == "LEGACY" or len(listing["code"]) != 3:
+            raise Conflict("Требуется перенос постоянного кода в название товара")
         if (
             listing["handler"] != "telegram_gifts"
             or listing["state"] != "VERIFIED"
             or not listing["verified_at"]
             or listing["revision"] != listing["config_revision"]
-            or marker(item.get("description")) != listing["code"]
+            or marker(item.get("name")) != listing["code"]
+            or marked_title(item["name"], listing["code"]) != listing["title_snapshot"]
             or critical(item) != json.loads(listing["baseline"])
             or digest(item["description"]) != listing["description_sha256"]
         ):
@@ -158,29 +146,12 @@ class LogicalProducts:
                     "after": options.get("after", ""),
                 }
                 ident = uuid.uuid4().hex
-                for _ in range(32):
-                    code = "#" + str(1_000_000 + secrets.randbelow(9_000_000))
-                    try:
-                        db.execute(
-                            "INSERT INTO logical_products(id,code,owner_id,account_id,handler,config,state,stock_item_id,baseline,original_description,created_at,updated_at) "
-                            "VALUES(?,?,?,?,'telegram_gifts',?,'LEGACY',?,'{}','',?,?)",
-                            (
-                                ident,
-                                code,
-                                row["owner_id"],
-                                account,
-                                encode(config),
-                                row["item_id"],
-                                now(),
-                                now(),
-                            ),
-                        )
-                        break
-                    except sqlite3.IntegrityError:
-                        if not db.execute("SELECT 1 FROM logical_products WHERE code=?", (code,)).fetchone():
-                            raise
-                else:
-                    raise Conflict("Не удалось выделить код для переноса привязки")
+                code = reserve_code(db, ident)
+                db.execute(
+                    "INSERT INTO logical_products(id,code,owner_id,account_id,handler,config,state,stock_item_id,baseline,original_description,created_at,updated_at) "
+                    "VALUES(?,?,?,?,'telegram_gifts',?,'LEGACY',?,'{}','',?,?)",
+                    (ident, code, row["owner_id"], account, encode(config), row["item_id"], now(), now()),
+                )
                 db.execute(
                     "INSERT INTO logical_listings(item_id,product_id,config_revision,description_sha256,server_status) VALUES(?,?,1,?,'UNVERIFIED')",
                     (row["item_id"], ident, row["description_sha256"]),
@@ -196,7 +167,7 @@ class LogicalProducts:
         )
         if not handler:
             raise Conflict("Выберите автоматический способ выдачи")
-        if marker(value["description"]):
+        if marker(value["name"]):
             raise Conflict("Новый товар не может присвоить существующий постоянный код")
         gifts = self.gift_service() if handler == "telegram_gifts" else None
         config = configuration(
@@ -223,21 +194,15 @@ class LogicalProducts:
 
     def commit_creation(self, db, owner, draft_id, value, prepared):
         self.authority(owner, prepared["account"], writes=True)
-        code = None
-        for _ in range(32):
-            candidate = "#" + str(1_000_000 + secrets.randbelow(9_000_000))
-            if not db.execute("SELECT 1 FROM logical_products WHERE code=?", (candidate,)).fetchone():
-                code = candidate
-                break
-        if code is None:
-            raise Conflict("Не удалось выделить постоянный код")
         ident = uuid.uuid4().hex
+        code = reserve_code(db, ident)
         original = value["description"]
         value = {
             **value,
             "managed_product_id": ident,
             "permanent_code": code,
-            "description": listing_text(marked_description(original, code), "description"),
+            "name": listing_text(marked_title(value["name"], code), "name"),
+            "description": original,
         }
         db.execute(
             "INSERT INTO logical_products(id,code,owner_id,account_id,handler,config,state,stock_item_id,baseline,original_description,created_at,updated_at) VALUES(?,?,?,?,?,?,'PENDING',?,'{}',?,?,?)",
@@ -263,7 +228,7 @@ class LogicalProducts:
         product = self.product(value["managed_product_id"], owner)
         self.authority(owner, product["account_id"])
         if (
-            marker(observed.get("description")) != product["code"]
+            marker(observed.get("name")) != product["code"]
             or not edit_receipt_matches(
                 observed.get("id"), {key: value[key] for key in ("name", "description", "price")}, observed
             )
@@ -313,6 +278,10 @@ class LogicalProducts:
             raise Conflict("Черновик связан с другим серверным товаром")
         db.execute(
             "INSERT OR IGNORE INTO bindings(draft_id,remote_id) VALUES(?,?)", (draft_id, proof["remote"])
+        )
+        db.execute(
+            "UPDATE logical_listings SET title_snapshot=? WHERE item_id=? AND product_id=?",
+            (marked_title(value["name"], product["code"]), proof["remote"], product["id"]),
         )
         db.execute("UPDATE drafts SET state='REMOTE_DRAFT' WHERE id=?", (draft_id,))
         if value.get("cost") is not None:
@@ -394,7 +363,9 @@ class LogicalProducts:
             if total > balance:
                 raise Conflict("Недостаточно Stars для настроенного пакета подарков")
         description = item.get("description")
-        existing_marker = marker(description)
+        existing_marker = marker(item.get("name"))
+        if existing and len(existing["code"]) != 3:
+            raise Conflict("Требуется перенос кода товара. Откройте перенос идентификаторов")
         if existing_marker and (not existing or existing["code"] != existing_marker):
             raise Conflict("Код в описании не принадлежит этой привязке")
         cleaned = description
@@ -407,13 +378,9 @@ class LogicalProducts:
                 cleaned = "\n".join(lines[: labels[0]]).rstrip()
         code = existing["code"] if existing else None
         if code is None:
-            for _ in range(32):
-                candidate = "#" + str(1_000_000 + secrets.randbelow(9_000_000))
-                if not self.store.rows("SELECT 1 FROM logical_products WHERE code=?", (candidate,)):
-                    code = candidate
-                    break
-            if code is None:
-                raise Conflict("Не удалось выделить код. Повторите подготовку")
+            with self.store.lock:
+                code = choose_code(self.store.db)
+        name = listing_text(marked_title(item["name"], code), "name")
         return {
             "request_id": uuid.uuid4().hex,
             "owner": owner,
@@ -424,6 +391,8 @@ class LogicalProducts:
             "baseline": baseline,
             "original": description,
             "cleaned": cleaned,
+            "name": name,
+            "original_name": item["name"],
             "status": item["status"],
             "product_id": existing["id"] if existing else None,
             "revision": existing["revision"] if existing else 0,
@@ -467,7 +436,7 @@ class LogicalProducts:
                 revision = product["revision"] + 1
             else:
                 revision = 1
-                code = prepared["code"]
+                code = reserve_code(db, ident, prepared["code"])
                 try:
                     db.execute(
                         "INSERT INTO logical_products(id,code,owner_id,account_id,handler,config,state,stock_item_id,baseline,original_description,created_at,updated_at) VALUES(?,?,?,?,?,?,'PENDING',?,?,?,?,?)",
@@ -491,7 +460,8 @@ class LogicalProducts:
                     raise Conflict(
                         "Код уже занят. Обновите превью: новый код требует подтверждения"
                     ) from None
-            description = listing_text(marked_description(prepared["cleaned"], code), "description")
+            description = listing_text(prepared["cleaned"], "description")
+            name = listing_text(prepared["name"], "name")
             db.execute(
                 "UPDATE logical_products SET handler=?,config=?,revision=?,enabled=0,state='PENDING',baseline=?,original_description=?,updated_at=? WHERE id=?",
                 (
@@ -510,11 +480,13 @@ class LogicalProducts:
                 prepared["item_id"],
                 {
                     "description": description,
+                    "name": name,
                     "logical_binding": {
                         "product_id": ident,
                         "revision": revision,
                         "account": prepared["account"],
                         "original_hash": digest(prepared["original"]),
+                        "original_name": prepared["original_name"],
                         "baseline": prepared["baseline"],
                         **({"platform_binding": True} if prepared.get("platform_binding") else {}),
                     },
@@ -569,6 +541,7 @@ class LogicalProducts:
         if current is not None and (
             current.get("id") != action["target"]
             or critical(current) != payload["baseline"]
+            or current.get("name") != payload.get("original_name")
             or digest(current.get("description", "")) != payload["original_hash"]
         ):
             raise Conflict("Товар изменился после превью. Обновите данные и подтвердите заново")
@@ -577,6 +550,33 @@ class LogicalProducts:
         self.binding_guard(action, writes=writes)
         expected = action["payload"]["description"]
         product = self.product(action["payload"]["logical_binding"]["product_id"])
+        if len(product["code"]) == 8 and not writes:
+            # Historical read-only resolution only. This never authorizes a new
+            # purchase/delivery, and the product still requires title migration.
+            from app.services.product_codes import remove_legacy_tail
+
+            row = self.store.rows("SELECT status FROM outbox WHERE id=?", (action["id"],))
+            if (
+                not row
+                or row[0]["status"] != "UNCERTAIN"
+                or remove_legacy_tail(expected, product["code"]) == expected
+            ):
+                raise Conflict("Не подтверждена историческая неизвестная операция")
+            if (
+                observed.get("id") != action["target"]
+                or critical(observed) != action["payload"]["logical_binding"]["baseline"]
+                or observed.get("description") != expected
+            ):
+                raise Conflict("Историческая запись не подтверждена сервером")
+            return {
+                "product_id": product["id"],
+                "revision": product["revision"],
+                "item_id": action["target"],
+                "status": observed["status"],
+                "description_sha256": digest(expected),
+                "baseline": critical(observed),
+                "title_snapshot": observed["name"],
+            }
         if action["payload"]["logical_binding"].get("platform_binding"):
             from app.services.platform_orders import PLATFORM_STATUSES
 
@@ -584,9 +584,10 @@ class LogicalProducts:
                 raise Conflict("Состояние товара больше не разрешает подтверждение привязки")
         if (
             observed.get("id") != action["target"]
-            or critical(observed) != action["payload"]["logical_binding"]["baseline"]
+            or critical(observed)
+            != {**action["payload"]["logical_binding"]["baseline"], "name": product["code"]}
             or observed.get("description") != expected
-            or marker(expected) != product["code"]
+            or marker(observed.get("name")) != product["code"]
         ):
             raise Conflict("Playerok не подтвердил точное описание и владельца привязки")
         return {
@@ -595,6 +596,8 @@ class LogicalProducts:
             "item_id": action["target"],
             "status": observed["status"],
             "description_sha256": digest(expected),
+            "baseline": critical(observed),
+            "title_snapshot": marked_title(observed["name"], product["code"]),
         }
 
     async def reconcile_binding(self, owner, product_id):
@@ -630,11 +633,13 @@ class LogicalProducts:
         link = self.listing(item.get("id"))
         if (
             product["state"] != "VERIFIED"
+            or len(product["code"]) != 3
             or not link
             or link["id"] != product["id"]
             or not link["verified_at"]
             or link["config_revision"] != product["revision"]
-            or marker(item.get("description")) != product["code"]
+            or marker(item.get("name")) != product["code"]
+            or marked_title(item["name"], product["code"]) != link["title_snapshot"]
             or critical(item) != json.loads(product["baseline"])
             or digest(item["description"]) != link["description_sha256"]
         ):
@@ -762,7 +767,7 @@ class LogicalProducts:
             raise Conflict("Автоматическое наследование для этого товара не разрешено")
         if (
             critical(item) != json.loads(product["baseline"])
-            or marker(item.get("description")) != product["code"]
+            or marker(item.get("name")) != product["code"]
             or item.get("status") not in ({"APPROVED", "SOLD"} if paid_order else {"APPROVED"})
             or item.get("deleted_at")
         ):
@@ -782,7 +787,7 @@ class LogicalProducts:
                 observed.get("id") not in snapshot_item_ids
                 and observed.get("status") == "APPROVED"
                 and not observed.get("deleted_at")
-                and marker(observed.get("description")) == product["code"]
+                and marker(observed.get("name")) == product["code"]
             ):
                 active.append(observed["id"])
         if paid_order is not None:
@@ -926,6 +931,10 @@ class LogicalProducts:
                 ),
             )
             db.execute(
+                "UPDATE logical_listings SET title_snapshot=? WHERE item_id=? AND product_id=?",
+                (marked_title(item["name"], product["code"]), item["id"], product_id),
+            )
+            db.execute(
                 "UPDATE logical_products SET error_code=NULL WHERE id=? AND revision=?",
                 (product_id, product["revision"]),
             )
@@ -970,8 +979,10 @@ class LogicalProducts:
 
     def require_delivery(self, item_id, handler=None, order_id=None):
         binding = self.listing(item_id)
-        if not binding or binding["state"] == "LEGACY":
+        if not binding:
             return None
+        if binding["state"] == "LEGACY" or len(binding["code"]) != 3:
+            raise Conflict("Требуется подтверждённый код в названии товара")
         self.authority(binding["owner_id"], binding["account_id"])
         platform = json.loads(binding["config"]).get("platform_only") is True
         if platform and handler != "playerok":
@@ -1029,6 +1040,15 @@ class LogicalProducts:
             or not future_order(json.loads(row["payload"]).get("created_at"), product["armed_at"])
         ):
             raise Conflict("Заказ не подтверждён как новый оплаченный заказ этой конфигурации")
+        transition = db.execute(
+            "SELECT confirmed_at FROM logical_code_migrations WHERE product_id=?", (product["id"],)
+        ).fetchone()
+        if (
+            transition
+            and transition[0]
+            and not future_order(json.loads(row["payload"]).get("created_at"), transition[0])
+        ):
+            raise Conflict("Заказ возник до подтверждения нового кода. Требуется ручная проверка")
         db.execute(
             "INSERT OR IGNORE INTO logical_order_scopes VALUES(?,?,?,?,?,?,?)",
             (
@@ -1079,12 +1099,19 @@ def finish_binding(db, action, status, result):
         return
     receipt = result["logical_binding"]
     db.execute(
-        "UPDATE logical_listings SET verified_at=?,server_status=? WHERE item_id=? AND operation_id=? AND config_revision=?",
-        (now(), receipt["status"], receipt["item_id"], action["id"], receipt["revision"]),
+        "UPDATE logical_listings SET verified_at=?,server_status=?,title_snapshot=? WHERE item_id=? AND operation_id=? AND config_revision=?",
+        (
+            now(),
+            receipt["status"],
+            receipt["title_snapshot"],
+            receipt["item_id"],
+            action["id"],
+            receipt["revision"],
+        ),
     )
     changed = db.execute(
-        "UPDATE logical_products SET state='VERIFIED',updated_at=? WHERE id=? AND revision=? AND state='PENDING'",
-        (now(), receipt["product_id"], receipt["revision"]),
+        "UPDATE logical_products SET state='VERIFIED',baseline=?,updated_at=? WHERE id=? AND revision=? AND state='PENDING'",
+        (encode(receipt["baseline"]), now(), receipt["product_id"], receipt["revision"]),
     ).rowcount
     if changed:
         from app.services.platform_orders import finish_platform_binding

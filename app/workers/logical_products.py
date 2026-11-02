@@ -107,7 +107,7 @@ class LogicalProductWorker:
                 return deliverable(deal, ident, account)
             from app.services.platform_orders import platform_sale
 
-            code = marker((deal.get("item") or {}).get("description"))
+            code = marker((deal.get("item") or {}).get("name"))
             candidates = [
                 p
                 for p in products
@@ -180,7 +180,7 @@ class LogicalProductWorker:
             malformed = False
             for item in snapshot:
                 try:
-                    code = marker(item.get("description"))
+                    code = marker(item.get("name"))
                 except ValueError:
                     linked = self.service.listing(item["id"])
                     if (

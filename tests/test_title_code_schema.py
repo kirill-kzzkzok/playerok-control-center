@@ -13,7 +13,7 @@ def old_store(path, monkeypatch):
 
     def old_glob(directory, pattern):
         for source in original_glob(directory, pattern):
-            if directory.name == "migrations" and source.name.startswith("030_"):
+            if directory.name == "migrations" and int(source.name.split("_", 1)[0]) >= 30:
                 continue
             yield source
 

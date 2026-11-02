@@ -130,7 +130,15 @@ class ProductReadiness:
                 "Диагностика синхронизации",
                 "diagnostics",
             )
-        if mode != "manual" and (not product or product["state"] != "VERIFIED"):
+        migrating = product and (len(product["code"]) != 3 or product["error_code"] == "CODE_MIGRATING")
+        if migrating:
+            add(
+                "CODE_MIGRATION",
+                "Требуется подтверждённый перенос кода в название. Новая выдача остановлена.",
+                "🔄 Перенос кодов товаров",
+                "codes:home",
+            )
+        if mode != "manual" and not migrating and (not product or product["state"] != "VERIFIED"):
             add(
                 "BINDING",
                 "Постоянная привязка не подтверждена Playerok.",
@@ -150,7 +158,7 @@ class ProductReadiness:
                     "iv:delivery:" + ident,
                     terminal=True,
                 )
-            if product["error_code"]:
+            if product["error_code"] and not migrating:
                 add(
                     "BINDING_CONFLICT",
                     "Обнаружен конфликт постоянного кода. Выдача остановлена.",
