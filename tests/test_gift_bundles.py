@@ -204,10 +204,15 @@ async def test_duplicate_paid_and_concurrent_package_reservations(rig):
     r.service.set_limits(7, 50, 65)
     await asyncio.gather(r.worker.once(), r.worker.once())
     assert len(t.payments) == 1
-    assert r.service.job("second")["state"] == "BLOCKED"
-    assert r.service.job("order")["reserved_stars"] == 25
+    # Concurrent claim order is not FIFO when enqueue timestamps are equal.
+    # Either order may reserve the package; the other must be blocked.
+    jobs = [r.service.job(ident) for ident in ("order", "second")]
+    assert sorted(job["state"] for job in jobs) == ["BLOCKED", "PENDING"]
+    winner = next(job for job in jobs if job["state"] == "PENDING")
+    assert winner["reserved_stars"] == 25
+    assert sum(job["reserved_stars"] for job in jobs) == 25
     await r.worker.once()
-    assert len(t.payments) == 2 and r.service.job("order")["state"] == "SUCCEEDED"
+    assert len(t.payments) == 2 and r.service.job(winner["order_id"])["state"] == "SUCCEEDED"
     for ident in ["order", "second"]:
         Orders(r.store).ingest(r.api.orders[ident])
     assert r.service.discover() == 0
