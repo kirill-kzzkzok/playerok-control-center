@@ -47,6 +47,23 @@ class SecretFilter(logging.Filter):
         return True
 
 
+class PollingFilter(logging.Filter):
+    """Transport owns outage/recovery summaries; library retries are DEBUG only."""
+
+    def filter(self, record):
+        text = record.getMessage()
+        for prefix, safe in (
+            ("Failed to fetch updates", "Telegram polling: запрос прерван"),
+            ("Sleep for", "Telegram polling: повтор с задержкой"),
+            ("Connection established", "Telegram polling: обновления восстановлены"),
+        ):
+            if text.startswith(prefix):
+                record.levelno, record.levelname = logging.DEBUG, "DEBUG"
+                record.msg, record.args = safe, ()
+                break
+        return True
+
+
 class ConsoleFormatter(logging.Formatter):
     COLORS: ClassVar = {
         logging.DEBUG: "90",
@@ -117,24 +134,34 @@ def event(category, message, *, order=None, operation=None, position=None, level
 
 
 def configure_logging(secrets=()):
-    Path("logs").mkdir(exist_ok=True)
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
-    handlers = [
-        logging.StreamHandler(sys.stdout),
-        RotatingFileHandler("logs/control_center.log", maxBytes=2_000_000, backupCount=5, encoding="utf-8"),
-    ]
+    level = os.environ.get("PCC_LOG_LEVEL", "INFO").upper()
+    debug = level == "DEBUG"
+    console = logging.StreamHandler(sys.stdout)
+    console.setLevel(logging.INFO)
+    handlers = [console]
+    file_error = False
+    try:
+        Path("logs").mkdir(exist_ok=True)
+        file = RotatingFileHandler(
+            "logs/control_center.log", maxBytes=2_000_000, backupCount=5, encoding="utf-8"
+        )
+        file.setLevel(logging.DEBUG if debug else logging.INFO)
+        handlers.append(file)
+    except OSError:
+        file_error = True
     for index, handler in enumerate(handlers):
         handler.addFilter(SecretFilter(secrets))
         handler.setFormatter(ConsoleFormatter(color=index == 0 and ansi_supported(sys.stdout)))
-    level = os.environ.get("PCC_LOG_LEVEL", "INFO").upper()
-    logging.basicConfig(
-        level=level if level in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"} else "INFO",
-        handlers=handlers,
-        force=True,
-    )
+    logging.basicConfig(level=logging.DEBUG if debug else logging.INFO, handlers=handlers, force=True)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("aiogram.event").setLevel(logging.WARNING)
+    dispatcher = logging.getLogger("aiogram.dispatcher")
+    dispatcher.filters.clear()
+    dispatcher.addFilter(PollingFilter())
+    if file_error:
+        event("WARNING", "Файл журнала недоступен · события остаются в консоли", level=logging.WARNING)

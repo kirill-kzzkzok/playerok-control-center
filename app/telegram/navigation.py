@@ -11,6 +11,7 @@ from aiogram.types import InputMediaPhoto
 
 from app.database.store import Conflict
 from app.security.logging import event
+from app.telegram.errors import telegram_error
 from app.telegram.input_cleanup import cleanup_input
 from app.telegram.keyboards import keyboard
 
@@ -433,6 +434,11 @@ class Navigation:
                         None  # Definite rejection permits a replacement, never a replay of business actions.
                     )
                 else:
+                    panel["editing"] = False
+                    panel["ui_error"] = telegram_error(error)
+                    for name in ("pending_view", "pending_markup", "pending_kind", "pending_token"):
+                        panel.pop(name, None)
+                    self.store.set_setting(key, panel)
                     raise
             if result is None:
                 if ident:

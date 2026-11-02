@@ -39,7 +39,7 @@ logging.shutdown()
     assert result.returncode == 0, result.stderr
     output = result.stdout
     assert output.count("Пакет 🧸 ×2, 🌹 ×1") == 1
-    assert "[ORDER" in output and "[SUCCESS" in output and "[DEBUG" in output
+    assert "[ORDER" in output and "[SUCCESS" in output and "[DEBUG" not in output
     assert "order_id=sale-1" in output and "gift_position=1" in output
     assert "polling-noise" not in output and "\x1b" not in output
     logs = list((tmp_path / "logs").glob("control_center.log*"))

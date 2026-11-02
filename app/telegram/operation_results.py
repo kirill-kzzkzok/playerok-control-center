@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from urllib.parse import quote
 
 from aiogram.exceptions import TelegramBadRequest
@@ -9,6 +10,7 @@ from aiogram.types import InlineKeyboardButton
 
 from app.database.store import Conflict
 from app.gifts.core import gift_name
+from app.telegram.errors import TERMINAL_EDIT, telegram_error
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 from app.telegram.presentation import status as human_status
@@ -258,20 +260,40 @@ class OperationResults:
                     or panel.get("editing")
                 ):
                     continue
+                retry_key = f"receipt-ui:{row['operation_id']}:{row['owner_id']}"
+                retry = self.store.setting(retry_key, {})
+                if retry.get("terminal") or retry.get("after", 0) > time.time():
+                    continue
                 text, markup = self.show(row["owner_id"], row["operation_id"])
                 try:
                     await bot.edit_message_text(
                         text, chat_id=row["owner_id"], message_id=row["view_message_id"], reply_markup=markup
                     )
                 except TelegramBadRequest as error:
-                    if "message is not modified" not in error.message.lower():
+                    if telegram_error(error) != "MESSAGE_NOT_MODIFIED":
+                        self.defer_view(retry_key, retry, error)
                         continue
-                except Exception:  # noqa: BLE001, S112 -- same known ID only; never resend an unknown notice
+                except Exception as error:  # noqa: BLE001 -- retry only known edit, never a business action/send
+                    self.defer_view(retry_key, retry, error)
                     continue
+                self.store.set_setting(retry_key, {})
                 self.store.execute(
                     "UPDATE operation_receipts SET rendered_status=?,notice_status=CASE WHEN ? IN ('SUCCEEDED','UNCERTAIN','PERMANENT_FAILED') THEN 'SENT' ELSE notice_status END WHERE operation_id=? AND owner_id=? AND view_token=?",
                     (row["status"], row["status"], row["operation_id"], row["owner_id"], row["view_token"]),
                 )
+
+    def defer_view(self, key, previous, error):
+        failures = previous.get("failures", 0) + 1
+        self.store.set_setting(
+            key,
+            {
+                "code": telegram_error(error),
+                "terminal": telegram_error(error) in TERMINAL_EDIT,
+                "failures": failures,
+                "after": time.time()
+                + max(min(3600, 5 * 2 ** min(failures, 10)), getattr(error, "retry_after", 0)),
+            },
+        )
 
     async def notify(self, bot):
         rows = self.store.rows(

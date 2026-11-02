@@ -9,6 +9,7 @@ from aiogram.exceptions import TelegramBadRequest
 from app.database.store import encode
 from app.services.chat_events import system_event
 from app.services.notification_preferences import NotificationPreferences
+from app.telegram.errors import TERMINAL_EDIT, telegram_error
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 from app.telegram.message_notice import message_notice
@@ -251,7 +252,7 @@ class Notifications:
 
     async def refresh_messages(self):
         rows = self.store.rows(
-            "SELECT n.*,i.payload,m.chat_id FROM notifications n JOIN inbox i ON i.key=n.event_key JOIN chat_messages m ON n.event_key='message:'||m.id WHERE n.status='SUCCEEDED' AND n.telegram_message_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM notification_actions a WHERE a.event_key=n.event_key AND a.owner_id=n.owner_id) AND n.refresh_after<=? LIMIT 100",
+            "SELECT n.*,i.payload,m.chat_id FROM notifications n JOIN inbox i ON i.key=n.event_key JOIN chat_messages m ON n.event_key='message:'||m.id WHERE n.status='SUCCEEDED' AND n.telegram_message_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM notification_actions a WHERE a.event_key=n.event_key AND a.owner_id=n.owner_id) AND n.refresh_failures>=0 AND n.refresh_after<=? LIMIT 100",
             (time.time(),),
         )
         for row in rows:
@@ -267,10 +268,19 @@ class Notifications:
                     text, chat_id=row["owner_id"], message_id=row["telegram_message_id"], reply_markup=markup
                 )
             except TelegramBadRequest as error:
-                if "message is not modified" not in error.message.lower():
+                if telegram_error(error) != "MESSAGE_NOT_MODIFIED":
+                    terminal = telegram_error(error) in TERMINAL_EDIT
                     self.store.execute(
-                        "UPDATE notifications SET refresh_after=?,refresh_failures=refresh_failures+1 WHERE event_key=? AND owner_id=?",
-                        (time.time() + 300, row["event_key"], row["owner_id"]),
+                        "UPDATE notifications SET refresh_after=?,refresh_failures=? WHERE event_key=? AND owner_id=?",
+                        (
+                            time.time() + 300,
+                            -1 if terminal else row["refresh_failures"] + 1,
+                            row["event_key"],
+                            row["owner_id"],
+                        ),
+                    )
+                    self.store.audit(
+                        row["owner_id"], "NOTIFICATION_UPDATE", row["event_key"], telegram_error(error)
                     )
                     continue
             except Exception:  # noqa: BLE001 -- only idempotent edits; no new message
@@ -296,7 +306,7 @@ class Notifications:
             "JOIN notifications n ON n.event_key=a.event_key AND n.owner_id=a.owner_id "
             "JOIN inbox i ON i.key=a.event_key JOIN chat_messages m ON i.key='message:'||m.id "
             "WHERE n.telegram_message_id IS NOT NULL "
-            "AND a.retry_after<=? AND (a.rendered_status IS NULL OR a.rendered_status!=o.status OR n.rendered_payload IS NULL) LIMIT 100",
+            "AND a.failures>=0 AND a.retry_after<=? AND (a.rendered_status IS NULL OR a.rendered_status!=o.status OR n.rendered_payload IS NULL) LIMIT 100",
             (time.time(),),
         )
         labels = {
@@ -310,7 +320,7 @@ class Notifications:
         for notification in pending:
             actions = self.store.rows(
                 "SELECT a.operation_id,a.failures,o.kind,o.status,o.result FROM notification_actions a "
-                "JOIN outbox o ON o.id=a.operation_id WHERE a.owner_id=? AND a.event_key=? AND a.retry_after<=? AND (a.rendered_status IS NULL OR a.rendered_status!=o.status OR ?=1) "
+                "JOIN outbox o ON o.id=a.operation_id WHERE a.owner_id=? AND a.event_key=? AND a.failures>=0 AND a.retry_after<=? AND (a.rendered_status IS NULL OR a.rendered_status!=o.status OR ?=1) "
                 "ORDER BY o.created_at DESC,o.id DESC",
                 (
                     notification["owner_id"],
@@ -359,7 +369,7 @@ class Notifications:
             except asyncio.CancelledError:
                 raise
             except TelegramBadRequest as error:
-                if "message is not modified" not in error.message.lower():
+                if telegram_error(error) != "MESSAGE_NOT_MODIFIED":
                     self.store.audit(
                         notification["owner_id"],
                         "NOTIFICATION_UPDATE",
@@ -394,7 +404,7 @@ class Notifications:
 
     def defer_update(self, notification, actions, error):
         for action in actions:
-            failures = action["failures"] + 1
+            failures = -1 if telegram_error(error) in TERMINAL_EDIT else action["failures"] + 1
             delay = max(min(3600, 5 * 2 ** min(failures, 10)), getattr(error, "retry_after", 0))
             self.store.execute(
                 "UPDATE notification_actions SET retry_after=?,failures=? WHERE operation_id=? AND event_key=? AND owner_id=?",

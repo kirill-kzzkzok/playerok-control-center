@@ -14,6 +14,7 @@ from aiohttp_socks import ProxyConnectionError, ProxyError, ProxyTimeoutError
 
 from app.localvpn import ProxyUnavailable, require_proxy
 from app.security.logging import event
+from app.telegram.errors import telegram_error
 
 request_evidence = ContextVar("telegram_request_evidence", default=None)
 
@@ -129,27 +130,49 @@ class TelegramNetworkSession(AiohttpSession):
         request_evidence.reset(token)
         state.update(seconds=round(time.monotonic() - started, 3), outcome=outcome)
         self.results[state["method"]] = state
-        previous = self._reported.get(state["method"])
-        # Keep routine polling quiet. Log first success, changes/recovery, and
-        # repeated failures at most once a minute unless diagnostics is explicit.
-        key = (outcome, state.get("blocked"), state["http"])
-        if (
-            self.diagnostics
-            or previous is None
-            or previous[0] != key
-            or (outcome != "OK" and time.monotonic() - previous[1] >= 60)
-        ):
-            event(
-                "CHECK" if outcome == "OK" else "WARNING",
-                f"Telegram {state['method']}: {self.route} — {outcome} "
-                f"host={state['hostname'] or self.origin[1]} start={state['started']} "
-                f"elapsed={state['seconds']}s http={state['http']}"
-                + f" connection={state.get('connection')} chunked={state.get('chunked')}"
-                + f" bytes={state.get('request_bytes', 0)} cause={state.get('network_error', '-')}"
-                + (" " + state["blocked"] if state.get("blocked") else ""),
-                level=logging.INFO if outcome == "OK" else logging.WARNING,
-            )
-            self._reported[state["method"]] = (key, time.monotonic())
+        # Structured evidence remains available in results; no URL/payload or raw errors.
+        logging.getLogger(__name__).debug(
+            "Telegram method=%s route=%s host=%s seconds=%s http=%s connection=%s outcome=%s cause=%s",
+            state["method"],
+            self.route,
+            state["hostname"] or self.origin[1],
+            state["seconds"],
+            state["http"],
+            state.get("connection"),
+            outcome,
+            state.get("error_code", state.get("blocked", "-")),
+        )
+        code = state.get("error_code") or state.get("blocked") or outcome
+        # Expected no-op and outer ACK cancellation aren't connection outages.
+        if outcome in {"OK", "CANCELLED"} or code == "MESSAGE_NOT_MODIFIED":
+            if outcome == "OK":
+                for key in tuple(self._reported):
+                    if key[0] == state["method"] and key[1] in {
+                        "NETWORK_ERROR",
+                        "TIMEOUT",
+                        "PROXY_UNAVAILABLE",
+                    }:
+                        previous = self._reported.pop(key)
+                        event("INFO", f"Telegram-соединение восстановлено · {previous[1]} неудачных попыток")
+            return
+        key = (state["method"], code)
+        clock = time.monotonic()
+        previous = self._reported.get(key)
+        count = (previous[1] if previous else 0) + 1
+        if previous is None or clock - previous[0] >= 30:
+            if previous:
+                text = f"Проблема Telegram сохраняется · {code} · {count} повторов"
+            else:
+                names = {
+                    "PROXY_UNAVAILABLE": "Telegram-прокси недоступен",
+                    "TIMEOUT": "Telegram не ответил вовремя",
+                    "NETWORK_ERROR": "Ошибка соединения с Telegram",
+                }
+                text = names.get(code, "Не удалось выполнить запрос Telegram") + " · " + code
+            event("WARNING", text, level=logging.WARNING)
+            self._reported[key] = (clock, count)
+        else:
+            self._reported[key] = (previous[0], count)
 
     async def make_request(self, bot, method, timeout=None):
         state, token, started = self._begin(method.__api_method__)
@@ -160,8 +183,15 @@ class TelegramNetworkSession(AiohttpSession):
             return result
         except (ProxyError, ProxyConnectionError, ProxyTimeoutError) as error:
             outcome = type(error).__name__
+            state["error_code"] = "PROXY_UNAVAILABLE"
             raise TelegramNetworkError(method=method, message="Local SOCKS transport unavailable") from None
         except Exception as error:
+            state["error_code"] = telegram_error(error)
+            if (
+                isinstance(error, TelegramNetworkError)
+                and "Playerok SOCKS service is not ready" in error.message
+            ):
+                state["error_code"] = "PROXY_UNAVAILABLE"
             outcome = type(error).__name__
             raise
         finally:
@@ -176,10 +206,17 @@ class TelegramNetworkSession(AiohttpSession):
             outcome = "OK"
         except (ProxyError, ProxyConnectionError, ProxyTimeoutError) as error:
             outcome = type(error).__name__
+            state["error_code"] = "PROXY_UNAVAILABLE"
             raise TelegramNetworkError(
                 method=GetFile(file_id="download"), message="Local SOCKS download unavailable"
             ) from None
         except Exception as error:
+            state["error_code"] = telegram_error(error)
+            if (
+                isinstance(error, TelegramNetworkError)
+                and "Playerok SOCKS service is not ready" in error.message
+            ):
+                state["error_code"] = "PROXY_UNAVAILABLE"
             outcome = type(error).__name__
             raise
         finally:
