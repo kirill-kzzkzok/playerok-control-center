@@ -1,5 +1,6 @@
 """Stage A: real Dispatcher, SQLite and workers; only remote boundaries are fake."""
 
+import asyncio
 import copy
 
 import pytest
@@ -8,6 +9,8 @@ from app.gifts.service import GiftService
 from app.services.logical_products import LogicalProducts
 from app.services.orders import Orders
 from app.services.product_readiness import ProductReadiness
+from app.workers.delivery_chains import ChainWorker
+from app.workers.enrollment import EnrollmentWorker
 from app.workers.logical_products import LogicalProductWorker
 from tests.test_universal_delivery_e2e import click, setup_ui
 from tests.test_universal_delivery_e2e import simulation as simulation_fixture
@@ -180,3 +183,28 @@ async def test_active_changed_product_error_has_direct_stop_then_configuration(s
     await click(r, suffix=":configure")
     assert any(k.endswith(":mode:telegram_gifts") for k in buttons(r.session.last_panel))
     assert not r.api.remote.payments and not r.api.messages
+
+
+async def test_two_paid_buyers_for_last_stock_unit_confirm_only_one_delivery(shop):
+    r = await shop()
+    await setup_ui(r, "unique_stock")
+    for ident in ("initial-one", "initial-two"):
+        Orders(r.store).ingest(r.api.order(ident))
+    for _ in range(12):
+        await EnrollmentWorker(r.store, r.api).once()
+        ChainWorker(r.store, r.api).once()
+        await r.worker.once()
+    assert r.store.rows("SELECT COUNT(*) AS n FROM inventory WHERE status='DELIVERED'")[0]["n"] == 2
+    for ident in ("last-one", "last-two"):
+        Orders(r.store).ingest(r.api.order(ident))
+    await asyncio.gather(EnrollmentWorker(r.store, r.api).once(), EnrollmentWorker(r.store, r.api).once())
+    for _ in range(8):
+        ChainWorker(r.store, r.api).once()
+        await r.worker.once()
+    last = r.store.rows("SELECT order_id,status FROM delivery_chains WHERE order_id LIKE 'last-%'")
+    assert len(last) == 1 and last[0]["status"] == "SUCCEEDED"
+    delivered = [m["text"] for m in r.api.messages if m["text"].startswith("isolated-unit-")]
+    assert len(delivered) == 3 and len(set(delivered)) == 3
+    assert r.store.rows("SELECT COUNT(*) AS n FROM inventory WHERE status='DELIVERED'")[0]["n"] == 3
+    assert r.store.rows("SELECT COUNT(*) AS n FROM reservations")[0]["n"] == 3
+    assert not await r.worker.once()
