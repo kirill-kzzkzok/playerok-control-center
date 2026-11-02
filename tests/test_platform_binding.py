@@ -46,7 +46,8 @@ async def test_new_code_waits_for_readback_then_future_followup_without_goods(sh
     product = LogicalProducts(r.store, r.api).listing("lot")
     assert product["state"] == "VERIFIED" and product["inherit_enabled"]
     assert product["enabled"] and Automation(r.store, r.api).get("lot")[1].enabled
-    assert r.api.item["description"].splitlines()[-1] == product["code"]
+    assert r.api.item["name"].endswith("[" + product["code"] + "]")
+    assert r.api.item["description"] == "Original description"
     await r.ui.click("platform:item:lot")
     assert "Привязка подтверждена" in r.session.last_panel.text
     assert product["code"] in r.session.last_panel.text

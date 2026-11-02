@@ -281,7 +281,9 @@ async def test_audit_connected_create_stock_policy_publish_edit_and_discounts(ri
         await ui.click("commit:" + (await state.get_data())["confirm_token"])
         await worker.once()
     await Notifications(store, bot).once()
-    assert remote["name"] == "Updated product name" and remote["price"] == 749 and remote["raw_price"] == 1000
+    code = store.rows("SELECT code FROM logical_products")[0]["code"]
+    assert remote["name"] == f"Updated product name [{code}]"
+    assert remote["price"] == 749 and remote["raw_price"] == 1000
     assert store.rows("SELECT COUNT(*) AS n FROM outbox WHERE kind='publish'") == [{"n": 1}]
     assert all(row["status"] == "SUCCEEDED" for row in store.rows("SELECT status FROM outbox"))
     assert "749" in session.calls[-1].text and "1000" in session.calls[-1].text

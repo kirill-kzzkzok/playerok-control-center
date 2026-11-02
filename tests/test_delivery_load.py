@@ -32,6 +32,7 @@ async def test_catalog_relist_and_ten_buyers_fifty_sales_remain_exact_under_load
             **deepcopy(r.api.item),
             "id": f"unrelated-{n}",
             "description": "Other product",
+            "name": f"Other product {n}",
             "status": "APPROVED",
         }
     call = r.api.call

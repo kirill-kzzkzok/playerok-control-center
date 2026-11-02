@@ -293,3 +293,38 @@ async def test_catalog_discovers_owned_relisted_alias_but_not_unrelated_listing(
     assert await service.discover(7) == []
     assert len(store.rows("SELECT * FROM logical_listings")) == 2
     assert not api.mutations and not store.rows("SELECT * FROM outbox")
+
+
+async def test_automatic_migration_continues_independent_product_after_block(legacy):
+    import copy
+
+    from app.services.logical_products import critical, digest
+
+    store, api, service = legacy
+    good = {**copy.deepcopy(api.item), "id": "good", "description": "Good description\n#7654321"}
+    store.execute(
+        "INSERT INTO logical_products SELECT 'second','#7654321',owner_id,account_id,handler,config,revision,control_revision,enabled,inherit_enabled,state,armed_at,'good',baseline,original_description,error_code,created_at,updated_at FROM logical_products WHERE id='stable'"
+    )
+    store.execute("UPDATE logical_products SET baseline=? WHERE id='second'", (encode(critical(good)),))
+    store.execute(
+        "INSERT INTO logical_listings(item_id,product_id,config_revision,description_sha256,server_status,verified_at) VALUES('good','second',1,?,'APPROVED',?)",
+        (digest(good["description"]), now()),
+    )
+    api.item["is_editable"] = False
+    items = {"lot": api.item, "good": good}
+
+    async def call(method, **kwargs):
+        assert method == "get_item"
+        return copy.deepcopy(items[kwargs["id"]])
+
+    def update(id, **changes):
+        api.mutations.append(id)
+        items[id].update(changes)
+        return copy.deepcopy(items[id])
+
+    api.call, api.account.update_item = call, update
+    report = await service.run(7)
+    assert report["verified"] == 1 and report["problems"], report
+    assert api.mutations == ["good"]
+    assert service.logical.product("stable")["code"] == "#2163148"
+    assert service.logical.product("second")["state"] == "VERIFIED"

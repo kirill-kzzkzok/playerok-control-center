@@ -66,13 +66,21 @@ class CodeMigration:
         account = self.logical.authority(owner)
         cursor, seen, problems = None, [], []
         for _ in range(200):
-            page = await self.api.call("get_my_items", count=24, after_cursor=cursor, statuses=None)
-            items, cursor = validate_page(page, "items", seen)
+            try:
+                page = await self.api.call("get_my_items", count=24, after_cursor=cursor, statuses=None)
+                items, cursor = validate_page(page, "items", seen)
+            except APIError as error:
+                problems.append({"stage": "CATALOG", "reason": error.code})
+                return problems
             for summary in items:
                 ident = summary["id"]
                 if self.logical.listing(ident):
                     continue
-                item = await self.api.call("get_item", id=ident)
+                try:
+                    item = await self.api.call("get_item", id=ident)
+                except APIError as error:
+                    problems.append({"item_id": ident, "reason": error.code})
+                    continue
                 lines = (item.get("description") or "").splitlines()
                 codes = [line.strip() for line in lines if re.fullmatch(r"#[0-9]{7}", line.strip())]
                 if not codes:
@@ -125,6 +133,7 @@ class CodeMigration:
         from app.workers.outbox import Executor, OutboxWorker
 
         self.logical.authority(owner, writes=True)
+        self.store.recover()
         problems = await self.discover(owner) if scan_catalog else []
 
         async def reconcile_unknown():

@@ -49,7 +49,10 @@ async def test_item_offers_start_and_relisting_permission_without_claiming_platf
     await r.ui.click("item:lot")
     visible = buttons(r.session.last_panel)
     assert any("Запустить продажи" in label for label in visible.values())
-    assert "Код товара: #" in r.session.last_panel.text
+    assert (
+        "Код товара: " + r.store.rows("SELECT code FROM logical_products")[0]["code"]
+        in r.session.last_panel.text
+    )
     assert "Наследовать настройки" in r.session.last_panel.text
     assert "Перевыставление включено" not in r.session.last_panel.text
     assert "private-text" not in r.session.last_panel.text

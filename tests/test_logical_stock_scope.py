@@ -24,7 +24,7 @@ def stock(tmp_path):
     config = encode({"after": "Thanks"})
     store.execute(
         "INSERT INTO logical_products(id,code,owner_id,account_id,handler,config,state,enabled,armed_at,stock_item_id,baseline,original_description,created_at,updated_at) "
-        "VALUES('product','#1234567',7,'seller','unique_stock',?,'VERIFIED',1,?,'original','{}','Description',?,?)",
+        "VALUES('product','AB6',7,'seller','unique_stock',?,'VERIFIED',1,?,'original','{}','Description',?,?)",
         (config, armed, armed, armed),
     )
     policy = asdict(DeliveryPolicy(enabled=True, mode="stock", auto_enroll=True))
