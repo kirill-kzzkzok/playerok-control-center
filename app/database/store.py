@@ -54,18 +54,40 @@ class Store:
         directory = Path(__file__).with_name("migrations")
         for source in sorted(directory.glob("[0-9]*.sql")):
             version = int(source.name.split("_", 1)[0])
-            with self.transaction() as db:
-                if db.execute("SELECT 1 FROM schema_migrations WHERE version=?", (version,)).fetchone():
-                    continue
-                statement = ""
-                for line in source.read_text(encoding="utf-8").splitlines(keepends=True):
-                    statement += line
-                    if sqlite3.complete_statement(statement):
-                        db.execute(statement)
+            # Rebuild a referenced parent without renaming the old parent and
+            # retargeting its children to a temporary table. Keep the connection
+            # exclusively owned until foreign-key enforcement is restored.
+            with self.lock:
+                rebuild = (
+                    version == 30
+                    and not self.db.execute(
+                        "SELECT 1 FROM schema_migrations WHERE version=?", (version,)
+                    ).fetchone()
+                )
+                if rebuild:
+                    if self.db.in_transaction:
+                        raise RuntimeError("Identity schema upgrade requires an outer transaction boundary")
+                    self.db.execute("PRAGMA foreign_keys=OFF")
+                try:
+                    with self.transaction() as db:
+                        if db.execute(
+                            "SELECT 1 FROM schema_migrations WHERE version=?", (version,)
+                        ).fetchone():
+                            continue
                         statement = ""
-                if statement.strip():
-                    raise RuntimeError("Незавершённая SQL-миграция")
-                db.execute("INSERT INTO schema_migrations VALUES(?,?)", (version, now()))
+                        for line in source.read_text(encoding="utf-8").splitlines(keepends=True):
+                            statement += line
+                            if sqlite3.complete_statement(statement):
+                                db.execute(statement)
+                                statement = ""
+                        if statement.strip():
+                            raise RuntimeError("Незавершённая SQL-миграция")
+                        if rebuild and db.execute("PRAGMA foreign_key_check").fetchone():
+                            raise RuntimeError("Identity schema upgrade failed foreign-key validation")
+                        db.execute("INSERT INTO schema_migrations VALUES(?,?)", (version, now()))
+                finally:
+                    if rebuild:
+                        self.db.execute("PRAGMA foreign_keys=ON")
 
     @contextmanager
     def transaction(self):
