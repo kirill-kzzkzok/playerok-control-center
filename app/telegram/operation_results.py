@@ -262,6 +262,11 @@ class OperationResults:
                     continue
                 retry_key = f"receipt-ui:{row['operation_id']}:{row['owner_id']}"
                 retry = self.store.setting(retry_key, {})
+                if (
+                    retry.get("view_token") != row["view_token"]
+                    or retry.get("view_message_id") != row["view_message_id"]
+                ):
+                    retry = {"view_token": row["view_token"], "view_message_id": row["view_message_id"]}
                 if retry.get("terminal") or retry.get("after", 0) > time.time():
                     continue
                 text, markup = self.show(row["owner_id"], row["operation_id"])
@@ -287,8 +292,9 @@ class OperationResults:
         self.store.set_setting(
             key,
             {
+                **previous,
                 "code": telegram_error(error),
-                "terminal": telegram_error(error) in TERMINAL_EDIT,
+                "terminal": telegram_error(error) in TERMINAL_EDIT or failures >= 8,
                 "failures": failures,
                 "after": time.time()
                 + max(min(3600, 5 * 2 ** min(failures, 10)), getattr(error, "retry_after", 0)),

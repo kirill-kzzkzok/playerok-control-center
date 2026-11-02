@@ -22,7 +22,19 @@ class SecretFilter(logging.Filter):
                     value = value.replace(secret, "[REDACTED]")
                 value = re.sub(r"@[A-Za-z0-9_]{3,32}", "[RECIPIENT]", value)
                 setattr(record, name, re.sub(r"[^A-Za-z0-9_\-\[\]]", "?", value)[:100])
-        message = record.getMessage()
+        from aiogram.exceptions import TelegramAPIError
+
+        from app.telegram.errors import telegram_error
+
+        error = record.exc_info[1] if record.exc_info else None
+        if not isinstance(error, TelegramAPIError):
+            args = record.args.values() if isinstance(record.args, dict) else record.args or ()
+            error = next((value for value in args if isinstance(value, TelegramAPIError)), None)
+        message = (
+            "Telegram: " + telegram_error(error)
+            if isinstance(error, TelegramAPIError)
+            else record.getMessage()
+        )
         for secret in self.secrets:
             message = message.replace(secret, "[REDACTED]")
         message = re.sub(r"bot\d+:[A-Za-z0-9_-]+", "bot[REDACTED]", message)
@@ -133,22 +145,35 @@ def event(category, message, *, order=None, operation=None, position=None, level
     return True
 
 
-def configure_logging(secrets=()):
+class ResilientFileHandler(RotatingFileHandler):
+    def handleError(self, record):
+        if not getattr(self, "failure_reported", False):
+            self.failure_reported = True
+            try:
+                sys.stderr.write(
+                    "Журнал недоступен · запись в файл не подтверждена, приложение продолжает работу\n"
+                )
+            except OSError:
+                pass
+
+
+def configure_logging(secrets=(), *, debug=False):
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     level = os.environ.get("PCC_LOG_LEVEL", "INFO").upper()
-    debug = level == "DEBUG"
+    debug = debug or level == "DEBUG"
     console = logging.StreamHandler(sys.stdout)
-    console.setLevel(logging.INFO)
+    selected = level if level in {"INFO", "WARNING", "ERROR", "CRITICAL"} else "INFO"
+    console.setLevel(selected)
     handlers = [console]
     file_error = False
     try:
         Path("logs").mkdir(exist_ok=True)
-        file = RotatingFileHandler(
+        file = ResilientFileHandler(
             "logs/control_center.log", maxBytes=2_000_000, backupCount=5, encoding="utf-8"
         )
-        file.setLevel(logging.DEBUG if debug else logging.INFO)
+        file.setLevel(logging.DEBUG if debug else selected)
         handlers.append(file)
     except OSError:
         file_error = True

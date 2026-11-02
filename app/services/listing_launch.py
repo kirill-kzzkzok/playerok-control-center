@@ -65,11 +65,15 @@ class ListingLaunch:
         with self.store.transaction():
             ident = self.store.setting(key)
             if ident:
-                self.load(owner, ident)
-                return ident
+                previous = self.load(owner, ident)
+                if previous["state"] != "CANCELLED":
+                    return ident
+                # A cancelled preparation has no publication authority. A new
+                # local preparation must pass PREPARE/COMMIT again.
+                source = source or previous["payload"]
             value = source or {}
             order, day = self.gifts.limits()
-            mode = value.get("delivery", "manual")
+            mode = value.get("delivery", value.get("mode", "manual"))
             if mode not in {"manual", "text", "stock", "gifts"}:
                 mode = "manual"
             imported = mode == "stock" and self.store.rows(

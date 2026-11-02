@@ -113,3 +113,48 @@ def test_transport_groups_failures_and_reports_recovery_without_raw_content(capl
     assert len(caplog.records) == 2
     assert "4 неудачных" in caplog.text
     assert "http=" not in caplog.text
+
+
+async def test_uncertain_transport_result_never_becomes_automatic_retry(tmp_path):
+    from app.playerok.adapter import APIError
+    from app.workers.outbox import OutboxWorker
+
+    store = Store(tmp_path / "uncertain.sqlite")
+    ident = store.enqueue("uncertain", "reply", "chat", {})
+    calls = []
+
+    async def execute(action):
+        calls.append(action["id"])
+        raise APIError("NETWORK_ERROR", uncertain=True)
+
+    worker = OutboxWorker(store, execute)
+    await worker.once()
+    assert store.rows("SELECT status FROM outbox WHERE id=?", (ident,))[0]["status"] == "UNCERTAIN"
+    await worker.once()
+    assert calls == [ident]
+    store.close()
+
+
+async def test_wizard_entry_preserves_previous_fsm_on_data_write_failure(tmp_path):
+    import sqlite3
+
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.base import StorageKey
+
+    from app.services.products import Products
+    from app.telegram.storage import SQLiteStorage
+    from app.telegram.wizard import Wizard
+
+    store = Store(tmp_path / "fsm.sqlite")
+    store.claim_first_owner(7)
+    state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
+    await state.set_state("previous")
+    await state.set_data({"context": "previous"})
+    store.execute(
+        "CREATE TEMP TRIGGER reject_fsm_data BEFORE UPDATE OF data ON fsm BEGIN SELECT RAISE(ABORT,'fault'); END"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        await Wizard(store, CatalogAPI(), Products(store, CatalogAPI())).start(7, state)
+    assert await state.get_state() == "previous"
+    assert await state.get_data() == {"context": "previous"}
+    store.close()

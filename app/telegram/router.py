@@ -50,6 +50,7 @@ from app.telegram.replies_panel import RepliesPanel
 from app.telegram.settings_panel import SettingsPanel
 from app.telegram.statistics_panel import StatisticsPanel
 from app.telegram.stock_panel import StockPanel
+from app.telegram.storage import replace_context
 from app.telegram.wizard import Wizard
 from playerokapi.enums import ItemStatuses
 
@@ -307,9 +308,12 @@ def create_router(store, api, products, synchronizer):
             elif action.startswith("draft:"):
                 ident = action.split(":", 1)[1]
                 draft = store.get_draft(ident, owner)
-                if draft["state"] == "DRAFT":
-                    await state.set_state("wizard")
-                    await state.set_data({"draft_id": ident, "revision": draft["revision"]})
+                if draft["payload"].get("launch_target"):
+                    if draft["state"] == "CANCELLED":
+                        ident = await launch_panel.service.open(owner, draft["payload"]["launch_target"])
+                    text, markup = await launch_panel.show(owner, state, ident)
+                elif draft["state"] == "DRAFT":
+                    await replace_context(state, "wizard", {"draft_id": ident, "revision": draft["revision"]})
                     text, markup = await wizard.screen(owner, state)
                 else:
                     binding = store.rows("SELECT remote_id FROM bindings WHERE draft_id=?", (ident,))

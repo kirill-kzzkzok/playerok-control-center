@@ -99,3 +99,25 @@ async def test_critical_system_problem_is_not_lost_in_initial_baseline(case):
     row = r.store.rows("SELECT * FROM notifications WHERE event_key='message:critical'")[0]
     assert row["status"] == "SUCCEEDED"
     assert "проблема" in r.session.messages[row["telegram_message_id"]]["text"]
+
+
+async def test_deleted_operation_view_stops_refresh_and_new_panel_recovers(case):
+    r = case
+    await r.ui.click("compose:chat")
+    await r.ui.message("One confirmed buyer response")
+    token = json.loads(r.store.rows("SELECT data FROM fsm")[0]["data"])["confirm_token"]
+    await r.ui.click("commit:" + token)
+    ident = r.store.rows("SELECT id FROM outbox")[0]["id"]
+    old = r.store.setting("navigation:123:7")["id"]
+    await r.worker.once()
+    r.session.messages[old]["exists"] = False
+    await OperationResults(r.store).refresh_views(r.bot)
+    count = len(r.session.calls)
+    await OperationResults(r.store).refresh_views(r.bot)
+    assert len(r.session.calls) == count
+    assert r.store.rows("SELECT status FROM outbox") == [{"status": "SUCCEEDED"}]
+    await r.ui.message("/start")
+    await r.ui.click("result:show:" + ident)
+    await OperationResults(r.store).refresh_views(r.bot)
+    assert "подтверждено" in r.session.last_panel.text
+    assert len(r.api.messages) == 1

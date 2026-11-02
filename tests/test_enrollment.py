@@ -204,3 +204,30 @@ async def test_last_stock_is_reserved_once_and_following_sale_is_blocked(setup):
     assert store.rows("SELECT status FROM auto_enrollment WHERE order_id='two'") == [{"status": "BLOCKED"}]
     assert not store.setting("delivery:item:enabled")
     assert "private code" not in str(store.rows("SELECT * FROM auto_enrollment"))
+
+
+async def test_old_pending_network_retry_requires_owner_review(setup, monkeypatch):
+    import time
+
+    store, api, orders, service, worker = setup
+    await arm(service)
+    order(store, orders, "delayed", now())
+    original = api.call.side_effect
+
+    async def offline(method, **kwargs):
+        if method == "get_deal":
+            raise APIError("NETWORK_ERROR")
+        return await original(method, **kwargs)
+
+    api.call.side_effect = offline
+    await worker.once()
+    assert store.rows("SELECT status FROM auto_enrollment")[0]["status"] == "PENDING"
+    clock = time.time()
+    monkeypatch.setattr("app.workers.enrollment.time.time", lambda: clock + 3600)
+    api.call.side_effect = original
+    await worker.once()
+    assert not store.rows("SELECT * FROM delivery_chains")
+    assert store.rows("SELECT status,error_code FROM auto_enrollment") == [
+        {"status": "BLOCKED", "error_code": "OWNER_REVIEW_REQUIRED"}
+    ]
+    assert store.rows("SELECT 1 FROM inbox WHERE kind='enrollment_blocked'")

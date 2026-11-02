@@ -1,6 +1,7 @@
 """One pinned Bot API route, with payload-free request evidence and no fallback."""
 
 import logging
+import secrets
 import time
 from contextvars import ContextVar
 from datetime import UTC, datetime
@@ -120,6 +121,7 @@ class TelegramNetworkSession(AiohttpSession):
     def _begin(self, method):
         state = {
             "method": method,
+            "request_id": secrets.token_hex(4),
             "hostname": None,
             "route": self.route,
             "started": datetime.now(UTC).isoformat(),
@@ -134,7 +136,8 @@ class TelegramNetworkSession(AiohttpSession):
         self.results[state["method"]] = state
         # Structured evidence remains available in results; no URL/payload or raw errors.
         logging.getLogger(__name__).debug(
-            "Telegram method=%s route=%s host=%s seconds=%s http=%s connection=%s outcome=%s cause=%s",
+            "Telegram request_id=%s method=%s route=%s host=%s seconds=%s http=%s connection=%s outcome=%s cause=%s",
+            state["request_id"],
             state["method"],
             self.route,
             state["hostname"] or self.origin[1],
@@ -149,12 +152,15 @@ class TelegramNetworkSession(AiohttpSession):
         if outcome in {"OK", "CANCELLED"} or code == "MESSAGE_NOT_MODIFIED":
             if outcome == "OK":
                 for key in tuple(self._reported):
-                    if key[0] == state["method"] and key[1] in {
+                    if key[0] != state["method"]:
+                        continue
+                    previous = self._reported.pop(key)
+                    if key[1] in {
                         "NETWORK_ERROR",
                         "TIMEOUT",
                         "PROXY_UNAVAILABLE",
+                        "DNS_ERROR",
                     }:
-                        previous = self._reported.pop(key)
                         event("INFO", f"Telegram-соединение восстановлено · {previous[1]} неудачных попыток")
             return
         key = (state["method"], code)
@@ -171,6 +177,18 @@ class TelegramNetworkSession(AiohttpSession):
                     "NETWORK_ERROR": "Ошибка соединения с Telegram",
                 }
                 text = names.get(code, "Не удалось выполнить запрос Telegram") + " · " + code
+            names = {
+                "getUpdates": "получение обновлений",
+                "answerCallbackQuery": "подтверждение кнопки",
+                "editMessageText": "обновление панели",
+                "editMessageMedia": "обновление изображения",
+                "sendMessage": "отправка сообщения",
+                "sendPhoto": "отправка изображения",
+                "downloadFile": "загрузка файла",
+            }
+            text += " · " + names.get(state["method"], "запрос API")
+            if code == "UNKNOWN_TELEGRAM_ERROR":
+                text += " · диагностика " + state["request_id"]
             event("WARNING", text, level=logging.WARNING)
             self._reported[key] = (clock, count)
         else:
@@ -189,6 +207,11 @@ class TelegramNetworkSession(AiohttpSession):
             raise TelegramNetworkError(method=method, message="Local SOCKS transport unavailable") from None
         except Exception as error:
             state["error_code"] = telegram_error(error)
+            cause = state.get("network_error", "")
+            if cause in {"ClientConnectorDNSError"}:
+                state["error_code"] = "DNS_ERROR"
+            elif cause in {"ConnectionTimeoutError", "SocketTimeoutError", "ServerTimeoutError"}:
+                state["error_code"] = "TIMEOUT"
             if (
                 isinstance(error, TelegramNetworkError)
                 and "Playerok SOCKS service is not ready" in error.message
@@ -214,6 +237,11 @@ class TelegramNetworkSession(AiohttpSession):
             ) from None
         except Exception as error:
             state["error_code"] = telegram_error(error)
+            cause = state.get("network_error", "")
+            if cause in {"ClientConnectorDNSError"}:
+                state["error_code"] = "DNS_ERROR"
+            elif cause in {"ConnectionTimeoutError", "SocketTimeoutError", "ServerTimeoutError"}:
+                state["error_code"] = "TIMEOUT"
             if (
                 isinstance(error, TelegramNetworkError)
                 and "Playerok SOCKS service is not ready" in error.message

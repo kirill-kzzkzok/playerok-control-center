@@ -741,3 +741,32 @@ async def test_dispatcher_configuration_restart_preview_and_final_button(launch)
         assert "secret" not in session.calls[-1].text
     finally:
         await bot.session.close()
+
+
+async def test_service_launch_draft_hidden_from_wizard_and_reopens_after_cancel(launch):
+    from app.services.catalog import draft_page
+
+    r = launch
+    ident = await r.launch.open(7, "item")
+    assert not any(row["id"] == ident for row in draft_page(r.store, 7)["rows"])
+    bot = Bot("123:" + "x" * 35, session=TelegramSession())
+    state = FSMContext(SQLiteStorage(r.store), StorageKey(bot_id=123, chat_id=7, user_id=7))
+    try:
+        await Interaction(bot, dispatcher(r.store, r.api)).click("draft:" + ident)
+        assert await state.get_state() != "wizard"
+        assert "Подготовка к публикации" in bot.session.last_panel.text
+        r.store.execute("UPDATE drafts SET state='CANCELLED' WHERE id=?", (ident,))
+        reopened = await r.launch.open(7, "item")
+        assert r.store.get_draft(reopened, 7)["state"] == "DRAFT"
+        assert not r.store.rows("SELECT * FROM outbox")
+    finally:
+        await bot.session.close()
+
+
+async def test_cancelled_launch_pointer_does_not_reopen_dead_configuration(launch):
+    r = launch
+    ident = await r.launch.open(7, "item")
+    r.store.execute("UPDATE drafts SET state='CANCELLED' WHERE id=?", (ident,))
+    reopened = await r.launch.open(7, "item")
+    assert r.store.get_draft(reopened, 7)["state"] == "DRAFT"
+    assert not r.store.rows("SELECT * FROM outbox")

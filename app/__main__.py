@@ -240,7 +240,10 @@ async def run_connected(config, *, network_diagnostics=False):
 def main():
     try:
         config = Config.load()
-        configure_logging([config.telegram_token, config.playerok_header, GiftSettings.load().api_hash])
+        configure_logging(
+            [config.telegram_token, config.playerok_header, GiftSettings.load().api_hash],
+            debug="--telegram-network-diagnostics" in sys.argv,
+        )
         config.require_owner()
         with InstanceLock(str(config.database_path) + ".lock"):
             asyncio.run(run(config, network_diagnostics="--telegram-network-diagnostics" in sys.argv))

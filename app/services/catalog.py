@@ -37,7 +37,9 @@ def draft_page(store, owner, page=0, filter_name="ALL", search="", page_size=10)
         or len(search) > 200
     ):
         raise ValidationError("Некорректный поиск, фильтр или страница черновиков")
-    where = "owner_id=? AND " + DRAFT_FILTERS[filter_name][1]
+    where = (
+        "owner_id=? AND json_extract(payload,'$.launch_target') IS NULL AND " + DRAFT_FILTERS[filter_name][1]
+    )
     args = (owner,)
     if search:
         value = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

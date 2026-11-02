@@ -12,6 +12,7 @@ from app.services.products import ValidationError, priority_price_basis
 from app.services.promotions import PromotionPolicy
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
+from app.telegram.storage import replace_context
 
 MODES = {
     "manual": "Ручная выдача",
@@ -52,8 +53,9 @@ class LaunchPanel:
                 ),
             )
         nonce = secrets.token_hex(6)
-        await state.set_state(None)
-        await state.set_data({"launch": {"id": ident, "revision": draft["revision"], "nonce": nonce}})
+        await replace_context(
+            state, None, {"launch": {"id": ident, "revision": draft["revision"], "nonce": nonce}}
+        )
         p = f"ln:{nonce}:"
         ready = value.get("ready")
         text = (

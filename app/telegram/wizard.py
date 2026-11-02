@@ -14,6 +14,7 @@ from app.services.products import ValidationError, listing_price, listing_text, 
 from app.services.withdrawals import draft_calculation, withdrawal_methods, withdrawal_snapshot
 from app.telegram.formatting import escaped, html_pages
 from app.telegram.keyboards import keyboard
+from app.telegram.storage import replace_context
 
 
 class Wizard:
@@ -49,8 +50,7 @@ class Wizard:
                 "withdrawal": self.store.setting(f"finance:{owner}:withdrawal"),
             },
         )
-        await state.set_state("wizard")
-        await state.set_data({"draft_id": ident, "revision": 0})
+        await replace_context(state, "wizard", {"draft_id": ident, "revision": 0})
         return await self.screen(owner, state)
 
     async def start_edit(self, owner, state, item_id):
@@ -58,8 +58,7 @@ class Wizard:
         draft = self.store.get_draft(ident, owner)
         await self.load_form(draft["payload"], draft["payload"]["obtaining_type_id"])
         self.store.update_draft(ident, owner, 0, draft["payload"])
-        await state.set_state("wizard")
-        await state.set_data({"draft_id": ident, "revision": 1})
+        await replace_context(state, "wizard", {"draft_id": ident, "revision": 1})
         return await self.screen(owner, state)
 
     async def save(self, owner, state, payload):
@@ -172,8 +171,12 @@ class Wizard:
 
     async def screen(self, owner, state):
         data = await state.get_data()
+        if not data.get("draft_id"):
+            raise ValidationError("Черновик не выбран. Откройте локальные черновики или создайте товар")
         draft = self.store.get_draft(data["draft_id"], owner)
         payload = draft["payload"]
+        if payload.get("launch_target"):
+            raise ValidationError("Это настройка запуска. Откройте товар и подготовку к публикации")
         if (
             payload.get("step") == "conditions"
             and getattr(self.api.account, "auto_accept_agreements", False)

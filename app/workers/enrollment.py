@@ -2,8 +2,9 @@ import asyncio
 import json
 import time
 import uuid
+from datetime import datetime
 
-from app.database.store import Conflict, now
+from app.database.store import Conflict, now, server_time
 from app.playerok.adapter import APIError
 from app.services.automation import future_order
 from app.services.delivery_chains import DeliveryChains
@@ -68,6 +69,13 @@ class EnrollmentWorker:
             order_id, revision = row["order_id"], row["policy_revision"]
             status, code, delay = "CREATED", None, 0
             try:
+                observed = self.store.rows(
+                    "SELECT json_extract(payload,'$.created_at') AS created FROM orders WHERE id=?",
+                    (order_id,),
+                )
+                created = server_time(observed[0]["created"]) if observed else None
+                if not created or time.time() - datetime.fromisoformat(created).timestamp() > 900:
+                    raise Conflict("OWNER_REVIEW_REQUIRED")
                 policies = self.store.rows(
                     "SELECT p.actor,p.payload,p.revision FROM orders o JOIN delivery_policies p ON p.item_id=o.item_id WHERE o.id=?",
                     (order_id,),

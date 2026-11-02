@@ -2,6 +2,7 @@ from app.database.store import Conflict
 from app.services.catalog import DRAFT_FILTERS, draft_page
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
+from app.telegram.storage import replace_context
 
 DRAFT_LABELS = {
     "DRAFT": "Черновик",
@@ -23,8 +24,7 @@ class DraftsPanel:
     async def listing(self, owner, state, page=0, selected="ALL", search=""):
         self.owner(owner)
         result = draft_page(self.store, owner, page, selected, search)
-        await state.set_state(None)
-        await state.set_data({"draft_list_filter": selected, "draft_list_search": search})
+        await replace_context(state, None, {"draft_list_filter": selected, "draft_list_search": search})
         text = f"💾 <b>Локальные черновики · {DRAFT_FILTERS[selected][0]}</b>\nСтраница {result['page'] + 1}/{result['pages']} · Всего: {result['total']}"
         if search:
             text += "\nПоиск: " + escaped(search, 500)
@@ -75,8 +75,9 @@ class DraftsPanel:
             parts = action.split(":")
             return await self.listing(owner, state, int(parts[2]), parts[3], search)
         if action == "dl:search":
-            await state.set_state("draftlist:search")
-            await state.set_data({"draft_list_filter": selected, "draft_list_search": search})
+            await replace_context(
+                state, "draftlist:search", {"draft_list_filter": selected, "draft_list_search": search}
+            )
             return (
                 "Введите часть названия или ID черновика (1–200 символов). Данные выдачи и описания в поиск не входят.",
                 keyboard([[("Отмена поиска", "dl:page:0:" + selected)]]),

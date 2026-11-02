@@ -784,6 +784,7 @@ class OutboxWorker:
                 action["lease_token"],
                 "RETRYABLE_FAILED"
                 if action["kind"] in {"delivery", "delivery_text", "chain_message", "reply", "mark_read"}
+                and not error.uncertain
                 and error.code
                 in {
                     "NETWORK_ERROR",

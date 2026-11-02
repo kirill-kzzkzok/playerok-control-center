@@ -105,3 +105,38 @@ def test_windows_launcher_runs_foreground_once_and_keeps_error_visible():
     assert "pythonunbuffered=1" in source and "chcp 65001" in source
     assert "pause" in source and "if errorlevel 1" in source
     assert "start " not in source and "pythonw" not in source
+
+
+def test_log_file_failure_is_reported_once_without_record_payload(tmp_path, capsys):
+    from app.security.logging import ResilientFileHandler
+
+    handler = ResilientFileHandler(tmp_path / "log.txt")
+    record = logging.LogRecord("shop", logging.ERROR, "", 1, "private buyer message", (), None)
+    handler.handleError(record)
+    handler.handleError(record)
+    handler.close()
+    text = capsys.readouterr().err
+    assert text.count("Журнал недоступен") == 1
+    assert "private buyer" not in text
+
+
+def test_raw_telegram_exception_is_classified_before_any_log_sink():
+    from aiogram.exceptions import TelegramBadRequest
+    from aiogram.methods import EditMessageText
+
+    error = TelegramBadRequest(
+        method=EditMessageText(text="private buyer text", chat_id=7, message_id=1),
+        message="can't parse entities private buyer text",
+    )
+    record = logging.LogRecord(
+        "aiogram.dispatcher",
+        logging.ERROR,
+        "",
+        1,
+        "Unhandled Telegram: %s",
+        (error,),
+        (type(error), error, None),
+    )
+    SecretFilter().filter(record)
+    assert "private buyer text" not in record.getMessage()
+    assert "ENTITY_PARSE_ERROR" in record.getMessage()

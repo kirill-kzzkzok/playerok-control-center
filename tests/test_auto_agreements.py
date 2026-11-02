@@ -469,3 +469,17 @@ async def test_final_pending_read_cannot_outlive_outbox_lease_and_still_post(rig
         assert not result["conditions"].get("auto_confirmed")
     finally:
         account.close()
+
+
+async def test_lost_acceptance_reconciles_with_durable_audit_and_previous_error(rig):
+    r = rig
+    r.api.account.fail_id = "a"
+    await r.products.schema_details("category", None)
+    op = r.store.rows("SELECT * FROM outbox")[0]
+    assert op["status"] == "UNCERTAIN"
+    r.api.pending = []
+    await r.products.schema_details("category", None)
+    assert r.store.rows("SELECT status FROM outbox")[0]["status"] == "SUCCEEDED"
+    assert r.store.rows("SELECT * FROM operation_resolutions WHERE operation_id=?", (op["id"],))
+    assert r.store.rows("SELECT * FROM audit_log WHERE action='RESOLVE_OPERATION' AND target=?", (op["id"],))
+    assert r.api.account.accepted == ["a"]

@@ -596,7 +596,14 @@ class Store:
         # connection's RLock and stall synchronous UI reads on the event loop.
         if destination.resolve() == self.path.resolve():
             raise ValueError("Нельзя записать резервную копию поверх рабочей базы")
-        with closing(sqlite3.connect(self.path)) as source, closing(sqlite3.connect(destination)) as target:
+        if str(self.path) == ":memory:":
+            with self.lock, closing(sqlite3.connect(destination)) as target:
+                self.db.backup(target)
+            return
+        with (
+            closing(sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True)) as source,
+            closing(sqlite3.connect(destination)) as target,
+        ):
             source.backup(target, pages=256)
 
     def close(self):

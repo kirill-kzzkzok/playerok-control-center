@@ -176,12 +176,40 @@ class AutoAgreements:
                         return {**conditions, "automatic": True, "auto_status": "UNCERTAIN"}
                     # Server now explicitly reports no unaccepted requirements.
                     # Never reset to PENDING or resend a mutation after lost ACK.
-                    from app.database.store import encode
+                    from app.database.store import encode, now
 
-                    self.store.execute(
-                        "UPDATE outbox SET status='SUCCEEDED',result=?,error_code=NULL WHERE id=? AND status='UNCERTAIN'",
-                        (encode({"server_no_pending": True, "reconciled": True}), operation["id"]),
-                    )
+                    result = {
+                        "server_no_pending": True,
+                        "reconciled": True,
+                        "resolution_source": "SERVER_READ",
+                    }
+                    with self.store.transaction() as db:
+                        changed = db.execute(
+                            "UPDATE outbox SET status='SUCCEEDED',result=?,error_code=NULL,lease_token=NULL,lease_until=NULL WHERE id=? AND status='UNCERTAIN'",
+                            (encode(result), operation["id"]),
+                        ).rowcount
+                        if changed:
+                            actor = db.execute(
+                                "SELECT user_id FROM administrators ORDER BY user_id LIMIT 1"
+                            ).fetchone()
+                            if not actor:
+                                raise Conflict("Владелец не подтверждён")
+                            db.execute(
+                                "INSERT INTO operation_resolutions(operation_id,actor,decision,reason,evidence,previous_error_code,previous_result,resolved_at) VALUES(?,?,'CONFIRM_READ_STATE',?,?,?,?,?)",
+                                (
+                                    operation["id"],
+                                    actor[0],
+                                    "Сервер подтвердил отсутствие непринятых условий",
+                                    encode(result),
+                                    operation["error_code"],
+                                    operation["result"],
+                                    now(),
+                                ),
+                            )
+                            db.execute(
+                                "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'RESOLVE_OPERATION',?,'CONFIRM_READ_STATE',?)",
+                                (actor[0], operation["id"], now()),
+                            )
                     operation = None
             if not conditions["pending"] and operation is None:
                 self.journal(category, obtaining, conditions, "SERVER_CONFIRMED")

@@ -22,6 +22,13 @@ class SQLiteStorage(BaseStorage):
             (self.key(key), state),
         )
 
+    async def replace(self, key, state, data):
+        state = state.state if isinstance(state, State) else state
+        self.store.execute(
+            "INSERT INTO fsm(key,state,data) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET state=excluded.state,data=excluded.data",
+            (self.key(key), state, encode(data)),
+        )
+
     async def get_state(self, key):
         rows = self.store.rows("SELECT state FROM fsm WHERE key=?", (self.key(key),))
         return rows[0]["state"] if rows else None
@@ -49,3 +56,13 @@ class SQLiteStorage(BaseStorage):
 
     async def close(self):
         pass  # Store is shared; lifecycle belongs to application.
+
+
+async def replace_context(context, state, data):
+    """Atomic entry for durable SQLite FSM; ordinary aiogram storage remains usable."""
+    replace = getattr(context.storage, "replace", None)
+    if replace is not None:
+        await replace(context.key, state, data)
+    else:
+        await context.set_data(data)
+        await context.set_state(state)
