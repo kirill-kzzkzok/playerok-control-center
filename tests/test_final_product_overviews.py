@@ -20,6 +20,9 @@ async def test_overviews_show_one_current_logical_product_and_keep_old_history(s
     await setup_ui(r, handler, value)
     Orders(r.store).ingest(r.api.order("historical-sale", status="CONFIRMED"))
     r.api.item["status"] = "SOLD"
+    r.api.items["intermediate-lot"] = {**deepcopy(r.api.item), "id": "intermediate-lot", "status": "APPROVED"}
+    await LogicalProductWorker(r.store, r.api).once()
+    r.api.items["intermediate-lot"]["status"] = "SOLD"
     r.api.items["next-lot"] = {**deepcopy(r.api.item), "id": "next-lot", "status": "APPROVED"}
     await LogicalProductWorker(r.store, r.api).once()
     for route in ("automation", "aq:list:policies:0"):

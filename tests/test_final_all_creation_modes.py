@@ -43,6 +43,10 @@ async def test_clean_wizard_creation_launch_and_immediate_first_sale(shop, mode,
     r.api.account.publish_item = publish
     r.api.account.send_message = lambda chat_id, text: Marketplace.send_message(r.api, chat_id, text)
     await r.ui.click("launch:from:" + draft)
+    await r.ui.click("publish:item")  # A saved old button must preserve the wizard's delivery intent.
+    launch = (await r.state.get_data())["launch"]
+    assert r.store.get_draft(launch["id"], 7)["payload"]["mode"] == mode
+    assert not r.api.published
     await r.launch_action("check")
     await r.launch_action("commit")
     await r.worker.once()

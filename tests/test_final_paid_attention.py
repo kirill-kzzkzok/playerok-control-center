@@ -1,8 +1,12 @@
 """Attention is driven by paid obligations, not notification delivery."""
 
+from aiogram.methods import SendMessage
+
+from app.playerok.adapter import APIError
 from app.services.orders import Orders
 from app.workers.delivery_chains import ChainWorker
 from app.workers.enrollment import EnrollmentWorker
+from app.workers.notifications import Notifications
 from tests.test_unified_delivery_controls import shop as shop_fixture
 from tests.test_universal_delivery_e2e import setup_ui
 from tests.test_ux_redesign import buttons
@@ -27,6 +31,44 @@ async def test_blocked_paid_order_is_visible_even_if_notification_is_missing(sho
     assert "Статус: Оплачен" in r.session.last_panel.text
     assert "Изменилось описание" in r.session.last_panel.text
     assert not r.api.messages and not r.api.remote.payments
+
+
+async def test_unknown_stock_send_and_blocked_chain_remain_visible_when_telegram_notice_fails(shop):
+    r = await shop()
+    await setup_ui(r, "unique_stock")
+    r.store.set_setting("notifications:initialized", True)
+    Orders(r.store).ingest(r.api.order("unknown-delivery"))
+    await EnrollmentWorker(r.store, r.api).once()
+    chains = ChainWorker(r.store, r.api)
+    chains.once()
+
+    def lost_reply(chat_id, text):
+        r.api.messages.append({"chat_id": chat_id, "text": text})
+        raise APIError("NETWORK_ERROR", uncertain=True)
+
+    r.api.account.send_message = lost_reply
+    await r.worker.once()
+    chains.once()
+    assert r.store.rows("SELECT status FROM delivery_chains") == [{"status": "BLOCKED"}]
+    assert r.store.rows("SELECT status FROM inventory WHERE status='QUARANTINED'") == [
+        {"status": "QUARANTINED"}
+    ]
+    send = r.session.make_request
+
+    async def lost_notice(bot, method, timeout=None):
+        if isinstance(method, SendMessage):
+            raise TimeoutError()
+        return await send(bot, method, timeout)
+
+    r.session.make_request = lost_notice
+    await Notifications(r.store, r.bot).once()
+    r.session.make_request = send
+    await r.ui.click("home")
+    assert "attention" in buttons(r.session.last_panel)
+    await r.ui.click("attention")
+    assert "order:unknown-delivery" in buttons(r.session.last_panel)
+    assert "неизвестен" in r.session.last_panel.text
+    assert not await r.worker.once() and len(r.api.messages) == 1
 
 
 async def test_closed_order_with_stale_blocked_enrollment_is_not_counted_as_unpaid_problem(shop):
