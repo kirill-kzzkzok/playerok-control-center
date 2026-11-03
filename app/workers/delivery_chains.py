@@ -11,10 +11,15 @@ class ChainWorker:
         self.store, self.service = store, DeliveryChains(store, api)
 
     def once(self):
-        rows = self.store.rows(
-            "SELECT order_id FROM delivery_chains WHERE status='ACTIVE' ORDER BY created_at LIMIT 50"
-        )
-        return sum(self.service.advance(row["order_id"]) for row in rows)
+        key = "chains:advance_cursor:" + str(self.service.api.account.id)
+        with self.store.transaction():
+            rows = self.store.rows(
+                "SELECT order_id FROM delivery_chains WHERE status='ACTIVE' "
+                "AND order_id>? ORDER BY order_id LIMIT 50",
+                (self.store.setting(key, ""),),
+            )
+            self.store.set_setting(key, rows[-1]["order_id"] if rows else "")
+            return sum(self.service.advance(row["order_id"]) for row in rows)
 
     async def run(self, stop):
         while not stop.is_set():

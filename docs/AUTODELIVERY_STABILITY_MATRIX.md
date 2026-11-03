@@ -69,3 +69,4 @@
 | 2.1 Конкурентный scan / поздние результаты | logical_products worker/service | RED2failed; shared existing lock, success snapshot fence, problemCAS incl control;47passed+3passed, real UI STOP | FIXED |
 | 2.2 Быстро SOLD / private item HTTP404 | logical_products / delivery_chains / Outbox / order_management | RED2failed stock/text + REDconflictingprice;98passed,4deliverymodes(existingPlayerok), sharedstock/oneorder-source/no duplicates | FIXED в проверенных сценариях |
 | 3.1 Независимость chats / orders / auth | sync_health / Gifts / readiness / automation / adapter | RED2failed;396passed+6passed; oldchat failure remains visible, order/unknown error blocked;503 no identity loss,401 disables | FIXED; phase3 latency/load gate pending |
+| 3.2 ACTIVE chain LIMIT50 starvation | workers/delivery_chains | RED1failed; bounded account cursor,77passed;50existing queued chains +new sale actual send once | FIXED; not a mixed-service SLA load test |
