@@ -225,7 +225,9 @@ class ItemPanel:
                 elif item.get("may_be_published") is True and basis is not None:
                     rows.insert(0, [("🔄 Перевыставить", "relist:item:" + ident)])
                 else:
-                    text += "\nВозможность повторного размещения или его базовая цена не подтверждены сервером."
+                    text += (
+                        "\nВозможность повторного размещения или его базовая цена не подтверждены сервером."
+                    )
                     rows.insert(0, [("Проверить возможность перевыставления", "relist:item:" + ident)])
             elif product and not platform and not product["enabled"] and product["handler"] != "manual":
                 rows.insert(0, [("🚀 Запустить продажи", "lp:ready:" + ident)])

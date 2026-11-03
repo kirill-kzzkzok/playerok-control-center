@@ -5,8 +5,8 @@ import pytest
 from app.services.logical_products import LogicalProducts
 from app.telegram.callback_ack import navigation
 from tests.test_product_readiness import shop as shop_fixture
-from tests.test_universal_delivery_e2e import setup_ui
 from tests.test_telegram_transport import production_dispatcher
+from tests.test_universal_delivery_e2e import setup_ui
 from tests.test_ux_redesign import buttons
 
 shop = shop_fixture
