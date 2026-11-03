@@ -8,13 +8,13 @@
 | A2 | РЕДАКТИРОВАНИЕ НЕ ДОЛЖНО НЕЗАМЕТНО ЛОМАТЬ АВТОВЫДАЧУ | CONFIRMED | Critical edits: RED5 behavioral cases →138passed profile; explicit STOP, obligation guards enqueue/dispatch, readback invalidates old approval, actual UI rebind/rearm. Future-only messages remain pending |
 | A3 | ЗАЩИТИТЬ УДАЛЕНИЕ ТОВАРА С НЕЗАВЕРШЁННЫМИ ЗАКАЗАМИ | FIXED | RED5;96passed профиль. Products scope guard в UI/preflight/dispatch, safe completed receipts, late lease/paid/Giftunknown/aliases. Live server status range не проверялся |
 | A4 | СОГЛАСОВАТЬ РЕДАКТИРОВАНИЕ С УЖЕ ЗАРЕЗЕРВИРОВАННЫМИ ЗАКАЗАМИ | CONFIRMED | Critical edit blocked for paid/reserved/late sale; reserve/history untouched, queued edit blocks rearm, unknown/restart no replay. Safe-message snapshot scenarios still pending |
-| B1 | ОДИН СТАРЫЙ ЧАТ НЕ ДОЛЖЕН ОСТАНАВЛИВАТЬ НЕЗАВИСИМЫЕ ПРОДАЖИ | — | Проверка ещё не выполнена |
-| B2 | ИСПРАВИТЬ BACKOFF РЕЗЕРВНОЙ СИНХРОНИЗАЦИИ ЗАКАЗОВ | — | Проверка ещё не выполнена |
-| B3 | РАЗОБРАТЬ HTTP 403 ОТ НЕДОСТУПНОГО СТАРОГО ЧАТА | — | Проверка ещё не выполнена |
-| B4 | ПРАВИЛЬНАЯ ПЕРВИЧНАЯ ИНИЦИАЛИЗАЦИЯ УВЕДОМЛЕНИЙ | — | Проверка ещё не выполнена |
-| B5 | ВОССТАНОВЛЕНИЕ АВТООТВЕТОВ ПОСЛЕ ВРЕМЕННОЙ ОШИБКИ | — | Проверка ещё не выполнена |
+| B1 | ОДИН СТАРЫЙ ЧАТ НЕ ДОЛЖЕН ОСТАНАВЛИВАТЬ НЕЗАВИСИМЫЕ ПРОДАЖИ | FIXED | RED launch/own-chat reply/polling; scoped orders/chat baseline, fresh identity preserved.102passed surrounding profile;24 bad candidates cannot starve healthy chat |
+| B2 | ИСПРАВИТЬ BACKOFF РЕЗЕРВНОЙ СИНХРОНИЗАЦИИ ЗАКАЗОВ | FIXED | Real Synchronizer.run test: old-chat error keeps30s poll instead of120/900; orders failures and RetryAfter remain conservative |
+| B3 | РАЗОБРАТЬ HTTP 403 ОТ НЕДОСТУПНОГО СТАРОГО ЧАТА | FIXED | SafeAccount/Playerok HTTP transport12cases: chat403 disables first, fresh viewer same account restores only desired permissions; viewer401/403/503/mismatch cannot restore |
+| B4 | ПРАВИЛЬНАЯ ПЕРВИЧНАЯ ИНИЦИАЛИЗАЦИЯ УВЕДОМЛЕНИЙ | FIXED | Startup boundary persisted before sync. New serverdated sale/message survive inaccessible history/restart/recovery; historical backfill stays BASELINE;121passed profile. Missing serverdate cannot prove novelty and remains held during BACKFILL |
+| B5 | ВОССТАНОВЛЕНИЕ АВТООТВЕТОВ ПОСЛЕ ВРЕМЕННОЙ ОШИБКИ | FIXED | RED2→42passed profile.3 bounded free-read attempts with durable deadlines; fresh rule/dialog before queue; existing outgoing event/unknown cannot retry |
 | C1 | НЕ ДОПУСКАТЬ БЛОКИРОВКИ СКЛАДСКОЙ ВЫДАЧИ МЕДЛЕННЫМ TELEGRAM GIFT | — | Проверка ещё не выполнена |
-| C2 | ОПЛАЧЕННЫЕ ЗАБЛОКИРОВАННЫЕ ЗАКАЗЫ ДОЛЖНЫ БЫТЬ ВИДНЫ ВСЕГДА | — | Проверка ещё не выполнена |
+| C2 | ОПЛАЧЕННЫЕ ЗАБЛОКИРОВАННЫЕ ЗАКАЗЫ ДОЛЖНЫ БЫТЬ ВИДНЫ ВСЕГДА | CONFIRMED | RED missing home attention for actual BLOCKED enrollment. SQL state-based paginated paid attention/order links, NEEDS_FULFILLMENT and closed-order exclusion covered. Worker degradation part depends on C3 |
 | C3 | ДОЛГОВРЕМЕННЫЕ ОШИБКИ WORKER НЕ ДОЛЖНЫ БЫТЬ НЕВИДИМЫМИ | — | Проверка ещё не выполнена |
 | C4 | НЕ ТЕРЯТЬ ВАЖНЫЕ УВЕДОМЛЕНИЯ ПРИ ОШИБКАХ TELEGRAM | — | Проверка ещё не выполнена |
 | C5 | ПРИОРИТЕТ КРИТИЧЕСКИХ УВЕДОМЛЕНИЙ | — | Проверка ещё не выполнена |

@@ -305,7 +305,7 @@ def create_router(store, api, products, synchronizer):
                 await state.clear()
                 text, markup = home_panel.home()
                 return await display(message, text, markup, not preserve)
-            if action in {"more", "attention", "tools"} or action.startswith("tools:"):
+            if action in {"more", "attention", "tools"} or action.startswith(("tools:", "attention:")):
                 await state.clear()
                 text, markup = home_panel.show(action, owner)
             elif action.startswith("codes:"):
