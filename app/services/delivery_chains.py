@@ -96,9 +96,16 @@ class DeliveryChains:
                     "UPDATE inventory SET status='RESERVED' WHERE id=? AND status='AVAILABLE'", (stock[0],)
                 )
                 db.execute("INSERT INTO reservations VALUES(?,?)", (ident, stock[0]))
+            saved_policy = asdict(policy)
+            binding = LogicalProducts(self.store, self.api).listing(item_id)
+            if binding:
+                saved_policy["_logical_authority"] = {
+                    "product_id": binding["id"],
+                    "control_revision": binding["control_revision"],
+                }
             db.execute(
                 "INSERT INTO delivery_chains VALUES(?,?,?,?,?,'ACTIVE',?)",
-                (ident, item_id, actor, revision, encode(asdict(policy)), now()),
+                (ident, item_id, actor, revision, encode(saved_policy), now()),
             )
             steps = []
             if policy.greeting:
@@ -129,19 +136,39 @@ class DeliveryChains:
                 Orders.empty_stock(db, item_id, ident)
         return ident
 
+    def policy_authorized(self, chain):
+        """A stock admission resume does not revoke a frozen paid-order policy.
+
+        Existing chains without a persisted control fence retain strict revision
+        checks: an absent fence cannot prove that an owner STOP never happened.
+        """
+        revision, policy = self.policies.get(chain["item_id"])
+        if not policy.enabled:
+            return False
+        saved = json.loads(chain["policy"])
+        authority = saved.pop("_logical_authority", None)
+        if authority:
+            from app.services.logical_products import LogicalProducts
+
+            binding = LogicalProducts(self.store, self.api).listing(chain["item_id"])
+            if (
+                not binding
+                or authority
+                != {
+                    "product_id": binding["id"],
+                    "control_revision": binding["control_revision"],
+                }
+                or not binding["enabled"]
+            ):
+                return False
+        return revision == chain["policy_revision"] or bool(authority and asdict(policy) == saved)
+
     def advance(self, ident):
         with self.store.transaction() as db:
             chain = db.execute("SELECT * FROM delivery_chains WHERE order_id=?", (ident,)).fetchone()
             if not chain or chain["status"] != "ACTIVE":
                 return False
-            policy = db.execute(
-                "SELECT revision,payload FROM delivery_policies WHERE item_id=?", (chain["item_id"],)
-            ).fetchone()
-            stop = (
-                not policy
-                or policy["revision"] != chain["policy_revision"]
-                or not json.loads(policy["payload"]).get("enabled")
-            )
+            stop = not self.policy_authorized(chain)
             steps = db.execute(
                 "SELECT s.*,o.status,o.started_at FROM delivery_chain_steps s LEFT JOIN outbox o ON o.id=s.operation_id WHERE s.order_id=? ORDER BY position",
                 (ident,),
@@ -222,8 +249,7 @@ class DeliveryChains:
             or payload.get("text") != step["text"]
         ):
             raise ValidationError("Шаг цепочки изменился или остановлен")
-        revision, policy = self.policies.get(step["item_id"])
-        if revision != step["policy_revision"] or not policy.enabled:
+        if not self.policy_authorized(step):
             raise ValidationError("Политика выключена или изменилась")
         earlier = self.store.rows(
             "SELECT o.status FROM delivery_chain_steps s LEFT JOIN outbox o ON o.id=s.operation_id WHERE s.order_id=? AND s.position<?",
@@ -273,13 +299,8 @@ class DeliveryChains:
             raise ValidationError("Чат закрыт для отправки")
         if self.store.rows("SELECT 1 FROM order_annotations WHERE order_id=? AND problem=1", (ident,)):
             raise ValidationError("Локальная проблема блокирует автоматическую отправку")
-        latest_revision, latest_policy = self.policies.get(step["item_id"])
-        if (
-            latest_revision != step["policy_revision"]
-            or not latest_policy.enabled
-            or not self.store.rows(
-                "SELECT 1 FROM delivery_chains WHERE order_id=? AND status='ACTIVE'", (ident,)
-            )
+        if not self.policy_authorized(step) or not self.store.rows(
+            "SELECT 1 FROM delivery_chains WHERE order_id=? AND status='ACTIVE'", (ident,)
         ):
             raise ValidationError("Цепочка остановлена во время проверки")
         return order["chat"]["id"]
