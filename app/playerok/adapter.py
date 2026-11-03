@@ -508,6 +508,7 @@ class Playerok:
                 raise APIError("CONNECTION_NOT_VERIFIED")
             return result
         except APIError as error:
+            chat_error = None
             connection = getattr(self, "connection", None)
             if connection and (
                 method == "get"
@@ -519,12 +520,26 @@ class Playerok:
                 }
             ):
                 connection.invalidate(error.code, error.diagnostics)
+                if (
+                    method in {"get_chat", "get_chat_messages"}
+                    and error.code == "UNAUTHORIZED_OR_CHALLENGE"
+                    and (error.diagnostics or {}).get("http_status") == 403
+                ):
+                    # A resource-specific 403 is not identity proof in either direction.
+                    # Disable first, then restore only through the normal fresh viewer
+                    # check and account binding. The failed chat read still fails.
+                    verified = await connection.check(cooldown=0)
+                    if verified["status"] == "CONNECTED":
+                        chat_error = APIError("CHAT_ACCESS_FORBIDDEN", diagnostics=error.diagnostics)
             from app.security.logging import event
 
             previous = getattr(self, "_last_logged_error", None)
-            if not previous or previous[0] != error.code or time.monotonic() - previous[1] >= 60:
-                event("WARNING", f"Playerok: ошибка чтения {method} · {error.code}", level=30)
-                self._last_logged_error = (error.code, time.monotonic())
+            code = (chat_error or error).code
+            if not previous or previous[0] != code or time.monotonic() - previous[1] >= 60:
+                event("WARNING", f"Playerok: ошибка чтения {method} · {code}", level=30)
+                self._last_logged_error = (code, time.monotonic())
+            if chat_error:
+                raise chat_error from None
             raise
         except CallsClosedError:
             raise APIError("API_CLOSING") from None

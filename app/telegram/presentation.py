@@ -114,6 +114,8 @@ def error_text(error):
         }
         return escaped(reasons.get(error.code, gift_reason(error.code)), 800)
     if isinstance(error, APIError):
+        if error.code == "CHAT_ACCESS_FORBIDDEN":
+            return "Playerok запретил доступ к этой переписке. Аккаунт проверен; остальные продажи продолжаются. Откройте диалог на Playerok и проверьте доступ."
         if error.code == "WRITES_DISABLED":
             return "Записи Playerok выключены или аккаунт не подтверждён. Проверьте разрешение записей и подключение в профиле."
         if error.code == "OPERATION_FORBIDDEN":
