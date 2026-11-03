@@ -111,3 +111,35 @@ async def test_flood_wait_is_respected_without_spending(shop):
     assert row["status"] == "RETRYABLE_FAILED" and row["retry_at"] >= before + 120
     assert not await r.worker.once()
     assert not r.api.remote.payments
+
+
+async def test_graceful_restart_during_free_resolve_retains_safe_retry(shop):
+    from telethon import functions
+
+    r = await pending(shop)
+    entered = asyncio.Event()
+    transport = r.api.gift_sender.client
+
+    class WaitingTransport:
+        def __getattr__(self, name):
+            return getattr(transport, name)
+
+        async def __call__(self, request):
+            if isinstance(request, functions.contacts.ResolveUsernameRequest):
+                entered.set()
+                await asyncio.Event().wait()
+            return await transport(request)
+
+    r.api.gift_sender.client = WaitingTransport()
+    task = asyncio.create_task(r.worker.once())
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert r.store.rows("SELECT status,started_at FROM outbox WHERE kind='gift_send'") == [
+        {"status": "RETRYABLE_FAILED", "started_at": None}
+    ]
+    r.api.gift_sender.client = transport
+    r.store.execute("UPDATE outbox SET retry_at=0 WHERE kind='gift_send'")
+    await r.worker.once()
+    assert len(r.api.remote.payments) == 1

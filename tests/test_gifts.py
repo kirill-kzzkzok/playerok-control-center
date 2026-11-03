@@ -545,7 +545,7 @@ async def test_cancellation_at_paid_boundary_never_replays(rig, after_send):
     assert len(r.remote.payments) == int(after_send)
 
 
-async def test_restart_during_recipient_check_retains_blocked_intent(rig):
+async def test_restart_during_recipient_check_retains_unstarted_retry(rig):
     r = rig
     await enroll(r)
     entered = asyncio.Event()
@@ -560,7 +560,10 @@ async def test_restart_during_recipient_check_retains_blocked_intent(rig):
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert r.service.job("order")["state"] == "BLOCKED" and not r.remote.payments
+    assert r.service.job("order")["state"] == "PENDING" and not r.remote.payments
+    assert r.store.rows("SELECT status FROM outbox WHERE kind='gift_send'") == [
+        {"status": "RETRYABLE_FAILED"}
+    ]
     assert r.service.discover() == 0
 
 
