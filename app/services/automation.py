@@ -231,6 +231,10 @@ class Automation:
                 ).fetchone()
             ):
                 raise Conflict("Возобновление больше недоступно: проверьте остановку и остаток")
+            if stock_resume:
+                from app.services.delivery_chains import DeliveryChains
+
+                DeliveryChains(self.store, self.api).freeze_stock_resume(db, ident, revision, policy)
             cutoff = now()
             db.execute(
                 "INSERT INTO delivery_policies VALUES(?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET revision=excluded.revision,actor=excluded.actor,payload=excluded.payload,updated_at=excluded.updated_at",

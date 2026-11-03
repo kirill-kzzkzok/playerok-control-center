@@ -163,6 +163,41 @@ class DeliveryChains:
                 return False
         return revision == chain["policy_revision"] or bool(authority and asdict(policy) == saved)
 
+    def freeze_stock_resume(self, db, item_id, revision, policy):
+        """Upgrade an old snapshot before an admission-only revision change.
+
+        Equal monotonic policy revisions plus an unchanged confirmed order scope
+        prove there was no intervening STOP/re-arm. Never infer that proof for
+        an already divergent old revision or an unbound legacy order.
+        """
+        from app.services.logical_products import LogicalProducts
+
+        binding = LogicalProducts(self.store, self.api).listing(item_id)
+        if (
+            not binding
+            or not binding["enabled"]
+            or binding["state"] != "VERIFIED"
+            or not binding["verified_at"]
+            or binding["revision"] != binding["config_revision"]
+        ):
+            return
+        for chain in db.execute(
+            "SELECT c.* FROM delivery_chains c JOIN logical_order_scopes s ON s.order_id=c.order_id "
+            "WHERE c.item_id=? AND c.actor=? AND c.policy_revision=? AND c.status='ACTIVE' "
+            "AND s.product_id=? AND s.config_revision=? AND s.config=? AND s.item_id=c.item_id",
+            (item_id, binding["owner_id"], revision, binding["id"], binding["revision"], binding["config"]),
+        ).fetchall():
+            saved = json.loads(chain["policy"])
+            if saved != asdict(policy):
+                continue
+            saved["_logical_authority"] = {
+                "product_id": binding["id"],
+                "control_revision": binding["control_revision"],
+            }
+            db.execute(
+                "UPDATE delivery_chains SET policy=? WHERE order_id=?", (encode(saved), chain["order_id"])
+            )
+
     def advance(self, ident):
         with self.store.transaction() as db:
             chain = db.execute("SELECT * FROM delivery_chains WHERE order_id=?", (ident,)).fetchone()

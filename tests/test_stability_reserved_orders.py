@@ -1,5 +1,7 @@
 """Paid orders retain immutable reservations across admission-only stock resume."""
 
+import json
+
 import pytest
 
 from app.services.logical_products import LogicalProducts
@@ -18,7 +20,8 @@ async def shop(tmp_path):
 
 
 @pytest.mark.parametrize("already_queued", [False, True])
-async def test_stock_resume_keeps_reserved_orders_deliverable(shop, already_queued):
+@pytest.mark.parametrize("saved_fence", [False, True])
+async def test_stock_resume_keeps_reserved_orders_deliverable(shop, already_queued, saved_fence):
     r = await shop()
     await setup_ui(r, "unique_stock")
     for i in range(3):
@@ -27,6 +30,14 @@ async def test_stock_resume_keeps_reserved_orders_deliverable(shop, already_queu
     assert len(r.store.rows("SELECT * FROM reservations")) == 3
     assert r.store.setting("delivery:lot:enabled") is False
     before = r.store.rows("SELECT * FROM reservations ORDER BY order_id")
+    if not saved_fence:
+        # Persisted shape from the previous version, not a fabricated final state.
+        for row in r.store.rows("SELECT order_id,policy FROM delivery_chains"):
+            policy = json.loads(row["policy"])
+            policy.pop("_logical_authority", None)
+            r.store.execute(
+                "UPDATE delivery_chains SET policy=? WHERE order_id=?", (json.dumps(policy), row["order_id"])
+            )
     if already_queued:
         ChainWorker(r.store, r.api).once()
     await r.ui.click("stock:view:lot")
@@ -50,7 +61,8 @@ async def test_stock_resume_keeps_reserved_orders_deliverable(shop, already_queu
     assert not await r.worker.once()
 
 
-async def test_owner_stop_and_rearm_do_not_revive_old_reserved_authority(shop):
+@pytest.mark.parametrize("saved_fence", [False, True])
+async def test_owner_stop_and_rearm_do_not_revive_old_reserved_authority(shop, saved_fence):
     r = await shop()
     await setup_ui(r, "unique_stock")
     Orders(r.store).ingest(r.api.order("reserved-before-stop"))
@@ -58,6 +70,11 @@ async def test_owner_stop_and_rearm_do_not_revive_old_reserved_authority(shop):
     ChainWorker(r.store, r.api).once()
     reservations = r.store.rows("SELECT * FROM reservations")
     assert len(reservations) == 1
+    if not saved_fence:
+        row = r.store.rows("SELECT policy FROM delivery_chains")[0]
+        policy = json.loads(row["policy"])
+        policy.pop("_logical_authority", None)
+        r.store.execute("UPDATE delivery_chains SET policy=?", (json.dumps(policy),))
     logical = LogicalProducts(r.store, r.api)
     product = logical.listing("lot")
     logical.stop(7, product["id"])
