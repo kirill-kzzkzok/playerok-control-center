@@ -838,7 +838,7 @@ class OutboxWorker:
         except Conflict:
             self.store.record_late_result(ident, token, status, result=result, error=error)
 
-    async def once(self, *, kinds=None, operation_id=None):
+    async def once(self, *, kinds=None, excluded_kinds=(), operation_id=None):
         # Defense in depth: read-only mode never claims any other pending action,
         # even if the caller forgot to pass the agreement-only filter.
         account = getattr(getattr(self.executor, "api", None), "account", None)
@@ -851,7 +851,9 @@ class OutboxWorker:
                 f"Восстановлено операций после истечения lease: {recovered}. Неизвестные отправки не повторяются.",
                 level=30,
             )
-        action = self.store.claim(lease_seconds=180, kinds=kinds, operation_id=operation_id)
+        action = self.store.claim(
+            lease_seconds=180, kinds=kinds, excluded_kinds=excluded_kinds, operation_id=operation_id
+        )
         if not action:
             return False
         event("INFO", "Начало операции: " + action["kind"], order=action["target"], operation=action["id"])

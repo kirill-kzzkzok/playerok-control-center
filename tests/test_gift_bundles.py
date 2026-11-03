@@ -224,6 +224,8 @@ async def test_bundle_dispatcher_preview_restart_progress_and_partial_retry(rig)
     r.api.gift_sender = PersonalGiftSender(r.api.gift_settings, client=t)
     r.api.item["description"] = "Real bundle\ngift: bear, bear, rose"
     r.service = GiftService(r.store, r.api, r.api.gift_settings, r.api.gift_sender)
+    await r.service.refresh()
+    await r.service.bind(7, "item", "bear, bear, rose")  # Existing legacy bundle compatibility.
     session = TelegramSession()
     bot = Bot("123:" + "x" * 35, session=session)
     ui = Interaction(bot, dispatcher(r.store, r.api))
@@ -483,6 +485,10 @@ async def test_binding_preview_rejects_changed_individual_prices_even_same_total
     t = BundleTransport()
     r.api.gift_sender = PersonalGiftSender(r.api.gift_settings, client=t)
     r.api.item["description"] = "Real bundle\ngift: bear, rose"
+    r.service = GiftService(r.store, r.api, r.api.gift_settings, r.api.gift_sender)
+    await r.service.refresh()
+    await r.service.bind(7, "item", "bear, rose")
+    original = r.service.listing("item")
     session = TelegramSession()
     bot = Bot("123:" + "x" * 35, session=session)
     ui = Interaction(bot, dispatcher(r.store, r.api))
@@ -493,7 +499,7 @@ async def test_binding_preview_rejects_changed_individual_prices_even_same_total
         t.catalog["bear"].stars = 20
         t.catalog["rose"].stars = 20
         await ui.click("gft:confirmbind:" + pending["nonce"])
-        assert not r.store.rows("SELECT * FROM gift_listings")
+        assert r.service.listing("item") == original
         assert "Цена отдельного подарка изменилась" in session.calls[-1].text
     finally:
         await bot.session.close()

@@ -300,7 +300,7 @@ class Store:
                 )
             return connection.execute("SELECT id FROM outbox WHERE operation_key=?", (key,)).fetchone()[0]
 
-    def claim(self, lease_seconds=60, *, kinds=None, operation_id=None):
+    def claim(self, lease_seconds=60, *, kinds=None, excluded_kinds=(), operation_id=None):
         with self.transaction() as db:
             unsafe = db.execute(
                 "SELECT id FROM outbox WHERE status IN ('PENDING','RETRYABLE_FAILED') AND started_at IS NOT NULL"
@@ -325,6 +325,9 @@ class Store:
             if operation_id is not None:
                 filters += " AND id=?"
                 args.append(operation_id)
+            if excluded_kinds:
+                filters += " AND kind NOT IN (" + ",".join("?" for _ in excluded_kinds) + ")"
+                args.extend(excluded_kinds)
             row = db.execute(
                 "SELECT * FROM outbox WHERE status IN ('PENDING','RETRYABLE_FAILED') AND retry_at<=? "
                 "AND (json_extract(payload,'$.code_migration.product_id') IS NULL OR NOT EXISTS(SELECT 1 FROM outbox active WHERE active.id<>outbox.id AND active.status IN ('PROCESSING','UNCERTAIN') AND json_extract(active.payload,'$.code_migration.product_id')=json_extract(outbox.payload,'$.code_migration.product_id')))"

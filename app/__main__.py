@@ -45,15 +45,25 @@ logger = logging.getLogger(__name__)
 
 
 async def outbox_loop(worker, stop):
+    # The same durable worker owns two bounded serial resource lanes. Stars
+    # purchases never overlap each other; waiting on MTProto does not occupy
+    # the independent Playerok transport lane.
+    async with asyncio.TaskGroup() as group:
+        group.create_task(outbox_lane(worker, stop, kinds=("gift_send",)))
+        group.create_task(outbox_lane(worker, stop, excluded_kinds=("gift_send",)))
+
+
+async def outbox_lane(worker, stop, *, kinds=None, excluded_kinds=()):
     while not stop.is_set():
         account = worker.executor.api.account
         processed = (
-            await worker.once()
+            await worker.once(kinds=kinds, excluded_kinds=excluded_kinds)
             if account.writes_enabled
             else (
-                await worker.once(kinds=("agreements",))
+                await worker.once(kinds=("agreements",), excluded_kinds=excluded_kinds)
                 if getattr(account, "auto_accept_agreements", False)
                 and getattr(account, "connection_verified", False)
+                and (kinds is None or "agreements" in kinds)
                 else False
             )
         )
