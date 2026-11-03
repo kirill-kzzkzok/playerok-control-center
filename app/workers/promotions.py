@@ -88,6 +88,8 @@ class PromotionWorker:
             self.store.set_setting("promotions:health", {"status": "OWNER_UNAVAILABLE", "at": now()})
             return 0
         actor = owners[0]["actor"]
+        previous_health = self.store.setting("promotions:health", {})
+        last_success = previous_health.get("last_success")
         await self.discover(revision, selection)
         processed = 0
         for _ in range(self.per_cycle):
@@ -166,23 +168,70 @@ class PromotionWorker:
                     + 1
                 )
                 interval = min(900, 30 * 2 ** min(failures, 5))
+                if isinstance(caught, APIError) and str(caught.retry_after or "").isdigit():
+                    interval = max(interval, int(caught.retry_after))
             else:
                 failures = 0
+                if self.settings.selected(ident, selection):
+                    last_success = now()
             self.store.execute(
                 "UPDATE promotion_schedule SET due_at=?,lease_token=NULL,lease_until=NULL,failures=?,error_code=?,checked_at=?,policy_revision=? WHERE item_id=? AND lease_token=?",
                 (time.time() + interval, failures, error, now(), revision, ident, token),
             )
             processed += 1
+        failed = self.store.rows(
+            "SELECT s.item_id,s.failures,s.due_at FROM promotion_schedule s "
+            "LEFT JOIN promotion_targets t ON t.item_id=s.item_id "
+            "WHERE s.policy_revision=? AND s.error_code IS NOT NULL "
+            "AND (t.disposition='include' OR (?='all' AND coalesce(t.disposition,'default')!='exclude'))",
+            (revision, selection),
+        )
+        discovery = self.store.setting("promotions:discovery", {}) if selection == "all" else {}
+        discovery_failed = discovery.get("revision") == revision and bool(discovery.get("error_code"))
+        degraded = bool(failed) or discovery_failed
+        incident = previous_health.get("incident") or uuid.uuid4().hex if degraded else None
+        retries = [row["due_at"] for row in failed]
+        if discovery_failed:
+            retries.append(discovery.get("next_at", 0))
+        persistent = any(row["failures"] >= 3 for row in failed) or (
+            discovery_failed and discovery.get("failures", 0) >= 3
+        )
+        current_revision, current, _ = self.settings.get()
+        status = (
+            "DISABLED"
+            if not current.enabled
+            else "STALE"
+            if current_revision != revision
+            else "DEGRADED"
+            if degraded
+            else "SCHEDULED"
+            if self.store.setting("promotions:paid_authority", {}).get("revision") == revision
+            else "DRY_RUN"
+        )
         self.store.set_setting(
             "promotions:health",
             {
-                "status": "SCHEDULED"
-                if self.store.setting("promotions:paid_authority", {}).get("revision") == revision
-                else "DRY_RUN",
+                "status": status,
                 "at": now(),
                 "processed": processed,
+                "revision": revision,
+                "failed_items": len(failed),
+                "discovery_error": discovery.get("error_code") if discovery_failed else None,
+                "last_success": last_success,
+                "next_retry": min(retries, default=None),
+                "incident": incident,
             },
         )
+        if persistent and status == "DEGRADED":
+            self.store.execute(
+                "INSERT OR IGNORE INTO inbox(key,kind,payload,received_at,processed_at) VALUES(?,'promotion_error',?,?,?)",
+                (
+                    f"promotion_error:{incident}",
+                    encode({"failed_items": len(failed), "incident": incident}),
+                    now(),
+                    now(),
+                ),
+            )
         return processed
 
     async def run(self, stop):

@@ -94,6 +94,17 @@ class PromotionsPanel:
                 + "\nСледующая проверка: "
                 + next_check
             )
+            health = self.service.store.setting("promotions:health", {})
+            if (
+                values["enabled"]
+                and health.get("revision") == data["revision"]
+                and health.get("status") == "DEGRADED"
+            ):
+                text += f"\n⚠️ Ошибки проверки товаров: {health.get('failed_items', 0)}"
+                if health.get("discovery_error"):
+                    text += "\nНе удалось обновить список товаров."
+                if health.get("last_success"):
+                    text += "\nПоследняя успешная проверка: " + local_time(health["last_success"])
             rows = [
                 [("📦 Товары для продвижения", "promo:catalog")],
                 [("💳 Разрешить платное расписание", "payp:arm")],

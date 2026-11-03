@@ -35,7 +35,7 @@ class Notifications:
         boundary = notification_baseline(self.store)
         critical = (
             "(i.kind IN ('worker_failed','operation_uncertain','stock_empty','order_problem',"
-            "'promotion_guard','enrollment_blocked','logical_product_blocked') OR "
+            "'promotion_guard','promotion_error','enrollment_blocked','logical_product_blocked') OR "
             "(i.kind='message' AND json_extract(i.payload,'$.user') IS NULL "
             "AND json_extract(i.payload,'$.text')='{{DEAL_HAS_PROBLEM}}'))"
         )
@@ -196,6 +196,21 @@ class Notifications:
                 markup = keyboard(
                     [[("Диагностика", "diagnostics:workers" if payload.get("cycle") else "diagnostics")]]
                 )
+            elif event["kind"] == "promotion_error":
+                health = self.store.setting("promotions:health", {})
+                if health.get("status") != "DEGRADED" or health.get("incident") != payload.get("incident"):
+                    self.store.execute(
+                        "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT ?,user_id,'RESOLVED' FROM administrators",
+                        (event["key"],),
+                    )
+                    continue
+                text = (
+                    "⚠️ <b>Проверки автопродвижения повторно завершаются ошибкой</b>\n"
+                    f"Товаров с ошибками: {health.get('failed_items', 0)}. "
+                    "Исправные товары проверяются независимо. Повтор запланирован; "
+                    "это предупреждение не подтверждает покупку поднятия."
+                )
+                markup = keyboard([[("Проверить автопродвижение", "promotions")]])
             elif event["kind"] == "promotion_guard":
                 text = (
                     "⛔ <b>Политика продвижения выключена по лимиту</b>\n"
