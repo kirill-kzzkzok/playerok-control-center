@@ -3,7 +3,7 @@ from dataclasses import asdict
 
 from app.database.store import Conflict, encode, now
 from app.services.automation import Automation, future_order
-from app.services.order_management import deliverable
+from app.services.order_management import deal_details, deliverable
 from app.services.orders import Orders
 from app.services.products import ValidationError
 
@@ -325,7 +325,7 @@ class DeliveryChains:
 
         await LogicalProducts(self.store, self.api).fresh_delivery_item(step["item_id"])
         ident = action["target"]
-        order = await self.api.call("get_deal", deal_id=ident)
+        order = await deal_details(self.api, ident)
         deliverable(order, ident, self.api.account.id)
         if order["item"]["id"] != step["item_id"]:
             raise ValidationError("Предмет сделки изменился")

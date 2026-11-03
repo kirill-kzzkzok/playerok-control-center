@@ -31,6 +31,47 @@ class Orders:
                 db.execute("UPDATE inbox SET processed_at=? WHERE key=?", (now(), key))
                 return False
             old_payload = json.loads(previous["payload"]) if previous else {}
+            old_item = old_payload.get("item") or {}
+            for before, after in (
+                (old_item.get("id"), item.get("id")),
+                ((old_item.get("user") or {}).get("id"), (item.get("user") or {}).get("id")),
+                ((old_payload.get("user") or {}).get("id"), (order.get("user") or {}).get("id")),
+                ((old_payload.get("chat") or {}).get("id"), (order.get("chat") or {}).get("id")),
+            ):
+                if before and after and before != after:
+                    raise Conflict("Идентичность сохранённой сделки расходится с серверным ответом")
+            # Retain observations for history/UI, never as fresh dispatch proof.
+            # Explicit empty values are real observations; absent/null omissions
+            # remain distinguishable in provenance. No status/problem flags merge.
+            order, item = dict(order), dict(item)
+            retained = {}
+            for target, source, fields, prefix in (
+                (order, old_payload, ("obtaining_fields", "user"), ""),
+                (
+                    item,
+                    old_item,
+                    (
+                        "name",
+                        "description",
+                        "category",
+                        "obtaining_type",
+                        "attributes",
+                        "data_fields",
+                        "comment",
+                        "user",
+                    ),
+                    "item.",
+                ),
+            ):
+                for field in fields:
+                    if target.get(field) is None and source.get(field) is not None:
+                        retained[prefix + field] = "null" if field in target else "absent"
+                        target[field] = source[field]
+            order["item"] = item
+            if retained:
+                order["_retained_fields"] = retained
+            else:
+                order.pop("_retained_fields", None)
             # Chat identity is immutable for the same order/item. A partial list
             # response omitting it must not erase a previously observed detail.
             # Real chat availability is still checked freshly before sending.

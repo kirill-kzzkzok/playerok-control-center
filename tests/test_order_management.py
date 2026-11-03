@@ -57,7 +57,7 @@ def setup(tmp_path):
     api = SimpleNamespace(account=Account(), lock=asyncio.Lock())
 
     async def call(method, **kwargs):
-        if method == "get_deal":
+        if method in {"get_deal", "get_delivery_deal"}:
             assert kwargs == {"deal_id": "order"}
             return deepcopy(order)
         if method == "get_chat":

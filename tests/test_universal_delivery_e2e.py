@@ -54,7 +54,7 @@ class MarketplaceBoundary(ReadAPI):
             return self.page("items", [item for item in self.items.values() if item["status"] == "APPROVED"])
         if method == "get_deals":
             return self.page("deals", list(self.orders.values()))
-        if method == "get_deal":
+        if method in {"get_deal", "get_delivery_deal"}:
             return copy.deepcopy(self.orders[kwargs["deal_id"]])
         if method == "get_chats":
             return self.page("chats", [{"id": o["chat"]["id"]} for o in self.orders.values()])

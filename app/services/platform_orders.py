@@ -139,10 +139,14 @@ class PlatformOrders:
 
     async def create(self, owner, ident, revision):
         self.policies.orders.owner(owner)
-        order = await self.policies.orders.fresh(owner, ident)
-        item = order["item"]["id"]
+        local = self.store.rows("SELECT item_id FROM orders WHERE id=?", (ident,))
+        if not local:
+            raise Conflict("Оплаченный заказ ещё не сохранён")
+        item = local[0]["item_id"]
         policy = self.authority(item, revision)
-        platform_sale(order, ident, policy.account_id)
+        order = await deal_details(self.api, ident, need_chat=policy.paid_reply, need_created=True)
+        platform_sale(order, ident, policy.account_id, item=item)
+        self.policies.orders.orders.ingest(order)
         product = self.logical.listing(item)
         if product and product["source_order_id"] and product["source_order_id"] != ident:
             raise Conflict("Купленный снимок товара относится к другому заказу")

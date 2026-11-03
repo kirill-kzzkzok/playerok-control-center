@@ -522,7 +522,12 @@ class GiftService:
         order = (
             await self.api.call("get_delivery_deal", deal_id=job["order_id"])
             if binding and binding["source_order_id"]
-            else await deal_details(self.api, job["order_id"])
+            else await deal_details(
+                self.api,
+                job["order_id"],
+                full_item=True,
+                obtaining_field_id=self.listing(job["item_id"])["username_field_id"],
+            )
         )
         deliverable(order, job["order_id"], self.api.account.id)
         if order["item"]["id"] != job["item_id"]:

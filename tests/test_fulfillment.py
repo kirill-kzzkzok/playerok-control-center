@@ -80,7 +80,7 @@ class API:
         if method == "get_fulfillment_providers":
             return {"items": self.providers}
         assert kwargs == {"deal_id": "deal"}
-        if method == "get_deal":
+        if method in {"get_deal", "get_delivery_deal"}:
             if self.account.written and self.read_error:
                 raise APIError("NETWORK_ERROR")
             order = deepcopy(self.order)

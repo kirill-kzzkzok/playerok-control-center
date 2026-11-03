@@ -771,7 +771,9 @@ class Executor:
             if local_item:
                 await LogicalProducts(self.store, self.api).fresh_delivery_item(local_item[0]["item_id"])
 
-            order = await self.api.call("get_deal", deal_id=target)
+            from app.services.order_management import deal_details
+
+            order = await deal_details(self.api, target)
             deliverable(order, target, self.api.account.id)
             Orders(self.store).ingest(order)
             chat = (order.get("chat") or {}).get("id")

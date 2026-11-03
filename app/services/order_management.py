@@ -2,7 +2,7 @@ import hashlib
 import json
 from decimal import Decimal, InvalidOperation
 
-from app.database.store import Conflict, encode
+from app.database.store import Conflict, encode, server_time
 from app.services.orders import Orders
 from app.services.products import ValidationError
 
@@ -37,7 +37,66 @@ def deliverable(order, ident, account_id):
     return order
 
 
-async def deal_details(api, ident, *, full_item=False, need_chat=True):
+def compatible_detail(short, detailed):
+    """Partial observations may omit data, but conflicting evidence is not merged."""
+    old, new = short.get("item") or {}, detailed.get("item") or {}
+    for left, right, label in (
+        (old.get("id"), new.get("id"), "товар"),
+        ((short.get("user") or {}).get("id"), (detailed.get("user") or {}).get("id"), "покупатель"),
+        ((short.get("chat") or {}).get("id"), (detailed.get("chat") or {}).get("id"), "чат"),
+        ((old.get("user") or {}).get("id"), (new.get("user") or {}).get("id"), "продавец"),
+        ((old.get("category") or {}).get("id"), (new.get("category") or {}).get("id"), "категория"),
+        (
+            (old.get("obtaining_type") or {}).get("id"),
+            (new.get("obtaining_type") or {}).get("id"),
+            "способ получения",
+        ),
+    ):
+        if left and right and left != right:
+            raise Conflict("Карточки одной сделки содержат разные данные: " + label)
+    for field in ("name", "description", "attributes", "data_fields", "comment"):
+        if old.get(field) is not None and new.get(field) is not None and old[field] != new[field]:
+            raise Conflict("Критичные параметры в карточках одной сделки расходятся")
+    if old.get("price") is not None and new.get("price") is not None:
+        try:
+            before, after = Decimal(str(old["price"])), Decimal(str(new["price"]))
+        except InvalidOperation:
+            raise Conflict("Playerok не подтвердил цену покупки; выдача остановлена") from None
+        if not before.is_finite() or not after.is_finite() or before != after:
+            raise Conflict(
+                "Цена в двух карточках одной сделки различается. Обновите заказ; выдача остановлена"
+            )
+    if short.get("status") in {
+        "SENT",
+        "CONFIRMED",
+        "CONFIRMED_AUTOMATICALLY",
+        "ROLLED_BACK",
+        "FAILED",
+    } and detailed.get("status") in {"PENDING", "PAID"}:
+        raise Conflict("Полная карточка вернула более ранний статус сделки")
+    if short.get("has_problem") is True and detailed.get("has_problem") is not True:
+        raise Conflict("Карточки сделки расходятся по наличию проблемы. Выполнение остановлено")
+    left = short.get("obtaining_fields")
+    right = detailed.get("obtaining_fields")
+    if isinstance(left, list) and isinstance(right, list):
+        for field in left:
+            if not isinstance(field, dict) or field.get("value") in (None, ""):
+                continue
+            matches = [v for v in right if isinstance(v, dict) and v.get("id") == field.get("id")]
+            if any(v.get("value") is not None and v["value"] != field["value"] for v in matches):
+                raise Conflict("Данные получателя в карточках одной сделки расходятся")
+
+
+async def deal_details(
+    api,
+    ident,
+    *,
+    full_item=False,
+    need_chat=True,
+    obtaining_field_id=None,
+    need_created=False,
+    need_role=False,
+):
     """Persisted/list deals may omit chat and item fields; omissions are not refusals.
 
     Read the SAME deal through the full contract before applying delivery guards.
@@ -46,26 +105,34 @@ async def deal_details(api, ident, *, full_item=False, need_chat=True):
     order = await api.call("get_deal", deal_id=ident)
     sale(order, ident, api.account.id)
     item = order.get("item") or {}
+    fields = order.get("obtaining_fields")
+    has_field = isinstance(fields, list) and any(
+        isinstance(f, dict) and f.get("id") == obtaining_field_id and f.get("value") for f in fields
+    )
     if (
         need_chat
         and not (order.get("chat") or {}).get("id")
         or full_item
-        and (not item.get("description") or not (item.get("category") or {}).get("id"))
+        and (
+            item.get("description") is None
+            or not (item.get("category") or {}).get("id")
+            or not (item.get("obtaining_type") or {}).get("id")
+        )
+        or not (item.get("user") or {}).get("id")
+        or obtaining_field_id
+        and not has_field
+        or need_created
+        and server_time(order.get("created_at")) is None
+        or need_role
+        and not (item.get("user") or {}).get("role")
+        or order.get("has_problem") is None
+        or order.get("is_automated") is None
     ):
         detailed = await api.call("get_delivery_deal", deal_id=ident)
         sale(detailed, ident, api.account.id)
         if (detailed.get("item") or {}).get("id") != item["id"]:
             raise Conflict("Полная сделка относится к другому товару; выдача остановлена")
-        detailed_item = detailed.get("item") or {}
-        if full_item and item.get("price") is not None and detailed_item.get("price") is not None:
-            try:
-                short_price, full_price = Decimal(str(item["price"])), Decimal(str(detailed_item["price"]))
-            except InvalidOperation:
-                raise Conflict("Playerok не подтвердил цену покупки; выдача остановлена") from None
-            if not short_price.is_finite() or not full_price.is_finite() or short_price != full_price:
-                raise Conflict(
-                    "Цена в двух карточках одной сделки различается. Обновите заказ; выдача остановлена"
-                )
+        compatible_detail(order, detailed)
         order = detailed
     return order
 
@@ -92,7 +159,9 @@ class OrderManagement:
         return order
 
     async def prepare_delivery(self, actor, ident):
-        order = await self.fresh(actor, ident)
+        self.owner(actor)
+        order = await deal_details(self.api, ident)
+        self.orders.ingest(order)
         deliverable(order, ident, self.api.account.id)
         local = self.store.rows("SELECT status FROM orders WHERE id=?", (ident,))[0]
         if local["status"] != order["status"]:

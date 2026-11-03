@@ -178,7 +178,7 @@ class Marketplace:
     async def call(self, method, **kwargs):
         if method == "get_item":
             return copy.deepcopy(self.item)
-        if method == "get_deal":
+        if method in {"get_deal", "get_delivery_deal"}:
             return copy.deepcopy(self.orders[kwargs["deal_id"]])
         if method == "get_chat":
             return {"id": kwargs["chat_id"], "is_texting_allowed": True}

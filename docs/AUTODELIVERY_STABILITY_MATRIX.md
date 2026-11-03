@@ -61,3 +61,4 @@
 | Дополнительный legacy Wizard/ListingLaunch | wizard / listing_launch / LogicalProducts | Проверить отдельно в фазе 4; прежние записи не удаляются | Проверка не начата |
 
 | 1.2 Enrollment lease после рестарта | instance / __main__ / enrollment | RED2failed; реальный InstanceLock, PENDING-only fencing;289passed, single confirmed delivery, old-token refusal | FIXED |
+| 1.3 Полная карточка / retained observations | order_management / orders / delivery_chains / Gifts / PlatformOrders / Outbox | RED5+2; fresh same-deal hydration, conflicting identities blocked, retained absent/null marked;177passed+89passed; no cached username as fresh proof | FIXED в проверенных text/stock/Gifts/Playerok путях; timestamp recovery отдельно |
