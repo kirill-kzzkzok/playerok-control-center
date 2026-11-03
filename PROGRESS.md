@@ -3129,3 +3129,6 @@ D10 contract: SOLD is historical status, not publication authority. Show native 
 
 D11 GREEN: actual UI RED1failed public404 hid persisted receipts ->37passed/32.46s/exit0 (localhistory/itempanel/navigation/readiness). History performs zeroAPIcalls, includes confirmed old order and existing operations across logical aliases, labels local evidence explicitly. Direct current-card action still calls get_item and fails safely on404. Read-only account binding/owner check, no secrets or current-readiness claims; same Outbox/history/reservations unchanged. Ruff exit0. D10 RED test currently separate, not part of this commit runtime.
 
+
+D10 GREEN: actual sold-card RED3failed ->20passed/19.02s/exit0 (visibility/native relist/status/itempanel). True permission+valid raw-price keeps existing native action; explicitFalse has concrete server-refusal text and no action; incomplete proof is labeled check only. QuickShop validates price basis through existing validator instead of raw missing-key exception. Native Outbox preview/COMMIT/payment guards unchanged. No remote mutations during card/check tests. Ruff exit0.
+

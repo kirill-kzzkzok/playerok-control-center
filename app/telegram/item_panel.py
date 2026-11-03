@@ -4,7 +4,7 @@ from urllib.parse import quote
 from app.services.attachments import Attachments
 from app.services.automation import Automation
 from app.services.logical_products import LogicalProducts
-from app.services.products import Products, ValidationError
+from app.services.products import Products, ValidationError, priority_price_basis
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 
@@ -216,7 +216,17 @@ class ItemPanel:
             if item.get("status") == "DRAFT":
                 rows.insert(0, [("🚀 Запустить продажи", "launch:item:" + ident)])
             elif item.get("status") == "SOLD":
-                rows.insert(0, [("🔄 Перевыставить", "relist:item:" + ident)])
+                try:
+                    basis = priority_price_basis(item)
+                except ValidationError:
+                    basis = None
+                if item.get("may_be_published") is False:
+                    text += "\nPlayerok не разрешил повторное размещение. Проверьте ограничения товара на площадке."
+                elif item.get("may_be_published") is True and basis is not None:
+                    rows.insert(0, [("🔄 Перевыставить", "relist:item:" + ident)])
+                else:
+                    text += "\nВозможность повторного размещения или его базовая цена не подтверждены сервером."
+                    rows.insert(0, [("Проверить возможность перевыставления", "relist:item:" + ident)])
             elif product and not platform and not product["enabled"] and product["handler"] != "manual":
                 rows.insert(0, [("🚀 Запустить продажи", "lp:ready:" + ident)])
         elif section == "edit":

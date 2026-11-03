@@ -7,7 +7,7 @@ from app.database.store import Conflict
 from app.playerok.adapter import validate_page
 from app.services.automation import Automation
 from app.services.logical_products import LogicalProducts
-from app.services.products import ValidationError
+from app.services.products import ValidationError, priority_price_basis
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 from playerokapi.enums import ItemStatuses
@@ -26,7 +26,7 @@ class QuickShopPanel:
                 raise ValidationError(
                     "Playerok не разрешил штатное повторное размещение. Проверьте товар на сайте"
                 )
-            quotes = await self.wizard.products.priority_preview(parts[2], item["raw_price"])
+            quotes = await self.wizard.products.priority_preview(parts[2], priority_price_basis(item))
             nonce = secrets.token_hex(6)
             await state.set_state(None)
             await state.set_data(
