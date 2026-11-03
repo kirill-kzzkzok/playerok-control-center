@@ -97,6 +97,32 @@ class MessageNavigation(BaseMiddleware):
                 )
         elif (message.text or "").split(" ", 1)[0].split("@")[0] in {"/start", "/status", "/panel_reset"}:
             key = primary
+        elif (message.text or "").split(" ", 1)[0].split("@")[0] != "/cancel":
+            # The last click is not proof of the intended recipient of plain
+            # text when independent cards are both waiting for input.
+            forms = {}
+            for row in self.store.rows(
+                "SELECT key FROM fsm WHERE state IS NOT NULL AND json_valid(key) AND json_extract(key,'$[0]')=? AND json_extract(key,'$[1]')=? AND json_extract(key,'$[2]')=?",
+                (bot.id, owner, owner),
+            ):
+                destiny = json.loads(row["key"])[5]
+                panel = self.store.setting(destiny, {}) if destiny.startswith(primary) else {}
+                if panel.get("id") and not panel.get("closed"):
+                    forms[destiny] = panel
+            reply = message.reply_to_message
+            if reply:
+                selected = panel_key(self.store, bot.id, owner, reply.message_id)
+                if getattr(reply.from_user, "id", None) != bot.id or selected not in forms:
+                    return await bot.send_message(
+                        owner,
+                        "Это сообщение не связано с открытой формой. Ответьте средствами Telegram на сообщение с нужной формой; данные не отправлены покупателю.",
+                    )
+                key = selected
+            elif len(forms) > 1:
+                return await bot.send_message(
+                    owner,
+                    "Открыто несколько форм. Ответьте средствами Telegram на сообщение с нужной формой и пришлите данные ещё раз. Ничего не отправлено покупателю; ваш текст сохранён в чате.",
+                )
         token = source_panel.set((bot.id, owner, key))
         try:
             from app.telegram.navigation import Navigation

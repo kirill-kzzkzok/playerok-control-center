@@ -3,6 +3,7 @@ import hashlib
 import json
 import time
 from datetime import datetime
+from enum import Enum
 from html import escape
 
 from aiogram.exceptions import TelegramBadRequest
@@ -17,6 +18,12 @@ from app.telegram.keyboards import keyboard
 from app.telegram.message_notice import message_notice
 from app.telegram.operation_results import OperationResults
 from app.telegram.presentation import status as human_status
+
+
+class NoticeEdit(Enum):
+    UPDATED = "updated"
+    UNCHANGED = "unchanged"
+    SKIPPED = "skipped"
 
 
 class Notifications:
@@ -404,9 +411,15 @@ class Notifications:
             if payload.get("deleted_at") or payload.get("is_read") is True:
                 markup = keyboard([[("Диалог", "chat:" + row["chat_id"])]])
             try:
-                await self.edit_notice(
+                outcome = await self.edit_notice(
                     text, chat_id=row["owner_id"], message_id=row["telegram_message_id"], reply_markup=markup
                 )
+                if outcome is NoticeEdit.SKIPPED:
+                    self.store.execute(
+                        "UPDATE notifications SET refresh_failures=-1 WHERE event_key=? AND owner_id=?",
+                        (row["event_key"], row["owner_id"]),
+                    )
+                    continue
             except asyncio.CancelledError:
                 self.store.execute(
                     "UPDATE notifications SET refresh_after=? WHERE event_key=? AND owner_id=?",
@@ -511,12 +524,18 @@ class Notifications:
                     row[:] = [b for b in row if not (b.callback_data or "").startswith("readchat:")]
                 markup.inline_keyboard = [row for row in markup.inline_keyboard if row]
             try:
-                await self.edit_notice(
+                outcome = await self.edit_notice(
                     text,
                     chat_id=notification["owner_id"],
                     message_id=notification["telegram_message_id"],
                     reply_markup=markup,
                 )
+                if outcome is NoticeEdit.SKIPPED:
+                    self.store.execute(
+                        "UPDATE notification_actions SET failures=-1 WHERE event_key=? AND owner_id=?",
+                        (notification["event_key"], notification["owner_id"]),
+                    )
+                    continue
             except asyncio.CancelledError:
                 self.defer_update(notification, actions, TimeoutError())
                 raise
@@ -564,9 +583,16 @@ class Notifications:
         lock = self.store.navigation_locks.setdefault((bot_id, chat_id), asyncio.Lock())
         async with lock:
             key = panel_key(self.store, bot_id, chat_id, message_id)
-            if self.store.setting(key, {}).get("route") is not None:
-                return  # The owner opened another view here. No background takeover.
-            return await self.bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, **kwargs)
+            panel = self.store.setting(key, {})
+            if panel.get("closed") or panel.get("route") is not None:
+                return NoticeEdit.SKIPPED
+            try:
+                await self.bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, **kwargs)
+            except TelegramBadRequest as error:
+                if telegram_error(error) != "MESSAGE_NOT_MODIFIED":
+                    raise
+                return NoticeEdit.UNCHANGED
+            return NoticeEdit.UPDATED
 
     def defer_update(self, notification, actions, error):
         for action in actions:

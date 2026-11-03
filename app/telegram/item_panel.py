@@ -380,8 +380,11 @@ class ItemPanel:
                 }
             )
             await state.set_state(None)
-            return f"Удалить только фото {selected + 1}? Остальные фотографии сохранятся.", keyboard(
-                [[("✅ Удалить это фото", "commit:" + nonce)]], back=("Отмена", "editphoto:" + view["id"])
+            return (
+                f"Удалить только фото {selected + 1}? Остальные фотографии сохранятся. API не подтверждает порядок и главное фото; проверьте их на Playerok.",
+                keyboard(
+                    [[("✅ Удалить это фото", "commit:" + nonce)]], back=("Отмена", "editphoto:" + view["id"])
+                ),
             )
         await state.set_data(
             {

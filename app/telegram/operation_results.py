@@ -113,6 +113,12 @@ class OperationResults:
             gift = self.store.rows("SELECT 1 FROM gift_listings WHERE item_id=?", (row["target"],))
             text += "\n🎁 Telegram Gifts: " + ("привязка сохранена" if gift else "не настроено")
             text += "\n⚡ Готовность автовыдачи: проверьте актуальную карточку товара."
+        if (
+            status == "SUCCEEDED"
+            and kind == "edit"
+            and {"add_photos", "keep_attachment_ids"} & payload.keys()
+        ):
+            text += "\nФотографии: состав подтверждён. API не подтверждает порядок и главное фото; проверьте их на Playerok."
         if status in {"PENDING", "PROCESSING", "RETRYABLE_FAILED"}:
             text += "\nПостановка в очередь не означает выполнения."
         elif status == "UNCERTAIN" or row["error_code"] == "MANUALLY_STOPPED_UNCERTAIN":
@@ -281,11 +287,16 @@ class OperationResults:
                 key = panel_key(self.store, bot.id, row["owner_id"], row["view_message_id"])
                 panel = self.store.setting(key, {})
                 if (
-                    panel.get("id") != row["view_message_id"]
+                    panel.get("closed")
+                    or panel.get("id") != row["view_message_id"]
                     or panel.get("token") != row["view_token"]
-                    or panel.get("sending")
-                    or panel.get("editing")
                 ):
+                    self.store.execute(
+                        "UPDATE operation_receipts SET view_message_id=NULL,view_token=NULL WHERE operation_id=? AND owner_id=? AND view_message_id=? AND view_token=?",
+                        (row["operation_id"], row["owner_id"], row["view_message_id"], row["view_token"]),
+                    )
+                    continue
+                if panel.get("sending") or panel.get("editing"):
                     continue
                 retry_key = f"receipt-ui:{row['operation_id']}:{row['owner_id']}"
                 retry = self.store.setting(retry_key, {})

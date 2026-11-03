@@ -60,6 +60,9 @@ class UploadCleanup:
                 removed += 1
         result = {"status": "OK", "removed": removed, "protected": len(active), "at": now()}
         self.store.set_setting("uploads:cleanup", result)
+        from app.services.edit_confirmation import prune_edit_confirmations
+
+        prune_edit_confirmations(self.store)
         return result
 
     async def run(self, stop):

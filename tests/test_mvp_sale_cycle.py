@@ -17,7 +17,9 @@ from app.workers.outbox import Executor, OutboxWorker
 from tests.test_operations import FakeAPI, queue_manual_publication
 
 
-@pytest.mark.parametrize("outcome", ["success", "lost_delivery_ack", "bad_create_receipt"])
+@pytest.mark.parametrize(
+    "outcome", ["success", "lost_delivery_ack", "bad_create_receipt", "partial_create_receipt"]
+)
 async def test_mvp_create_photo_publish_future_sale_stock_delivery_and_owner_confirmation(
     tmp_path, monkeypatch, outcome
 ):
@@ -37,6 +39,11 @@ async def test_mvp_create_photo_publish_future_sale_stock_delivery_and_owner_con
         assert kwargs["attachments"][0].startswith(b"\xff\xd8")
         remote.update(result, raw_price=result["price"])
         if outcome == "bad_create_receipt":
+            # A partial ACK alone is no longer a failure if fresh server reads
+            # fully confirm it. Keep the original UNKNOWN safety assertion by
+            # providing genuinely incomplete photo evidence on the read too.
+            remote["attachments"] = []
+        if outcome in {"bad_create_receipt", "partial_create_receipt"}:
             return {"id": result["id"]}
         return result
 
@@ -90,6 +97,7 @@ async def test_mvp_create_photo_publish_future_sale_stock_delivery_and_owner_con
         await products.queue_create(draft_id, 1, 0)
         await worker.once()
         assert not await worker.once()
+        assert api.account.calls.count("createItem") == 1
         if outcome == "bad_create_receipt":
             assert store.rows("SELECT status,error_code FROM outbox") == [
                 {"status": "UNCERTAIN", "error_code": "CREATE_NOT_CONFIRMED"}

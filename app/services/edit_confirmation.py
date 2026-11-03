@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import time
+from datetime import UTC, datetime, timedelta
 
 from app.database.store import Conflict, encode, now
 from app.playerok.adapter import APIError
@@ -11,6 +12,29 @@ from app.services.item_receipts import edit_receipt_matches
 
 def payload_hash(payload):
     return hashlib.sha256(encode(payload).encode()).hexdigest()
+
+
+CRITICAL_FIELDS = {"category", "obtaining_type", "attributes", "data_fields", "comment"}
+
+
+def compact_item(item):
+    value = {field: item[field] for field in ("id", "name", "description", "price") if field in item}
+    value["user"] = {"id": (item.get("user") or {}).get("id")}
+    if isinstance(item.get("attachments"), list):
+        value["attachments"] = [
+            {"id": image.get("id")} for image in item["attachments"] if isinstance(image, dict)
+        ]
+    return value
+
+
+def prune_edit_confirmations(store, *, limit=500, retention_days=7):
+    """Only temporary proof of terminal success; unresolved/closed unknown stays."""
+    cutoff = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
+    with store.transaction() as db:
+        return db.execute(
+            "DELETE FROM settings WHERE key IN (SELECT s.key FROM settings s JOIN outbox o ON s.key='edit:confirmation:'||o.id WHERE o.kind='edit' AND o.status='SUCCEEDED' AND datetime(COALESCE(CASE WHEN json_valid(s.value) THEN json_extract(s.value,'$.checked_at') END,o.created_at))<datetime(?) LIMIT ?)",
+            (cutoff, limit),
+        ).rowcount
 
 
 class EditConfirmation:
@@ -30,7 +54,12 @@ class EditConfirmation:
             "account": self.api.account.id,
             "expected": expected,
             "keep": keep,
-            "before": current,
+            "before": compact_item(current),
+            "critical_hashes": {
+                field: payload_hash(current[field])
+                for field in CRITICAL_FIELDS
+                if current.get(field) is not None
+            },
             "lease_token": action["lease_token"],
             "prepared_at": now(),
         }
@@ -45,7 +74,12 @@ class EditConfirmation:
         # Missing evidence is never filled with the old snapshot. In particular,
         # a successful edit cannot attest an externally changed delivery contract.
         before = proof["before"]
-        fields = {"category", "obtaining_type", "attributes", "data_fields", "comment"}
+        if any(
+            payload_hash(observed.get(field)) != digest
+            for field, digest in proof.get("critical_hashes", {}).items()
+        ):
+            return False
+        fields = set(CRITICAL_FIELDS)
         fields |= {"name", "description", "price"} - proof["expected"].keys()
         return all(
             before.get(field) is None
@@ -71,7 +105,19 @@ class EditConfirmation:
                 return observed
         raise APIError("EDIT_NOT_CONFIRMED", uncertain=True)
 
-    def record(self, action, proof, observed, result):
+    def live(self, action, proof):
+        rows = self.store.rows(
+            "SELECT status,lease_token,lease_until FROM outbox WHERE id=?", (action["id"],)
+        )
+        return bool(
+            rows
+            and rows[0]["status"] == "PROCESSING"
+            and rows[0]["lease_token"] == action["lease_token"]
+            and (rows[0]["lease_until"] or 0) > time.time()
+            and self.api.account.id == proof["account"]
+        )
+
+    def record(self, action, proof, observed, result, *, confirmed=True):
         with self.store.transaction() as db:
             row = db.execute(
                 "SELECT status,lease_token,lease_until FROM outbox WHERE id=?", (action["id"],)
@@ -86,14 +132,42 @@ class EditConfirmation:
                 raise Conflict("Lease проверки редактирования потерян")
             self.store.set_setting(
                 self.key(action["id"]),
-                {**proof, "confirmed": True, "observed": observed, "result": result, "checked_at": now()},
+                {
+                    **proof,
+                    "confirmed": confirmed,
+                    "readback_only": not confirmed,
+                    "observed": compact_item(observed),
+                    "result": result,
+                    "checked_at": now(),
+                },
             )
 
     async def evidence(self, action):
-        proof = self.store.setting(self.key(action["id"]), {})
+        try:
+            proof = self.store.setting(self.key(action["id"]), {})
+        except (ValueError, TypeError):
+            proof = {}
+        if not isinstance(proof, dict):
+            proof = {}
+        valid = (
+            isinstance(proof.get("account"), str)
+            and isinstance(proof.get("before"), dict)
+            and isinstance(proof.get("expected"), dict)
+            and isinstance(proof.get("keep"), list)
+            and isinstance(proof.get("observed"), dict)
+            and isinstance(proof.get("result"), dict)
+            and isinstance(proof.get("critical_hashes", {}), dict)
+            and proof.get("confirmed") is True
+            and proof["result"].get("remote_id") == action["target"]
+            and proof["observed"].get("id") == action["target"]
+            and proof["before"].get("id") == action["target"]
+        )
+        if not valid:
+            proof = {**proof, "confirmed": False}
         observed = await self.api.call("get_item", id=action["target"])
         if (
-            not self.api.account.id
+            not isinstance(observed, dict)
+            or not self.api.account.id
             or (observed.get("user") or {}).get("id") != self.api.account.id
             or observed.get("id") != action["target"]
         ):

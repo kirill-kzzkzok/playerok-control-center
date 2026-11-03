@@ -861,9 +861,12 @@ def create_router(store, api, products, synchronizer):
                     raise
                 await message.answer_photo(
                     BufferedInputFile(await wizard.attachments.read(source), filename="replacement.jpg"),
-                    caption="Заменить ВСЕ фотографии?"
-                    if data.get("photo_mode") == "all" or "keep_attachment_ids" not in data
-                    else "Сохранить изменение? Остальные фотографии сохранятся.",
+                    caption=(
+                        "Заменить ВСЕ фотографии?"
+                        if data.get("photo_mode") == "all" or "keep_attachment_ids" not in data
+                        else "Сохранить изменение? Остальные фотографии сохранятся."
+                    )
+                    + "\n\nAPI не подтверждает порядок и главное фото. Проверьте их на Playerok после сохранения.",
                     reply_markup=keyboard([[("✅ Подтвердить изменение фото", "commit:" + nonce)]]),
                 )
                 return

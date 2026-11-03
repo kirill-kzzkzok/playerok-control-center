@@ -115,7 +115,9 @@ class Interaction:
     def __init__(self, bot, dp):
         self.bot, self.dp, self.counter = bot, dp, 0
 
-    async def message(self, text=None, owner=7, document=None, group=False, caption=None):
+    async def message(
+        self, text=None, owner=7, document=None, group=False, caption=None, reply_to_message=None
+    ):
         self.counter += 1
         entities = [{"type": "bot_command", "offset": 0, "length": 6}] if text == "/start" else None
         message = Message(
@@ -127,6 +129,7 @@ class Interaction:
             entities=entities,
             document=document,
             caption=caption,
+            reply_to_message=reply_to_message,
         )
         return await self.dp.feed_update(self.bot, Update(update_id=self.counter, message=message))
 

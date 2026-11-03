@@ -369,6 +369,21 @@ class Executor:
             if attachments:
                 expected["add_attachments"] = attachments
             if (
+                result.get("status") is None
+                or result.get("user") is None
+                or result.get("category") is None
+                or any(field not in result for field in expected if field != "add_attachments")
+                or attachments
+                and "attachments" not in result
+            ):
+                created_id = result["id"]
+                try:
+                    result = await self.owned_item(created_id)
+                except (APIError, ValidationError):
+                    raise APIError("CREATE_NOT_CONFIRMED", uncertain=True) from None
+                if result.get("id") != created_id:
+                    raise APIError("CREATE_NOT_CONFIRMED", uncertain=True)
+            if (
                 result.get("status") != "DRAFT"
                 or (result.get("user") or {}).get("id") != self.api.account.id
                 or (result.get("category") or {}).get("id") != value["category_id"]
@@ -411,7 +426,17 @@ class Executor:
                 raise ValidationError("Условия скидки изменились. Требуется новое подтверждение.")
             result = await self.mutate(action, "updateItem", "update_item", id=target, price=fresh["price"])
             if (
-                result.get("id") != target
+                isinstance(result, dict)
+                and result.get("id") == target
+                and (result.get("price") is None or result.get("raw_price") is None)
+            ):
+                try:
+                    result = await self.owned_item(target)
+                except (APIError, ValidationError):
+                    raise APIError("DISCOUNT_RESULT_UNKNOWN", uncertain=True) from None
+            if (
+                not isinstance(result, dict)
+                or result.get("id") != target
                 or result.get("price") != fresh["price"]
                 or result.get("raw_price") != fresh["expected_raw_price"]
             ):
@@ -446,7 +471,7 @@ class Executor:
                 data_fields=fields,
                 comment=comment,
             )
-            if result.get("id") != target:
+            if not isinstance(result, dict) or result.get("id") not in {None, target}:
                 raise APIError("EDIT_NOT_CONFIRMED", uncertain=True)
             observed = await self.owned_item(target)
             if not field_receipt_matches(target, observed, attributes, fields, comment):
@@ -510,6 +535,11 @@ class Executor:
             result = await self.mutate(
                 action, "publishItem", "publish_item", item_id=target, priority_status_id=quote["id"]
             )
+            if isinstance(result, dict) and result.get("id") == target and result.get("status") is None:
+                try:
+                    result = await self.owned_item(target)
+                except (APIError, ValidationError):
+                    raise APIError("PUBLICATION_NOT_CONFIRMED", uncertain=True) from None
             if (
                 not isinstance(result, dict)
                 or result.get("id") != target
@@ -656,7 +686,18 @@ class Executor:
 
             confirmation = EditConfirmation(self.store, self.api)
             proof = confirmation.prepare(action, current, changes, keep)
-            result = await self.mutate(action, "updateItem", "update_item", id=target, **changes)
+            try:
+                result = await self.mutate(action, "updateItem", "update_item", id=target, **changes)
+            except APIError as error:
+                if error.uncertain and confirmation.live(action, proof):
+                    try:
+                        observed = await confirmation.readback(action, proof)
+                        # A lost response has no causal receipt. Record only the
+                        # observed postcondition, never invent mutation success.
+                        confirmation.record(action, proof, observed, None, confirmed=False)
+                    except (APIError, Conflict):
+                        pass  # Preserve the original uncertain mutation outcome.
+                raise
             observed = None
             if not edit_receipt_matches(target, proof["expected"], result, keep_attachment_ids=keep):
                 observed = await confirmation.readback(action, proof)

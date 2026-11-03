@@ -89,3 +89,41 @@ async def test_changed_photo_baseline_blocks_and_unknown_upload_never_repeats(ph
     ]
     assert not await r.worker.once()
     assert len(r.api.mutations) == (1 if fault == "lost" else 0)
+
+
+@pytest.mark.parametrize("reordered", [False, True])
+async def test_replacing_first_image_confirms_composition_without_claiming_main_image(photos, reordered):
+    from app.telegram.operation_results import OperationResults
+
+    r = photos
+    original = r.api.account.update_item
+
+    def update(**changes):
+        original(**changes)
+        if reordered:
+            r.api.item["attachments"].reverse()
+        return {"id": "lot"}
+
+    r.api.account.update_item = update
+    await r.ui.click("editphoto:lot")
+    await click(r, suffix=":select:0")
+    await click(r, suffix=":replace")
+    await r.ui.message(
+        document=Document(
+            file_id="photo", file_unique_id="fixture", file_name="image.png", mime_type="image/png"
+        )
+    )
+    shown = r.session.last_panel
+    caption = shown.media.caption if hasattr(shown, "media") else shown.caption
+    assert "порядок" in caption.lower()
+    confirmation = "commit:" + (await state(r).get_data())["confirm_token"]
+    await r.ui.click(confirmation)
+    await r.worker.once()
+    row = r.store.rows("SELECT id,status FROM outbox")[0]
+    assert row["status"] == "SUCCEEDED"
+    assert {a["id"] for a in r.api.item["attachments"]} == {"old-1", "old-2", "uploaded-0"}
+    assert (r.api.item["attachments"][0]["id"] == "uploaded-0") is reordered
+    text, _ = OperationResults(r.store).show(7, row["id"])
+    assert "порядок и главное фото" in text
+    assert "не подтверждает" in text
+    assert not await r.worker.once() and len(r.api.mutations) == 1

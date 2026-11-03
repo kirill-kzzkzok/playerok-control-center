@@ -132,8 +132,16 @@ async def test_historical_notification_refresh_cannot_overwrite_user_opened_scre
     Orders(r.store).ingest_message(
         "chat", {"id": "old-notice", "text": "changed buyer text", "created_at": now()}
     )
+    rendered_before = r.store.rows(
+        "SELECT rendered_payload FROM notifications WHERE event_key='message:old-notice'"
+    )[0]["rendered_payload"]
     await Notifications(r.store, r.bot).refresh_messages()
     assert r.session.messages[b] == before
+    row = r.store.rows(
+        "SELECT rendered_payload,refresh_failures FROM notifications WHERE event_key='message:old-notice'"
+    )[0]
+    assert row["rendered_payload"] == rendered_before
+    assert row["refresh_failures"] == -1
 
 
 async def test_open_chat_from_another_card_renders_source_without_touching_chat_notice(ui):
