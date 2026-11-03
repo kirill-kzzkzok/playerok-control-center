@@ -87,3 +87,9 @@
 
 Индивидуальные формулировки 46 IDs в приложенном ТЗ отсутствуют. Существующие AUDIT_FINDINGS/REPRODUCTIONS/COVERAGE относятся к другому набору G*/F*; они не дают доказанного соответствия A1–D10. Групповые исправления не отмечены как 46 отдельных GREEN.
 | 1.3c Консервативная подтверждённая дата покупки | orders | RED1failed;82passed; historical date cannot be lifted across the cutoff: retain earliest confirmed server evidence, including coarse timestamps | FIXED, full latest gate pending |
+
+## Проверка checkpoint c9e4460
+
+Исправленный полный набор: **1864 passed**, exit 0, 535.45 s. Предыдущий полный набор имел 12 падений; причины и исправления отражены в PROGRESS.md. Все существующие acceptance assertions сохранены. Ruff/format/compileall/pip check/selfcheck проходят. CI41565342278 на момент фиксации ещё выполнялся.
+
+Это проверка текущих изменений, а не завершение фаз 3–5. Следующий шаг и оставшиеся требования перечислены выше. Реальных внешних мутаций и платных тестов не выполнялось.
