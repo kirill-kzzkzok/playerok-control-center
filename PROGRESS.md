@@ -3144,3 +3144,6 @@ D8 contract: existing inherit=False remains conservative. Launch preview explain
 
 D9 GREEN: root RED changed description reopened admission ->30passed/26.54s; new real relist/three reserved orders3passed/13.73s, expanded40passed/32.97s/exit0 (authority/reservedorders/stockUI/scope/futuremessages). Dispatcher STOP after preview refuses; inherited next-lot resume preserves code/id/armed_at/control/inherit and all3reservations, workers deliver exactly3distinct original units; old sold alias stays closed, duplicate confirmation changes no policies. Fresh critical identity and actual stock/runtime/control checked through existing Automation.save+LogicalProducts.commit_arm. No extraction/new engine, no money/UNKNOWN reset. Ruff exit0. D8 text test separate and pending, not part of runtime checkpoint.
 
+
+D8 GREEN: actual creation/launch RED1failed missing consequences ->36passed/24.20s/exit0 (choice/sourceintent/launch). Default inherit=False unchanged; preview explicitly says future listings checked separately, opt-in applies to verified same-code relistings and preserves separate money permissions. Toggle alone leaves LP full record unchanged, no publish or Stars. Ruff exit0.
+
