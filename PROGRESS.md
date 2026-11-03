@@ -3147,3 +3147,9 @@ D9 GREEN: root RED changed description reopened admission ->30passed/26.54s; new
 
 D8 GREEN: actual creation/launch RED1failed missing consequences ->36passed/24.20s/exit0 (choice/sourceintent/launch). Default inherit=False unchanged; preview explicitly says future listings checked separately, opt-in applies to verified same-code relistings and preserves separate money permissions. Toggle alone leaves LP full record unchanged, no publish or Stars. Ruff exit0.
 
+
+D12 contract: overview lists use logical identity, not one row per delivery_policies/gift projection. One representative per LP, prefer confirmed public APPROVED alias, exclude private order snapshots; legacy settings without a logical link remain visible separately. Owner/account scoped, no guessing by name, no history deletion. Automation menu/queue and Gifts list share the representative selection, direct item route. Historical aliases remain in local history. RED actual UI configured stock/Gift -> real logical worker relist -> overview one current item.
+
+
+D12 GREEN: actual stock/Gift relist RED2failed (duplicate stock buttons and Gift absent in Automation) ->99passed/41.75s/exit0 (overviews/modernGift/automation/queue/navigation/Gifts). LogicalProducts.overview supplies all three lists: one public representative per owner/account logical identity, confirmed APPROVED preferred, private aliases excluded, independent old settings fallback. Playerok stays in Automation but not Gifts. Old order remains reachable from next-lot local history. Existing queue pagination test updated only route prefix auto:item->item;27distinct/3pages assertion retained. No status guessed from name, list is saved evidence; opening current item still fresh API. No schema/history/permissions changes. Ruff exit0.
+

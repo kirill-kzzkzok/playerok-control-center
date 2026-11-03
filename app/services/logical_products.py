@@ -170,6 +170,38 @@ class LogicalProducts:
         )
         return rows[0] if rows else None
 
+    def overview(self, owner, *, handler=None, limit=11, offset=0):
+        """One saved public representative per product, plus unlinked old settings."""
+        if not self.store.rows("SELECT 1 FROM administrators WHERE user_id=?", (owner,)):
+            raise Conflict("Доступ закрыт")
+        account = self.store.setting("playerok:account_id")
+        if self.api and account and account != self.api.account.id:
+            raise Conflict("Аккаунт не соответствует привязке базы")
+        return self.store.rows(
+            "WITH ranked AS (SELECT l.item_id,CASE WHEN json_extract(p.config,'$.platform_only')=1 "
+            "THEN 'playerok' ELSE p.handler END handler,p.config,p.updated_at,"
+            "row_number() OVER (PARTITION BY p.id ORDER BY "
+            "(l.server_status='APPROVED' AND l.verified_at IS NOT NULL AND l.config_revision=p.revision) DESC,"
+            "l.verified_at DESC,l.item_id) position FROM logical_products p "
+            "JOIN logical_listings l ON l.product_id=p.id WHERE p.owner_id=? AND p.account_id=? "
+            "AND l.source_order_id IS NULL),"
+            "entries AS (SELECT item_id,handler,config,updated_at,json_extract(config,'$.bundle') bundle,"
+            "(SELECT sum(json_extract(value,'$.stars')) FROM json_each(config,'$.bundle')) approved_stars "
+            "FROM ranked WHERE position=1 UNION ALL "
+            "SELECT d.item_id,CASE WHEN g.item_id IS NOT NULL THEN 'telegram_gifts' "
+            "WHEN json_extract(d.payload,'$.mode')='stock' THEN 'unique_stock' "
+            "WHEN json_extract(d.payload,'$.mode')='text' THEN 'fixed_text' ELSE 'manual' END handler,"
+            "NULL,d.updated_at,g.bundle,g.approved_stars FROM delivery_policies d "
+            "LEFT JOIN gift_listings g ON g.item_id=d.item_id AND g.owner_id=d.actor WHERE d.actor=? "
+            "AND NOT EXISTS(SELECT 1 FROM logical_listings l WHERE l.item_id=d.item_id) UNION ALL "
+            "SELECT g.item_id,'telegram_gifts',NULL,'',g.bundle,g.approved_stars FROM gift_listings g WHERE g.owner_id=? "
+            "AND NOT EXISTS(SELECT 1 FROM logical_listings l WHERE l.item_id=g.item_id) "
+            "AND NOT EXISTS(SELECT 1 FROM delivery_policies d WHERE d.item_id=g.item_id)) "
+            "SELECT item_id,handler,config,coalesce(bundle,'[]') bundle,coalesce(approved_stars,0) approved_stars "
+            "FROM entries WHERE (? IS NULL OR handler=?) ORDER BY updated_at DESC,item_id LIMIT ? OFFSET ?",
+            (owner, account, owner, owner, handler, handler, limit, offset),
+        )
+
     def gift_service(self):
         from app.gifts.mtproto import PersonalGiftSender
         from app.gifts.service import GiftService

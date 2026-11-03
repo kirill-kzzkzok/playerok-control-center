@@ -20,9 +20,7 @@ class AutomationPanel:
     async def menu(self, owner, state):
         self.service.orders.owner(owner)
         await state.clear()
-        rows = self.store.rows(
-            "SELECT item_id,revision FROM delivery_policies ORDER BY updated_at DESC LIMIT 6"
-        )
+        rows = LogicalProducts(self.store, self.service.api).overview(owner, limit=6)
         buttons = [[(item_label(self.store, row["item_id"])[:55], "item:" + row["item_id"])] for row in rows]
         buttons.extend(
             [

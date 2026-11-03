@@ -56,15 +56,29 @@ class AutomationQueue:
     def __init__(self, store, api):
         self.store, self.access = store, Automation(store, api)
 
-    def listing(self, name, page):
+    def listing(self, name, page, actor):
         if name not in LISTS or not 0 <= page <= 1_000_000:
             raise ValidationError("Список или страница недоступны")
         title, query, prefix = LISTS[name]
-        values = self.store.rows(query + " LIMIT 11 OFFSET ?", (page * 10,))
+        if name == "policies":
+            from app.services.logical_products import LogicalProducts
+            from app.telegram.presentation import item_label
+
+            title, prefix = "Товары с настройками выдачи", "item:"
+            values = [
+                {"ident": row["item_id"], "label": item_label(self.store, row["item_id"])}
+                for row in LogicalProducts(self.store, self.access.api).overview(actor, offset=page * 10)
+            ]
+        else:
+            values = self.store.rows(query + " LIMIT 11 OFFSET ?", (page * 10,))
         rows = []
         text = f"<b>{title}</b> · страница {page + 1}\n"
         for value in values[:10]:
-            label = value["ident"][:35] + " · " + value["label"][:45]
+            label = (
+                value["label"][:60]
+                if name == "policies"
+                else value["ident"][:35] + " · " + value["label"][:45]
+            )
             if prefix:
                 rows.append([(label, prefix + value["ident"])])
             else:
@@ -99,7 +113,7 @@ class AutomationQueue:
         parts = action.split(":")
         if len(parts) == 4 and parts[1] == "list":
             await state.clear()
-            return self.listing(parts[2], int(parts[3]))
+            return self.listing(parts[2], int(parts[3]), actor)
         if len(parts) != 3:
             raise ValidationError("Кнопка очереди устарела")
         command, ident = parts[1:]

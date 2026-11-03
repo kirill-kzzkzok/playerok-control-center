@@ -56,7 +56,7 @@ async def test_full_policy_and_target_pagination_no_duplicates(setup):
                 button.callback_data
                 for row in markup.inline_keyboard
                 for button in row
-                if button.callback_data.startswith("auto:item:" if kind == "policies" else "aq:target:")
+                if button.callback_data.startswith("item:" if kind == "policies" else "aq:target:")
             )
         assert len(buttons) == len(set(buttons)) == 27
     api.call.assert_not_called()
