@@ -76,12 +76,12 @@ def connection_summary(api):
     value = getattr(manager, "state", {})
     if value.get("status") == "DISCONNECTED":
         return "🔴 Playerok не подключён"
-    if (
-        value.get("status") == "CONNECTED"
-        and recent(value.get("last_success"))
-        and getattr(api.account, "connection_verified", False)
-    ):
-        return "🟢 Playerok подключён"
+    if value.get("status") == "CONNECTED" and getattr(api.account, "connection_verified", False):
+        if recent(value.get("last_success")):
+            return "🟢 Playerok подключён"
+        return "⚪ Playerok: аккаунт подтверждён\nПоследняя проверка: " + local_time(
+            value.get("last_success")
+        )
     return "🟡 Подключение Playerok нужно проверить"
 
 

@@ -114,7 +114,8 @@ class HomePanel:
             if problems
             else (
                 "В локальной истории проблем нет."
-                if connection.startswith("🟢")
+                if getattr(getattr(self.api, "connection", None), "state", {}).get("status") == "CONNECTED"
+                and getattr(self.api.account, "connection_verified", False)
                 else "Проверьте подключение в профиле."
             )
         )

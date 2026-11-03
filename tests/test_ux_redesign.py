@@ -168,6 +168,11 @@ async def test_home_expired_success_is_not_fresh(ux):
         state={"status": "CONNECTED", "last_success": (datetime.now(UTC) - timedelta(hours=1)).isoformat()}
     )
     assert "🟢" not in HomePanel(r.store, r.api).home()[0]
+    await r.ui.click("more")
+    await r.ui.click("home")
+    assert "аккаунт подтверждён" in r.session.calls[-1].text
+    assert "нужно проверить" not in r.session.calls[-1].text
+    assert r.api.account.connection_verified and not r.api.calls
     r.api.connection.state["last_success"] = datetime.now(UTC).isoformat()
     assert "🟢" in HomePanel(r.store, r.api).home()[0]
 

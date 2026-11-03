@@ -3102,3 +3102,9 @@ D1 remaining contract: gft:item/bind for an unbound listing with no historical g
 
 D1 remaining GREEN: actual Dispatcher RED2failed3passed (new picker used legacy and modern DRAFT invisible) ->74passed/35.63s/exit0 Gift+newcreation;41passed/18.85s/exit0 newcreation+UX+LogicalProducts. Earlier profile3failed94passed were historical tests assuming new legacy creation; made historical compatibility explicit by preparing existing legacy binding, price-change assertion now preserves exact old binding instead of expecting absent. Raw MTProto error test now binds test account before modern read-only catalog; redaction assertion retained. Old pending confirmbind without historical projection now rejected, no new Gift row or purchase. Lists modern logical Gift configuration before arming, owner/account scoped, one representative, private order aliases excluded; legacy fallback preserved. No migrations/live. Ruff exit0. D1 historical old jobs/history not rewritten. D12 other list dedup still pending.
 
+
+D6 contract: old last_success on CONNECTED runtime with connection_verified=True is retained account proof, not fresh connectivity proof and not authorization loss. Home shows age explicitly with neutral status, never false reconnect request or green fresh proof. UNKNOWN/DISCONNECTED/connection_verified=False retain conservative state. Rendering performs no network or permission mutations. Actual Dispatcher home age regression first; no polling/identity authority changes.
+
+
+D6 GREEN: actualUI RED1failed on false reconnect wording (earlier harness attempt hit unchanged-message no-op and was not validRED); ->48passed/42.92s/exit0 UX+PlayerokConnection+403identity. Neutral retained identity plus Moscow last-check time, old proof not green/current; actual UNKNOWN/auth rejection still disables gates. Home render makes no API calls or permissions changes. Ruff format corrected1file, check passed. No run-loop/renewal bypass.
+
