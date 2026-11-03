@@ -71,7 +71,7 @@ class FakeAPI:
         if method == "get_game_category":
             return {"id": kwargs["id"], "options": []}
         if method == "get_item":
-            if kwargs["id"] in self.account.created:
+            if kwargs["id"] in getattr(self.account, "created", {}):
                 result = dict(self.account.created[kwargs["id"]])
                 result["status"] = self.account.published.get(kwargs["id"], result["status"])
                 return result
