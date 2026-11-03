@@ -113,10 +113,17 @@ async def test_gift_picker_server_drafts_keep_selection_context_after_restart(ux
 
 
 async def test_gift_picker_opens_server_draft_binding_without_enabling_delivery(ux):
+    from app.gifts.mtproto import PersonalGiftSender
     from app.gifts.settings import GiftSettings
+    from app.services.account_binding import bind_account
+    from tests.test_gifts import MTProtoTransport
 
     r = ux
-    r.api.gift_settings = GiftSettings(0, "", "data/test", "stars", "gift", "username", False, 100, 300)
+    r.api.gift_settings = GiftSettings(
+        1, "test-only", "data/test", "stars", "gift", "username", False, 100, 300
+    )
+    r.api.gift_sender = PersonalGiftSender(r.api.gift_settings, client=MTProtoTransport())
+    bind_account(r.store, r.api.account.id)
     r.api.value.update(
         status="DRAFT",
         description="Gift\ngift: zombie_bear, rose",
@@ -133,8 +140,9 @@ async def test_gift_picker_opens_server_draft_binding_without_enabling_delivery(
     await r.ui.click("gft:choose")
     await r.ui.click("itemfilter:DRAFT")
     await r.ui.click("gft:item:lot")
-    assert "gft:bind:lot" in buttons(r.session.calls[-1])
-    assert "zombie_bear" in r.session.calls[-1].text
+    assert any(":giftpick:heart" in key for key in buttons(r.session.calls[-1]))
+    assert (await r.state.get_data())["logical_setup"]["handler"] == "telegram_gifts"
+    assert "gift: zombie_bear, rose" in r.api.value["description"]  # Selection never edits Playerok.
     assert not r.store.rows("SELECT * FROM gift_listings")
     assert not r.store.rows("SELECT * FROM outbox")
 

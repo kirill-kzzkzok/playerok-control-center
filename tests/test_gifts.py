@@ -627,6 +627,8 @@ async def test_stock_and_gifts_exclude_each_other(rig):
 
 async def test_dispatcher_bind_restart_confirm_limits_enable_stop_and_order_results(rig):
     r = rig
+    # Compatibility for a historical binding; new listings use LogicalProducts.
+    await r.service.bind(7, "item", "heart")
     session = TelegramSession()
     bot = Bot("123:" + "x" * 35, session=session)
     ui = Interaction(bot, dispatcher(r.store, r.api))
@@ -721,6 +723,8 @@ async def test_description_edit_cannot_silently_stop_gifts_or_change_paid_obliga
 
 async def test_dispatcher_rejects_price_changed_since_binding_preview(rig):
     r = rig
+    await r.service.bind(7, "item", "heart")
+    original = r.service.listing("item")
     session = TelegramSession()
     bot = Bot("123:" + "x" * 35, session=session)
     ui = Interaction(bot, dispatcher(r.store, r.api))
@@ -730,7 +734,7 @@ async def test_dispatcher_rejects_price_changed_since_binding_preview(rig):
         pending = (await state.get_data())["gift_bind"]
         r.remote.gift.stars = 20
         await ui.click("gft:confirmbind:" + pending["nonce"])
-        assert not r.service.listing("item")
+        assert r.service.listing("item") == original
         assert "Цена изменилась" in session.calls[-1].text
     finally:
         await bot.session.close()
@@ -914,6 +918,9 @@ async def test_gift_order_navigation_clears_old_secret_input_context(rig):
 
 async def test_raw_mtproto_valueerror_is_not_reflected_in_panel(rig):
     r = rig
+    from app.services.account_binding import bind_account
+
+    bind_account(r.store, r.api.account.id)
 
     async def failed_catalog():
         raise ValueError("do-not-expose-private-peer")

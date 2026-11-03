@@ -83,3 +83,40 @@ async def test_unbound_server_draft_gift_selection_cannot_write_another_legacy_t
     assert product["state"] == "VERIFIED" and not product["enabled"]
     assert len(calls) == 1 and "gift:" not in r.api.item["description"].lower()
     assert not r.api.published and not r.remote.payments
+
+
+async def test_gift_picker_for_a_new_listing_opens_the_modern_catalog(shop):
+    r = shop
+    await r.ui.message("/start")
+    from app.services.account_binding import bind_account
+
+    bind_account(r.store, r.api.account.id)
+    await r.sync.once()
+    await r.ui.click("gft:choose")
+    await r.ui.click("gft:item:item")
+    data = await r.state.get_data()
+    assert data.get("logical_setup", {}).get("handler") == "telegram_gifts"
+    assert any(":giftpick:heart" in key for key in buttons(r.session.calls[-1]))
+    assert not r.store.rows("SELECT * FROM gift_listings")
+    assert not r.store.rows("SELECT * FROM outbox") and not r.remote.payments
+
+
+async def test_new_modern_gift_draft_is_visible_before_arming(shop):
+    r = shop
+    await r.create_and_prepare(prepare_launch=False)
+    assert not r.store.rows("SELECT * FROM gift_listings")
+    await r.ui.click("gft:bindings")
+    assert "gft:item:item" in buttons(r.session.calls[-1])
+    await r.ui.click("gft:item:item")
+    assert "logical_view" in await r.state.get_data()
+    assert "Постоянный код" in r.session.calls[-1].text
+    assert not r.api.published and not r.remote.payments
+
+
+async def test_old_unbound_gift_confirmation_cannot_create_a_competing_binding(shop):
+    r = shop
+    await r.ui.message("/start")
+    await r.state.set_data({"gift_bind": {"item": "item", "nonce": "old-confirmation"}})
+    await r.ui.click("gft:confirmbind:old-confirmation")
+    assert "Старое подтверждение" in r.session.calls[-1].text
+    assert not r.store.rows("SELECT * FROM gift_listings") and not r.remote.payments

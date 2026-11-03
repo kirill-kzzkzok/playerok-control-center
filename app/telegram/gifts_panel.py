@@ -98,6 +98,16 @@ class GiftsPanel:
                 if command == "off":
                     logical.stop(owner, product["id"])
                 return await LogicalProductsPanel(self.store, s.api).card(owner, ident, state)
+            if command in {"item", "bind"} and ident and not s.listing(ident):
+                panel = LogicalProductsPanel(self.store, s.api)
+                await panel.card(owner, ident, state)
+                view = (await state.get_data())["logical_view"]
+                return await panel.callback("lp:" + view["nonce"] + ":mode:telegram_gifts", owner, state)
+            if command == "confirmbind" and not s.listing(ident):
+                await state.clear()
+                raise Conflict(
+                    "Старое подтверждение больше не действует. Выберите товар в разделе подарков и подтвердите постоянную привязку"
+                )
         if command == "home":
             await state.clear()
             v = self.store.setting("gifts:connection", {})
@@ -246,10 +256,19 @@ class GiftsPanel:
             if not 0 <= page <= 100000:
                 raise Conflict("Страница недоступна")
             rows = self.store.rows(
-                "SELECT g.* FROM gift_listings g WHERE NOT EXISTS "
-                "(SELECT 1 FROM logical_listings l WHERE l.item_id=g.item_id AND l.source_order_id IS NOT NULL) "
-                "ORDER BY g.item_id LIMIT 11 OFFSET ?",
-                (page * 10,),
+                "WITH modern AS (SELECT l.item_id,json_extract(p.config,'$.bundle') bundle,"
+                "(SELECT sum(json_extract(value,'$.stars')) FROM json_each(p.config,'$.bundle')) approved_stars,"
+                "row_number() OVER (PARTITION BY p.id ORDER BY (l.server_status='APPROVED') DESC,"
+                "l.verified_at DESC,l.item_id) position "
+                "FROM logical_products p JOIN logical_listings l ON l.product_id=p.id "
+                "WHERE p.owner_id=? AND p.account_id=? AND p.handler='telegram_gifts' "
+                "AND coalesce(json_extract(p.config,'$.platform_only'),0)=0 AND l.source_order_id IS NULL),"
+                "entries AS (SELECT item_id,coalesce(bundle,'[]') bundle,coalesce(approved_stars,0) approved_stars "
+                "FROM modern WHERE position=1 UNION ALL "
+                "SELECT g.item_id,g.bundle,g.approved_stars FROM gift_listings g WHERE g.owner_id=? "
+                "AND NOT EXISTS (SELECT 1 FROM logical_listings l WHERE l.item_id=g.item_id)) "
+                "SELECT * FROM entries ORDER BY item_id LIMIT 11 OFFSET ?",
+                (owner, s.api.account.id, owner, page * 10),
             )
             buttons = [
                 [
