@@ -3162,3 +3162,12 @@ D13 GREEN: RED4failed2passed (two immediate stops, two wrongly navigation-allowl
 
 D13 quality correction: previous combined shell command continued to commit after Ruff failure, so preceding claim Ruff exit0 in D13 line was premature and incorrect. Actual two findings: I001 import order in new test, format-only ItemPanel line from D10. Both corrected; rerun whole Ruff check . exit0, format .358files exit0, compileall app/tests exit0, pipcheck exit0. No test failure hidden and no checks disabled. This corrective checkpoint supersedes the earlier quality claim.
 
+
+C1/C7 next contract (runtime unchanged while full d79deb2 regression runs): keep one Store/OutboxWorker/Executor and one serial lane per resource. Independent Playerok lane excludes gift_send; a single Stars lane claims only gift_send. SQLite leases/idempotency, budgets, started_at, unknown/STOP guards unchanged. No parallel Stars lane or global unbounded gather. Existing outbox_loop will own both bounded tasks; normal Playerok mutation serialization remains ThreadCalls. RED actual UI creates Gift/stock/text, blocks MTProto payment boundary under existing90s timeout, pays independent orders and verifies their actual transport delivery before releasing Gift. A short synchronization window proves nonblocking, not90seconds wall-time/live acceptance. Full current suite remains frozen until complete; only tests/docs may be added meanwhile.
+
+
+C6 next contract (read-only notification fix, runtime unchanged during full snapshot suite): stock_empty checks Inventory.counts(item_id).AVAILABLE using permanent stock_scope. Event/history/order link unchanged; reserved/quarantined are not availability. Restock suppresses obsolete alert but never reopens admission or dispatches orders. RED real UI stock -> logical worker relist ->3reservations empty event ->optional UI replenishment ->Notifications delivery decision.
+
+
+C6 GREEN: real relist/3reserved/UIrestock RED1failed1passed (obsolete empty alert after replenishment) ->30passed/26.88s/exit0 (stocknotice/notifications/scope/stockUI). Notifications uses existing Inventory.counts shared logical stock_scope and AVAILABLE only, retains order link/event/history. Restock suppresses notice, no auto-resume; reservations unchanged. No schema/remote operations.
+

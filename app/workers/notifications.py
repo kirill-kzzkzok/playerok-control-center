@@ -225,10 +225,9 @@ class Notifications:
                 )
                 markup = keyboard([[("Проверить товар", "lp:item:" + rows[0]["item_id"])]])
             elif event["kind"] == "stock_empty":
-                if self.store.rows(
-                    "SELECT 1 FROM inventory WHERE item_id=? AND status='AVAILABLE' LIMIT 1",
-                    (payload["item_id"],),
-                ):
+                from app.services.inventory import Inventory
+
+                if Inventory(self.store, None).counts(payload["item_id"])["AVAILABLE"]:
                     self.store.execute(
                         "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT ?,user_id,'SKIPPED' FROM administrators",
                         (event["key"],),
