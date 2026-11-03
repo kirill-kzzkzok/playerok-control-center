@@ -396,11 +396,18 @@ class GiftService:
             return 0
         count = 0
         with self.store.transaction() as db:
+            cursor_key = "gifts:discovery_cursor:" + str(self.api.account.id)
+            cursor = self.store.setting(cursor_key, "")
             rows = db.execute(
                 "SELECT o.*,l.gift_code,l.gift_id,l.revision,l.armed_at,l.owner_id FROM orders o "
                 "JOIN gift_listings l ON o.item_id=l.item_id WHERE o.status='PAID' AND l.enabled=1 "
-                "AND NOT EXISTS(SELECT 1 FROM gift_jobs j WHERE j.order_id=o.id) LIMIT 50"
+                "AND NOT EXISTS(SELECT 1 FROM gift_jobs j WHERE j.order_id=o.id) "
+                "AND o.id>? ORDER BY o.id LIMIT 50",
+                (cursor,),
             ).fetchall()
+            # Ineligible historical rows must not pin the first page forever.
+            # Persist with enqueue, so crashes replay safely through job uniqueness.
+            self.store.set_setting(cursor_key, rows[-1]["id"] if rows else "")
             for row in rows:
                 payload = json.loads(row["payload"])
                 created, armed = server_time(payload.get("created_at")), server_time(row["armed_at"])
