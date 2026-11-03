@@ -281,9 +281,10 @@ class LogicalProducts:
             "text": "fixed_text",
             "stock": "unique_stock",
             "playerok": "manual",
+            "manual": "manual",
         }.get(value.get("delivery"))
         if not handler:
-            raise Conflict("Выберите автоматический способ выдачи")
+            raise Conflict("Выберите способ выдачи")
         if marker(value["name"]):
             raise Conflict("Новый товар не может присвоить существующий постоянный код")
         gifts = self.gift_service() if handler == "telegram_gifts" else None

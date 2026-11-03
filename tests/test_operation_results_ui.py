@@ -43,6 +43,9 @@ async def rig(tmp_path):
 async def test_real_handlers_queue_then_notify_owner_confirmed_result_once(rig, kind):
     store, api, session, bot, ui, state = rig
     if kind == "create":
+        from app.services.account_binding import bind_account
+
+        bind_account(store, api.account.id)
         draft = store.draft(
             7,
             {

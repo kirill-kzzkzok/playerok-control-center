@@ -425,7 +425,7 @@ class Products:
         logical = LogicalProducts(self.store, self.api)
         creation = (
             await logical.prepare_creation(owner, draft["payload"])
-            if draft["payload"].get("managed_delivery")
+            if draft["payload"].get("managed_delivery") or draft["payload"].get("delivery") == "manual"
             else None
         )
         with self.store.transaction() as db:
