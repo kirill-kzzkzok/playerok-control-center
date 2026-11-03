@@ -23,7 +23,7 @@
 | D1 | ОБЪЕДИНИТЬ СОЗДАНИЕ И НАСТРОЙКУ TELEGRAM GIFTS | — | Проверка ещё не выполнена |
 | D2 | ДОБАВИТЬ «ВЫДАЁТ PLAYEROK» В ЕДИНЫЙ МАСТЕР | — | Проверка ещё не выполнена |
 | D3 | ОДИН ПРОЦЕСС ПОДГОТОВКИ И ЗАПУСКА | — | Проверка ещё не выполнена |
-| D4 | ИЗМЕНЕНИЕ БЛАГОДАРНОСТИ БЕЗ ОСТАНОВКИ ПРОДАЖ | — | Проверка ещё не выполнена |
+| D4 | ИЗМЕНЕНИЕ БЛАГОДАРНОСТИ БЕЗ ОСТАНОВКИ ПРОДАЖ | CONFIRMED | Future after implemented for managed text/stock/Gifts, RED3→9passed; immutable registered orders, real worker sends, unknown Stars/stock restart no repeat.119passed surrounding profile. Playerok reply and greeting routes still pending |
 | D5 | ПРАВИЛЬНЫЕ КНОПКИ ИСПРАВЛЕНИЯ ПРОБЛЕМ | — | Проверка ещё не выполнена |
 | D6 | УБРАТЬ ЛОЖНОЕ ПРЕДУПРЕЖДЕНИЕ О ПОДКЛЮЧЕНИИ ЧЕРЕЗ ПЯТЬ МИНУТ | — | Проверка ещё не выполнена |
 | D7 | ПРАВИЛЬНАЯ ДЛИНА НАЗВАНИЯ С УЧЁТОМ [XXX] | — | Проверка ещё не выполнена |

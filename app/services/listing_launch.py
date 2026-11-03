@@ -498,6 +498,7 @@ class ListingLaunch:
             "revision": revision,
             "control_revision": product["control_revision"],
             "inherit": bool(value.get("inherit", False)),
+            "source_config": encode(config),
         }
         if handler != "manual":
             cutoff = (
@@ -517,7 +518,7 @@ class ListingLaunch:
             "gift": self.store.rows("SELECT revision,enabled FROM gift_listings WHERE item_id=?", (item,)),
             "enabled": self.store.setting(f"delivery:{item}:enabled"),
             "logical": self.store.rows(
-                "SELECT p.id,p.revision,p.control_revision,p.enabled,p.state FROM logical_products p JOIN logical_listings l ON l.product_id=p.id WHERE l.item_id=?",
+                "SELECT p.id,p.revision,p.control_revision,p.enabled,p.state,p.config FROM logical_products p JOIN logical_listings l ON l.product_id=p.id WHERE l.item_id=?",
                 (item,),
             ),
         }

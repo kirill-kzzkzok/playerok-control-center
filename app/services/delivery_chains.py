@@ -1,5 +1,5 @@
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 from app.database.store import Conflict, encode, now
 from app.services.automation import Automation, future_order
@@ -41,6 +41,14 @@ class DeliveryChains:
             LogicalProducts(self.store, self.api).pin_order(
                 db, ident, item_id, "unique_stock" if policy.mode == "stock" else "fixed_text"
             )
+            scope = db.execute(
+                "SELECT config FROM logical_order_scopes WHERE order_id=?", (ident,)
+            ).fetchone()
+            if scope:
+                messages = json.loads(scope["config"])
+                policy = replace(
+                    policy, greeting=messages.get("greeting", ""), after=messages.get("after", "")
+                )
             inventory_item = stock_scope(self.store, item_id, ident)
             if (
                 db.execute("SELECT 1 FROM gift_jobs WHERE order_id=?", (ident,)).fetchone()
@@ -161,7 +169,11 @@ class DeliveryChains:
                 or not binding["enabled"]
             ):
                 return False
-        return revision == chain["policy_revision"] or bool(authority and asdict(policy) == saved)
+        from app.services.logical_products import without_messages
+
+        return revision == chain["policy_revision"] or bool(
+            authority and without_messages(asdict(policy)) == without_messages(saved)
+        )
 
     def freeze_stock_resume(self, db, item_id, revision, policy):
         """Upgrade an old snapshot before an admission-only revision change.

@@ -202,15 +202,15 @@ class LogicalProductsPanel:
                 )
             if not product or product["handler"] == "manual":
                 return await self.callback(prefix + "configure", owner, state)
+            if parts[1] == "messages":
+                return await self.callback(prefix + "editafter", owner, state)
             if product["enabled"]:
                 return (
-                    "Для изменения сообщений или завершения остановите новые выдачи. Уже начатые операции не повторяются. Затем откройте этот пункт снова.",
+                    "Для изменения автоматической отметки выполнения остановите новые выдачи. Уже начатые операции не повторяются. Затем откройте этот пункт снова.",
                     keyboard(
                         [[("⛔ Остановить выдачу", prefix + "stop")]], back=("⬅️ К товару", "item:" + parts[2])
                     ),
                 )
-            if parts[1] == "messages":
-                return await self.callback(prefix + "editafter", owner, state)
             await state.update_data(
                 logical_setup={"handler": product["handler"], "config": json.loads(product["config"])}
             )
@@ -259,15 +259,19 @@ class LogicalProductsPanel:
                 rows, back=("К товару", "lp:item:" + view["item"])
             )
         if command == "editafter":
-            if not product or product["enabled"] or product["handler"] == "manual":
-                raise Conflict("Сначала остановите выдачу товара и выберите автоматический способ")
-            config = json.loads(product["config"])
-            if product["handler"] == "telegram_gifts":
-                config.setdefault("after", config.get("options", {}).get("after", ""))
-            await state.update_data(logical_setup={"handler": product["handler"], "config": config})
-            await state.set_state("logical:after")
+            if not product or product["handler"] == "manual":
+                raise Conflict("Сначала подтвердите автоматический способ выдачи")
+            await state.update_data(
+                logical_message_edit={key: product[key] for key in ("revision", "control_revision", "config")}
+            )
+            await state.set_state("logical:notice")
             return (
-                "Введите сообщение после подтверждённой выдачи. Чтобы убрать его, отправьте один дефис: —",
+                "Введите сообщение после подтверждённой выдачи для будущих покупок. Уже зарегистрированные заказы сохранят свой текст. "
+                + (
+                    "Чтобы вернуть стандартное уведомление, отправьте один дефис: —"
+                    if product["handler"] == "telegram_gifts"
+                    else "Чтобы убрать сообщение, отправьте один дефис: —"
+                ),
                 keyboard([], back=("Отмена", "lp:item:" + view["item"])),
             )
         if command == "mode":
@@ -661,6 +665,22 @@ class LogicalProductsPanel:
     async def message(self, message, state):
         current = await state.get_state()
         data = await state.get_data()
+        if current == "logical:notice":
+            view = data.get("logical_view", {})
+            await self.view(message.from_user.id, state, view.get("nonce"))
+            value = message.text
+            if not isinstance(value, str):
+                raise Conflict("Отправьте сообщение текстом")
+            self.service.update_after(
+                message.from_user.id,
+                view["item"],
+                data.get("logical_message_edit", {}),
+                "" if value.strip() in {"-", "—"} else value,
+            )
+            await state.set_state(None)
+            await state.update_data(logical_message_edit=None)
+            text, markup = await self.card(message.from_user.id, view["item"], state)
+            return "✅ Сообщение для будущих покупок сохранено.\n\n" + text, markup
         view, setup = data.get("logical_view"), data.get("logical_setup")
         if (
             not view

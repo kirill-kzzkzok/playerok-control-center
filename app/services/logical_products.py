@@ -62,9 +62,84 @@ def configuration(handler, config, *, max_count=5):
     return result
 
 
+def without_messages(config):
+    """Only these two top-level texts may vary without new delivery authority."""
+    value = json.loads(config) if isinstance(config, str) else config
+    return {key: selected for key, selected in value.items() if key not in {"greeting", "after"}}
+
+
 class LogicalProducts:
     def __init__(self, store, api=None):
         self.store, self.api = store, api
+
+    def update_after(self, owner, item_id, expected, text):
+        """Local future-message edit; never arm, send, or rewrite an order snapshot."""
+        from app.services.delivery_chains import DeliveryChains
+
+        text = message_text(text)
+        with self.store.transaction() as db:
+            product = self.listing(item_id)
+            if not product:
+                raise Conflict("Сначала подтвердите привязку товара")
+            self.authority(owner, product["account_id"])
+            if product["owner_id"] != owner or any(
+                product[key] != expected.get(key) for key in ("revision", "control_revision", "config")
+            ):
+                raise Conflict("Настройки или остановка изменились во время ввода. Откройте сообщение заново")
+            config = json.loads(product["config"])
+            if (
+                product["state"] != "VERIFIED"
+                or not product["verified_at"]
+                or product["handler"] == "manual"
+                or config.get("platform_only")
+            ):
+                raise Conflict("Сообщение доступно после подтверждения автоматического способа выдачи")
+            aliases = db.execute(
+                "SELECT item_id FROM logical_listings WHERE product_id=? AND config_revision=? AND verified_at IS NOT NULL",
+                (product["id"], product["revision"]),
+            ).fetchall()
+            for alias in aliases:
+                target = alias["item_id"]
+                if db.execute(
+                    "SELECT 1 FROM outbox WHERE target=? AND kind IN ('edit','edit_fields','delete','publish','premium_publish') "
+                    "AND status IN ('PENDING','PROCESSING','RETRYABLE_FAILED','UNCERTAIN') LIMIT 1",
+                    (target,),
+                ).fetchone():
+                    raise Conflict("Изменение или публикация товара не завершены. Сначала сверьте операцию")
+                if product["enabled"]:
+                    for order in db.execute(
+                        "SELECT id,payload FROM orders WHERE item_id=? AND status='PAID' "
+                        "AND NOT EXISTS(SELECT 1 FROM logical_order_scopes s WHERE s.order_id=orders.id)",
+                        (target,),
+                    ).fetchall():
+                        if future_order(json.loads(order["payload"]).get("created_at"), product["armed_at"]):
+                            self.pin_order(db, order["id"], target, product["handler"])
+                revision, policy = Automation(self.store, self.api).get(target)
+                if policy.mode in {"text", "stock"}:
+                    DeliveryChains(self.store, self.api).freeze_stock_resume(db, target, revision, policy)
+                    updated = asdict(policy)
+                    updated["after"] = text
+                    db.execute(
+                        "UPDATE delivery_policies SET payload=?,revision=revision+1 WHERE item_id=? AND revision=?",
+                        (encode(updated), target, revision),
+                    )
+                if product["handler"] == "telegram_gifts":
+                    self.store.set_setting(
+                        "gifts:listing_options:" + target,
+                        {
+                            **self.store.setting("gifts:listing_options:" + target, {}),
+                            "after": text,
+                        },
+                    )
+            config["after"] = text
+            db.execute(
+                "UPDATE logical_products SET config=?,updated_at=? WHERE id=?",
+                (encode(config), now(), product["id"]),
+            )
+            db.execute(
+                "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'UPDATE_FUTURE_MESSAGE',?,?,?)",
+                (owner, product["id"], digest(text), now()),
+            )
 
     def authority(self, owner, account=None, *, writes=False):
         if not self.store.rows("SELECT 1 FROM administrators WHERE user_id=?", (owner,)):
@@ -389,6 +464,7 @@ class LogicalProducts:
             "product_id": existing["id"] if existing else None,
             "revision": existing["revision"] if existing else 0,
             "control_revision": existing["control_revision"] if existing else 0,
+            "source_config": existing["config"] if existing else None,
             "code": code,
             **({"platform_binding": True} if platform_binding else {}),
         }
@@ -415,6 +491,7 @@ class LogicalProducts:
                     or current_link["id"] != prepared["product_id"]
                     or current_link["revision"] != prepared["revision"]
                     or current_link["control_revision"] != prepared["control_revision"]
+                    or current_link["config"] != prepared.get("source_config")
                 )
             ):
                 raise Conflict("Привязка изменилась после превью. Откройте актуальную настройку")
@@ -687,6 +764,7 @@ class LogicalProducts:
             "control_revision": product["control_revision"],
             "inherit": bool(inherit),
             "expected_enabled": product["enabled"],
+            "source_config": product["config"],
         }
         if product["handler"] == "telegram_gifts":
             gifts = self.gift_service()
@@ -750,6 +828,7 @@ class LogicalProducts:
             or product["control_revision"] != context["control_revision"]
             or product["enabled"] != context.get("expected_enabled", 0)
             or product["state"] != "VERIFIED"
+            or product["config"] != context.get("source_config")
             or not link
             or link["id"] != product["id"]
             or not link["verified_at"]
@@ -804,7 +883,7 @@ class LogicalProducts:
         product = self.product(product_id, owner)
         if expected_product and any(
             product[key] != expected_product[key]
-            for key in ("revision", "control_revision", "state", "enabled", "inherit_enabled")
+            for key in ("revision", "control_revision", "state", "enabled", "inherit_enabled", "config")
         ):
             raise Conflict("Управление товаром изменилось во время сверки; старый результат отклонён")
         self.authority(owner, product["account_id"], writes=True)
@@ -896,6 +975,7 @@ class LogicalProducts:
                 or current["revision"] != product["revision"]
                 or current["control_revision"] != product["control_revision"]
                 or current["armed_at"] != product["armed_at"]
+                or current["config"] != product["config"]
                 or not current["inherit_enabled"]
             ):
                 raise Conflict("Наследование остановлено во время проверки")
@@ -1065,7 +1145,7 @@ class LogicalProducts:
                 scope["product_id"] != binding["id"]
                 or scope["config_revision"] != binding["revision"]
                 or scope["item_id"] != item_id
-                or scope["config"] != binding["config"]
+                or without_messages(scope["config"]) != without_messages(binding["config"])
                 for scope in scopes
             ):
                 raise Conflict("Конфигурация заказа не совпадает с подтверждённой привязкой")
