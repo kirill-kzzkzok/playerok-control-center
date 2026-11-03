@@ -36,7 +36,7 @@ class DeliveryChains:
         item_id = order["item"]["id"]
         from app.services.logical_products import LogicalProducts, stock_scope
 
-        await LogicalProducts(self.store, self.api).fresh_delivery_item(item_id)
+        await LogicalProducts(self.store, self.api).fresh_delivery_item(item_id, ident)
         with self.store.transaction() as db:
             LogicalProducts(self.store, self.api).pin_order(
                 db, ident, item_id, "unique_stock" if policy.mode == "stock" else "fixed_text"
@@ -323,7 +323,7 @@ class DeliveryChains:
             return chat_id
         from app.services.logical_products import LogicalProducts
 
-        await LogicalProducts(self.store, self.api).fresh_delivery_item(step["item_id"])
+        await LogicalProducts(self.store, self.api).fresh_delivery_item(step["item_id"], action["target"])
         ident = action["target"]
         order = await deal_details(self.api, ident)
         deliverable(order, ident, self.api.account.id)

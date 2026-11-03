@@ -818,7 +818,7 @@ class LogicalProducts:
         if source_order_id and (
             not paid_order
             or paid_order.get("id") != source_order_id
-            or product["handler"] != "telegram_gifts"
+            or product["handler"] not in {"telegram_gifts", "fixed_text", "unique_stock"}
             and not json.loads(product["config"]).get("platform_only")
         ):
             raise Conflict("Снимок сделки не разрешает этот способ выдачи")
@@ -1060,11 +1060,22 @@ class LogicalProducts:
                 raise Conflict("Конфигурация заказа не совпадает с подтверждённой привязкой")
         return binding
 
-    async def fresh_delivery_item(self, item_id):
+    async def fresh_delivery_item(self, item_id, order_id=None):
         product = self.listing(item_id)
         if not product or product["state"] == "LEGACY":
             return
-        item = await self.api.call("get_item", id=item_id)
+        if product["source_order_id"]:
+            if order_id != product["source_order_id"]:
+                raise Conflict("Снимок объявления разрешён только для исходной оплаченной сделки")
+            from app.services.order_management import deal_details, deliverable
+            from app.services.orders import Orders
+
+            order = await deal_details(self.api, order_id, full_item=True, force_full=True)
+            deliverable(order, order_id, product["account_id"])
+            item = order.get("item") or {}
+            Orders(self.store).ingest(order)
+        else:
+            item = await self.api.call("get_item", id=item_id)
         if (
             item.get("id") != item_id
             or item.get("deleted_at")

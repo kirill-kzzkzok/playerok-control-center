@@ -784,7 +784,9 @@ class Executor:
 
             local_item = self.store.rows("SELECT item_id FROM orders WHERE id=?", (target,))
             if local_item:
-                await LogicalProducts(self.store, self.api).fresh_delivery_item(local_item[0]["item_id"])
+                await LogicalProducts(self.store, self.api).fresh_delivery_item(
+                    local_item[0]["item_id"], target
+                )
 
             from app.services.order_management import deal_details
 

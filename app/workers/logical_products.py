@@ -10,7 +10,7 @@ from app.playerok.adapter import APIError
 from app.security.logging import event
 from app.services.automation import future_order
 from app.services.logical_products import LogicalProducts, critical, marker
-from app.services.order_management import deal_details, deliverable
+from app.services.order_management import compatible_detail, deal_details, deliverable
 from app.services.orders import Orders
 from app.workers.pagination import PageScanner
 from playerokapi.enums import ItemStatuses
@@ -146,7 +146,9 @@ class LogicalProductWorker:
                         raise
                     # Playerok deal.item can be a purchased snapshot whose ID
                     # is not a public item route. Read its full, exact deal.
-                    deal = await self.api.call("get_delivery_deal", deal_id=row["id"])
+                    detailed = await self.api.call("get_delivery_deal", deal_id=row["id"])
+                    compatible_detail(deal, detailed)
+                    deal = detailed
                     validate_candidate_order(deal, row["id"])
                     observed = deal.get("item") or {}
                     if observed.get("id") != row["item_id"]:
@@ -222,6 +224,7 @@ class LogicalProductWorker:
                     if source_order:
                         current_deal = await self.api.call("get_delivery_deal", deal_id=source_order)
                         validate_candidate_order(current_deal, source_order)
+                        compatible_detail(paid_items[item["id"]], current_deal)
                         fresh = current_deal.get("item") or {}
                         Orders(self.store).ingest(current_deal)
                         paid_items[item["id"]] = current_deal
@@ -250,7 +253,7 @@ class LogicalProductWorker:
                     continue
                 adopted += int(self.service.listing(item["id"]) is not None)
                 if source_order:
-                    event("ORDER", "Привязка сделки подтверждена: Telegram-подарки", order=source_order)
+                    event("ORDER", "Привязка оплаченной сделки подтверждена", order=source_order)
         self.store.set_setting(
             key + ":completed", {"at": now(), "generation": generation, "adopted": adopted}
         )

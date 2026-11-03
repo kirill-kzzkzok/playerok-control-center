@@ -96,6 +96,7 @@ async def deal_details(
     obtaining_field_id=None,
     need_created=False,
     need_role=False,
+    force_full=False,
 ):
     """Persisted/list deals may omit chat and item fields; omissions are not refusals.
 
@@ -110,7 +111,8 @@ async def deal_details(
         isinstance(f, dict) and f.get("id") == obtaining_field_id and f.get("value") for f in fields
     )
     if (
-        need_chat
+        force_full
+        or need_chat
         and not (order.get("chat") or {}).get("id")
         or full_item
         and (
