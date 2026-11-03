@@ -260,7 +260,7 @@ async def test_shared_outbox_success_receipt_notice_and_automatic_completion(rig
         ("form_price", "PAYMENT_FORM_MISMATCH"),
         ("channel", "RECIPIENT_NOT_USER"),
         ("changed", "RECIPIENT_CHANGED"),
-        ("temporary", "GIFT_CHECK_FAILED"),
+        ("temporary", "GIFT_PREFLIGHT_NETWORK"),
         ("format", "GIFT_VALIDATION_FAILED"),
         ("missing", "GIFT_VALIDATION_FAILED"),
         ("restricted", "GIFT_RESTRICTED"),
@@ -313,7 +313,12 @@ async def test_preflight_failures_never_spend_or_refund(rig, fault, expected):
         r.api.gift_sender.client = ChannelClient()
     await r.worker.once()
     j = r.service.job("order")
-    assert j["state"] == "BLOCKED" and j["error_code"] == expected
+    assert j["state"] == ("PENDING" if fault == "temporary" else "BLOCKED")
+    assert j["error_code"] == expected
+    if fault == "temporary":
+        assert r.store.rows("SELECT status FROM outbox WHERE kind='gift_send'") == [
+            {"status": "RETRYABLE_FAILED"}
+        ]
     assert not r.remote.payments and not r.api.refunds and j["refund_state"] == "NONE"
 
 
@@ -372,7 +377,7 @@ async def test_expired_lease_restart_has_no_replay(rig, stage):
         r.store.execute("UPDATE gift_jobs SET state='SPENDING',spent_at=?,stars=15,form_id='1'", (now(),))
     r.store.execute("UPDATE outbox SET lease_until=0 WHERE id=?", (action["id"],))
     assert r.store.recover() == 1
-    assert r.service.job("order")["state"] == ("BLOCKED" if stage == "checking" else "UNCERTAIN")
+    assert r.service.job("order")["state"] == ("PENDING" if stage == "checking" else "UNCERTAIN")
     assert await r.worker.once() is False and not r.remote.payments
 
 
@@ -849,7 +854,9 @@ async def test_transient_mtproto_failures_never_become_invalid_username(rig, err
     await enroll(r)
     r.remote.resolve_error = error
     await r.worker.once()
-    assert r.service.job("order")["state"] == "BLOCKED"
+    assert r.service.job("order")["state"] == (
+        "PENDING" if isinstance(error, (ConnectionError, errors.FloodWaitError)) else "BLOCKED"
+    )
     assert r.service.job("order")["refund_state"] == "NONE"
     assert not r.remote.payments and not r.api.refunds
 

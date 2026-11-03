@@ -218,6 +218,8 @@ class Executor:
 
             return await PaidPromotions(self.store, self.api).execute(self, action)
         if kind == "gift_send":
+            from telethon import errors as mtproto_errors
+
             from app.gifts.core import GiftValidationError
             from app.gifts.mtproto import GiftFailure
 
@@ -228,6 +230,19 @@ class Executor:
             except (GiftFailure, GiftValidationError, ValidationError, Conflict) as exc:
                 spending = service.job(target)["state"] in {"SPENDING", "UNCERTAIN"}
                 raise APIError(getattr(exc, "code", "GIFT_VALIDATION_FAILED"), uncertain=spending) from None
+            except APIError as error:
+                spending = service.job(target)["state"] in {"SPENDING", "UNCERTAIN"}
+                raise APIError(error.code, uncertain=spending or error.uncertain) from None
+            except mtproto_errors.FloodWaitError as error:
+                spending = service.job(target)["state"] in {"SPENDING", "UNCERTAIN"}
+                raise APIError(
+                    "GIFT_PREFLIGHT_NETWORK", uncertain=spending, retry_after=error.seconds
+                ) from None
+            except (TimeoutError, OSError):
+                spending = service.job(target)["state"] in {"SPENDING", "UNCERTAIN"}
+                raise APIError(
+                    "GIFT_PAYMENT_UNKNOWN" if spending else "GIFT_PREFLIGHT_NETWORK", uncertain=spending
+                ) from None
             except Exception as error:  # noqa: BLE001 -- protect RPC details and preserve paid uncertainty
                 spending = service.job(target)["state"] in {"SPENDING", "UNCERTAIN"}
                 event(
@@ -804,9 +819,9 @@ class OutboxWorker:
     def __init__(self, store, executor):
         self.store, self.executor = store, executor
 
-    def finish(self, ident, token, status, result=None, error=None):
+    def finish(self, ident, token, status, result=None, error=None, retry_after=None):
         try:
-            self.store.finish(ident, token, status, result=result, error=error)
+            self.store.finish(ident, token, status, result=result, error=error, retry_after=retry_after)
         except Conflict:
             self.store.record_late_result(ident, token, status, result=result, error=error)
 
@@ -834,11 +849,21 @@ class OutboxWorker:
             # request was never sent: PERMANENT_FAILED, not an uncertain external outcome.
             self.finish(action["id"], action["lease_token"], "PERMANENT_FAILED", error="VALIDATION_FAILED")
         except APIError as error:
+            gift_retry = False
+            if action["kind"] == "gift_send":
+                from app.gifts.outcomes import unstarted_preflight
+
+                with self.store.transaction() as db:
+                    gift_retry = unstarted_preflight(db, action)
             self.finish(
                 action["id"],
                 action["lease_token"],
                 "RETRYABLE_FAILED"
-                if action["kind"] in {"delivery", "delivery_text", "chain_message", "reply", "mark_read"}
+                if (
+                    action["kind"] in {"delivery", "delivery_text", "chain_message", "reply", "mark_read"}
+                    or gift_retry
+                    and action["attempts"] + 1 < 4
+                )
                 and not error.uncertain
                 and error.code
                 in {
@@ -852,12 +877,14 @@ class OutboxWorker:
                     "CONNECTION_NOT_VERIFIED",
                     "SESSION_EXPIRED",
                     "UNAUTHORIZED_OR_CHALLENGE",
+                    "GIFT_PREFLIGHT_NETWORK",
                 }
                 and action["attempts"] < 4
                 else "UNCERTAIN"
                 if error.uncertain
                 else "PERMANENT_FAILED",
                 error=error.code,
+                retry_after=error.retry_after,
             )
         except asyncio.CancelledError:
             self.finish(action["id"], action["lease_token"], "UNCERTAIN", error="PROCESS_CANCELLED")

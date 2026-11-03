@@ -684,6 +684,9 @@ class GiftService:
                 raise GiftFailure("BALANCE_TOO_LOW")
             if db.execute("SELECT 1 FROM gift_steps WHERE form_id=?", (str(prepared.form_id),)).fetchone():
                 raise GiftFailure("PAYMENT_FORM_ALREADY_USED")
+            # One atomic fence before paid intent; an expired free-check lease
+            # can never wake up and dispatch after recovery claimed its retry.
+            self.store.mark_started(action)
             db.execute(
                 "UPDATE gift_jobs SET reserved_day=?,reserved_stars=?,state='SPENDING',spent_at=COALESCE(spent_at,?),form_id=?,updated_at=? WHERE order_id=?",
                 (day, remaining - prepared.stars, now(), str(prepared.form_id), now(), j["order_id"]),

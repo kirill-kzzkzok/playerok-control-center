@@ -421,7 +421,7 @@ class Store:
             if changed != 1:
                 raise Conflict("Операция остановлена до отправки")
 
-    def finish(self, ident, token, status, result=None, error=None):
+    def finish(self, ident, token, status, result=None, error=None, retry_after=None):
         if status not in {"SUCCEEDED", "RETRYABLE_FAILED", "UNCERTAIN", "PERMANENT_FAILED"}:
             raise ValueError("Недопустимый результат операции")
         with self.transaction() as db:
@@ -446,10 +446,18 @@ class Store:
                 status = "PERMANENT_FAILED"  # Proven no POST; hold reserve for explicit owner recovery.
             if status == "RETRYABLE_FAILED" and evidence["started_at"] is not None:
                 status = "UNCERTAIN"
+            if status == "RETRYABLE_FAILED" and evidence["kind"] == "gift_send":
+                from app.gifts.outcomes import unstarted_preflight
+
+                if not unstarted_preflight(db, {"id": ident}):
+                    status = "UNCERTAIN"
             if status == "RETRYABLE_FAILED":
+                delay = min(300, 5 * 2 ** min(evidence["attempts"], 5))
+                if str(retry_after or "").isdigit():
+                    delay = max(delay, int(retry_after))
                 db.execute(
                     "UPDATE outbox SET retry_at=? WHERE id=?",
-                    (time.time() + min(300, 5 * 2 ** min(evidence["attempts"], 5)), ident),
+                    (time.time() + delay, ident),
                 )
             r = db.execute(
                 "UPDATE outbox SET status=?,result=?,error_code=?,lease_until=NULL WHERE id=? AND lease_token=? AND status='PROCESSING'",
@@ -563,6 +571,17 @@ class Store:
                 (time.time(),),
             )
             for row in affected:
+                if row["kind"] == "gift_send" and row["attempts"] < 4:
+                    from app.gifts.outcomes import finish, unstarted_preflight
+
+                    if unstarted_preflight(db, row):
+                        db.execute(
+                            "UPDATE outbox SET status='RETRYABLE_FAILED',error_code='PREFLIGHT_INTERRUPTED',"
+                            "retry_at=?,lease_token=NULL,lease_until=NULL WHERE id=?",
+                            (time.time() + 30, row["id"]),
+                        )
+                        finish(db, row, "RETRYABLE_FAILED", None, "PREFLIGHT_INTERRUPTED", self)
+                        continue
                 if row["started_at"] is None and row["kind"] in {
                     "delivery",
                     "delivery_text",

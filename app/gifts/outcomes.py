@@ -3,6 +3,23 @@
 from app.database.store import encode, now
 
 
+def unstarted_preflight(db, action):
+    """Positive journal proof, never absence of a response after payment."""
+    return bool(
+        db.execute(
+            "SELECT 1 FROM outbox o JOIN gift_jobs j ON j.operation_id=o.id "
+            "JOIN gift_steps s ON s.operation_id=o.id WHERE o.id=? "
+            "AND o.started_at IS NULL AND j.state IN ('PENDING','CHECKING') "
+            "AND s.state IN ('PENDING','CHECKING') AND j.spent_at IS NULL "
+            "AND s.spent_at IS NULL AND s.form_id IS NULL AND s.receipt IS NULL "
+            "AND s.message_id IS NULL AND s.ack_message_id IS NULL "
+            "AND NOT EXISTS(SELECT 1 FROM gift_steps p WHERE p.order_id=j.order_id "
+            "AND (p.spent_at IS NOT NULL OR p.state IN ('SPENDING','UNCERTAIN','SUCCEEDED')))",
+            (action["id"],),
+        ).fetchone()
+    )
+
+
 def finish(db, action, status, result, error, store=None):
     job = db.execute("SELECT * FROM gift_jobs WHERE order_id=?", (action["target"],)).fetchone()
     if not job:
@@ -10,6 +27,16 @@ def finish(db, action, status, result, error, store=None):
     if action["kind"] == "gift_send":
         step = db.execute("SELECT * FROM gift_steps WHERE operation_id=?", (action["id"],)).fetchone()
         if step:
+            if status == "RETRYABLE_FAILED" and unstarted_preflight(db, action):
+                db.execute(
+                    "UPDATE gift_steps SET state='PENDING',error_code=? WHERE operation_id=?",
+                    (error, action["id"]),
+                )
+                db.execute(
+                    "UPDATE gift_jobs SET state='PENDING',error_code=?,updated_at=? WHERE order_id=?",
+                    (error, now(), job["order_id"]),
+                )
+                return
             if status == "SUCCEEDED" and step["state"] == "SPENDING":
                 receipt = (result or {}).get("gift_receipt")
                 if not receipt or not receipt.get("message_id"):
