@@ -92,9 +92,51 @@ class ItemPanel:
             keyboard([], back=("⬅️ К товару", "item:" + ident)),
         )
 
+    def history(self, ident, owner):
+        from app.telegram.presentation import item_label, local_time, status
+
+        logical = LogicalProducts(self.store, self.api)
+        logical.authority(owner)
+        product = logical.listing(ident)
+        if product and product["owner_id"] != owner:
+            raise ValidationError("История принадлежит другому владельцу")
+        ids = (
+            [
+                r["item_id"]
+                for r in self.store.rows(
+                    "SELECT item_id FROM logical_listings WHERE product_id=?", (product["id"],)
+                )
+            ]
+            if product
+            else [ident]
+        )
+        marks = ",".join("?" for _ in ids)
+        orders = self.store.rows(
+            f"SELECT id,status,created_at FROM orders WHERE item_id IN ({marks}) ORDER BY created_at DESC LIMIT 5",
+            ids,
+        )
+        rows = [
+            [(local_time(o["created_at"]) + " · " + status(o["status"], "order"), "order:" + o["id"])]
+            for o in orders
+        ]
+        operations = self.store.rows(
+            f"SELECT b.id,b.status FROM outbox b LEFT JOIN orders o ON o.id=b.target WHERE o.item_id IN ({marks}) OR b.target IN ({marks}) ORDER BY b.created_at DESC LIMIT 5",
+            ids + ids,
+        )
+        rows += [[("Операция: " + status(o["status"]), "ops:show:" + o["id"])] for o in operations]
+        text = "📋 <b>Локальная история товара</b>\n" + escaped(item_label(self.store, ident), 200)
+        if product:
+            text += "\nКод товара: " + escaped(product["code"], 20)
+        text += "\nПоследние заказы и операции. Текущее состояние объявления здесь не проверяется."
+        if not orders and not operations:
+            text += "\nИстория этого товара пока пуста."
+        return text, keyboard(rows, back=("⬅️ К товарам", "items"))
+
     async def screen(self, ident, section, state, owner, gifts, stock):
         from app.telegram.presentation import status
 
+        if section == "history":
+            return self.history(ident, owner)
         item, details, photos = await self.card(ident, state)
         if isinstance(item.get("name"), str):
             self.store.set_setting("ui:item:" + ident + ":name", item["name"][:200])
@@ -186,7 +228,7 @@ class ItemPanel:
                 [("Фотографии", "editphoto:" + ident)],
                 [("Характеристики и данные", "editfields:" + ident)],
             ] + photos
-        elif section in {"delivery", "messages", "completion", "history"}:
+        elif section in {"delivery", "messages", "completion"}:
             from app.services.product_readiness import ProductReadiness
             from app.telegram.product_presentation import summary
 
@@ -225,36 +267,6 @@ class ItemPanel:
                 ]
                 if section == "messages":
                     rows.append([("Ответы на фразы покупателей — отдельно", "ar:menu")])
-            else:
-                ids = (
-                    [ident]
-                    if not product
-                    else [
-                        r["item_id"]
-                        for r in self.store.rows(
-                            "SELECT item_id FROM logical_listings WHERE product_id=?", (product["id"],)
-                        )
-                    ]
-                )
-                marks = ",".join("?" for _ in ids)
-                from app.telegram.presentation import local_time
-
-                orders = self.store.rows(
-                    f"SELECT id,status,created_at FROM orders WHERE item_id IN ({marks}) ORDER BY created_at DESC LIMIT 5",
-                    ids,
-                )
-                rows = [
-                    [(local_time(o["created_at"]) + " · " + status(o["status"], "order"), "order:" + o["id"])]
-                    for o in orders
-                ]
-                operations = self.store.rows(
-                    f"SELECT b.id,b.kind,b.status FROM outbox b LEFT JOIN orders o ON o.id=b.target WHERE o.item_id IN ({marks}) OR b.target IN ({marks}) ORDER BY b.created_at DESC LIMIT 5",
-                    ids + ids,
-                )
-                rows += [[("Операция: " + status(o["status"]), "ops:show:" + o["id"])] for o in operations]
-                if not orders and not operations:
-                    text += "\nИстория этого товара пока пуста."
-                rows.append([("Подробности объявления", "iv:details:" + ident)])
         elif section == "other":
             text = title + "\nДругие действия"
             rows = [

@@ -3120,3 +3120,12 @@ D5 contract: diagnostic actions must address actual scope. WRITES_OFF explains l
 
 D5 GREEN: RED3failed ->62passed/29.44s/exit0 diagnostics+readiness+UX+logicalservices; extended actual limit STOP->reopen->per-item order/day controls and emergency settings17passed/16.95s/exit0 with logicalpanel/navigation. Tests assert no external mutation by permission help, no Stars/message by recovery. Playerok mismatch opens PlatformPanel with item preserved, localStars limits do not open global editor. WRITES_OFF distinct from desired_writes=True auth gating, help has no toggle and explains restart. Stale code-in-description instruction corrected. Ruff foundISC004 in new permission text; explicit grouping corrected, no check disabled. No runtime financial changes/live.
 
+
+D11 contract: iv:history:<item> is local historical evidence, not a fresh listing read. Validate owner/database account binding and logical owner; enumerate original+known aliases orders/Outbox without public get_item. Always label local history, no current status/readiness claims. Navigation offers orders/ops and list; editing/arm still require fresh server. RED actual Dispatcher after persisted order+logical binding then public404; no API call and no mutation allowed.
+
+
+D10 contract: SOLD is historical status, not publication authority. Show native relist action only with fresh may_be_published=True and validated price basis; explicitFalse explains server refusal, missing evidence offers a fresh capability check without promising publication. Existing native preview/COMMIT and budget/UNKNOWN guards remain unchanged. RED actual sold card with missing/false permission and missing price, no writes.
+
+
+D11 GREEN: actual UI RED1failed public404 hid persisted receipts ->37passed/32.46s/exit0 (localhistory/itempanel/navigation/readiness). History performs zeroAPIcalls, includes confirmed old order and existing operations across logical aliases, labels local evidence explicitly. Direct current-card action still calls get_item and fails safely on404. Read-only account binding/owner check, no secrets or current-readiness claims; same Outbox/history/reservations unchanged. Ruff exit0. D10 RED test currently separate, not part of this commit runtime.
+
