@@ -1,11 +1,27 @@
 """Safe Telegram failure codes. Never expose exception text or request payloads."""
 
-from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter
+from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramNetworkError,
+    TelegramRetryAfter,
+)
 
 REJECTED_CONTENT = frozenset(
     {"INVALID_MESSAGE_CONTENT", "MESSAGE_TOO_LONG", "ENTITY_PARSE_ERROR", "INVALID_MESSAGE_ID"}
 )
 TERMINAL_EDIT = REJECTED_CONTENT | {"MESSAGE_NOT_FOUND", "MESSAGE_NOT_EDITABLE"}
+
+
+def send_failure(error):
+    """Only a returned Telegram rejection proves that a send did not happen."""
+    if isinstance(error, TelegramRetryAfter):
+        return "PENDING", "RATE_LIMITED", max(1, error.retry_after)
+    if isinstance(error, TelegramForbiddenError):
+        return "REJECTED", "SEND_FORBIDDEN", 0
+    if isinstance(error, TelegramBadRequest):
+        return "REJECTED", "SEND_REJECTED", 0
+    return "UNCERTAIN", telegram_error(error), 0
 
 
 def telegram_error(error):

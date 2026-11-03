@@ -10,7 +10,7 @@ from aiogram.types import InlineKeyboardButton
 
 from app.database.store import Conflict
 from app.gifts.core import gift_name
-from app.telegram.errors import TERMINAL_EDIT, telegram_error
+from app.telegram.errors import TERMINAL_EDIT, send_failure, telegram_error
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 from app.telegram.presentation import status as human_status
@@ -69,6 +69,8 @@ class OperationResults:
         )[0]
         if receipt["notice_status"] == "UNCERTAIN":
             text += "\nУведомление о результате могло прийти без подтверждения Telegram. Здесь показан сохранённый исход; повтор операции не выполняется."
+        elif receipt["notice_status"] == "REJECTED":
+            text += "\nTelegram отклонил уведомление. Результат операции сохранён здесь; сама операция не повторяется."
         buttons = []
         payload = json.loads(row["payload"])
         targets = self.store.rows("SELECT item_id FROM orders WHERE id=?", (row["target"],))
@@ -319,7 +321,8 @@ class OperationResults:
 
     async def notify(self, bot):
         rows = self.store.rows(
-            "SELECT r.operation_id,r.owner_id,r.view_message_id,r.view_token FROM operation_receipts r JOIN outbox o ON o.id=r.operation_id WHERE r.notice_status='PENDING' AND NOT (o.status='SUCCEEDED' AND o.operation_key LIKE 'chat-card-reply:%') AND NOT EXISTS(SELECT 1 FROM notification_actions a WHERE a.operation_id=o.id) AND o.status IN ('SUCCEEDED','UNCERTAIN','PERMANENT_FAILED') LIMIT 20"
+            "SELECT r.operation_id,r.owner_id,r.view_message_id,r.view_token FROM operation_receipts r JOIN outbox o ON o.id=r.operation_id WHERE r.notice_status='PENDING' AND r.send_retry_at<=? AND NOT (o.status='SUCCEEDED' AND o.operation_key LIKE 'chat-card-reply:%') AND NOT EXISTS(SELECT 1 FROM notification_actions a WHERE a.operation_id=o.id) AND o.status IN ('SUCCEEDED','UNCERTAIN','PERMANENT_FAILED') LIMIT 20",
+            (time.time(),),
         )
         for row in rows:
             panel = self.store.setting(f"navigation:{getattr(bot, 'id', None)}:{row['owner_id']}", {})
@@ -331,8 +334,8 @@ class OperationResults:
                 continue
             # Persist admission before Telegram; a lost Telegram ACK must not resend.
             changed = self.store.execute(
-                "UPDATE operation_receipts SET notice_status='PROCESSING' WHERE operation_id=? AND owner_id=? AND notice_status='PENDING'",
-                (row["operation_id"], row["owner_id"]),
+                "UPDATE operation_receipts SET notice_status='PROCESSING' WHERE operation_id=? AND owner_id=? AND notice_status='PENDING' AND send_retry_at<=?",
+                (row["operation_id"], row["owner_id"], time.time()),
             ).rowcount
             if not changed:
                 continue
@@ -345,14 +348,15 @@ class OperationResults:
                     (row["operation_id"], row["owner_id"]),
                 )
                 raise
-            except Exception:  # noqa: BLE001 -- no raw Telegram errors or buyer data
+            except Exception as error:  # noqa: BLE001 -- no raw Telegram errors or buyer data
+                outcome, code, delay = send_failure(error)
                 self.store.execute(
-                    "UPDATE operation_receipts SET notice_status='UNCERTAIN' WHERE operation_id=? AND owner_id=?",
-                    (row["operation_id"], row["owner_id"]),
+                    "UPDATE operation_receipts SET notice_status=?,send_error=?,send_retry_at=? WHERE operation_id=? AND owner_id=?",
+                    (outcome, code, time.time() + delay, row["operation_id"], row["owner_id"]),
                 )
             else:
                 self.store.execute(
-                    "UPDATE operation_receipts SET notice_status='SENT',telegram_message_id=? WHERE operation_id=? AND owner_id=?",
+                    "UPDATE operation_receipts SET notice_status='SENT',send_error=NULL,send_retry_at=0,telegram_message_id=? WHERE operation_id=? AND owner_id=?",
                     (message.message_id, row["operation_id"], row["owner_id"]),
                 )
 

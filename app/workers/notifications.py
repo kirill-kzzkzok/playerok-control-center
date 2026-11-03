@@ -10,7 +10,7 @@ from app.database.store import encode
 from app.services.chat_events import system_event
 from app.services.notification_preferences import NotificationPreferences, notification_baseline
 from app.telegram.chat_cards import ChatCards
-from app.telegram.errors import TERMINAL_EDIT, telegram_error
+from app.telegram.errors import TERMINAL_EDIT, send_failure, telegram_error
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 from app.telegram.message_notice import message_notice
@@ -68,7 +68,9 @@ class Notifications:
         events = self.store.rows(
             "SELECT i.* FROM inbox i WHERE i.processed_at IS NOT NULL "
             "AND EXISTS (SELECT 1 FROM administrators a WHERE NOT EXISTS "
-            "(SELECT 1 FROM notifications n WHERE n.event_key=i.key AND n.owner_id=a.user_id)) "
+            "(SELECT 1 FROM notifications n WHERE n.event_key=i.key AND n.owner_id=a.user_id) "
+            "OR EXISTS(SELECT 1 FROM notifications n WHERE n.event_key=i.key AND n.owner_id=a.user_id "
+            "AND n.status='PENDING' AND n.send_retry_at<=strftime('%s','now'))) "
             + ("AND (" + critical + " OR " + fresh_event + ") " if not initialized else "")
             + "ORDER BY i.received_at,i.key LIMIT 200",
             (boundary["at"],) if not initialized else (),
@@ -295,6 +297,11 @@ class Notifications:
                         (event["key"], user),
                     ).rowcount
                 if not inserted:
+                    inserted = self.store.execute(
+                        "UPDATE notifications SET status='PROCESSING' WHERE event_key=? AND owner_id=? AND status='PENDING' AND send_retry_at<=?",
+                        (event["key"], user, time.time()),
+                    ).rowcount
+                if not inserted:
                     continue
                 try:
                     message = await self.bot.send_message(user, text, reply_markup=markup)
@@ -305,14 +312,15 @@ class Notifications:
                     )
                     raise
                 except Exception as error:  # noqa: BLE001 -- API may have accepted message; never retry blindly
+                    outcome, code, delay = send_failure(error)
                     self.store.execute(
-                        "UPDATE notifications SET status='UNCERTAIN' WHERE event_key=? AND owner_id=?",
-                        (event["key"], user),
+                        "UPDATE notifications SET status=?,send_error=?,send_retry_at=? WHERE event_key=? AND owner_id=?",
+                        (outcome, code, time.time() + delay, event["key"], user),
                     )
                     self.store.audit(user, "NOTIFICATION", event["key"], type(error).__name__)
                 else:
                     self.store.execute(
-                        "UPDATE notifications SET status='SUCCEEDED',telegram_message_id=?,rendered_payload=? WHERE event_key=? AND owner_id=?",
+                        "UPDATE notifications SET status='SUCCEEDED',send_error=NULL,send_retry_at=0,telegram_message_id=?,rendered_payload=? WHERE event_key=? AND owner_id=?",
                         (
                             message.message_id,
                             hashlib.sha256(event["payload"].encode()).hexdigest(),
