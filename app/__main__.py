@@ -64,14 +64,16 @@ async def outbox_loop(worker, stop):
                 continue
 
 
-async def run(config, *, network_diagnostics=False):
+async def run(config, *, network_diagnostics=False, instance_lock=None):
     if getattr(config, "telegram_transport", "legacy") == "localvpn":
         async with PlayerokProxy(NetworkSettings.load()):
-            return await run_connected(config, network_diagnostics=network_diagnostics)
-    return await run_connected(config, network_diagnostics=network_diagnostics)
+            return await run_connected(
+                config, network_diagnostics=network_diagnostics, instance_lock=instance_lock
+            )
+    return await run_connected(config, network_diagnostics=network_diagnostics, instance_lock=instance_lock)
 
 
-async def run_connected(config, *, network_diagnostics=False):
+async def run_connected(config, *, network_diagnostics=False, instance_lock=None):
     event("INFO", "Запуск Playerok Control Center")
     store = Store(config.database_path)
     account = SafeAccount(config.playerok_header, writes_enabled=config.writes_enabled)
@@ -109,6 +111,8 @@ async def run_connected(config, *, network_diagnostics=False):
         for owner in config.owner_ids:
             store.execute("INSERT OR IGNORE INTO administrators VALUES(?)", (owner,))
         recovered = store.recover()
+        if instance_lock is not None:
+            EnrollmentWorker(store, api).recover_startup(instance_lock)
         InterfaceCleanup(store).recover()
         if recovered:
             logger.warning("Recovered %s operations as UNCERTAIN", recovered)
@@ -245,8 +249,14 @@ def main():
             debug="--telegram-network-diagnostics" in sys.argv,
         )
         config.require_owner()
-        with InstanceLock(str(config.database_path) + ".lock"):
-            asyncio.run(run(config, network_diagnostics="--telegram-network-diagnostics" in sys.argv))
+        with InstanceLock(str(config.database_path) + ".lock") as instance_lock:
+            asyncio.run(
+                run(
+                    config,
+                    network_diagnostics="--telegram-network-diagnostics" in sys.argv,
+                    instance_lock=instance_lock,
+                )
+            )
     except KeyboardInterrupt:
         return 0
     except ProxyUnavailable:

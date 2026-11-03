@@ -59,3 +59,5 @@
 |---|---|---|---|
 | 1.1 Reserve → пополнение → resume → отправка | delivery_chains / automation / stock_panel | RED2failed; control fence в immutable chain.policy, одинаковая политика после resume разрешена;77passed+3passed (STOP/rearm/no duplicate/actual delivery). Legacy без fence сохраняет строгую блокировку | FIXED для новых подтверждённых цепочек |
 | Дополнительный legacy Wizard/ListingLaunch | wizard / listing_launch / LogicalProducts | Проверить отдельно в фазе 4; прежние записи не удаляются | Проверка не начата |
+
+| 1.2 Enrollment lease после рестарта | instance / __main__ / enrollment | RED2failed; реальный InstanceLock, PENDING-only fencing;289passed, single confirmed delivery, old-token refusal | FIXED |

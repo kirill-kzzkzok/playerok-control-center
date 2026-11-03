@@ -6,6 +6,7 @@ class InstanceLock:
     def __init__(self, path):
         self.path = Path(path)
         self.handle = None
+        self.locked_pid = None
 
     def __enter__(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -27,7 +28,17 @@ class InstanceLock:
         except OSError:
             self.handle.close()
             raise RuntimeError("Другой экземпляр уже работает") from None
+        self.locked_pid = os.getpid()
         return self
 
+    def owns(self, path):
+        return bool(
+            self.locked_pid == os.getpid()
+            and self.handle is not None
+            and not self.handle.closed
+            and self.path.resolve() == Path(path).resolve()
+        )
+
     def __exit__(self, *args):
+        self.locked_pid = None
         self.handle.close()

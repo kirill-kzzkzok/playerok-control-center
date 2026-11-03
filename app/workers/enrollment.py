@@ -17,6 +17,21 @@ class EnrollmentWorker:
     def __init__(self, store, api):
         self.store, self.api, self.chains = store, api, DeliveryChains(store, api)
 
+    def recover_startup(self, instance_lock):
+        """Only the exclusive app startup may fence checks left by a dead process.
+
+        Enrollment never dispatches externally. Existing chains are subsequently
+        detected idempotently; paid Outbox states and the 15-minute guard remain.
+        """
+        if not instance_lock or not instance_lock.owns(str(self.store.path) + ".lock"):
+            raise RuntimeError("Восстановление требует эксклюзивной блокировки этой базы")
+        with self.store.transaction() as db:
+            return db.execute(
+                "UPDATE auto_enrollment SET lease_token=NULL,lease_until=NULL,updated_at=? "
+                "WHERE status='PENDING' AND lease_token IS NOT NULL",
+                (now(),),
+            ).rowcount
+
     def discover(self):
         with self.store.transaction() as db:
             rows = db.execute(
