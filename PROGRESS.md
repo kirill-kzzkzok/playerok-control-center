@@ -3108,3 +3108,9 @@ D6 contract: old last_success on CONNECTED runtime with connection_verified=True
 
 D6 GREEN: actualUI RED1failed on false reconnect wording (earlier harness attempt hit unchanged-message no-op and was not validRED); ->48passed/42.92s/exit0 UX+PlayerokConnection+403identity. Neutral retained identity plus Moscow last-check time, old proof not green/current; actual UNKNOWN/auth rejection still disables gates. Home render makes no API calls or permissions changes. Ruff format corrected1file, check passed. No run-loop/renewal bypass.
 
+
+D7 contract: new Wizard names reserve six UTF-16 units for the later logical title suffix before accepting input (10..66 human units). Existing marked names in edits keep existing code rules; new names cannot claim an arbitrary permanent code. No truncation or duplicate suffix. No remote mutation or code reservation during input. RED real Wizard category/fields/name entry, ASCII and surrogate-pair boundary; existing draft untouched on refusal.
+
+
+D7 GREEN: actual Wizard RED2failed (67ASCII and34surrogate-pair emoji advanced to description) ->44passed/27.56s/exit0 (names/productcodes/modernGift/Playerokcreation/Telegramintegration). New name input10..66 UTF16 reserves suffix before any create RPC/code reservation;33bear emoji accepted,34rejected and draft stays name. Existing marked editing retains72final contract, new arbitrary code rejected. No truncation/no code generation at input. Ruff format/check exit0. Existing service title_code/titled tests assert one suffix, marker preservation and72boundary.
+

@@ -10,7 +10,15 @@ from app.services.attachments import Attachments
 from app.services.finance import format_calculation, money
 from app.services.financial_quotes import save_quote
 from app.services.inventory import stock_values
-from app.services.products import ValidationError, listing_price, listing_text, validate_draft, validate_field
+from app.services.product_codes import title_code, titled
+from app.services.products import (
+    ValidationError,
+    listing_price,
+    listing_text,
+    text_units,
+    validate_draft,
+    validate_field,
+)
 from app.services.withdrawals import draft_calculation, withdrawal_methods, withdrawal_snapshot
 from app.telegram.formatting import escaped, html_pages
 from app.telegram.keyboards import keyboard
@@ -328,7 +336,11 @@ class Wizard:
                     text += "\nМожно выбрать несколько значений. Затем нажмите «Готово»."
                     rows.append([("✅ Готово", f"w:{nonce}:field_done")])
         elif step == "name":
-            text = "📝 <b>Название</b>\nВведите название от 10 до 72 символов по текущим правилам формы Playerok."
+            text = (
+                "📝 <b>Название</b>\nВведите название от 10 до 66 символов UTF-16. Ещё 6 оставлены для постоянного кода [XXX]; emoji могут занимать два символа."
+                if not payload.get("edit_target") and not payload.get("permanent_code")
+                else "📝 <b>Название</b>\nДо 72 символов UTF-16 вместе с постоянным кодом. Код товара сохраняется."
+            )
         elif step == "description":
             text = "📋 <b>Описание</b>\nВведите многострочный текст от 10 до 2048 символов."
             from app.gifts.settings import GiftSettings
@@ -896,6 +908,15 @@ class Wizard:
             payload["field_index"] += 1
         elif step in {"name", "description"}:
             payload[step] = listing_text(text, step)
+            if step == "name" and not payload.get("edit_target"):
+                if payload.get("permanent_code"):
+                    payload[step] = titled(payload[step], payload["permanent_code"])
+                elif title_code(payload[step]):
+                    raise ValidationError(
+                        "Введите название без [XXX]: постоянный код назначится автоматически"
+                    )
+                elif text_units(payload[step]) > 66:
+                    raise ValidationError("Название: максимум 66 символов UTF-16, ещё 6 нужны для кода [XXX]")
             if step == "description" and any(
                 line.strip().lower().startswith("gift:") for line in text.splitlines()
             ):
