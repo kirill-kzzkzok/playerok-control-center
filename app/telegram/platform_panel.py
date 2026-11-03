@@ -47,6 +47,7 @@ class PlatformPanel:
             fulfill=data["fulfill"],
             text=data["text"],
             switch_confirmed=switching,
+            expected_text=data.get("saved_text"),
         )
         data["nonce"] = secrets.token_hex(6)
         data["pending"] = result
@@ -72,6 +73,7 @@ class PlatformPanel:
             return self.waiting(data["id"], result["operation"])
         data.pop("pending", None)
         data["revision"], _ = self.service.policies.get(data["id"])
+        data["saved_text"] = data["text"]
         return await self.show(data, state, saved=True)
 
     def waiting(self, item, operation):
@@ -121,6 +123,7 @@ class PlatformPanel:
                     "reply": active and policy.paid_reply,
                     "fulfill": active and policy.mark_sent,
                     "text": policy.greeting if selected else DEFAULT_REPLY,
+                    "saved_text": policy.greeting if selected else None,
                 },
                 state,
             )

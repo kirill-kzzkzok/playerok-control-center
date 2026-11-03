@@ -10,16 +10,96 @@ from app.services.logical_products import LogicalProducts
 from app.services.orders import Orders
 from app.workers.delivery_chains import ChainWorker
 from app.workers.enrollment import EnrollmentWorker
+from tests.test_playerok_delivery import configure
 from tests.test_telegram_transport import production_dispatcher
 from tests.test_unified_delivery_controls import shop as shop_fixture
-from tests.test_universal_delivery_e2e import setup_ui
+from tests.test_universal_delivery_e2e import click, setup_ui
+from tests.test_ux_redesign import buttons
 
 shop = shop_fixture
+
+
+@pytest.mark.parametrize("queued", [False, True])
+async def test_platform_reply_text_changes_only_for_future_orders_without_stop(shop, queued):
+    r = await shop()
+    await configure(r, reply=True, fulfill=False, text="Старое спасибо после оплаты")
+    old = r.api.order("old")
+    old["is_automated"] = True
+    Orders(r.store).ingest(old)
+    if queued:
+        await EnrollmentWorker(r.store, r.api).once()
+        ChainWorker(r.store, r.api).once()
+    logical = LogicalProducts(r.store, r.api)
+    before = logical.listing("lot")
+    operations = r.store.rows("SELECT id,payload FROM outbox")
+    await r.ui.click("platform:item:lot")
+    await click(r, suffix=":text")
+    await r.ui.message("Новое спасибо после оплаты")
+    await click(r, suffix=":save")
+    assert "Сохранено" in r.session.last_panel.text
+    after = logical.listing("lot")
+    assert all(after[key] == before[key] for key in ("enabled", "armed_at", "control_revision", "revision"))
+    assert r.store.rows("SELECT id,payload FROM outbox") == operations
+    new = r.api.order("new")
+    new["is_automated"] = True
+    Orders(r.store).ingest(new)
+    await EnrollmentWorker(r.store, r.api).once()
+    for _ in range(7):
+        ChainWorker(r.store, r.api).once()
+        await r.worker.once()
+    assert [m["text"] for m in r.api.messages if m["chat_id"] == "chat-old"] == [
+        "Старое спасибо после оплаты"
+    ]
+    assert [m["text"] for m in r.api.messages if m["chat_id"] == "chat-new"] == ["Новое спасибо после оплаты"]
+    assert not r.api.remote.payments
+
+
+@pytest.mark.parametrize("concurrent", ["stop", "text"])
+async def test_platform_future_reply_rejects_stale_input_after_stop_or_another_text(shop, concurrent):
+    r = await shop()
+    await configure(r, reply=True, fulfill=False, text="Исходное сообщение")
+    logical = LogicalProducts(r.store, r.api)
+    await r.ui.click("platform:item:lot")
+    await click(r, suffix=":text")
+    product = logical.listing("lot")
+    if concurrent == "stop":
+        logical.stop(7, product["id"])
+    else:
+        logical.update_after(7, "lot", product, "Другой сохранённый текст", field="greeting")
+    before = logical.listing("lot")
+    await r.ui.message("Устаревший текст")
+    save = next(key for key in buttons(r.session.last_panel) if key.endswith(":save"))
+    await r.ui.click(save)
+    assert logical.listing("lot") == before
+    assert "❗" in r.session.last_panel.text
+    assert not r.api.messages and not r.api.remote.payments
 
 
 async def change_message(r, value):
     await r.ui.click("lp:messages:lot")
     await r.ui.message(value)
+
+
+async def test_stock_greeting_can_change_without_restarting_reserved_delivery(shop):
+    r = await shop()
+    await setup_ui(r, "unique_stock")
+    Orders(r.store).ingest(r.api.order("old"))
+    await EnrollmentWorker(r.store, r.api).once()
+    before = r.store.rows("SELECT * FROM reservations")
+    await r.ui.click("lp:messages:lot")
+    greeting = next(key for key in buttons(r.session.last_panel) if key.endswith(":editgreeting"))
+    await r.ui.click(greeting)
+    await r.ui.message("Приветствие только новой покупке")
+    assert r.store.rows("SELECT * FROM reservations") == before
+    Orders(r.store).ingest(r.api.order("new"))
+    await EnrollmentWorker(r.store, r.api).once()
+    for _ in range(12):
+        ChainWorker(r.store, r.api).once()
+        await r.worker.once()
+    old = [m["text"] for m in r.api.messages if m["chat_id"] == "chat-old"]
+    new = [m["text"] for m in r.api.messages if m["chat_id"] == "chat-new"]
+    assert len(old) == 2 and "Приветствие только новой покупке" not in old
+    assert len(new) == 3 and new[0] == "Приветствие только новой покупке"
 
 
 @pytest.mark.parametrize("phase", ["paid", "reserved", "queued"])

@@ -273,21 +273,36 @@ class LogicalProductsPanel:
             return "⚡ <b>Способ выдачи</b>\nВыберите, что получит покупатель.", keyboard(
                 rows, back=("К товару", "lp:item:" + view["item"])
             )
-        if command == "editafter":
+        if command in {"editafter", "editgreeting"}:
             if not product or product["handler"] == "manual":
                 raise Conflict("Сначала подтвердите автоматический способ выдачи")
+            if command == "editgreeting" and product["handler"] not in {"unique_stock", "fixed_text"}:
+                raise Conflict("Приветствие до выдачи относится только к тексту и складу")
             await state.update_data(
-                logical_message_edit={key: product[key] for key in ("revision", "control_revision", "config")}
+                logical_message_edit={
+                    key: product[key] for key in ("revision", "control_revision", "config")
+                },
+                logical_message_field="greeting" if command == "editgreeting" else "after",
             )
             await state.set_state("logical:notice")
             return (
-                "Введите сообщение после подтверждённой выдачи для будущих покупок. Уже зарегистрированные заказы сохранят свой текст. "
+                (
+                    "Введите приветствие перед выдачей"
+                    if command == "editgreeting"
+                    else "Введите сообщение после подтверждённой выдачи"
+                )
+                + " для будущих покупок. Уже зарегистрированные заказы сохранят свой текст. "
                 + (
                     "Чтобы вернуть стандартное уведомление, отправьте один дефис: —"
                     if product["handler"] == "telegram_gifts"
                     else "Чтобы убрать сообщение, отправьте один дефис: —"
                 ),
-                keyboard([], back=("Отмена", "lp:item:" + view["item"])),
+                keyboard(
+                    [[("Приветствие перед выдачей", prefix + "editgreeting")]]
+                    if command == "editafter" and product["handler"] in {"unique_stock", "fixed_text"}
+                    else [],
+                    back=("Отмена", "lp:item:" + view["item"]),
+                ),
             )
         if command == "mode":
             if product and product["enabled"]:
@@ -691,6 +706,7 @@ class LogicalProductsPanel:
                 view["item"],
                 data.get("logical_message_edit", {}),
                 "" if value.strip() in {"-", "—"} else value,
+                field=data.get("logical_message_field", "after"),
             )
             await state.set_state(None)
             await state.update_data(logical_message_edit=None)

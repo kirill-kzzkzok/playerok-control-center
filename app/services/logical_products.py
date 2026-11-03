@@ -72,11 +72,13 @@ class LogicalProducts:
     def __init__(self, store, api=None):
         self.store, self.api = store, api
 
-    def update_after(self, owner, item_id, expected, text):
+    def update_after(self, owner, item_id, expected, text, *, field="after"):
         """Local future-message edit; never arm, send, or rewrite an order snapshot."""
         from app.services.delivery_chains import DeliveryChains
 
         text = message_text(text)
+        if field not in {"greeting", "after"}:
+            raise Conflict("Поле сообщения недоступно")
         with self.store.transaction() as db:
             product = self.listing(item_id)
             if not product:
@@ -87,11 +89,16 @@ class LogicalProducts:
             ):
                 raise Conflict("Настройки или остановка изменились во время ввода. Откройте сообщение заново")
             config = json.loads(product["config"])
+            platform = config.get("platform_only") is True
             if (
                 product["state"] != "VERIFIED"
                 or not product["verified_at"]
                 or product["handler"] == "manual"
-                or config.get("platform_only")
+                and not platform
+                or platform
+                and field != "greeting"
+                or product["handler"] == "telegram_gifts"
+                and field != "after"
             ):
                 raise Conflict("Сообщение доступно после подтверждения автоматического способа выдачи")
             aliases = db.execute(
@@ -100,6 +107,7 @@ class LogicalProducts:
             ).fetchall()
             for alias in aliases:
                 target = alias["item_id"]
+                revision, policy = Automation(self.store, self.api).get(target)
                 if db.execute(
                     "SELECT 1 FROM outbox WHERE target=? AND kind IN ('edit','edit_fields','delete','publish','premium_publish') "
                     "AND status IN ('PENDING','PROCESSING','RETRYABLE_FAILED','UNCERTAIN') LIMIT 1",
@@ -108,20 +116,26 @@ class LogicalProducts:
                     raise Conflict("Изменение или публикация товара не завершены. Сначала сверьте операцию")
                 if product["enabled"]:
                     for order in db.execute(
-                        "SELECT id,payload FROM orders WHERE item_id=? AND status='PAID' "
+                        "SELECT id,payload FROM orders WHERE item_id=? AND (status='PAID' OR ? AND status IN ('SENT','CONFIRMED','CONFIRMED_AUTOMATICALLY')) "
                         "AND NOT EXISTS(SELECT 1 FROM logical_order_scopes s WHERE s.order_id=orders.id)",
-                        (target,),
+                        (target, platform),
                     ).fetchall():
                         if future_order(json.loads(order["payload"]).get("created_at"), product["armed_at"]):
-                            self.pin_order(db, order["id"], target, product["handler"])
-                revision, policy = Automation(self.store, self.api).get(target)
-                if policy.mode in {"text", "stock"}:
+                            self.pin_order(
+                                db, order["id"], target, "playerok" if platform else product["handler"]
+                            )
+                            if platform:
+                                db.execute(
+                                    "UPDATE logical_order_scopes SET config=json_set(config,'$.greeting',?) WHERE order_id=?",
+                                    (policy.greeting, order["id"]),
+                                )
+                if policy.mode in {"text", "stock", "playerok"}:
                     DeliveryChains(self.store, self.api).freeze_stock_resume(db, target, revision, policy)
                     updated = asdict(policy)
-                    updated["after"] = text
+                    updated[field] = text
                     db.execute(
-                        "UPDATE delivery_policies SET payload=?,revision=revision+1 WHERE item_id=? AND revision=?",
-                        (encode(updated), target, revision),
+                        "UPDATE delivery_policies SET payload=?,revision=revision+? WHERE item_id=? AND revision=?",
+                        (encode(updated), int(policy.mode != "playerok"), target, revision),
                     )
                 if product["handler"] == "telegram_gifts":
                     self.store.set_setting(
@@ -131,7 +145,7 @@ class LogicalProducts:
                             "after": text,
                         },
                     )
-            config["after"] = text
+            config[field] = text
             db.execute(
                 "UPDATE logical_products SET config=?,updated_at=? WHERE id=?",
                 (encode(config), now(), product["id"]),
@@ -1267,7 +1281,12 @@ class LogicalProducts:
         row = db.execute("SELECT payload,status,item_id FROM orders WHERE id=?", (order_id,)).fetchone()
         if (
             not row
-            or row["status"] != "PAID"
+            or row["status"]
+            not in (
+                {"PAID", "SENT", "CONFIRMED", "CONFIRMED_AUTOMATICALLY"}
+                if handler == "playerok"
+                else {"PAID"}
+            )
             or row["item_id"] != item_id
             or not future_order(json.loads(row["payload"]).get("created_at"), product["armed_at"])
         ):

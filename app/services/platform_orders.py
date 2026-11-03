@@ -1,7 +1,7 @@
 """Playerok delivers the goods; reuse durable chains for seller follow-up only."""
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 from app.database.store import Conflict, encode, now, server_time
 from app.services.automation import Automation, DeliveryPolicy, future_order, message_text
@@ -42,7 +42,9 @@ class PlatformOrders:
         self.policies = Automation(store, api)
         self.logical = LogicalProducts(store, api)
 
-    async def save(self, owner, item_id, revision, *, reply, fulfill, text, switch_confirmed=False):
+    async def save(
+        self, owner, item_id, revision, *, reply, fulfill, text, switch_confirmed=False, expected_text=None
+    ):
         account = self.logical.authority(owner)
         item = await self.policies.item(owner, item_id)
         if item.get("deleted_at") or item.get("status") not in PLATFORM_STATUSES:
@@ -56,10 +58,29 @@ class PlatformOrders:
             greeting=message_text(text, required=reply),
             account_id=account,
         )
-        current, _ = self.policies.get(item_id)
+        current, old_policy = self.policies.get(item_id)
         if current != revision:
             raise Conflict("Настройки изменились. Откройте товар заново")
         product = self.logical.listing(item_id)
+        if (
+            product
+            and json.loads(product["config"]).get("platform_only")
+            and old_policy.mode == "playerok"
+            and {k: v for k, v in asdict(old_policy).items() if k != "greeting"}
+            == {k: v for k, v in asdict(policy).items() if k != "greeting"}
+        ):
+            self.logical.verify_listing(product, item)
+            with self.store.transaction():
+                latest_revision, latest = self.policies.get(item_id)
+                if (
+                    latest_revision != revision
+                    or latest != old_policy
+                    or expected_text is not None
+                    and old_policy.greeting != expected_text
+                ):
+                    raise Conflict("Сообщение изменилось во время ввода. Откройте настройки заново")
+                self.logical.update_after(owner, item_id, product, policy.greeting, field="greeting")
+            return {"saved": True}
         gift = self.store.rows("SELECT enabled FROM gift_listings WHERE item_id=?", (item_id,))
         replacing = bool(gift and gift[0]["enabled"]) or bool(
             product
@@ -157,6 +178,14 @@ class PlatformOrders:
                 raise Conflict("Автоматизация разрешена только новым покупкам после сохранения")
             if db.execute("SELECT 1 FROM delivery_chains WHERE order_id=?", (ident,)).fetchone():
                 return ident
+            had_scope = db.execute(
+                "SELECT config FROM logical_order_scopes WHERE order_id=?", (ident,)
+            ).fetchone()
+            self.logical.pin_order(db, ident, item, "playerok")
+            if had_scope:
+                policy = replace(
+                    policy, greeting=json.loads(had_scope["config"]).get("greeting", policy.greeting)
+                )
             if (
                 db.execute("SELECT 1 FROM gift_jobs WHERE order_id=?", (ident,)).fetchone()
                 or db.execute("SELECT 1 FROM reservations WHERE order_id=?", (ident,)).fetchone()
