@@ -139,7 +139,31 @@ class ChatCards:
             ):
                 await self.update(row)
 
+    async def refresh(self, owner, token):
+        rows = self.store.rows(
+            "SELECT * FROM chat_cards WHERE token=? AND owner_id=? AND account_id=? AND state='OPEN'",
+            (token, owner, self.account),
+        )
+        if rows:
+            await self.update(rows[0])
+
     async def update(self, row):
+        from app.telegram.navigation_context import panel_key
+
+        if not hasattr(self.store, "navigation_locks"):
+            self.store.navigation_locks = {}
+        bot_id = getattr(self.bot, "id", None)
+        lock = self.store.navigation_locks.setdefault((bot_id, row["owner_id"]), asyncio.Lock())
+        async with lock:
+            if row["telegram_message_id"]:
+                panel = self.store.setting(
+                    panel_key(self.store, bot_id, row["owner_id"], row["telegram_message_id"]), {}
+                )
+                if panel.get("closed") or panel.get("route") not in {None, "chat:" + row["chat_id"]}:
+                    return
+            return await self.update_card(row)
+
+    async def update_card(self, row):
         text, markup = self.render(row)
         fingerprint = hashlib.sha256((text + markup.model_dump_json()).encode()).hexdigest()
         if row["state"] == "OPEN" and row["fingerprint"] == fingerprint:
@@ -225,6 +249,10 @@ class ChatCards:
                 )
 
     async def observe(self, token, owner, message_id):
+        from app.telegram.navigation_context import panel_key
+
+        if self.store.setting(panel_key(self.store, self.bot.id, owner, message_id), {}).get("route"):
+            raise Conflict("Старая кнопка переписки устарела: в этом сообщении открыт другой экран")
         row = self.row(token, owner)
         if row["state"] in {"SENDING", "UNCERTAIN"}:
             self.store.execute(
@@ -281,11 +309,37 @@ class ChatCards:
             "UPDATE chat_cards SET hint=? WHERE token=?",
             ("Напишите ответ покупателю " + str(peer)[:70] + ". Отмена: /cancel", token),
         )
-        await self.flush()
+        await self.refresh(owner, token)
+
+    async def compose_view(self, owner, chat_id, message_id, state, api):
+        from app.telegram.presentation import chat_peer
+        from app.telegram.storage import replace_context
+
+        if (
+            not self.store.rows("SELECT 1 FROM administrators WHERE user_id=?", (owner,))
+            or api.account.id != self.account
+        ):
+            raise Conflict("Владелец или аккаунт переписки не подтверждён")
+        chat = await api.call("get_chat", chat_id=chat_id)
+        if chat.get("id") != chat_id or chat.get("is_texting_allowed") is not True:
+            raise Conflict("Playerok не разрешает ответ в этом диалоге")
+        await replace_context(
+            state,
+            "chatcard:reply",
+            {"chat_view_message_id": message_id, "chat_account": self.account, "chat_id": chat_id},
+        )
+        return "Напишите ответ покупателю " + chat_peer(chat, self.account) + ". Отмена: /cancel", keyboard(
+            [], back=("Отмена", "chat:" + chat_id)
+        )
 
     async def reply(self, message, state, api):
         data = await state.get_data()
-        row = self.row(data.get("chat_card"), message.from_user.id)
+        view = data.get("chat_view_message_id")
+        row = (
+            {"chat_id": data.get("chat_id")}
+            if view
+            else self.row(data.get("chat_card"), message.from_user.id)
+        )
         if data.get("chat_account") != self.account or api.account.id != self.account:
             raise Conflict("Подключённый аккаунт изменился. Ответ не отправлен")
         if not message.text:
@@ -299,7 +353,7 @@ class ChatCards:
             raise Conflict("Playerok не разрешает отправку. Текст сохранён в вашем сообщении")
         key = f"chat-card-reply:{self.account}:{message.from_user.id}:{message.message_id}"
         with self.store.transaction() as db:
-            current = self.row(row["token"], message.from_user.id)
+            current = row if view else self.row(row["token"], message.from_user.id)
             if getattr(state.storage, "store", None) is not self.store:
                 raise Conflict("Нужна сохранённая сессия интерфейса. Откройте переписку заново")
             if db.execute(
@@ -312,7 +366,11 @@ class ChatCards:
                 key,
                 {"kind": "reply", "target": current["chat_id"], "payload": {"text": message.text}},
             )
-            db.execute("UPDATE chat_cards SET reply_operation=?,hint='' WHERE token=?", (ident, row["token"]))
+            db.execute(
+                "UPDATE chat_cards SET reply_operation=?,hint='' WHERE chat_id=? AND owner_id=? AND account_id=?",
+                (ident, row["chat_id"], message.from_user.id, self.account),
+            )
             state.storage.consume(db, state.key, "chatcard:reply", data)
-        await self.flush()
+        if not view:
+            await self.refresh(message.from_user.id, row["token"])
         return ident

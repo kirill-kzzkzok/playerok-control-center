@@ -652,14 +652,18 @@ class Executor:
                     changes["remove_attachments"] = removed
             if not changes:
                 raise ValidationError("Нет разрешённых изменений")
+            from app.services.edit_confirmation import EditConfirmation
+
+            confirmation = EditConfirmation(self.store, self.api)
+            proof = confirmation.prepare(action, current, changes, keep)
             result = await self.mutate(action, "updateItem", "update_item", id=target, **changes)
-            if not edit_receipt_matches(target, changes, result, keep_attachment_ids=keep):
-                raise APIError("EDIT_NOT_CONFIRMED", uncertain=True)
+            observed = None
+            if not edit_receipt_matches(target, proof["expected"], result, keep_attachment_ids=keep):
+                observed = await confirmation.readback(action, proof)
+                result = observed
             if protected_description or "keep_attachment_ids" in payload:
                 try:
-                    observed = await self.owned_item(target)
-                    if not edit_receipt_matches(target, changes, observed, keep_attachment_ids=keep):
-                        raise APIError("EDIT_READBACK_UNKNOWN", uncertain=True)
+                    observed = observed or await confirmation.readback(action, proof)
                     if "keep_attachment_ids" in payload and {
                         a["id"] for a in observed.get("attachments", [])
                     } != {a["id"] for a in result.get("attachments", [])}:
@@ -686,12 +690,16 @@ class Executor:
                 from app.services.logical_products import critical, marked_title
 
                 try:
-                    if critical(observed) != critical(current):
+                    before_identity, after_identity = critical(current), critical(observed)
+                    # Price has its own requested/unchanged readback comparison.
+                    before_identity.pop("price")
+                    after_identity.pop("price")
+                    if after_identity != before_identity:
                         raise ValueError
                     title = marked_title(observed["name"], product["code"])
                 except ValueError:
                     raise APIError("TITLE_EDIT_READBACK_UNKNOWN", uncertain=True) from None
-                return {
+                receipt = {
                     **self.item_result(observed),
                     "identity_title": {
                         "product_id": product["id"],
@@ -703,7 +711,11 @@ class Executor:
                         "title": title,
                     },
                 }
-            return self.item_result(result)
+                confirmation.record(action, proof, observed, receipt)
+                return receipt
+            receipt = self.item_result(result)
+            confirmation.record(action, proof, observed if observed is not None else result, receipt)
+            return receipt
         if kind == "mark_read":
             await self.api.call("get_chat", chat_id=target)
             result = await self.mutate(action, "markChatAsRead", "mark_chat_as_read", chat_id=target)

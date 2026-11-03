@@ -80,7 +80,7 @@ class ChatPanel:
             blocks.append(f"<b>{author}</b> · {date}\n{escaped(text, 290)}{attachment}")
         rows = [[("✉️ Ответить", "compose:" + ident), ("✖️ Закрыть", "chatclose:" + ident)]]
         return (
-            f"💬 <b>Переписка с {escaped(peer_name, 80)}</b>\nстраница {view['index'] + 1}\n\n"
+            f"💬 <b>Переписка с покупателем</b>\n👤 {escaped(peer_name, 80)}\nстраница {view['index'] + 1}\n\n"
             + ("\n\n".join(blocks) if blocks else "Сообщений нет."),
             keyboard(rows, home=False),
         )

@@ -31,12 +31,19 @@ async def test_offline_ack_and_read_profile_does_not_drop_safe_action(case, monk
         return await original_api(method, **kwargs)
 
     r.session.make_request, r.api.call = slow_ack, slow_read
+    source = r.store.setting("navigation:123:7")["id"]
+    message_ids = set(r.session.messages)
     begin = perf_counter()
     await r.ui.click(action)
     elapsed = perf_counter() - begin
     if action.startswith("compose:"):
         assert r.store.rows("SELECT state FROM fsm")[0]["state"] == "chatcard:reply"
-        assert r.store.rows("SELECT state FROM chat_cards")[0]["state"] == "OPEN"
+        # The reply form now belongs to the clicked navigation message, not a
+        # newly created notification card. ACK timeout still permits this safe
+        # local form; it never authorizes sending the reply.
+        assert r.store.setting("navigation:123:7")["id"] == source
+        assert "Напишите ответ покупателю" in r.session.messages[source]["text"]
+        assert set(r.session.messages) == message_ids
     else:
         assert r.store.setting("navigation:123:7")["route"] == action
     assert not r.store.rows("SELECT * FROM outbox")

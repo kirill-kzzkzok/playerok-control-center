@@ -12,8 +12,10 @@ class InterfaceCleanupPanel:
     async def callback(self, action, owner, state, message):
         if message.chat.id != owner or message.chat.type != "private":
             raise Conflict("Очистка доступна только в личном чате владельца")
+        from app.telegram.navigation import Navigation
+
         active_id = (
-            self.service.store.setting(f"navigation:{message.bot.id}:{owner}", {}).get("id")
+            self.service.store.setting(Navigation(self.service.store).key(message.bot, owner), {}).get("id")
             or message.message_id
         )
         if action == "ic:preview":

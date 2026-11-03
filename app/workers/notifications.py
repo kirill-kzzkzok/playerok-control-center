@@ -404,7 +404,7 @@ class Notifications:
             if payload.get("deleted_at") or payload.get("is_read") is True:
                 markup = keyboard([[("Диалог", "chat:" + row["chat_id"])]])
             try:
-                await self.bot.edit_message_text(
+                await self.edit_notice(
                     text, chat_id=row["owner_id"], message_id=row["telegram_message_id"], reply_markup=markup
                 )
             except asyncio.CancelledError:
@@ -511,7 +511,7 @@ class Notifications:
                     row[:] = [b for b in row if not (b.callback_data or "").startswith("readchat:")]
                 markup.inline_keyboard = [row for row in markup.inline_keyboard if row]
             try:
-                await self.bot.edit_message_text(
+                await self.edit_notice(
                     text,
                     chat_id=notification["owner_id"],
                     message_id=notification["telegram_message_id"],
@@ -548,11 +548,25 @@ class Notifications:
                         notification["owner_id"],
                     ),
                 )
+
                 for action in actions:
                     db.execute(
                         "UPDATE notification_actions SET rendered_status=?,retry_after=0,failures=0 WHERE operation_id=?",
                         (action["status"], action["operation_id"]),
                     )
+
+    async def edit_notice(self, text, *, chat_id, message_id, **kwargs):
+        from app.telegram.navigation_context import panel_key
+
+        bot_id = getattr(self.bot, "id", None)
+        if not hasattr(self.store, "navigation_locks"):
+            self.store.navigation_locks = {}
+        lock = self.store.navigation_locks.setdefault((bot_id, chat_id), asyncio.Lock())
+        async with lock:
+            key = panel_key(self.store, bot_id, chat_id, message_id)
+            if self.store.setting(key, {}).get("route") is not None:
+                return  # The owner opened another view here. No background takeover.
+            return await self.bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, **kwargs)
 
     def defer_update(self, notification, actions, error):
         for action in actions:

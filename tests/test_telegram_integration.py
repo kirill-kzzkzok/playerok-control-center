@@ -300,10 +300,17 @@ async def test_notification_reply_keeps_original_and_updates_after_durable_compl
         await worker.once()
         assert not await worker.once()
         await Notifications(store, bot).once()
-        card = store.rows("SELECT * FROM chat_cards")[0]
-        shown = session.messages[card["telegram_message_id"]]["text"]
-        assert "Original question" in shown and "Answer &lt;buyer&gt;" in shown
-        assert "подтверждён Playerok" in shown
+        # A reply opened from this notification owns the same physical message,
+        # rather than creating an unrelated ChatCard. Durable result refresh is
+        # still required, with exactly one real transport send.
+        shown = session.messages[old.message_id]["text"]
+        assert "подтверждено" in shown
+        assert not store.rows("SELECT * FROM chat_cards")
+        assert (
+            "Original question"
+            in store.rows("SELECT payload FROM chat_messages WHERE id='incoming'")[0]["payload"]
+        )
+        assert store.rows("SELECT status FROM outbox") == [{"status": "SUCCEEDED"}]
         assert session.messages[old.message_id]["exists"]
         assert sent == [("chat", "Answer <buyer>")]
     finally:

@@ -258,9 +258,9 @@ async def test_chat_chronology_without_ids_and_reply_confirmation(ux):
     assert "&lt;hello&gt;" in shown.text
     labels = buttons(shown)
     assert set(labels.values()) == {"✉️ Ответить", "✖️ Закрыть"}
-    reply = next(key for key in labels if key.startswith("cc:reply:"))
-    row = r.store.rows("SELECT * FROM chat_cards")[0]
-    await r.ui.click(reply, message_id=row["telegram_message_id"])
+    reply = next(key for key in labels if key.startswith("compose:"))
+    source = r.store.setting("navigation:123:7")["id"]
+    await r.ui.click(reply, message_id=source)
     await r.ui.message("<my reply>")
     # Read-only installation never enqueues or pretends the reply succeeded.
     assert not r.store.rows("SELECT * FROM outbox")
@@ -344,7 +344,7 @@ async def test_order_compact_card_details_retain_all_actions(ux):
     assert not r.store.rows("SELECT * FROM outbox")
 
 
-async def test_navigation_from_notification_never_edits_evidence(ux):
+async def test_navigation_from_notification_edits_its_source_without_deleting_evidence(ux):
     r = ux
     from app.services.orders import Orders
 
@@ -352,13 +352,16 @@ async def test_navigation_from_notification_never_edits_evidence(ux):
     r.store.execute(
         "INSERT INTO notifications(event_key,owner_id,telegram_message_id,status) VALUES('message:incoming',7,1,'SUCCEEDED')"
     )
+    evidence = r.store.rows("SELECT * FROM chat_messages")
     for action in ("home", "more", "tools", "chat:chat", "iv:other:lot"):
         await r.ui.click(action)
         assert not any(
-            m.__api_method__ in {"editMessageText", "editMessageMedia", "deleteMessage"}
-            and getattr(m, "message_id", None) == 1
+            m.__api_method__ == "deleteMessage" and getattr(m, "message_id", None) == 1
             for m in r.session.calls
         )
+    assert any(m.__api_method__ == "editMessageText" and m.message_id == 1 for m in r.session.calls)
+    assert all(m.message_id == 1 for m in r.session.calls if m.__api_method__ == "editMessageText")
+    assert all(row in r.store.rows("SELECT * FROM chat_messages") for row in evidence)
     assert r.store.rows("SELECT telegram_message_id FROM notifications")[0]["telegram_message_id"] == 1
 
 

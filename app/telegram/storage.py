@@ -11,8 +11,11 @@ class SQLiteStorage(BaseStorage):
         self.store = store
 
     def key(self, key: StorageKey):
+        destiny = key.destiny
+        if destiny == "default":
+            destiny = self.store.setting(f"navigation:fsm_active:{key.bot_id}:{key.user_id}", destiny)
         return encode(
-            [key.bot_id, key.chat_id, key.user_id, key.thread_id, key.business_connection_id, key.destiny]
+            [key.bot_id, key.chat_id, key.user_id, key.thread_id, key.business_connection_id, destiny]
         )
 
     async def set_state(self, key, state: StateType = None):

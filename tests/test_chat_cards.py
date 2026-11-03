@@ -330,3 +330,27 @@ async def test_more_than_one_batch_of_dialogs_does_not_starve_later_card_updates
     await r.notifications.once()
     row = r.store.rows("SELECT * FROM chat_cards WHERE chat_id='chat-100'")[0]
     assert "Latest message must appear" in r.session.messages[row["telegram_message_id"]]["text"]
+
+
+async def test_new_incoming_after_navigation_preserves_form_and_reopens_one_notice(cards):
+    r = cards
+    incoming(r, 1)
+    await r.notifications.once()
+    old = r.store.rows("SELECT * FROM chat_cards")[0]
+    message_id = old["telegram_message_id"]
+    await r.ui.click(
+        "ops:list:ALL:0",
+        message_id=message_id,
+        reply_markup=r.session.messages[message_id]["reply_markup"],
+    )
+    screen = deepcopy(r.session.messages[message_id])
+    assert "История операций" in screen["text"]
+    assert r.store.rows("SELECT state FROM chat_cards") == [{"state": "CLOSED"}]
+    incoming(r, 2)
+    await r.notifications.once()
+    current = r.store.rows("SELECT * FROM chat_cards")[0]
+    assert current["state"] == "OPEN" and current["telegram_message_id"] != message_id
+    assert r.session.messages[message_id] == screen
+    assert len(calls(r, "sendMessage")) == 2, [call.text for call in calls(r, "sendMessage")]
+    assert len(r.store.rows("SELECT * FROM chat_messages")) == 2
+    assert not r.store.rows("SELECT * FROM outbox") and not r.sent

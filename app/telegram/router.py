@@ -40,6 +40,7 @@ from app.telegram.launch_panel import LaunchPanel
 from app.telegram.listings_panel import ListingsPanel
 from app.telegram.logical_products_panel import LogicalProductsPanel
 from app.telegram.navigation import Navigation
+from app.telegram.navigation_context import MessageNavigation
 from app.telegram.operation_results import OperationResults
 from app.telegram.operations_panel import OperationsPanel
 from app.telegram.order_finance_panel import OrderFinancePanel
@@ -75,6 +76,8 @@ async def display(message, text, markup, edit=False):
 
 def create_router(store, api, products, synchronizer):
     router = Router()
+    router.callback_query.middleware(MessageNavigation(store))
+    router.message.middleware(MessageNavigation(store))
     router.message.middleware(InputCleanup(store))
     navigator = Navigation(store)
     wizard = Wizard(store, api, products)
@@ -139,12 +142,19 @@ def create_router(store, api, products, synchronizer):
     async def cancel_chat_reply(message, state):
         data = await state.get_data()
         if await state.get_state() == "chatcard:reply":
+            if data.get("chat_view_message_id"):
+                await state.clear()
+                message, _ = await navigator.enter(message, message.from_user.id, state, "input")
+                return await message.answer(
+                    "Ввод ответа отменён.",
+                    reply_markup=keyboard([], back=("К переписке", "chat:" + data["chat_id"])),
+                )
             store.execute(
                 "UPDATE chat_cards SET hint='' WHERE token=? AND owner_id=?",
                 (data.get("chat_card"), message.from_user.id),
             )
             await state.clear()
-            await ChatCards(store, message.bot).flush()
+            await ChatCards(store, message.bot).refresh(message.from_user.id, data.get("chat_card"))
             return
         await state.clear()
 
@@ -171,64 +181,33 @@ def create_router(store, api, products, synchronizer):
         message = query.message
         if message is None or not hasattr(message, "answer"):
             return
-        if action.startswith(("cc:", "chat:", "compose:", "reply:", "readchat:", "chatmore:", "chatclose:")):
+        if action.startswith("cc:"):
             cards = ChatCards(store, message.bot)
             token = action.split(":")[-1]
             try:
-                if action.startswith("cc:"):
-                    if ack["status"] not in {"ok", "transport"}:
-                        return
-                    if action.startswith("cc:close:"):
-                        await cards.close(token, owner, message.message_id)
-                        if (await state.get_data()).get("chat_card") == token:
-                            await state.clear()
-                    elif action.startswith("cc:reply:"):
-                        await cards.compose(token, owner, message.message_id, state, api)
+                if ack["status"] not in {"ok", "transport"}:
                     return
-                ident = action.split(":", 1)[1]
-                if action.startswith("chatclose:"):
-                    rows = store.rows(
-                        "SELECT * FROM chat_cards WHERE chat_id=? AND owner_id=? AND account_id=?",
-                        (ident, owner, cards.account),
-                    )
-                    if rows and rows[0]["telegram_message_id"] == message.message_id:
-                        await cards.close(rows[0]["token"], owner, message.message_id)
-                    return
-                previous = (await state.get_data()).get("chat_card")
-                await state.clear()
-                if previous:
-                    store.execute(
-                        "UPDATE chat_cards SET hint='' WHERE token=? AND owner_id=?", (previous, owner)
-                    )
-                await chats.show("chat:" + ident, state)  # API history only; never mark read.
-                cards.touch(owner, ident)
-                await cards.flush()
-                if action.startswith(("compose:", "reply:")) and ack["status"] in {"ok", "transport"}:
-                    row = store.rows(
-                        "SELECT * FROM chat_cards WHERE owner_id=? AND account_id=? AND chat_id=?",
-                        (owner, cards.account, ident),
-                    )[0]
-                    if row["state"] == "OPEN":
-                        await cards.compose(row["token"], owner, row["telegram_message_id"], state, api)
+                if action.startswith("cc:close:"):
+                    await cards.close(token, owner, message.message_id)
+                    if (await state.get_data()).get("chat_card") == token:
+                        await state.clear()
+                elif action.startswith("cc:reply:"):
+                    await cards.compose(token, owner, message.message_id, state, api)
             except (ValueError, APIError) as error:
-                if not action.startswith("cc:") and store.rows(
-                    "SELECT 1 FROM chat_messages WHERE chat_id=? LIMIT 1", (token,)
-                ):
-                    cards.touch(owner, token)
-                    store.execute(
-                        "UPDATE chat_cards SET hint=? WHERE chat_id=? AND owner_id=? AND account_id=?",
-                        (
-                            "Историю Playerok обновить не удалось. Показаны сохранённые сообщения.",
-                            token,
-                            owner,
-                            cards.account,
-                        ),
-                    )
                 store.execute(
                     "UPDATE chat_cards SET hint=? WHERE token=? AND owner_id=?",
                     (error_text(error), token, owner),
                 )
-                await cards.flush()
+                await cards.refresh(owner, token)
+            return
+        if action.startswith(("readchat:", "chatmore:")):
+            action = "chat:" + action.split(":", 1)[1]
+        if action.startswith("chatclose:"):
+            store.execute(
+                "UPDATE chat_cards SET state='CLOSED',hint='',busy_until=0 WHERE account_id=? AND owner_id=? AND telegram_message_id=?",
+                (store.setting("playerok:account_id"), owner, message.message_id),
+            )
+            await navigator.enter(message, owner, state, "nav:close")
             return
         if not navigator.allowed(message, owner, action):
             return await navigator.feedback(message, owner, "Экран закрыт или устарел. Откройте /start")
@@ -625,6 +604,10 @@ def create_router(store, api, products, synchronizer):
                         order_filter=store.setting(f"ui:{owner}:order_filter", "ALL"),
                     )
                 text, markup = await orders_panel.callback(action, owner, state)
+            elif action.startswith(("compose:", "reply:")):
+                text, markup = await ChatCards(store, message.bot).compose_view(
+                    owner, action.split(":", 1)[1], message.message_id, state, api
+                )
             elif action.startswith(("chat:", "chatpage:")):
                 text, markup = await chats.show(action, state)
             elif action.startswith("chatmedia:"):
@@ -770,13 +753,29 @@ def create_router(store, api, products, synchronizer):
             cards = ChatCards(store, message.bot)
             data = await state.get_data()
             try:
-                await cards.reply(message, state, api)
+                ident = await cards.reply(message, state, api)
+                if data.get("chat_view_message_id"):
+                    message, _ = await navigator.enter(message, message.from_user.id, state, "input")
+                    await message.answer(
+                        "⏳ Ответ сохранён в очереди. Отправка ещё не подтверждена.",
+                        reply_markup=keyboard(
+                            [[("Проверить результат", "result:show:" + ident)]],
+                            back=("К переписке", "chat:" + data["chat_id"]),
+                        ),
+                    )
             except (ValueError, APIError) as error:
+                if data.get("chat_view_message_id"):
+                    message, _ = await navigator.enter(message, message.from_user.id, state, "input")
+                    await message.answer(
+                        "❗ " + error_text(error),
+                        reply_markup=keyboard([], back=("К переписке", "chat:" + data["chat_id"])),
+                    )
+                    return
                 store.execute(
                     "UPDATE chat_cards SET hint=? WHERE chat_id=? AND owner_id=? AND account_id=?",
                     (error_text(error), data.get("chat_id"), message.from_user.id, cards.account),
                 )
-                await cards.flush()
+                await cards.refresh(message.from_user.id, data.get("chat_card"))
             return
         message, _ = await navigator.enter(message, message.from_user.id, state, "input")
         try:

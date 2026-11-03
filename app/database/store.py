@@ -503,42 +503,17 @@ class Store:
                     (json.loads(row["payload"])["draft_id"],),
                 )
             payload = json.loads(row["payload"])
-            if status == "SUCCEEDED" and (
-                row["kind"] == "edit_fields"
-                or row["kind"] == "edit"
-                and "description" in payload
-                and not payload.get("logical_binding")
-                and not payload.get("code_migration")
-            ):
-                # A receipt proves the edit, not approval of a new purchase contract.
+            if row["kind"] == "edit_fields" and status == "SUCCEEDED":
                 db.execute("UPDATE logical_listings SET verified_at=NULL WHERE item_id=?", (row["target"],))
-            if (
-                row["kind"] == "edit"
-                and status == "SUCCEEDED"
-                and isinstance(result, dict)
-                and result.get("identity_title")
-            ):
-                title = result["identity_title"]
-                db.execute(
-                    "UPDATE logical_listings SET title_snapshot=? WHERE item_id=? AND product_id=? AND title_snapshot IS ? AND EXISTS(SELECT 1 FROM logical_products p WHERE p.id=logical_listings.product_id AND p.code=? AND p.revision=? AND p.control_revision=?)",
-                    (
-                        title["title"],
-                        title["item_id"],
-                        title["product_id"],
-                        title["prior_title"],
-                        title["code"],
-                        title["revision"],
-                        title["control_revision"],
-                    ),
-                )
-            if row["kind"] == "edit" and json.loads(row["payload"]).get("code_migration"):
-                from app.services.code_migration import finish_migration
+            if row["kind"] == "edit":
+                if status == "SUCCEEDED":
+                    from app.services.edit_confirmation import finish_edit
 
-                finish_migration(db, {**dict(row), "id": ident}, status, result)
-            if row["kind"] == "edit" and json.loads(row["payload"]).get("logical_binding"):
-                from app.services.logical_products import finish_binding
+                    finish_edit(db, {**dict(row), "id": ident, "payload": payload}, result)
+                elif payload.get("code_migration"):
+                    from app.services.code_migration import finish_migration
 
-                finish_binding(db, {**dict(row), "id": ident}, status, result)
+                    finish_migration(db, {**dict(row), "id": ident}, status, result)
             self.release_launch(db, ident, row["target"], row["payload"], status, error=error)
             if row["kind"] in {"premium_publish", "premium_bump"}:
                 from app.services.paid_promotions import finish_expense

@@ -48,6 +48,15 @@ class ProductReadiness:
             revision, policy, policy_error = 0, DeliveryPolicy(), True
         gift = self.gifts.listing(ident)
         config = json.loads(product["config"]) if product else {}
+        prepared_gift = bool(
+            product
+            and product["handler"] == "telegram_gifts"
+            and product["state"] == "VERIFIED"
+            and product["verified_at"]
+            and product["revision"] == product["config_revision"]
+            and not product["enabled"]
+            and not (gift and gift["enabled"])
+        )
         mode = (
             "playerok"
             if config.get("platform_only") or policy.mode == "playerok"
@@ -276,7 +285,11 @@ class ProductReadiness:
         balance = self.store.setting("gifts:balance", {})
         required = reserved = shortage = None
         if mode == "telegram_gifts":
-            required = gift["approved_stars"] if gift else sum(g["stars"] for g in config.get("bundle", []))
+            required = (
+                gift["approved_stars"]
+                if gift and not prepared_gift
+                else sum(g["stars"] for g in config.get("bundle", []))
+            )
             connection = self.store.setting("gifts:connection", {})
             if connection.get("status") != "OK" or not fresh(connection.get("at")):
                 add(
@@ -343,9 +356,11 @@ class ProductReadiness:
                         "Обновить баланс",
                         "rd:balance:" + ident,
                     )
-            expected = json.loads(gift["bundle"]) if gift else config.get("bundle", [])
+            expected = json.loads(gift["bundle"]) if gift and not prepared_gift else config.get("bundle", [])
             try:
-                bundle = self.gifts.catalog_bundle(gift["gift_code"] if gift else config["code"])
+                bundle = self.gifts.catalog_bundle(
+                    gift["gift_code"] if gift and not prepared_gift else config["code"]
+                )
                 if bundle != expected:
                     add(
                         "GIFT_PRICE",

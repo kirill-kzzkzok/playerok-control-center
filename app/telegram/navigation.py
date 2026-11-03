@@ -61,6 +61,8 @@ def safe_route(action):
             "iv:",
             "order:",
             "chat:",
+            "compose:",
+            "reply:",
             "stats:",
             "sd:",
             "sr:",
@@ -110,6 +112,11 @@ class Navigation:
             store.navigation_locks = {}
 
     def key(self, bot, owner):
+        from app.telegram.navigation_context import source_panel
+
+        scoped = source_panel.get()
+        if scoped and scoped[:2] == (bot.id, owner):
+            return scoped[2]
         return f"navigation:{bot.id}:{owner}"
 
     def protected(self, owner, ident):
@@ -142,6 +149,8 @@ class Navigation:
                 panel.pop(name, None)
             self.store.set_setting(key, panel)
         if action.startswith("nav:close"):
+            if action.count(":") == 2 and action.split(":")[-1] != panel.get("token"):
+                raise Conflict("Кнопка закрытия устарела. Откройте текущую карточку")
             await state.clear()
             await self.close(bot, owner)
             return None, None
@@ -287,9 +296,7 @@ class Navigation:
             and not action.startswith(("nav:close", "nav:back:"))
         ):
             return False
-        if panel.get("id") and panel["id"] != message.message_id:
-            return safe_route(action) or action.startswith("ff:start:")
-        return True
+        return not (panel.get("id") and panel["id"] != message.message_id)
 
     async def close(self, bot, owner):
         key = self.key(bot, owner)
@@ -297,7 +304,14 @@ class Navigation:
         panel["closed"] = True
         self.store.set_setting(key, panel)
         ident = panel.get("id")
-        if not ident or self.protected(owner, ident):
+        if not ident:
+            return
+        if self.protected(owner, ident):
+            try:
+                await bot.edit_message_reply_markup(chat_id=owner, message_id=ident, reply_markup=None)
+            except Exception:  # noqa: BLE001 -- keep the receipt and the durable closed gate
+                panel["keyboard"] = "UNKNOWN"
+                self.store.set_setting(key, panel)
             return
         try:
             await bot.edit_message_reply_markup(chat_id=owner, message_id=ident, reply_markup=None)
@@ -354,7 +368,7 @@ class Navigation:
                 for button in row:
                     if button.callback_data == "nav:close":
                         button.callback_data = "nav:close:" + token
-            if view.get("history") and safe_route(action):
+            if view.get("history") and safe_route(action) and not action.startswith(("chat:", "chatpage:")):
                 # Dynamic parent follows the actual origin; explicit destination buttons remain explicit.
                 parent = view["history"][-1]["route"]
                 markup.inline_keyboard = [
@@ -377,8 +391,6 @@ class Navigation:
                     [InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:back:" + token)]
                 )
             ident, kind = panel.get("id"), "photo" if photo is not None else "text"
-            if ident and self.protected(owner, ident):
-                ident = None  # Proofs and notifications are never adopted as panels.
             fingerprint = (
                 hashlib.sha256(
                     json.dumps(
@@ -490,7 +502,7 @@ class Navigation:
                 for name in ("recovery_token", "recovery_id", "recovery_markup", "recovery_kind"):
                     panel.pop(name, None)
                 self.store.set_setting(key, panel)
-                if old:
+                if old and not self.protected(owner, old):
                     try:
                         await bot.delete_message(owner, old)
                     except Exception:  # noqa: BLE001 -- known old panel already has no keyboard; no deletion retry

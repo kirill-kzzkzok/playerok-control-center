@@ -28,6 +28,17 @@ from tests.test_operations import FakeAPI
 async def test_mismatched_text_price_or_incomplete_edit_receipt_is_unknown_once(tmp_path, changes, result):
     store = Store(tmp_path / "edit.sqlite")
     api = FakeAPI()
+    original_read = api.call
+
+    async def read(method, **kwargs):
+        value = await original_read(method, **kwargs)
+        if method == "get_item" and "price" in changes:
+            # The readback must actually disagree. The shared fixture's price
+            # 100 was already equal to the requested value before any write.
+            value["price"] = 99
+        return value
+
+    api.call = read
     calls = []
 
     def edit(**kwargs):

@@ -129,6 +129,7 @@ class OperationsPanel:
                 text += "\n\nПовтор запрещён, пока результат не установлен. Отсутствие записи на проверенных страницах не доказывает, что отправки не было."
                 if row["kind"] in {
                     "create",
+                    "edit",
                     "reply",
                     "delivery",
                     "delivery_text",
@@ -139,15 +140,15 @@ class OperationsPanel:
                     "premium_publish",
                     "premium_bump",
                 }:
-                    rows.append([("🔎 Сверить успешный результат", "ops:confirm:" + ident)])
-                rows.append([("⛔ Остановить без повтора", "ops:stop:" + ident)])
+                    rows.append([("🔍 Проверить результат на Playerok", "ops:confirm:" + ident)])
+                rows.append([("⛔ Закрыть без повторной отправки", "ops:stop:" + ident)])
             elif (
                 row["error_code"] == "MANUALLY_STOPPED_UNCERTAIN"
-                and row["kind"] in {"premium_publish", "premium_bump"}
+                and row["kind"] in {"edit", "premium_publish", "premium_bump"}
                 and row["status"] == "PERMANENT_FAILED"
             ):
-                text += "\n\nПовтор остановлен, но платёж остался неизвестным. Сверка квитанции по-прежнему доступна."
-                rows.append([("🔎 Сверить квитанцию и закрыть расход", "ops:confirm:" + ident)])
+                text += "\n\nЗапись закрыта без подтверждения успеха. Сверка без записи по-прежнему доступна; повторной отправки не будет."
+                rows.append([("🔍 Проверить результат на Playerok", "ops:confirm:" + ident)])
             rows.append([("История операций", "ops:list:ALL:0")])
             return text, keyboard(rows)
         if command not in {"stop", "confirm"} or (
@@ -156,14 +157,29 @@ class OperationsPanel:
                 command == "confirm"
                 and row["status"] == "PERMANENT_FAILED"
                 and row["error_code"] == "MANUALLY_STOPPED_UNCERTAIN"
-                and row["kind"] in {"premium_publish", "premium_bump"}
+                and row["kind"] in {"edit", "premium_publish", "premium_bump"}
             )
         ):
             raise Conflict("Операция уже разрешена или действие недоступно")
         data = {"id": ident, "signature": signature(row), "decision": "STOP_UNCERTAIN"}
         if command == "confirm":
+            if row["kind"] == "edit":
+                evidence = await self.service.evidence(owner, ident)
+                if evidence["decision"] == "CURRENT_STATE_ONLY":
+                    await state.clear()
+                    return "🔍 Playerok проверен\n" + evidence["reason"], keyboard(
+                        [
+                            *(
+                                [[("⛔ Закрыть без повторной отправки", "ops:stop:" + ident)]]
+                                if row["status"] == "UNCERTAIN"
+                                else []
+                            ),
+                            [("⬅️ К операции", "ops:show:" + ident)],
+                        ]
+                    )
             if row["kind"] in {
                 "create",
+                "edit",
                 "edit_fields",
                 "mark_read",
                 "fulfill",
@@ -183,6 +199,12 @@ class OperationsPanel:
                 raise Conflict("Проверка успешности этого типа операции пока недоступна")
         await state.set_state("resolve:reason")
         await state.set_data({"resolution": data})
+        if command == "stop":
+            return (
+                "⛔ Закрыть без повторной отправки?\n\nДействие на Playerok могло успешно выполниться. Закрытие не отменяет изменения и не подтверждает успех. Повторный запрос не отправляется.\n\nРезервы начатых и неизвестных платежей и карантин выдачи сохраняются. Только доказанно неиспользованный денежный резерв может быть снят существующей проверкой. Привязки не подтверждаются, автовыдача не включается. Для обычного редактирования закрытие снимает ожидание этой записи в очереди; перед новой правкой проверьте текущее объявление.\n\n"
+                + self.reason_prompt(data),
+                keyboard([[("⬅️ Отмена", "ops:show:" + ident)]]),
+            )
         return self.reason_prompt(data), keyboard([])
 
     @staticmethod
@@ -209,9 +231,24 @@ class OperationsPanel:
         await state.set_state(None)
         text = (
             "Подтвердите локальное решение: "
-            + escaped(data["decision"], 60)
+            + (
+                "закрыть без подтверждения успеха"
+                if data["decision"] == "STOP_UNCERTAIN"
+                else "подтвердить проверенный результат"
+            )
             + "\n"
             + escaped(reason, 700)
             + "\n\nВ Playerok ничего не отправляется. Перед подтверждением успешности данные будут проверены повторно."
         )
-        return text, keyboard([[("✅ Сохранить решение", "ops:apply:" + data["nonce"])]])
+        return text, keyboard(
+            [
+                [
+                    (
+                        "⛔ Закрыть запись без повтора"
+                        if data["decision"] == "STOP_UNCERTAIN"
+                        else "✅ Сохранить решение",
+                        "ops:apply:" + data["nonce"],
+                    )
+                ]
+            ]
+        )

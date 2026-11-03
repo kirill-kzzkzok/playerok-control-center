@@ -77,6 +77,30 @@ class Reconciliation:
         action = self.action(actor, ident, uncertain=True)
         kind, target = action["kind"], action["target"]
         payload = json.loads(action["payload"])
+        if kind == "edit":
+            from app.services.edit_confirmation import EditConfirmation
+            from app.services.logical_products import LogicalProducts
+
+            logical = LogicalProducts(self.store, self.api)
+            logical.authority(actor)
+            structured = {**action, "payload": payload}
+            if payload.get("logical_binding") or payload.get("code_migration"):
+                tag = "logical_binding" if payload.get("logical_binding") else "code_migration"
+                logical.product(payload[tag]["product_id"], actor)
+                observed = await self.api.call("get_item", id=target)
+                if tag == "logical_binding":
+                    receipt = logical.confirm_binding(structured, observed, writes=False)
+                else:
+                    from app.services.code_migration import CodeMigration
+
+                    receipt = CodeMigration(self.store, self.api).confirm(structured, observed, writes=False)
+                return {
+                    "decision": "CONFIRM_READ_STATE",
+                    "remote_id": target,
+                    tag: receipt,
+                    "checked_at": now(),
+                }
+            return await EditConfirmation(self.store, self.api).evidence(structured)
         if kind == "create":
             from app.services.logical_products import LogicalProducts
 
@@ -330,6 +354,19 @@ class Reconciliation:
                     "UPDATE drafts SET state='UPDATED' WHERE id=? AND state='QUEUED'",
                     (json.loads(action["payload"])["draft_id"],),
                 )
+            if action["kind"] == "edit" and status == "SUCCEEDED":
+                from app.services.edit_confirmation import finish_edit
+
+                structured = {**action, "payload": json.loads(action["payload"])}
+                if structured["payload"].get("logical_binding"):
+                    from app.services.logical_products import LogicalProducts
+
+                    LogicalProducts(self.store, self.api).binding_guard(structured, writes=False)
+                if structured["payload"].get("code_migration"):
+                    from app.services.code_migration import CodeMigration
+
+                    CodeMigration(self.store, self.api).guard(structured, writes=False)
+                finish_edit(db, structured, result)
             if action["kind"] == "delivery" and status == "SUCCEEDED":
                 db.execute(
                     "UPDATE inventory SET status='DELIVERED' WHERE id=(SELECT inventory_id FROM reservations WHERE order_id=?) AND status='QUARANTINED'",

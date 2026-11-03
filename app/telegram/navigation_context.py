@@ -1,0 +1,141 @@
+"""Select a callback's physical card before invoking existing UI handlers."""
+
+import json
+from contextvars import ContextVar
+from dataclasses import replace
+
+from aiogram import BaseMiddleware
+from aiogram.fsm.context import FSMContext
+
+from app.telegram.callback_ack import navigation
+from app.telegram.storage import replace_context
+
+source_panel = ContextVar("source_panel", default=None)
+
+
+def panel_key(store, bot_id, owner, message_id):
+    primary = f"navigation:{bot_id}:{owner}"
+    if store.setting(primary, {}).get("id") == message_id:
+        return primary
+    known = store.rows(
+        "SELECT key FROM settings WHERE key GLOB ? AND json_extract(value,'$.id')=?",
+        (primary + ":message:*", message_id),
+    )
+    if len(known) == 1:
+        return known[0]["key"]
+    return f"{primary}:message:{message_id}"
+
+
+class MessageNavigation(BaseMiddleware):
+    def __init__(self, store):
+        self.store = store
+
+    async def __call__(self, handler, event, data):
+        state = data.get("state")
+        if state is None:
+            return await handler(event, data)
+        callback = hasattr(event, "data") and hasattr(event, "message")
+        message = event.message if callback else event
+        if message is None or not hasattr(message, "bot"):
+            return await handler(event, data)
+        owner, bot = event.from_user.id, message.bot
+        if message.chat.type != "private" or message.chat.id != owner:
+            return None
+        if callback and not hasattr(message, "reply_markup"):
+            return await bot.send_message(
+                owner,
+                "Исходное сообщение недоступно. Откройте карточку заново через /start. Другие экраны сохранены.",
+            )
+        if (
+            callback
+            and data.get("callback_ack", {}).get("status") in {"stale", "rejected"}
+            and not navigation(event.data or "")
+        ):
+            return await bot.send_message(
+                owner,
+                "Кнопка устарела или отклонена Telegram. Действие не выполнено. Откройте нужную карточку заново; соседние экраны сохранены.",
+            )
+        primary = f"navigation:{bot.id}:{owner}"
+        active_key = f"navigation:active:{bot.id}:{owner}"
+        active = self.store.setting(active_key, primary)
+        key = active
+        if callback:
+            from app.telegram.navigation import Navigation
+
+            key = panel_key(self.store, bot.id, owner, message.message_id)
+            if not self.store.setting(key):
+                candidates = [(primary, self.store.setting(primary, {}))]
+                candidates += [
+                    (row["key"], json.loads(row["value"]))
+                    for row in self.store.rows(
+                        "SELECT key,value FROM settings WHERE key GLOB ?",
+                        (primary + ":message:*",),
+                    )
+                ]
+                observed = [
+                    candidate for candidate, panel in candidates if Navigation.observed(message, panel)
+                ]
+                if len(observed) == 1:
+                    key = observed[0]
+            if key != primary and not self.store.setting(primary, {}).get("id") and not message.reply_markup:
+                key = primary  # Old bootstrap callbacks without a known panel.
+            if key != primary and not self.store.setting(key):
+                if not navigation(event.data or "") and not (event.data or "").startswith("cc:"):
+                    return await bot.send_message(
+                        owner,
+                        "Кнопка устарела. Откройте карточку заново через /start; действие не выполнено.",
+                    )
+                self.store.set_setting(
+                    key,
+                    {
+                        "id": message.message_id,
+                        "kind": "photo" if message.photo else "text",
+                        "route": None,
+                        "history": [],
+                        "context": {},
+                    },
+                )
+        elif (message.text or "").split(" ", 1)[0].split("@")[0] in {"/start", "/status", "/panel_reset"}:
+            key = primary
+        token = source_panel.set((bot.id, owner, key))
+        try:
+            from app.telegram.navigation import Navigation
+
+            if (
+                callback
+                and not (event.data or "").startswith(
+                    ("cc:", "chat:", "compose:", "reply:", "readchat:", "chatmore:", "chatclose:")
+                )
+                and not Navigation(self.store).allowed(message, owner, event.data or "")
+            ):
+                return await handler(event, data)
+            alias = f"navigation:fsm_active:{bot.id}:{owner}"
+            if not self.store.setting(alias):
+                # One-time migration of the pre-existing single durable FSM.
+                # Thereafter each card has ONE canonical row: no snapshots of
+                # consumed confirmations can resurrect after a crash.
+                old_state, old_data = await state.get_state(), await state.get_data()
+                old_key = state.storage.key(state.key)
+                prior = FSMContext(state.storage, replace(state.key, destiny=primary))
+                with self.store.transaction():
+                    await replace_context(prior, old_state, old_data)
+                    self.store.execute("DELETE FROM fsm WHERE key=?", (old_key,))
+                    self.store.set_setting(alias, key)
+            else:
+                self.store.set_setting(alias, key)
+            self.store.set_setting(active_key, key)
+            if callback and not (event.data or "").startswith(
+                ("cc:", "chat:", "readchat:", "chatmore:", "chatpage:")
+            ):
+                # A notification card used as a form/another screen is no longer
+                # the live conversation view. The next incoming event may open
+                # one new notice; it must not overwrite this owner's form.
+                self.store.execute(
+                    "UPDATE chat_cards SET state='CLOSED',hint='',busy_until=0 WHERE owner_id=? AND account_id=? AND telegram_message_id=? AND state='OPEN'",
+                    (owner, self.store.setting("playerok:account_id", ""), message.message_id),
+                )
+            data["state"] = FSMContext(state.storage, replace(state.key, destiny=key))
+            data["raw_state"] = await data["state"].get_state()
+            return await handler(event, data)
+        finally:
+            source_panel.reset(token)

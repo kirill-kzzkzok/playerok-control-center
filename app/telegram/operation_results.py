@@ -117,7 +117,14 @@ class OperationResults:
             text += "\nПостановка в очередь не означает выполнения."
         elif status == "UNCERTAIN" or row["error_code"] == "MANUALLY_STOPPED_UNCERTAIN":
             text += "\n⚠️ Запрос мог выполниться. Не повторяйте его. Сначала проверьте фактический результат."
-            buttons.append([("Безопасная сверка", "ops:show:" + ident)])
+            buttons.append(
+                [
+                    (
+                        "🔍 Проверить результат на Playerok",
+                        "ops:confirm:" + ident if kind == "edit" else "ops:show:" + ident,
+                    )
+                ]
+            )
         elif status == "PERMANENT_FAILED":
             code = row["error_code"] or ""
             reason = "Условия операции не прошли повторную проверку. Откройте объект и проверьте актуальные данные."
@@ -269,7 +276,9 @@ class OperationResults:
             if lock is None:
                 lock = asyncio.Lock()
             async with lock:
-                key = f"navigation:{bot.id}:{row['owner_id']}"
+                from app.telegram.navigation_context import panel_key
+
+                key = panel_key(self.store, bot.id, row["owner_id"], row["view_message_id"])
                 panel = self.store.setting(key, {})
                 if (
                     panel.get("id") != row["view_message_id"]
@@ -335,7 +344,11 @@ class OperationResults:
             (time.time(),),
         )
         for row in rows:
-            panel = self.store.setting(f"navigation:{getattr(bot, 'id', None)}:{row['owner_id']}", {})
+            from app.telegram.navigation_context import panel_key
+
+            panel = self.store.setting(
+                panel_key(self.store, getattr(bot, "id", None), row["owner_id"], row["view_message_id"]), {}
+            )
             if (
                 row["view_message_id"] is not None
                 and panel.get("id") == row["view_message_id"]
