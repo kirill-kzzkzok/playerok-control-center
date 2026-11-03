@@ -509,16 +509,15 @@ class Playerok:
             return result
         except APIError as error:
             connection = getattr(self, "connection", None)
-            if connection and error.code in {
-                "SESSION_EXPIRED",
-                "UNAUTHORIZED_OR_CHALLENGE",
-                "NETWORK_ERROR",
-                "NON_JSON_RESPONSE",
-                "HTTP_500",
-                "HTTP_502",
-                "HTTP_503",
-                "HTTP_504",
-            }:
+            if connection and (
+                method == "get"
+                or error.code
+                in {
+                    "SESSION_EXPIRED",
+                    "UNAUTHORIZED_OR_CHALLENGE",
+                    "ACCOUNT_UNAVAILABLE",
+                }
+            ):
                 connection.invalidate(error.code, error.diagnostics)
             from app.security.logging import event
 

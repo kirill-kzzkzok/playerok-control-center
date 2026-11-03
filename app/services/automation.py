@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from app.database.store import Conflict, encode, now
 from app.services.order_management import OrderManagement, deliverable
 from app.services.products import ValidationError
+from app.services.sync_health import orders_sync_failed
 
 
 def message_text(value, *, required=False):
@@ -127,7 +128,7 @@ class Automation:
             reasons.append("глобальная автоматика выключена")
         if not baseline:
             reasons.append("первоначальная сверка заказов не завершена")
-        if sync == "ERROR":
+        if orders_sync_failed(self.store):
             reasons.append("последняя сверка завершилась ошибкой")
         if not getattr(self.api.account, "id", None):
             reasons.append("сессия Playerok не подтверждена")

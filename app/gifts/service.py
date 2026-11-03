@@ -20,6 +20,7 @@ from app.localvpn import active_proxy
 from app.security.logging import event
 from app.services.order_management import deal_details, deliverable, sale
 from app.services.orders import Orders
+from app.services.sync_health import orders_sync_failed
 
 
 def description_hash(value):
@@ -269,7 +270,7 @@ class GiftService:
             and not self.store.setting("gifts:stopped", True)
             and not self.store.setting("gifts:paused", False)
             and bool(self.store.setting("orders:last_complete_sync"))
-            and self.store.setting("sync:health", {}).get("status") != "ERROR"
+            and not orders_sync_failed(self.store)
             and not self.store.rows(
                 "SELECT 1 FROM gift_jobs WHERE state='UNCERTAIN' OR refund_state='UNCERTAIN' LIMIT 1"
             )
@@ -946,7 +947,7 @@ class GiftService:
             reasons.append("временная пауза подарочных покупок; настройки товаров сохранены")
         if not self.store.setting("orders:last_complete_sync"):
             reasons.append("сверка заказов не завершена")
-        if self.store.setting("sync:health", {}).get("status") == "ERROR":
+        if orders_sync_failed(self.store):
             reasons.append("ошибка синхронизации")
         if self.store.rows("SELECT 1 FROM gift_jobs WHERE state IN ('SPENDING','UNCERTAIN')"):
             reasons.append("предыдущий платёж требует сверки")

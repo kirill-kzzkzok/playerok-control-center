@@ -16,6 +16,7 @@ from app.services.inventory import Inventory
 from app.services.logical_products import LogicalProducts
 from app.services.playerok_connection import REASONS
 from app.services.products import ValidationError
+from app.services.sync_health import orders_sync_failed
 
 
 def fresh(value, seconds=300):
@@ -126,7 +127,7 @@ class ProductReadiness:
                 "diagnostics",
                 unknown=True,
             )
-        if self.store.setting("sync:health", {}).get("status") == "ERROR":
+        if orders_sync_failed(self.store):
             add(
                 "SYNC_ERROR",
                 "Последняя синхронизация завершилась ошибкой.",
