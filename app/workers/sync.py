@@ -8,6 +8,7 @@ from app.playerok.adapter import APIError
 from app.services.notification_preferences import notification_baseline
 from app.services.sync_health import orders_sync_failed
 from app.workers.pagination import PageScanner
+from app.workers.supervisor import worker_cycle
 from playerokapi.enums import ItemDealDirections
 
 
@@ -212,7 +213,16 @@ class Synchronizer(PageScanner):
             self.wake.clear()
             try:
                 if time.monotonic() >= next_full:
-                    await self.once()
+                    with worker_cycle(self.store, "sync", min(900, 60 * 2 ** min(failures + 1, 4))) as cycle:
+                        await self.once()
+                        cycle["processed"] = self.health.get("orders", 0)
+                        if orders_sync_failed(self.store):
+                            cycle["error_code"] = self.health.get("errors", {}).get(
+                                "orders", "ORDER_SYNC_FAILED"
+                            )
+                        cycle["retry_delay"] = max(
+                            cycle["retry_delay"], self.health.get("orders_retry_after", 0)
+                        )
                     failures = failures + 1 if orders_sync_failed(self.store) else 0
                     next_full = (
                         time.monotonic()

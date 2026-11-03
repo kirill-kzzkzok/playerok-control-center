@@ -8,6 +8,7 @@ from app.playerok.adapter import APIError
 from app.services.fulfillment import Fulfillment
 from app.services.order_management import deal_details, deliverable
 from app.services.orders import Orders
+from app.workers.supervisor import worker_cycle
 
 
 class GiftWorker:
@@ -119,7 +120,8 @@ class GiftWorker:
 
     async def run(self, stop):
         while not stop.is_set():
-            await self.once()
+            with worker_cycle(self.store, "gifts", 5, max_seconds=180) as cycle:
+                cycle["processed"] = await self.once()
             try:
                 await asyncio.wait_for(stop.wait(), 5)
             except TimeoutError:

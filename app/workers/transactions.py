@@ -6,6 +6,7 @@ from app.database.store import now
 from app.playerok.adapter import APIError
 from app.services.transactions import Transactions
 from app.workers.pagination import PageScanner
+from app.workers.supervisor import worker_cycle
 
 
 class TransactionWorker:
@@ -69,7 +70,16 @@ class TransactionWorker:
         failures = 0
         while not stop.is_set():
             try:
-                await self.once()
+                with worker_cycle(
+                    self.store, "transactions", min(900, 60 * 2 ** min(failures + 1, 4))
+                ) as cycle:
+                    await self.once()
+                    cycle["processed"] = self.health.get("observations", 0)
+                    if self.health.get("status") in {"ERROR", "NOT_AUTHORIZED"}:
+                        cycle["error_code"] = self.health.get("code", "ACCOUNT_NOT_VERIFIED")
+                    cycle["retry_delay"] = max(
+                        cycle["retry_delay"], self.health.get("retry_at", 0) - time.time()
+                    )
             except Exception as error:  # noqa: BLE001 -- persist a sanitized worker boundary
                 self.health = {
                     "status": "ERROR",

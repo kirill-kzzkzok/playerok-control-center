@@ -186,9 +186,12 @@ class PromotionWorker:
         return processed
 
     async def run(self, stop):
+        from app.workers.supervisor import worker_cycle
+
         while not stop.is_set():
             try:
-                await self.once()
+                with worker_cycle(self.store, "promotions", 30) as cycle:
+                    cycle["processed"] = await self.once() or 0
             except Exception as error:  # noqa: BLE001 -- keep read-only scheduler alive, log safe type/code only
                 self.store.set_setting(
                     "promotions:health",

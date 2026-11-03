@@ -295,10 +295,13 @@ class LogicalProductWorker:
             )
 
     async def run(self, stop):
+        from app.workers.supervisor import worker_cycle
+
         failures = 0
         while not stop.is_set():
             try:
-                await self.once()
+                with worker_cycle(self.store, "logical-products", min(900, 30 * 2 ** min(failures + 1, 5))):
+                    await self.once()
                 failures = 0
             except (APIError, ValueError) as error:
                 failures += 1

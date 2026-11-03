@@ -144,15 +144,43 @@ class Notifications:
                 text = f"🛒 <b>Заказ</b>\n{escape(item.get('name') or payload['id'])}\nСтатус: {escape(human_status(payload['status'], 'order'))}\nСумма: {item.get('price', '?')} ₽"
                 markup = keyboard([[("Открыть заказ", "order:" + payload["id"])]])
             elif event["kind"] == "worker_failed":
+                from app.workers.supervisor import CYCLE_LABELS
+
+                if payload.get("cycle"):
+                    current = self.store.setting("runtime:cycle:" + payload["worker"], {})
+                    if current.get("consecutive_failures", 0) < 3 or current.get("incident") != payload.get(
+                        "incident"
+                    ):
+                        self.store.execute(
+                            "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) "
+                            "SELECT ?,user_id,'RESOLVED' FROM administrators",
+                            (event["key"],),
+                        )
+                        continue
                 text = (
-                    "⚠️ <b>Фоновая задача остановилась</b>\n"
-                    + escaped(payload["worker"], 80)
+                    (
+                        "⚠️ <b>Фоновая обработка требует проверки</b>\n"
+                        if payload.get("cycle")
+                        else "⚠️ <b>Фоновая задача остановилась</b>\n"
+                    )
+                    + escaped(
+                        CYCLE_LABELS.get(payload["worker"], payload["worker"])
+                        if payload.get("cycle")
+                        else payload["worker"],
+                        80,
+                    )
                     + ": "
                     + escaped(payload["error_type"], 80)
-                    + "\nПерезапуск выполняется с задержкой. Проверьте диагностику. "
+                    + (
+                        "\nПовторная проверка запланирована. Проверьте диагностику. "
+                        if payload.get("cycle")
+                        else "\nПерезапуск выполняется с задержкой. Проверьте диагностику. "
+                    )
                     + "Неопределённые операции автоматически не повторяются."
                 )
-                markup = keyboard([[("Диагностика", "diagnostics")]])
+                markup = keyboard(
+                    [[("Диагностика", "diagnostics:workers" if payload.get("cycle") else "diagnostics")]]
+                )
             elif event["kind"] == "promotion_guard":
                 text = (
                     "⛔ <b>Политика продвижения выключена по лимиту</b>\n"
@@ -473,12 +501,15 @@ class Notifications:
             )
 
     async def run(self, stop):
+        from app.workers.supervisor import worker_cycle
+
         self.store.execute("UPDATE notifications SET status='UNCERTAIN' WHERE status='PROCESSING'")
         self.store.execute(
             "UPDATE operation_receipts SET notice_status='UNCERTAIN' WHERE notice_status='PROCESSING'"
         )
         while not stop.is_set():
-            await self.once()
+            with worker_cycle(self.store, "notifications", 5):
+                await self.once()
             try:
                 await asyncio.wait_for(stop.wait(), timeout=5)
             except TimeoutError:

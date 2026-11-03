@@ -9,6 +9,7 @@ from app.playerok.adapter import APIError
 from app.services.automation import future_order
 from app.services.delivery_chains import DeliveryChains
 from app.services.products import ValidationError
+from app.workers.supervisor import worker_cycle
 
 
 class EnrollmentWorker:
@@ -140,7 +141,8 @@ class EnrollmentWorker:
     async def run(self, stop):
         while not stop.is_set():
             try:
-                await self.once()
+                with worker_cycle(self.store, "enrollment", 10) as cycle:
+                    cycle["processed"] = await self.once()
             except Exception as error:  # noqa: BLE001 -- retain durable jobs/leases; never log raw API text
                 self.store.set_setting(
                     "enrollment:health", {"status": "ERROR", "code": type(error).__name__, "at": now()}

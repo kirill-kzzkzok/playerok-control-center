@@ -2,7 +2,7 @@ import asyncio
 import json
 import secrets
 import sqlite3
-from datetime import UTC
+from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
 
@@ -652,8 +652,6 @@ def create_router(store, api, products, synchronizer):
                     await state.clear()
                 text, markup = settings_panel.handle(action, owner)
             elif action == "backup":
-                from datetime import datetime
-
                 destination = Path("data/backups") / (
                     datetime.now(UTC).strftime("%Y%m%dT%H%M%S") + ".sqlite3"
                 )
@@ -662,6 +660,32 @@ def create_router(store, api, products, synchronizer):
                     "Резервная копия сохранена локально в data/backups. В Telegram база с данными выдачи не отправляется.",
                     keyboard([]),
                 )
+            elif action == "diagnostics:workers":
+                from app.workers.supervisor import CYCLE_LABELS
+
+                text = "⚙️ <b>Фоновая обработка</b>\n"
+                for row in store.rows(
+                    "SELECT key,value FROM settings WHERE key GLOB 'runtime:cycle:*' ORDER BY key LIMIT 8"
+                ):
+                    health = json.loads(row["value"])
+                    name = CYCLE_LABELS.get(row["key"].rsplit(":", 1)[1], "Фоновая обработка")
+                    text += "\n<b>" + escaped(name, 60) + "</b>\n"
+                    text += "Последний запуск: " + local_time(health.get("last_started"))
+                    text += "\nУспешный цикл: " + (
+                        local_time(health["last_success"])
+                        if health.get("last_success")
+                        else "пока не подтверждён"
+                    )
+                    text += f"\nОшибок подряд: {health.get('consecutive_failures', 0)} · обработано за цикл: {health.get('processed', 0)}"
+                    if health.get("retry_at"):
+                        text += "\nСледующая попытка: " + local_time(
+                            datetime.fromtimestamp(health["retry_at"], UTC).isoformat()
+                        )
+                    if health.get("error_code"):
+                        text += "\nПричина: <code>" + escaped(health["error_code"], 80) + "</code>"
+                    text += "\n"
+                text += "\nЭто состояние обработчиков, а не разрешение выдачи или подтверждение отправки."
+                markup = keyboard([], back=("К вопросам", "attention"))
             elif action == "diagnostics":
                 health = store.setting("sync:health", {"status": "NOT_STARTED"})
                 actions = store.rows(

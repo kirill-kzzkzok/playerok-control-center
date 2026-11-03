@@ -3,14 +3,90 @@ import logging
 import random
 import time
 import uuid
+from contextlib import contextmanager
 
 from app.database.store import encode, now
 
 logger = logging.getLogger(__name__)
+CYCLE_LABELS = {
+    "chains": "Выдача заказов",
+    "enrollment": "Обнаружение новых продаж",
+    "gifts": "Telegram-подарки",
+    "auto-replies": "Автоответы",
+    "logical-products": "Перевыставления",
+    "sync": "Синхронизация",
+    "transactions": "История расходов",
+    "promotions": "Продвижение",
+    "notifications": "Уведомления владельцу",
+}
 
 
 class WorkerExitedError(RuntimeError):
     pass
+
+
+@contextmanager
+def worker_cycle(store, name, retry_delay, *, max_seconds=900):
+    """Observe one cycle, never retry its work or confer execution authority."""
+    key = "runtime:cycle:" + name
+    health = store.setting(key, {})
+    health.update(state="RUNNING", last_started=now(), retry_at=0, deadline_at=time.time() + max_seconds)
+    store.set_setting(key, health)
+    result = {"processed": 0, "retry_delay": retry_delay}
+    cancelled = False
+    try:
+        yield result
+    except Exception as error:
+        result["error_code"] = getattr(error, "code", type(error).__name__)
+        raise
+    except BaseException:
+        cancelled = True
+        raise
+    finally:
+        with store.transaction() as db:
+            if cancelled:
+                health["state"] = "STOPPED"
+            elif result.get("error_code"):
+                failures = health.get("consecutive_failures", 0) + 1
+                if failures == 1:
+                    health["incident"] = uuid.uuid4().hex
+                health.update(
+                    state="DEGRADED" if result["processed"] else "ERROR",
+                    consecutive_failures=failures,
+                    error_code=result["error_code"],
+                    retry_at=time.time() + result["retry_delay"],
+                    processed=result["processed"],
+                )
+                if failures >= 3:
+                    timestamp = now()
+                    db.execute(
+                        "INSERT OR IGNORE INTO inbox(key,kind,payload,received_at,processed_at) "
+                        "VALUES(?,'worker_failed',?,?,?)",
+                        (
+                            f"worker_cycle:{name}:{health['incident']}",
+                            encode(
+                                {
+                                    "worker": name,
+                                    "error_type": health["error_code"],
+                                    "cycle": True,
+                                    "incident": health["incident"],
+                                }
+                            ),
+                            timestamp,
+                            timestamp,
+                        ),
+                    )
+            else:
+                health.update(
+                    state="OK",
+                    consecutive_failures=0,
+                    error_code=None,
+                    last_success=now(),
+                    processed=result["processed"],
+                    retry_at=0,
+                )
+            health["updated_at"] = now()
+            store.set_setting(key, health)
 
 
 class Supervisor:

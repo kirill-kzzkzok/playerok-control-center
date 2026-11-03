@@ -2,6 +2,7 @@ import asyncio
 
 from app.database.store import now
 from app.services.delivery_chains import DeliveryChains
+from app.workers.supervisor import worker_cycle
 
 
 class ChainWorker:
@@ -28,7 +29,8 @@ class ChainWorker:
     async def run(self, stop):
         while not stop.is_set():
             try:
-                self.once()
+                with worker_cycle(self.store, "chains", 2) as cycle:
+                    cycle["processed"] = self.once()
                 self.store.set_setting("chains:health", {"status": "OK", "at": now()})
             except Exception as error:  # noqa: BLE001 -- persist safe worker health, retain durable sequence
                 self.store.set_setting(

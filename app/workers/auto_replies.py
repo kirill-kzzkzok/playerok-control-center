@@ -6,6 +6,7 @@ from app.playerok.adapter import APIError
 from app.services.auto_replies import AutoReplies
 from app.services.products import ValidationError
 from app.services.sync_health import chat_sync_ready, orders_sync_ready
+from app.workers.supervisor import worker_cycle
 
 
 class AutoReplyWorker:
@@ -134,7 +135,14 @@ class AutoReplyWorker:
     async def run(self, stop):
         while not stop.is_set():
             try:
-                await self.once()
+                with worker_cycle(self.store, "auto-replies", 10) as cycle:
+                    cycle["processed"] = await self.once()
+                    health = self.store.setting("auto_replies:health", {})
+                    cycle["retry_delay"] = max(10, (health.get("retry_at") or 0) - time.time())
+                    if health.get("status") == "ERROR":
+                        cycle["error_code"] = health.get("code") or next(
+                            iter(health.get("errors", [])), "READ_CHECK_FAILED"
+                        )
             except Exception as error:  # noqa: BLE001 -- isolate worker, never log message contents
                 self.store.set_setting(
                     "auto_replies:health", {"status": "ERROR", "code": type(error).__name__, "at": now()}

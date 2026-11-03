@@ -1,11 +1,13 @@
 """Small local navigation hub; no synchronisation or external writes on open."""
 
+import json
 import time
 
 from app.database.store import Conflict
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard, main_menu
 from app.telegram.presentation import connection_summary
+from app.workers.supervisor import CYCLE_LABELS
 
 
 class HomePanel:
@@ -92,6 +94,16 @@ class HomePanel:
             rows.append([("Не удалось синхронизировать магазин", "diagnostics")])
         if getattr(getattr(self.api, "connection", None), "state", {}).get("status") == "DISCONNECTED":
             rows.append([("Playerok не подключён", "profile")])
+        for worker in self.store.rows("SELECT key,value FROM settings WHERE key GLOB 'runtime:cycle:*'"):
+            health = json.loads(worker["value"])
+            stalled = health.get("state") == "RUNNING" and 0 < health.get("deadline_at", 0) < time.time()
+            if (
+                stalled
+                or health.get("consecutive_failures", 0) >= 3
+                and health.get("state") in {"ERROR", "DEGRADED"}
+            ):
+                label = CYCLE_LABELS.get(worker["key"].rsplit(":", 1)[1], "Фоновая обработка")
+                rows.append([("⚠️ " + label + " требует проверки", "diagnostics:workers")])
         return rows
 
     def home(self):

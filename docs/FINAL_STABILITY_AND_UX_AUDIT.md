@@ -15,7 +15,7 @@
 | B5 | ВОССТАНОВЛЕНИЕ АВТООТВЕТОВ ПОСЛЕ ВРЕМЕННОЙ ОШИБКИ | FIXED | RED2→42passed profile.3 bounded free-read attempts with durable deadlines; fresh rule/dialog before queue; existing outgoing event/unknown cannot retry |
 | C1 | НЕ ДОПУСКАТЬ БЛОКИРОВКИ СКЛАДСКОЙ ВЫДАЧИ МЕДЛЕННЫМ TELEGRAM GIFT | — | Проверка ещё не выполнена |
 | C2 | ОПЛАЧЕННЫЕ ЗАБЛОКИРОВАННЫЕ ЗАКАЗЫ ДОЛЖНЫ БЫТЬ ВИДНЫ ВСЕГДА | CONFIRMED | RED missing home attention for actual BLOCKED enrollment. SQL state-based paginated paid attention/order links, NEEDS_FULFILLMENT and closed-order exclusion covered. Worker degradation part depends on C3 |
-| C3 | ДОЛГОВРЕМЕННЫЕ ОШИБКИ WORKER НЕ ДОЛЖНЫ БЫТЬ НЕВИДИМЫМИ | — | Проверка ещё не выполнена |
+| C3 | ДОЛГОВРЕМЕННЫЕ ОШИБКИ WORKER НЕ ДОЛЖНЫ БЫТЬ НЕВИДИМЫМИ | CONFIRMED | RED real caught chain failure→79passed profile; durable cycles/start/success/consecutive/retry/progress,1coalesced alert after3 failures,Home+diagnostics,recovery suppresses obsolete alert. Normal90sGift no alarm. Realtime extended coverage pending |
 | C4 | НЕ ТЕРЯТЬ ВАЖНЫЕ УВЕДОМЛЕНИЯ ПРИ ОШИБКАХ TELEGRAM | — | Проверка ещё не выполнена |
 | C5 | ПРИОРИТЕТ КРИТИЧЕСКИХ УВЕДОМЛЕНИЙ | — | Проверка ещё не выполнена |
 | C6 | УВЕДОМЛЕНИЕ «СКЛАД ПУСТ» ДОЛЖНО ИСПОЛЬЗОВАТЬ ПРАВИЛЬНЫЙ STOCK_SCOPE | — | Проверка ещё не выполнена |
