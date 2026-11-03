@@ -140,13 +140,16 @@ class ProductReadiness:
                 "Диагностика синхронизации",
                 "diagnostics",
             )
-        migrating = product and (len(product["code"]) != 3 or product["error_code"] == "CODE_MIGRATING")
+        legacy = product and product["state"] == "LEGACY"
+        migrating = product and (
+            legacy or len(product["code"]) != 3 or product["error_code"] == "CODE_MIGRATING"
+        )
         if migrating:
             add(
                 "CODE_MIGRATION",
                 "Требуется подтверждённый перенос кода в название. Новая выдача остановлена.",
-                "🔄 Перенос кодов товаров",
-                "codes:home",
+                "🔐 Подтвердить новый код" if legacy else "🔄 Перенос кодов товаров",
+                "lp:item:" + ident if legacy else "codes:home",
             )
         if mode != "manual" and not migrating and (not product or product["state"] != "VERIFIED"):
             add(

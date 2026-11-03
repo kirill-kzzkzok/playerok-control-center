@@ -80,7 +80,7 @@ class LogicalProductsPanel:
                 text += f"\nТекст выдачи сохранён: {len(config.get('text', ''))} символов; содержимое скрыто"
             if product["state"] == "LEGACY":
                 text += "\nНужен перенос старой привязки: код ещё не добавлен в Playerok. Действующая история сохранена."
-                rows.append([("Обновить описание на Playerok", prefix + "migrate")])
+                rows.append([("🔐 Перенести привязку в [XXX]", prefix + "migrate")])
             elif product["state"] == "PENDING":
                 operation = self.store.rows(
                     "SELECT status FROM outbox WHERE id=?", (product["operation_id"],)
