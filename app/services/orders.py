@@ -101,6 +101,23 @@ class Orders:
                 ),
             )
             db.execute("UPDATE inbox SET processed_at=? WHERE key=?", (now(), key))
+            # Missing upstream dates are not permanent refusals. A later API
+            # observation may prove eligibility against the ORIGINAL policy
+            # cutoff; no owner stop, blocked check or existing chain is reset.
+            from app.services.automation import future_order
+
+            policy = db.execute(
+                "SELECT revision,updated_at FROM delivery_policies WHERE item_id=?",
+                (item["id"],),
+            ).fetchone()
+            if policy and future_order(order.get("created_at"), policy["updated_at"]):
+                db.execute(
+                    "UPDATE auto_enrollment SET status='PENDING',error_code=NULL "
+                    "WHERE order_id=? AND policy_revision=? AND status='SKIPPED' "
+                    "AND error_code='NOT_A_VERIFIED_FUTURE_ORDER' "
+                    "AND NOT EXISTS(SELECT 1 FROM delivery_chains WHERE order_id=?)",
+                    (ident, policy["revision"], ident),
+                )
             old_problem = old_payload.get("has_problem")
             if not previous or previous["status"] != status or old_problem != order.get("has_problem"):
                 history = db.execute(

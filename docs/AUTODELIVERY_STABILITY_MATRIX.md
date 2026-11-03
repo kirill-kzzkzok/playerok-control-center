@@ -62,3 +62,4 @@
 
 | 1.2 Enrollment lease после рестарта | instance / __main__ / enrollment | RED2failed; реальный InstanceLock, PENDING-only fencing;289passed, single confirmed delivery, old-token refusal | FIXED |
 | 1.3 Полная карточка / retained observations | order_management / orders / delivery_chains / Gifts / PlatformOrders / Outbox | RED5+2; fresh same-deal hydration, conflicting identities blocked, retained absent/null marked;177passed+89passed; no cached username as fresh proof | FIXED в проверенных text/stock/Gifts/Playerok путях; timestamp recovery отдельно |
+| 1.3b Поздняя серверная дата | orders / enrollment | RED1failed; SKIPPED текущей revision восстанавливается после подтверждённой future date;51passed включая реальные workers, исторические даты не допускаются | FIXED |
