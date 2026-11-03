@@ -28,10 +28,14 @@ class HomePanel:
             "EXISTS(SELECT 1 FROM gift_jobs g WHERE g.order_id=o.id AND "
             "(g.state='UNCERTAIN' OR g.refund_state='UNCERTAIN')) AS payment_unknown, "
             "EXISTS(SELECT 1 FROM gift_jobs g WHERE g.order_id=o.id "
-            "AND g.state IN ('BLOCKED','INVALID_RECIPIENT')) AS gift_blocked FROM orders o), "
+            "AND g.state IN ('BLOCKED','INVALID_RECIPIENT')) AS gift_blocked, "
+            "EXISTS(SELECT 1 FROM gift_listings g JOIN logical_listings l ON l.item_id=g.item_id "
+            "JOIN logical_products p ON p.id=l.product_id WHERE g.item_id=o.item_id "
+            "AND g.enabled=1 AND p.state='LEGACY' "
+            "AND NOT EXISTS(SELECT 1 FROM gift_jobs j WHERE j.order_id=o.id)) AS binding_unverified FROM orders o), "
             "actionable AS (SELECT * FROM issues WHERE uncertain OR payment_unknown OR "
             "status IN ('PAID','SENT') AND (enrollment OR chain IN ('BLOCKED','NEEDS_FULFILLMENT') "
-            "OR quarantine OR gift_blocked)) "
+            "OR quarantine OR gift_blocked OR binding_unverified)) "
             "SELECT *,COUNT(*) OVER() AS total FROM actionable "
             "ORDER BY (uncertain OR payment_unknown OR quarantine) DESC,id LIMIT 10 OFFSET ?",
             (time.time(), page * 10),
@@ -50,6 +54,8 @@ class HomePanel:
             reasons.append("Нужно проверить завершение сделки на Playerok")
         if row["gift_blocked"]:
             reasons.append("Подарок не выдан. Проверьте получателя и разрешения")
+        if row["binding_unverified"]:
+            reasons.append("Старая подарочная привязка требует подтверждения [XXX]. Заказ проверьте вручную")
         return "; ".join(reasons)
 
     def problems(self, *, include_paid=True):

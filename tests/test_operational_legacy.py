@@ -6,6 +6,7 @@ from app.database.store import now
 from app.services.logical_products import LogicalProducts
 from app.services.orders import Orders
 from app.services.product_readiness import ProductReadiness
+from app.telegram.home_panel import HomePanel
 from tests.test_gifts import enroll
 from tests.test_gifts import rig as rig_fixture
 
@@ -45,3 +46,5 @@ async def test_legacy_upgrade_preserves_jobs_and_blocks_new_payments(rig, paymen
     assert not state["ready"]
     migration = next(p for p in state["problems"] if p["code"] == "CODE_MIGRATION")
     assert migration["action"][1] == "lp:item:item"
+    attention = HomePanel(r.store, r.api).paid_issues()
+    assert any(row["id"] == "after-upgrade" for row in attention)
