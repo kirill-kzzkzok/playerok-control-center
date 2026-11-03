@@ -386,7 +386,7 @@ async def test_dispatcher_create_disabled_then_separate_arming_restart_and_no_se
         assert not api.account.sent and not store.rows("SELECT * FROM outbox")
         await ui.click("ar:show:" + rule["id"])
         assert "&lt;Здравствуйте&gt;" in session.calls[-1].text
-        await ui.click("ar:stop")
+        await ui.stop("ar:stop")
         assert not service.rules(7)[0]["enabled"]
     finally:
         await dp.storage.close()

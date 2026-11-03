@@ -115,9 +115,15 @@ class AutomationPanel:
         self.service.orders.owner(owner)
         if action == "automation":
             return await self.menu(owner, state)
-        if action == "auto:stop":
-            count = self.service.stop_all(owner)
-            await state.clear()
+        if action == "auto:stop" or action.startswith("auto:stop_confirm:"):
+            from app.telegram.stop_confirmation import StopConfirmation
+
+            confirmation = StopConfirmation(self.store, self.service.api)
+            if action == "auto:stop":
+                return await confirmation.request("auto", owner, state)
+            count = await confirmation.confirm(
+                "auto", owner, state, action.split(":", 2)[2], self.service.stop_all
+            )
             return (
                 f"Выключено политик: {count}. Уже поставленные вручную операции не отменяются; проверьте диагностику.",
                 keyboard([[("Автоматизация", "automation")]]),

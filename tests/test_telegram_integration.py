@@ -101,6 +101,17 @@ def dispatcher(store, api):
 
 
 class Interaction:
+    async def stop(self, action, owner=7):
+        await self.click(action, owner=owner)
+        panel = self.bot.session.last_panel
+        confirmation = next(
+            button.callback_data
+            for row in panel.reply_markup.inline_keyboard
+            for button in row
+            if ":stop_confirm:" in (button.callback_data or "")
+        )
+        await self.click(confirmation, owner=owner)
+
     def __init__(self, bot, dp):
         self.bot, self.dp, self.counter = bot, dp, 0
 
@@ -554,7 +565,7 @@ async def test_automation_router_edits_local_policy_without_enabling_runtime(tmp
         assert "Изменения применяются после сохранения" in session.calls[-1].text
         assert store.rows("SELECT revision FROM delivery_policies") == [{"revision": 1}]
         assert not store.rows("SELECT * FROM outbox")
-        await ui.click("auto:stop")
+        await ui.stop("auto:stop")
         assert store.rows("SELECT revision FROM delivery_policies") == [{"revision": 2}]
         count = len(api.calls)
         await ui.click("auto:item:item", owner=8)
@@ -583,7 +594,7 @@ async def test_promotions_settings_router_has_no_paid_execution(tmp_path):
         await ui.click(f"pp:{nonce}:save")
         assert store.rows("SELECT revision FROM promotion_policy") == [{"revision": 1}]
         assert "Остановлено" in session.calls[-1].text
-        await ui.click("promo:stop")
+        await ui.stop("promo:stop")
         assert store.rows("SELECT revision FROM promotion_policy") == [{"revision": 2}]
         assert not store.rows("SELECT * FROM promotion_expenses")
         assert not store.rows("SELECT * FROM outbox")

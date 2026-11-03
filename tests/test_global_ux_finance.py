@@ -203,13 +203,15 @@ async def test_offer_group_confirmation_runs_through_dispatcher_and_survives_res
     assert not ux.store.rows("SELECT * FROM outbox")
 
 
-async def test_emergency_stop_works_from_unknown_navigation_send(ux):
+async def test_old_emergency_stop_cannot_mutate_from_unknown_navigation_send(ux):
     panel = ux.store.setting("navigation:123:7")
     panel.update(sending=True, pending_kind="text")
     ux.store.set_setting("navigation:123:7", panel)
+    stopped = ux.store.setting("gifts:stopped")
+    revision = ux.store.setting("gifts:stop_revision")
     await ux.ui.click("gft:stop", message_id=777)
-    assert ux.store.setting("gifts:stopped") is True
-    assert ux.store.setting("gifts:stop_revision") == 1
+    assert ux.store.setting("gifts:stopped") == stopped
+    assert ux.store.setting("gifts:stop_revision") == revision
     assert not ux.store.rows("SELECT * FROM outbox")
 
 

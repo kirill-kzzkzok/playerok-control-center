@@ -156,9 +156,13 @@ class AutoRepliesPanel:
         if action == "ar:menu":
             await state.clear()
             return self.menu(owner)
-        if action == "ar:stop":
-            count = self.service.stop(owner)
-            await state.clear()
+        if action == "ar:stop" or action.startswith("ar:stop_confirm:"):
+            from app.telegram.stop_confirmation import StopConfirmation
+
+            confirmation = StopConfirmation(self.store, self.service.api)
+            if action == "ar:stop":
+                return await confirmation.request("ar", owner, state)
+            count = await confirmation.confirm("ar", owner, state, action.split(":", 2)[2], self.service.stop)
             return f"Выключено правил: {count}. Уже переданный серверу запрос остановить нельзя.", keyboard(
                 [[("Правила", "ar:menu")]]
             )

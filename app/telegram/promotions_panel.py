@@ -181,9 +181,15 @@ class PromotionsPanel:
                 else "Записей нет. Оценки проверки без оплаты не считаются расходом."
             )
             return text, keyboard([[("Настройки", "promotions")]])
-        if action in {"promotions", "promo:stop", "promo:settings"}:
+        if action == "promo:stop" or action.startswith("promo:stop_confirm:"):
+            from app.telegram.stop_confirmation import StopConfirmation
+
+            confirmation = StopConfirmation(self.service.store, self.api)
             if action == "promo:stop":
-                self.service.stop(owner)
+                return await confirmation.request("promo", owner, state)
+            await confirmation.confirm("promo", owner, state, action.split(":", 2)[2], self.service.stop)
+            action = "promotions"
+        if action in {"promotions", "promo:settings"}:
             revision, policy, selection = self.service.get()
             return await self.show(
                 {

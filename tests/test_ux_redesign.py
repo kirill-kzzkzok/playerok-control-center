@@ -273,7 +273,7 @@ async def test_gifts_stop_visible_and_no_implicit_enable(ux):
     await r.ui.click("gft:home")
     assert "gft:stop" in buttons(r.session.calls[-1])
     assert "gft:history" in buttons(r.session.calls[-1])
-    await r.ui.click("gft:stop")
+    await r.ui.stop("gft:stop")
     assert r.store.setting("gifts:stopped") is True
     assert not r.api.calls
     assert not r.store.rows("SELECT * FROM outbox")

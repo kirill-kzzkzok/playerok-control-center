@@ -436,7 +436,7 @@ async def test_explicit_paid_arming_and_tariff_confirmation_through_dispatcher(r
         assert r.store.setting("promotions:approved:item")["amount"] == "10.00"
         assert r.settings.selected("item", "selected")
         assert not r.api.charges and not r.store.rows("SELECT * FROM outbox")
-        await ui.click("promo:stop")
+        await ui.stop("promo:stop")
         assert not r.store.setting("promotions:paid_authority")
         await ui.click("payp:confirmarm:" + token)
         assert not r.store.setting("promotions:paid_authority")

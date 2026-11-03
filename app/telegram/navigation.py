@@ -259,9 +259,6 @@ class Navigation:
         )
 
     def allowed(self, message, owner, action):
-        if action in {"gft:stop", "promo:stop"}:
-            # Stopping future spending is safe even from an old or unacknowledged UI.
-            return True
         panel = self.store.setting(self.key(message.bot, owner), {})
         if action.startswith(("reply:", "compose:", "readchat:", "chat:")):
             from app.services.replies import Replies
@@ -288,7 +285,6 @@ class Navigation:
             (panel.get("sending") or panel.get("editing"))
             and not safe_route(action)
             and not action.startswith(("nav:close", "nav:back:"))
-            and action not in {"gft:stop", "promo:stop"}
         ):
             return False
         if panel.get("id") and panel["id"] != message.message_id:

@@ -79,6 +79,19 @@ class GiftsPanel:
         s.owner(owner)
         parts = action.split(":")
         command = parts[1]
+        if command in {"stop", "stop_confirm"}:
+            from app.telegram.stop_confirmation import StopConfirmation
+
+            confirmation = StopConfirmation(self.store, s.api)
+            if command == "stop":
+                return await confirmation.request("gft", owner, state)
+            if len(parts) != 3:
+                raise Conflict("Подтверждение остановки устарело")
+            await confirmation.confirm("gft", owner, state, parts[2], s.stop)
+            return (
+                "Новые покупки остановлены. Уже отправленный запрос отменить невозможно. Проверьте операции с неизвестным результатом. Лоты потребуется включить заново.",
+                keyboard([[("Требуют проверки", "gft:list:uncertain:0"), ("Назад", "gft:home")]]),
+            )
         # Permanent products own their execution policy. Old panels must never
         # arm/rebind just the gift projection and leave the product stopped.
         if command in {"item", "bind", "enable", "arm", "off", "confirmbind"}:
@@ -298,13 +311,6 @@ class GiftsPanel:
             await state.clear()
             await state.set_data({"gift_picker": True})
             return await ListingsPanel(s.api, self.store).show("items", state)
-        if command == "stop":
-            s.stop(owner)
-            await state.clear()
-            return (
-                "Новые покупки остановлены. Уже отправленный запрос отменить невозможно. Проверьте операции с неизвестным результатом. Лоты потребуется включить заново.",
-                keyboard([[("Требуют проверки", "gft:list:uncertain:0"), ("Назад", "gft:home")]]),
-            )
         if command in {"limits", "description"}:
             await state.clear()
             await state.set_state("gifts:" + command)

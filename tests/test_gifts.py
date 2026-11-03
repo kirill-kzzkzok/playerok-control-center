@@ -602,7 +602,7 @@ async def test_dispatcher_uncertain_read_reconciliation_and_owner_notice(rig, lo
             assert "Выполнено и подтверждено" in session.calls[-1].text
             assert r.service.job("order")["state"] == "SUCCEEDED"
         assert len(r.remote.payments) == 1
-        await ui.click("gft:stop")
+        await ui.stop("gft:stop")
         await ui.click("gft:home", owner=8)
         assert r.store.setting("gifts:stopped") is True
     finally:
@@ -663,7 +663,7 @@ async def test_dispatcher_bind_restart_confirm_limits_enable_stop_and_order_resu
         )
         text, _ = OrdersPanel(r.store, r.api).delivered(7)
         assert "Отправка подтверждена" in text
-        await ui.click("gft:stop")
+        await ui.stop("gft:stop")
         assert r.service.listing("item")["enabled"] == 0 and r.store.setting("gifts:stopped") is True
         assert len(r.remote.payments) == 1
     finally:
