@@ -14,7 +14,7 @@ from app.services.products import Products, save_image
 from app.workers.delivery_chains import ChainWorker
 from app.workers.enrollment import EnrollmentWorker
 from app.workers.outbox import Executor, OutboxWorker
-from tests.test_operations import FakeAPI
+from tests.test_operations import FakeAPI, queue_manual_publication
 
 
 @pytest.mark.parametrize("outcome", ["success", "lost_delivery_ack", "bad_create_receipt"])
@@ -97,9 +97,7 @@ async def test_mvp_create_photo_publish_future_sale_stock_delivery_and_owner_con
             assert not store.rows("SELECT * FROM bindings")
             return
         assert store.rows("SELECT remote_id FROM bindings") == [{"remote_id": "remote1"}]
-        store.enqueue(
-            "publish", "publish", "remote1", {"price": 1000, "raw_price": 1000, "priority_id": "free"}
-        )
+        await queue_manual_publication(store, api, "remote1")
         await worker.once()
         assert remote["status"] == "APPROVED"
         store.set_setting("orders:last_complete_sync", now())

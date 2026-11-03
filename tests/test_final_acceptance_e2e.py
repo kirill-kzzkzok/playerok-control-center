@@ -182,7 +182,7 @@ class AcceptanceHarness:
         nonce = (await self.state.get_data())["launch"]["nonce"]
         await self.ui.click(f"ln:{nonce}:{action}")
 
-    async def create_and_prepare(self, *, seed_resume=True):
+    async def create_and_prepare(self, *, seed_resume=True, prepare_launch=True):
         await self.ui.message("/start")
         bind_account(self.store, self.api.account.id)
         await self.sync.once()
@@ -215,6 +215,8 @@ class AcceptanceHarness:
         assert len(self.api.created) == 1
         assert self.api.item["status"] == "DRAFT"
         assert self.store.get_draft(self.original_draft, 7)["state"] == "REMOTE_DRAFT"
+        if not prepare_launch:
+            return
         await self.ui.click("launch:from:" + self.original_draft)
         await self.launch_action("edit:after")
         await self.ui.message(NOTICE)

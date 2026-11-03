@@ -107,7 +107,7 @@ async def queue_manual_publication(store, api, target, owner=1, *, publication="
     ident = await service.open(owner, target, {"delivery": "manual"})
     draft = service.load(owner, ident)
     value = draft["payload"]
-    value.update(publication=publication, quote_id=quote_id)
+    value.update(mode="manual", manual_delivery_confirmed=True, publication=publication, quote_id=quote_id)
     value["promotion_policy"] = asdict(PromotionSettings(store, api).get()[1])
     value["ready"] = await service.check(owner, value)
     store.update_draft(ident, owner, draft["revision"], value)

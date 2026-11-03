@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from app.database.store import Conflict, encode, now, server_time
+from app.gifts.core import gift_code_from_description
 from app.services.automation import Automation, DeliveryPolicy, message_text
 from app.services.finance import money
 from app.services.inventory import Inventory, stock_values
@@ -57,6 +58,46 @@ class ListingLaunch:
             raise Conflict("Это не настройка запуска товара")
         return draft
 
+    def source_configuration(self, owner, target):
+        """Recover selected delivery from the confirmed creation/link, not its title."""
+        rows = self.store.rows(
+            "SELECT d.payload FROM bindings b JOIN drafts d ON d.id=b.draft_id "
+            "WHERE b.remote_id=? AND d.owner_id=? AND json_extract(d.payload,'$.launch_target') IS NULL",
+            (target, owner),
+        )
+        if len(rows) > 1:
+            raise Conflict("У товара несколько исходных черновиков. Сначала проверьте его привязку")
+        source = json.loads(rows[0]["payload"]) if rows else {}
+        original_delivery = source.get("delivery")
+        product = LogicalProducts(self.store, self.api).listing(target)
+        if product and product["state"] == "VERIFIED":
+            if product["owner_id"] != owner or product["account_id"] != self.api.account.id:
+                raise Conflict("Исходные настройки принадлежат другому аккаунту")
+            config = json.loads(product["config"])
+            if not config.get("platform_only"):
+                mode = {
+                    "telegram_gifts": "gifts",
+                    "unique_stock": "stock",
+                    "fixed_text": "text",
+                    "manual": "manual",
+                }[product["handler"]]
+                source = {
+                    **source,
+                    "delivery": mode,
+                    "gift_code": config.get("code"),
+                    "delivery_data": config.get("text", ""),
+                }
+        return {**source, "original_delivery": original_delivery}
+
+    def needs_delivery_choice(self, owner, value):
+        source = self.source_configuration(owner, value["launch_target"])
+        expected = {source.get("delivery"), source.get("original_delivery")}
+        return (
+            value["mode"] == "manual"
+            and bool(expected & {"text", "stock", "gifts"})
+            and value.get("manual_delivery_confirmed") is not True
+        )
+
     async def open(self, owner, target, source=None):
         item = await self.automation.item(owner, target)
         if item.get("status") != "DRAFT":
@@ -71,11 +112,16 @@ class ListingLaunch:
                 # A cancelled preparation has no publication authority. A new
                 # local preparation must pass PREPARE/COMMIT again.
                 source = source or previous["payload"]
-            value = source or {}
+            value = source if source is not None else self.source_configuration(owner, target)
             order, day = self.gifts.limits()
             mode = value.get("delivery", value.get("mode", "manual"))
             if mode not in {"manual", "text", "stock", "gifts"}:
                 mode = "manual"
+            gift_code = value.get("gift_code")
+            if mode == "gifts" and not gift_code:
+                gift_code = gift_code_from_description(
+                    value.get("description", ""), required=False, max_count=self.gifts.settings.max_gifts
+                )
             imported = mode == "stock" and self.store.rows(
                 "SELECT 1 FROM draft_stock_imports WHERE item_id=? AND owner_id=?", (target, owner)
             )
@@ -85,7 +131,8 @@ class ListingLaunch:
                     "launch_target": target,
                     "account_id": self.api.account.id,
                     "mode": mode,
-                    "gift_code": value.get("gift_code"),
+                    "manual_delivery_confirmed": False,
+                    "gift_code": gift_code,
                     "inherit": False,
                     "data": "" if imported else value.get("delivery_data", ""),
                     "greeting": "",
@@ -167,6 +214,10 @@ class ListingLaunch:
         mode = value["mode"]
         if mode not in {"manual", "text", "stock", "gifts"}:
             raise ValidationError("Выберите способ выдачи")
+        if self.needs_delivery_choice(owner, value):
+            raise ValidationError(
+                "В исходном товаре выбрана автовыдача. Выберите способ выдачи заново перед публикацией"
+            )
         if mode != "manual":
             if not getattr(self.api.account, "automation_enabled", False):
                 raise ValidationError("Автоматизация выключена. Проверьте настройки подключения")

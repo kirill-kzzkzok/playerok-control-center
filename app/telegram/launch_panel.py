@@ -58,6 +58,9 @@ class LaunchPanel:
         )
         p = f"ln:{nonce}:"
         ready = value.get("ready")
+        needs_choice = self.service.needs_delivery_choice(owner, value)
+        if needs_choice:
+            ready = None
         text = (
             "🚦 <b>Подготовка к публикации</b>\n"
             + escaped(item.get("name") or "Товар", 200)
@@ -143,6 +146,8 @@ class LaunchPanel:
             rows.insert(2, [("Платное автоподнятие: переключить", p + "promotion")])
         if ready:
             rows.append([("🚀 Опубликовать и запустить", p + "commit")])
+        if needs_choice:
+            text += "\n⚠️ Ранее выбрана автовыдача. Выберите способ выдачи заново; прежний ручной режим не подтверждён."
         rows.append([("💾 Сохранить и выйти", "home")])
         return text, keyboard(rows, back=("⬅️ К товару", "item:" + value["launch_target"]))
 
@@ -212,6 +217,7 @@ class LaunchPanel:
             if parts[3] not in MODES:
                 raise ValidationError("Неизвестный способ выдачи")
             value["mode"] = parts[3]
+            value["manual_delivery_confirmed"] = parts[3] == "manual"
         elif command in {"complete", "refund", "promotion", "inherit"}:
             key = "auto_complete" if command == "complete" else command
             value[key] = not value.get(key, False)

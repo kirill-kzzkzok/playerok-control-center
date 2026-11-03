@@ -104,6 +104,7 @@ async def configured(r, mode="gifts", **options):
     draft = r.launch.load(7, ident)
     value = draft["payload"]
     value.update(options)
+    value["manual_delivery_confirmed"] = mode == "manual"
     value["ready"] = await r.launch.check(7, value)
     r.store.update_draft(ident, 7, draft["revision"], value)
     return ident, r.launch.load(7, ident)["revision"]
