@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import time
+from datetime import datetime
 from html import escape
 
 from aiogram.exceptions import TelegramBadRequest
@@ -29,8 +30,7 @@ class Notifications:
     async def once(self):
         if not self.store.rows("SELECT user_id FROM administrators LIMIT 1"):
             return
-        await self.refresh_actions()
-        await OperationResults(self.store).notify(self.bot)
+        started = time.perf_counter()
         # Startup, not the last inaccessible historical chat, defines the boundary.
         boundary = notification_baseline(self.store)
         critical = (
@@ -343,6 +343,37 @@ class Notifications:
                     )
 
         await ChatCards(self.store, self.bot).flush()
+        dispatch_ms = (time.perf_counter() - started) * 1000
+        background_started = time.perf_counter()
+        exhausted = []
+        # New events have already received their fair priority quota. Old edits
+        # cannot monopolize the next cycle. Receipt cancellation retains the
+        # existing PROCESSING -> UNCERTAIN contract; no business action repeats.
+        for name, callback in (
+            ("receipts", lambda: OperationResults(self.store).notify(self.bot)),
+            ("edits", self.refresh_actions),
+        ):
+            try:
+                async with asyncio.timeout(2):
+                    await callback()
+            except TimeoutError:
+                exhausted.append(name)
+        critical_ages = [
+            max(0, time.time() - datetime.fromisoformat(event["received_at"]).timestamp())
+            for event in events
+            if event["priority"] == 1
+        ]
+        self.store.set_setting(
+            "notifications:timing",
+            {
+                "at": time.time(),
+                "dispatch_ms": round(dispatch_ms, 2),
+                "background_ms": round((time.perf_counter() - background_started) * 1000, 2),
+                "background_budget_exhausted": exhausted,
+                "critical_max_age_seconds": round(max(critical_ages, default=0), 2),
+                "events": len(events),
+            },
+        )
 
     async def refresh_messages(self):
         rows = self.store.rows(
@@ -361,6 +392,12 @@ class Notifications:
                 await self.bot.edit_message_text(
                     text, chat_id=row["owner_id"], message_id=row["telegram_message_id"], reply_markup=markup
                 )
+            except asyncio.CancelledError:
+                self.store.execute(
+                    "UPDATE notifications SET refresh_after=? WHERE event_key=? AND owner_id=?",
+                    (time.time() + 30, row["event_key"], row["owner_id"]),
+                )
+                raise
             except TelegramBadRequest as error:
                 if telegram_error(error) != "MESSAGE_NOT_MODIFIED":
                     terminal = telegram_error(error) in TERMINAL_EDIT or row["refresh_failures"] + 1 >= 8
@@ -466,6 +503,7 @@ class Notifications:
                     reply_markup=markup,
                 )
             except asyncio.CancelledError:
+                self.defer_update(notification, actions, TimeoutError())
                 raise
             except TelegramBadRequest as error:
                 if telegram_error(error) != "MESSAGE_NOT_MODIFIED":

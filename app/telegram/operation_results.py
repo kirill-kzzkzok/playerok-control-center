@@ -292,6 +292,9 @@ class OperationResults:
                     await bot.edit_message_text(
                         text, chat_id=row["owner_id"], message_id=row["view_message_id"], reply_markup=markup
                     )
+                except asyncio.CancelledError:
+                    self.defer_view(retry_key, retry, TimeoutError())
+                    raise
                 except TelegramBadRequest as error:
                     if telegram_error(error) != "MESSAGE_NOT_MODIFIED":
                         self.defer_view(retry_key, retry, error)
