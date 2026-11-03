@@ -7,6 +7,7 @@ import pytest
 from app.database.store import Store
 from app.services.products import Products, ValidationError, priority_price_basis
 from app.workers.outbox import Executor, OutboxWorker
+from tests.test_operations import queue_manual_publication
 
 
 def test_promotion_uses_real_base_not_discounted_sale_price():
@@ -39,6 +40,7 @@ async def test_free_publication_quote_uses_base_and_rechecks_both_prices(tmp_pat
 
         def __init__(self):
             self.status = "DRAFT"
+            self.raw_price = 1000
 
         async def call(self, method, **kwargs):
             if method == "get_item":
@@ -47,7 +49,7 @@ async def test_free_publication_quote_uses_base_and_rechecks_both_prices(tmp_pat
                     "user": {"id": "seller"},
                     "status": self.status,
                     "price": 800,
-                    "raw_price": 1100 if changed else 1000,
+                    "raw_price": self.raw_price,
                 }
             assert method == "get_item_priority_statuses"
             requested.append(kwargs["item_price"])
@@ -62,9 +64,11 @@ async def test_free_publication_quote_uses_base_and_rechecks_both_prices(tmp_pat
 
     api.account.publish_item = publish
     try:
-        store.enqueue("publish", "publish", "item", {"priority_id": "free", "price": 800, "raw_price": 1000})
+        await queue_manual_publication(store, api, "item")
+        requested.clear()
+        api.raw_price = 1100 if changed else 1000
         await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
-        assert requested == [1100 if changed else 1000]
+        assert requested and all(price == (1100 if changed else 1000) for price in requested)
         assert len(published) == (0 if changed else 1)
         assert store.rows("SELECT status FROM outbox")[0]["status"] == (
             "PERMANENT_FAILED" if changed else "SUCCEEDED"

@@ -359,8 +359,23 @@ class ListingLaunch:
             result["balance"] = str(capacity)
             if viewer.get("id") != value["account_id"]:
                 raise ValidationError("Баланс Playerok или его владелец не подтверждены для PREMIUM")
-            if capacity < amount:
-                raise ValidationError("Недостаточно баланса Playerok для выбранного PREMIUM")
+            if self.store.rows("SELECT 1 FROM promotion_expenses WHERE status='UNCERTAIN' LIMIT 1"):
+                raise Conflict("Предыдущий расход Playerok требует сверки без повторной оплаты")
+            reserved = sum(
+                (
+                    money(row["amount"])
+                    for row in self.store.rows(
+                        "SELECT amount FROM promotion_expenses WHERE status='RESERVED' "
+                        "AND operation_key NOT IN (SELECT operation_key FROM outbox WHERE id=COALESCE(?,''))",
+                        (publication_operation,),
+                    )
+                ),
+                Decimal(0),
+            )
+            if capacity < amount + reserved:
+                raise ValidationError(
+                    "Недостаточно баланса Playerok для выбранного PREMIUM с учётом резервов"
+                )
         if value["promotion"] and value["publication"] != "PREMIUM":
             raise ValidationError("Платное автоподнятие требует подтверждённого PREMIUM-тарифа")
         result["quote"] = {k: quote.get(k) for k in ("id", "type", "price", "period")}

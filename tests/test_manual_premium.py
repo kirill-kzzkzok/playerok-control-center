@@ -38,11 +38,31 @@ async def manual(tmp_path):
     store.close()
 
 
-async def confirm(r, item="item"):
+async def preview_premium(r, item="item"):
     await r.ui.click("payp:item:" + item)
-    await r.ui.click(next(key for key in buttons(r.session.last_panel) if key.startswith("payp:pick:")))
+    old = next((key for key in buttons(r.session.last_panel) if key.startswith("payp:pick:")), None)
+    if old:
+        await r.ui.click(old)
+    else:
+        pending = (await state(r).get_data())["launch"]
+        await r.ui.click("ln:" + pending["nonce"] + ":quotes")
+        await r.ui.click(next(key for key in buttons(r.session.last_panel) if ":quote:" in key))
+        pending = (await state(r).get_data())["launch"]
+        await r.ui.click("ln:" + pending["nonce"] + ":check")
     assert not r.api.charges
-    return next(key for key in buttons(r.session.last_panel) if key.startswith("payp:commit:"))
+
+
+def premium_confirmation(r):
+    return next(
+        key
+        for key in buttons(r.session.last_panel)
+        if key.startswith("payp:commit:") or key.startswith("ln:") and key.endswith(":commit")
+    )
+
+
+async def confirm(r, item="item"):
+    await preview_premium(r, item)
+    return premium_confirmation(r)
 
 
 async def test_manual_premium_with_zero_automatic_budgets_charges_once_after_confirmation(manual):
@@ -88,8 +108,7 @@ async def test_manual_reservations_compete_for_real_balance_without_enabling_sch
     r.api.balance = 15
     await r.ui.click(await confirm(r))
     # A second real UI confirmation cannot reserve the same 15 ₽ twice.
-    await r.ui.click("payp:item:other")
-    await r.ui.click(next(key for key in buttons(r.session.last_panel) if key.startswith("payp:pick:")))
+    await preview_premium(r, "other")
     assert "Недостаточно баланса" in r.session.last_panel.text
     assert len(r.store.rows("SELECT * FROM outbox")) == 1
     assert len(r.store.rows("SELECT * FROM promotion_expenses WHERE status='RESERVED'")) == 1

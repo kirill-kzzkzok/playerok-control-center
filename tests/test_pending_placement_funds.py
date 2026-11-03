@@ -9,6 +9,7 @@ from app.database.store import Store
 from app.services.account_binding import bind_account
 from app.services.products import Products
 from app.workers.outbox import Executor, OutboxWorker
+from tests.test_manual_premium import premium_confirmation, preview_premium
 from tests.test_paid_promotions import PaidAPI
 from tests.test_telegram_integration import Interaction, TelegramSession
 from tests.test_telegram_transport import production_dispatcher
@@ -50,6 +51,7 @@ async def shop(tmp_path):
     r = SimpleNamespace(
         store=store,
         api=api,
+        bot=bot,
         session=session,
         ui=ui,
         worker=OutboxWorker(store, Executor(store, api, Products(store, api))),
@@ -61,8 +63,7 @@ async def shop(tmp_path):
 
 
 async def pick(r, item="item"):
-    await r.ui.click("payp:item:" + item)
-    await r.ui.click(next(k for k in buttons(r.session.last_panel) if k.startswith("payp:pick:")))
+    await preview_premium(r, item)
 
 
 @pytest.mark.parametrize("status", ["DRAFT", "APPROVED", "SOLD"])
@@ -75,7 +76,7 @@ async def test_pending_income_pays_placement_once_after_confirmation(shop, statu
         prefix = "relist:"
     else:
         await pick(r)
-        prefix = "payp:commit:"
+        prefix = "ln:" if status == "DRAFT" else "payp:commit:"
     assert not r.session.last_panel.text.startswith("❗"), r.session.last_panel.text
     assert "замороз" in r.session.last_panel.text.lower()
     assert not r.api.charges
@@ -102,7 +103,10 @@ async def test_pending_is_not_combined_or_confused_with_frozen_or_admin_block(sh
     else:
         r.api.blocked = True
     await pick(r)
-    assert not any(k.startswith("payp:commit:") for k in buttons(r.session.last_panel))
+    assert not any(
+        k.startswith("payp:commit:") or k.startswith("ln:") and k.endswith(":commit")
+        for k in buttons(r.session.last_panel)
+    )
     assert not r.store.rows("SELECT * FROM outbox") and not r.api.charges
 
 
@@ -110,7 +114,7 @@ async def test_pending_is_not_combined_or_confused_with_frozen_or_admin_block(sh
 async def test_unknown_never_repeats_and_fresh_income_rechecked(shop, case):
     r = shop
     await pick(r)
-    key = next(k for k in buttons(r.session.last_panel) if k.startswith("payp:commit:"))
+    key = premium_confirmation(r)
     await r.ui.click(key)
     if case == "lost":
         r.api.timeout = True
@@ -128,8 +132,11 @@ async def test_competing_reservations_cannot_overspend_pending_income(shop):
     r = shop
     r.api.quotes[0]["price"] = 30
     await pick(r)
-    await r.ui.click(next(k for k in buttons(r.session.last_panel) if k.startswith("payp:commit:")))
+    await r.ui.click(premium_confirmation(r))
     await pick(r, "other")
-    assert not any(k.startswith("payp:commit:") for k in buttons(r.session.last_panel))
+    assert not any(
+        k.startswith("payp:commit:") or k.startswith("ln:") and k.endswith(":commit")
+        for k in buttons(r.session.last_panel)
+    )
     assert len(r.store.rows("SELECT * FROM promotion_expenses")) == 1
     assert not r.api.charges
