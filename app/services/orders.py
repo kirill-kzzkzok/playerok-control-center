@@ -38,7 +38,13 @@ class Orders:
                 # Keep the most conservative upstream evidence. Short snapshots
                 # can truncate dates; later corrections must never lift an old
                 # sale across the owner's cutoff or replace it with receive time.
-                order = {**order, "created_at": min(previous_created, observed_created)}
+                order = {
+                    **order,
+                    "created_at": min(previous_created, observed_created),
+                    "_created_at_conflict": True,
+                }
+            if old_payload.get("_created_at_conflict"):
+                order = {**order, "_created_at_conflict": True}
             for before, after in (
                 (old_item.get("id"), item.get("id")),
                 ((old_item.get("user") or {}).get("id"), (item.get("user") or {}).get("id")),

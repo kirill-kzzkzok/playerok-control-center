@@ -1214,6 +1214,11 @@ class LogicalProducts:
             )
 
     def require_delivery(self, item_id, handler=None, order_id=None):
+        if order_id and self.store.rows(
+            "SELECT 1 FROM orders WHERE id=? AND json_extract(payload,'$._created_at_conflict')=1",
+            (order_id,),
+        ):
+            raise Conflict("Серверные даты создания сделки расходятся; требуется ручная проверка")
         binding = self.listing(item_id)
         if not binding:
             return None
@@ -1289,6 +1294,7 @@ class LogicalProducts:
                 else {"PAID"}
             )
             or row["item_id"] != item_id
+            or json.loads(row["payload"]).get("_created_at_conflict")
             or not future_order(json.loads(row["payload"]).get("created_at"), product["armed_at"])
         ):
             raise Conflict("Заказ не подтверждён как новый оплаченный заказ этой конфигурации")

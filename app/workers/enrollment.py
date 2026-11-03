@@ -22,7 +22,7 @@ class EnrollmentWorker:
         """Only the exclusive app startup may fence checks left by a dead process.
 
         Enrollment never dispatches externally. Existing chains are subsequently
-        detected idempotently; paid Outbox states and the 15-minute guard remain.
+        detected idempotently; paid Outbox states and admission cutoffs remain.
         """
         if not instance_lock or not instance_lock.owns(str(self.store.path) + ".lock"):
             raise RuntimeError("Восстановление требует эксклюзивной блокировки этой базы")
@@ -86,14 +86,14 @@ class EnrollmentWorker:
             status, code, delay = "CREATED", None, 0
             try:
                 observed = self.store.rows(
-                    "SELECT json_extract(payload,'$.created_at') AS created FROM orders WHERE id=?",
+                    "SELECT json_extract(payload,'$.created_at') AS created,json_extract(payload,'$._created_at_conflict') AS date_conflict FROM orders WHERE id=?",
                     (order_id,),
                 )
                 created = server_time(observed[0]["created"]) if observed else None
-                if not created or time.time() - datetime.fromisoformat(created).timestamp() > 900:
+                if not created or observed[0]["date_conflict"]:
                     raise Conflict("OWNER_REVIEW_REQUIRED")
                 policies = self.store.rows(
-                    "SELECT p.actor,p.payload,p.revision FROM orders o JOIN delivery_policies p ON p.item_id=o.item_id WHERE o.id=?",
+                    "SELECT p.actor,p.payload,p.revision,p.updated_at,o.item_id FROM orders o JOIN delivery_policies p ON p.item_id=o.item_id WHERE o.id=?",
                     (order_id,),
                 )
                 if (
@@ -102,6 +102,26 @@ class EnrollmentWorker:
                     or not json.loads(policies[0]["payload"]).get("auto_enroll")
                 ):
                     raise Conflict("POLICY_CHANGED")
+                if time.time() - datetime.fromisoformat(created).timestamp() > 900:
+                    # Age alone is not proof of an historical sale. A modern,
+                    # owner-armed binding can prove admission across downtime;
+                    # legacy policies retain the conservative age limit.
+                    from app.services.logical_products import LogicalProducts
+
+                    policy = json.loads(policies[0]["payload"])
+                    handler = {"stock": "unique_stock", "text": "fixed_text", "playerok": "playerok"}.get(
+                        policy.get("mode")
+                    )
+                    binding = LogicalProducts(self.store, self.api).require_delivery(
+                        policies[0]["item_id"], handler
+                    )
+                    if (
+                        not handler
+                        or not binding
+                        or not future_order(created, binding["armed_at"])
+                        or not future_order(created, policies[0]["updated_at"])
+                    ):
+                        raise Conflict("OWNER_REVIEW_REQUIRED")
                 existing = self.store.rows("SELECT 1 FROM delivery_chains WHERE order_id=?", (order_id,))
                 result = (
                     order_id
