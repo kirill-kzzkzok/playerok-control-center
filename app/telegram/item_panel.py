@@ -4,7 +4,7 @@ from urllib.parse import quote
 from app.services.attachments import Attachments
 from app.services.automation import Automation
 from app.services.logical_products import LogicalProducts
-from app.services.products import ValidationError
+from app.services.products import Products, ValidationError
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 
@@ -249,7 +249,13 @@ class ItemPanel:
             ]
             if item.get("status") == "DRAFT":
                 rows.insert(0, [("🚦 Настроить и запустить", "launch:item:" + ident)])
-            rows.append([("🗑 Удалить", "delete:" + ident)])
+            problem = Products(self.store, self.api).deletion_problem(ident) if self.store else None
+            if problem:
+                text += "\nУдаление заблокировано: " + escaped(problem["reason"])
+                path = "order:" + problem["order_id"] if problem["order_id"] else "ops:list:ALL:0"
+                rows.append([("Проверить обязательства", path)])
+            else:
+                rows.append([("🗑 Удалить", "delete:" + ident)])
         else:
             text, rows = details, photos
         markup = keyboard(

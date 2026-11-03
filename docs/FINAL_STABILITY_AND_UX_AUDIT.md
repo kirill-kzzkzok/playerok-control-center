@@ -6,7 +6,7 @@
 |---|---|---|---|
 | A1 | УСТРАНИТЬ ПУБЛИКАЦИЮ В ОБХОД ЕДИНОГО ЗАПУСКА | FIXED | RED2free+RED2paid;148passed и3paidUI. Free/PREMIUM DRAFT требуют ListingLaunch. Старые publish/payp/FSM безопасно перенаправляются/отклоняются; active promotion/native relist сохранены. Full gate pending |
 | A2 | РЕДАКТИРОВАНИЕ НЕ ДОЛЖНО НЕЗАМЕТНО ЛОМАТЬ АВТОВЫДАЧУ | — | Проверка ещё не выполнена |
-| A3 | ЗАЩИТИТЬ УДАЛЕНИЕ ТОВАРА С НЕЗАВЕРШЁННЫМИ ЗАКАЗАМИ | — | Проверка ещё не выполнена |
+| A3 | ЗАЩИТИТЬ УДАЛЕНИЕ ТОВАРА С НЕЗАВЕРШЁННЫМИ ЗАКАЗАМИ | FIXED | RED5;96passed профиль. Products scope guard в UI/preflight/dispatch, safe completed receipts, late lease/paid/Giftunknown/aliases. Live server status range не проверялся |
 | A4 | СОГЛАСОВАТЬ РЕДАКТИРОВАНИЕ С УЖЕ ЗАРЕЗЕРВИРОВАННЫМИ ЗАКАЗАМИ | — | Проверка ещё не выполнена |
 | B1 | ОДИН СТАРЫЙ ЧАТ НЕ ДОЛЖЕН ОСТАНАВЛИВАТЬ НЕЗАВИСИМЫЕ ПРОДАЖИ | — | Проверка ещё не выполнена |
 | B2 | ИСПРАВИТЬ BACKOFF РЕЗЕРВНОЙ СИНХРОНИЗАЦИИ ЗАКАЗОВ | — | Проверка ещё не выполнена |
@@ -145,3 +145,9 @@
 ### A1 / PREMIUM
 
 PaidPromotions.queue отклоняет DRAFT без launch до резервирования расхода. Старые payp:item/pick/commit открывают существующий LaunchPanel в режиме PREMIUM с новой проверкой. Worker отклоняет ранее сохранённый неподготовленный PREMIUM-DRAFT. Разрешения на активное продвижение, штатное перевыставление, суммы, расходные резервы и UNKNOWN не ослаблены. Финансовые regression tests используют настоящее manual ListingLaunch для публикации, не подделку ready/marker.
+
+## A3 / удаление
+
+Read-only Products.deletion_problem / require_deletable сохраняет единую проверку обязательств по aliases одного LogicalProduct. UI даёт order/ops переход; неизвестные операции не повторяются. Старый nonce после отказа удаляется. Оплата после preview и во время fresh get_item блокирует RPC. После lease recovery поздняя квитанция сохраняется отдельно; основной UNCERTAIN не снимается. Stocks/reservations/history не удаляются. CLOSED+полные receipts снимают только устаревшее напоминание как причину запрета, не финансовые unknown/reserves.
+
+Платформа: существующий removeItem(id), production proof — exact id+aware deletedAt. Список допустимых серверных статусов и атомарность с оплатой в другом клиенте без live API не объявляются доказанными; серверные ограничения не обходятся. Никаких реальных удалений.

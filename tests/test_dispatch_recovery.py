@@ -130,8 +130,10 @@ async def test_concurrent_publish_button_confirmations_dispatch_one_mutation(sto
     state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
     try:
         await ui.click("publish:controlled-draft")
-        nonce = (await state.get_data())["confirm_token"]
-        await asyncio.gather(ui.click("commit:" + nonce), ui.click("commit:" + nonce))
+        nonce = (await state.get_data())["launch"]["nonce"]
+        await ui.click("ln:" + nonce + ":check")
+        nonce = (await state.get_data())["launch"]["nonce"]
+        await asyncio.gather(ui.click("ln:" + nonce + ":commit"), ui.click("ln:" + nonce + ":commit"))
         assert len(store.rows("SELECT * FROM outbox WHERE kind='publish'")) == 1
         worker = OutboxWorker(store, Executor(store, api, Products(store, api)))
         assert await worker.once() and not await worker.once()

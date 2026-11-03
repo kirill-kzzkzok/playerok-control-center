@@ -210,6 +210,72 @@ class Products:
     def __init__(self, store, api):
         self.store, self.api = store, api
 
+    def deletion_problem(self, item_id, operation_id=None):
+        scope = (
+            "WITH scope(item_id) AS (SELECT ? UNION SELECT peer.item_id "
+            "FROM logical_listings base JOIN logical_listings peer ON peer.product_id=base.product_id "
+            "WHERE base.item_id=?) "
+        )
+        checks = (
+            (
+                "У товара есть незавершённый оплаченный заказ. Сначала проверьте его выполнение.",
+                "SELECT id AS order_id FROM orders WHERE item_id IN scope AND status IN ('PAID','SENT') LIMIT 1",
+            ),
+            (
+                "За товаром закреплён запас с незавершённой или неизвестной выдачей. Нужна сверка заказа.",
+                (
+                    "SELECT r.order_id FROM reservations r JOIN inventory i ON i.id=r.inventory_id "
+                    "JOIN orders o ON o.id=r.order_id WHERE o.item_id IN scope "
+                    "AND i.status IN ('RESERVED','QUARANTINED') LIMIT 1"
+                ),
+            ),
+            (
+                "Выдача товара ещё не завершена. Сначала проверьте цепочку заказа.",
+                (
+                    "SELECT c.order_id FROM delivery_chains c JOIN orders o ON o.id=c.order_id "
+                    "WHERE c.item_id IN scope AND c.status IN ('ACTIVE','BLOCKED','NEEDS_FULFILLMENT') "
+                    "AND NOT (c.status='NEEDS_FULFILLMENT' "
+                    "AND o.status IN ('CONFIRMED','CONFIRMED_AUTOMATICALLY') "
+                    "AND EXISTS(SELECT 1 FROM delivery_chain_steps s WHERE s.order_id=c.order_id) "
+                    "AND NOT EXISTS(SELECT 1 FROM delivery_chain_steps s LEFT JOIN outbox q ON q.id=s.operation_id "
+                    "WHERE s.order_id=c.order_id AND (q.status IS NOT 'SUCCEEDED' "
+                    "OR q.target<>c.order_id OR q.kind<>s.kind))) LIMIT 1"
+                ),
+            ),
+            (
+                "Подарочная операция выполняется или требует сверки. Удаление пока заблокировано.",
+                (
+                    "SELECT order_id FROM gift_jobs WHERE item_id IN scope "
+                    "AND (state IN ('SPENDING','UNCERTAIN') OR refund_state IN ('QUEUED','SPENDING','UNCERTAIN') "
+                    "OR completion_state='QUEUED') LIMIT 1"
+                ),
+            ),
+        )
+        with self.store.transaction():
+            for reason, query in checks:
+                rows = self.store.rows(scope + query, (item_id, item_id))
+                if rows:
+                    return {"reason": reason, "order_id": rows[0]["order_id"]}
+            rows = self.store.rows(
+                scope + "SELECT CASE WHEN q.target IN (SELECT id FROM orders WHERE item_id IN scope) "
+                "THEN q.target END AS order_id FROM outbox q "
+                "WHERE (q.target IN scope OR q.target IN (SELECT id FROM orders WHERE item_id IN scope)) "
+                "AND q.status IN ('PENDING','PROCESSING','RETRYABLE_FAILED','UNCERTAIN') "
+                "AND q.id<>COALESCE(?,'') LIMIT 1",
+                (item_id, item_id, operation_id),
+            )
+            if rows:
+                return {
+                    "reason": "По товару есть незавершённая операция. Сначала проверьте её результат без повтора.",
+                    "order_id": rows[0]["order_id"],
+                }
+        return None
+
+    def require_deletable(self, item_id, operation_id=None):
+        problem = self.deletion_problem(item_id, operation_id)
+        if problem:
+            raise ValidationError(problem["reason"])
+
     def native_relist_guard(self, value):
         from app.services.logical_products import LogicalProducts
 

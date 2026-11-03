@@ -20,6 +20,7 @@ from app.services.item_receipts import edit_receipt_matches, field_receipt_match
 from app.services.order_management import deliverable
 from app.services.orders import Orders
 from app.services.products import (
+    Products,
     ValidationError,
     field_baseline,
     listing_price,
@@ -92,6 +93,8 @@ class Executor:
             from app.services.paid_promotions import PaidPromotions
 
             PaidPromotions(self.store, self.api).guard(action)
+        if action["kind"] == "delete":
+            Products(self.store, self.api).require_deletable(action["target"], action["id"])
         if action["payload"].get("chain_id"):
             DeliveryChains(self.store, self.api).dispatchable(action)
         if action["payload"].get("auto_reply"):
@@ -525,6 +528,7 @@ class Executor:
         if kind in {"edit", "delete"}:
             current = await self.owned_item(target)
             if kind == "delete":
+                Products(self.store, self.api).require_deletable(target, action["id"])
                 result = await self.mutate(action, "removeItem", "remove_item", id=target)
                 if result is not True:
                     raise APIError("DELETE_RESULT_UNKNOWN", uncertain=True)

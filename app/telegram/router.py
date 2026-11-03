@@ -545,13 +545,23 @@ def create_router(store, api, products, synchronizer):
                 )
             elif action.startswith("delete:"):
                 kind, ident = action.split(":", 1)
-                pending = {"kind": kind, "target": ident, "payload": {}}
-                nonce = secrets.token_hex(8)
-                await state.set_data({"pending": pending, "confirm_token": nonce})
-                text, markup = (
-                    "Подтвердите удаление лота.",
-                    keyboard([[("Подтвердить", "commit:" + nonce)]]),
-                )
+                await products.owned_item(ident)
+                problem = products.deletion_problem(ident)
+                if problem:
+                    await state.clear()
+                    path = "order:" + problem["order_id"] if problem["order_id"] else "ops:list:ALL:0"
+                    text, markup = (
+                        "Удаление заблокировано. " + escaped(problem["reason"]),
+                        keyboard([[("Проверить обязательства", path)]], back=("К товару", "item:" + ident)),
+                    )
+                else:
+                    pending = {"kind": kind, "target": ident, "payload": {}}
+                    nonce = secrets.token_hex(8)
+                    await state.set_data({"pending": pending, "confirm_token": nonce})
+                    text, markup = (
+                        "Подтвердите удаление лота.",
+                        keyboard([[("Подтвердить", "commit:" + nonce)]]),
+                    )
             elif action.startswith("commit:"):
                 data = await state.get_data()
                 if action.split(":", 1)[1] != data.get("confirm_token") or not data.get("pending"):
