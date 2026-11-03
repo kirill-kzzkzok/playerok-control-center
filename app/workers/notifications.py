@@ -357,7 +357,6 @@ class Notifications:
                         ),
                     )
 
-        await ChatCards(self.store, self.bot).flush()
         dispatch_ms = (time.perf_counter() - started) * 1000
         background_started = time.perf_counter()
         exhausted = []
@@ -365,6 +364,7 @@ class Notifications:
         # cannot monopolize the next cycle. Receipt cancellation retains the
         # existing PROCESSING -> UNCERTAIN contract; no business action repeats.
         for name, callback in (
+            ("chats", lambda: ChatCards(self.store, self.bot).flush()),
             ("receipts", lambda: OperationResults(self.store).notify(self.bot)),
             ("edits", self.refresh_actions),
         ):

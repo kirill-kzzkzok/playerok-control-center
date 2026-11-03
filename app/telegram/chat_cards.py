@@ -172,8 +172,8 @@ class ChatCards:
                 ident = row["telegram_message_id"]
         except asyncio.CancelledError:
             self.store.execute(
-                "UPDATE chat_cards SET state=?,busy_until=0 WHERE token=? AND busy_token=?",
-                ("UNCERTAIN" if sending else "OPEN", row["token"], token),
+                "UPDATE chat_cards SET state=?,busy_until=0,retry_after=? WHERE token=? AND busy_token=?",
+                ("UNCERTAIN" if sending else "OPEN", time.time() + 30, row["token"], token),
             )
             raise
         except Exception as error:  # noqa: BLE001 -- never repeat an unknown send

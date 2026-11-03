@@ -3,12 +3,16 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from app.database.store import Store, encode, now
 from app.services.orders import Orders
+from app.telegram.chat_cards import ChatCards
 from app.workers.notifications import Notifications
 
 
-async def test_critical_send_precedes_one_hundred_slow_historical_edits(tmp_path):
+@pytest.mark.parametrize("cards", [False, True])
+async def test_critical_send_precedes_one_hundred_slow_historical_edits(tmp_path, cards):
     store = Store(tmp_path / "latency.sqlite")
     store.claim_first_owner(7)
     store.set_setting("notifications:initialized", True)
@@ -35,6 +39,10 @@ async def test_critical_send_precedes_one_hundred_slow_historical_edits(tmp_path
         await asyncio.Event().wait()
 
     bot = SimpleNamespace(send_message=send, edit_message_text=edit)
+    if cards:
+        store.set_setting("playerok:account_id", "seller")
+        ChatCards(store, bot).touch(7, "chat")
+        store.execute("UPDATE chat_cards SET state='OPEN',telegram_message_id=102,fingerprint='outdated'")
     task = asyncio.create_task(Notifications(store, bot).once())
     try:
         await asyncio.wait_for(entered.wait(), 5)
