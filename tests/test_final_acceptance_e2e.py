@@ -182,7 +182,9 @@ class AcceptanceHarness:
         nonce = (await self.state.get_data())["launch"]["nonce"]
         await self.ui.click(f"ln:{nonce}:{action}")
 
-    async def create_and_prepare(self, *, seed_resume=True, prepare_launch=True, stop_before_delivery=False):
+    async def create_and_prepare(
+        self, *, seed_resume=True, prepare_launch=True, stop_before_delivery=False, description=None
+    ):
         await self.ui.message("/start")
         bind_account(self.store, self.api.account.id)
         await self.sync.once()
@@ -195,7 +197,7 @@ class AcceptanceHarness:
             await self.wizard_action("choose:0")
         await self.ui.message("Товар будет передан на указанный Telegram username")
         await self.ui.message("Проверочный Telegram Heart")
-        await self.ui.message("Изолированная проверка полного сценария\ngift: heart")
+        await self.ui.message(description or "Изолированная проверка полного сценария\ngift: heart")
         await self.ui.message(
             document=Document(
                 file_id="photo",

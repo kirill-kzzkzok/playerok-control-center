@@ -1,5 +1,6 @@
 """Durable setup within the product wizard, before the final publication confirmation."""
 
+import json
 import secrets
 from dataclasses import asdict
 
@@ -19,6 +20,7 @@ MODES = {
     "text": "Постоянный текст",
     "stock": "Уникальные данные со склада",
     "gifts": "Telegram Gifts",
+    "playerok": "📦 Выдаёт Playerok",
 }
 FIELDS = {
     "data": "Введите текст выдачи или запас, по одной единице на строку. Содержимое не будет показано в превью.",
@@ -71,7 +73,9 @@ class LaunchPanel:
             + MODES[value["mode"]]
             + "\nАвтовыдача: "
             + (
-                "не применяется"
+                "не требуется — товар выдаёт площадка"
+                if value["mode"] == "playerok"
+                else "не применяется"
                 if value["mode"] == "manual"
                 else "готова к предварительному включению"
                 if ready
@@ -136,7 +140,24 @@ class LaunchPanel:
             )
         if value["mode"] in {"text", "stock"}:
             rows.insert(1, [("🔐 Данные выдачи", p + "edit:data"), ("Приветствие", p + "edit:greeting")])
-        if value["mode"] != "manual":
+        if value["mode"] == "playerok":
+            text += "\nСообщение после оплаты: " + (
+                "включено" if value.get("platform_reply") else "выключено"
+            )
+            text += "\nБот не отправляет товар повторно. Действия по заказу разрешаются только после подтверждения выдачи Playerok."
+            rows.insert(
+                1,
+                [
+                    (
+                        "Сообщение после оплаты: " + ("вкл" if value.get("platform_reply") else "выкл"),
+                        p + "platform_reply",
+                    )
+                ],
+            )
+            if value.get("platform_reply"):
+                rows.insert(2, [("Изменить сообщение после оплаты", p + "edit:greeting")])
+            rows.insert(2, [("Автоматическая отметка выполнения", p + "complete")])
+        elif value["mode"] != "manual":
             rows.insert(1, [("Сообщение после выдачи", p + "edit:after"), ("Автозавершение", p + "complete")])
         if value["mode"] == "gifts":
             rows.insert(1, [("🎁 Выбрать подарки", p + "catalog"), ("Лимиты Stars", p + "edit:limits")])
@@ -216,8 +237,46 @@ class LaunchPanel:
         if command == "mode":
             if parts[3] not in MODES:
                 raise ValidationError("Неизвестный способ выдачи")
+            previous = value["mode"]
             value["mode"] = parts[3]
+            if parts[3] == "playerok":
+                from app.services.logical_products import LogicalProducts
+
+                product = LogicalProducts(self.store, self.api).listing(value["launch_target"])
+                if (
+                    product
+                    and product["handler"] == "telegram_gifts"
+                    and not json.loads(product["config"]).get("platform_only")
+                ):
+                    value["platform_switch_confirmed"] = False
+                    value["prior_mode"] = previous
+                    value.pop("ready", None)
+                    self.store.update_draft(draft["id"], owner, draft["revision"], value)
+                    await state.update_data(launch={**view, "revision": draft["revision"] + 1})
+                    return (
+                        "Сменить Telegram Gifts на выдачу Playerok? Бот больше не будет покупать подарки для этого товара. Необходима подтверждённая выдача площадкой.",
+                        keyboard(
+                            [[("Подтвердить смену способа", p + "platform_switch")]],
+                            back=("Отмена", p + "platform_cancel"),
+                        ),
+                    )
+            if previous != parts[3]:
+                value.update(auto_complete=False, platform_reply=False, refund=False)
             value["manual_delivery_confirmed"] = parts[3] == "manual"
+        elif command == "platform_switch":
+            if value["mode"] != "playerok":
+                raise Conflict("Выбран другой способ выдачи")
+            value["platform_switch_confirmed"] = True
+            value.update(auto_complete=False, platform_reply=False, refund=False)
+            value.pop("prior_mode", None)
+        elif command == "platform_cancel":
+            if value["mode"] != "playerok" or value.get("platform_switch_confirmed"):
+                raise Conflict("Выбор уже изменён. Откройте способ выдачи заново")
+            value["mode"] = value.pop("prior_mode", "gifts")
+        elif command == "platform_reply":
+            if value["mode"] != "playerok":
+                raise Conflict("Сообщение после оплаты доступно в режиме Playerok")
+            value["platform_reply"] = not value.get("platform_reply", False)
         elif command in {"complete", "refund", "promotion", "inherit"}:
             key = "auto_complete" if command == "complete" else command
             value[key] = not value.get(key, False)
@@ -226,7 +285,12 @@ class LaunchPanel:
             if field not in FIELDS:
                 raise ValidationError("Поле недоступно")
             await state.set_state("launch:" + field)
-            return FIELDS[field], keyboard([], back=("Отмена", "launch:open:" + draft["id"]))
+            prompt = (
+                "Сообщение после подтверждённой оплаты для товара, который выдаёт Playerok. «-» — стандартный текст."
+                if field == "greeting" and value["mode"] == "playerok"
+                else FIELDS[field]
+            )
+            return prompt, keyboard([], back=("Отмена", "launch:open:" + draft["id"]))
         elif command == "quotes":
             item = await self.service.automation.item(owner, value["launch_target"])
             quotes = await self.service.products.priority_preview(item["id"], priority_price_basis(item))

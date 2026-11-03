@@ -24,7 +24,7 @@ from app.services.finance import money
 from app.services.inventory import Inventory, stock_values
 from app.services.logical_products import LogicalProducts, configuration
 from app.services.paid_promotions import PaidPromotions, placement_funds
-from app.services.products import Products, ValidationError, priority_price_basis
+from app.services.products import Products, ValidationError, priority_price_basis, validate_field
 from app.services.promotion_settings import PromotionSettings
 from app.services.promotions import PromotionPolicy, dry_run
 from app.services.sync_health import orders_sync_ready
@@ -47,6 +47,12 @@ def launch_prefix(ident):
 
 
 class ListingLaunch:
+    @staticmethod
+    def wants_automation(value):
+        return value["mode"] in {"text", "stock", "gifts"} or (
+            value["mode"] == "playerok" and (value.get("platform_reply", False) or value["auto_complete"])
+        )
+
     def __init__(self, store, api, gifts):
         self.store, self.api, self.gifts = store, api, gifts
         self.products = Products(store, api)
@@ -75,7 +81,9 @@ class ListingLaunch:
             if product["owner_id"] != owner or product["account_id"] != self.api.account.id:
                 raise Conflict("Исходные настройки принадлежат другому аккаунту")
             config = json.loads(product["config"])
-            if not config.get("platform_only"):
+            if config.get("platform_only"):
+                source = {**source, "delivery": "playerok"}
+            else:
                 mode = {
                     "telegram_gifts": "gifts",
                     "unique_stock": "stock",
@@ -95,7 +103,7 @@ class ListingLaunch:
         expected = {source.get("delivery"), source.get("original_delivery")}
         return (
             value["mode"] == "manual"
-            and bool(expected & {"text", "stock", "gifts"})
+            and bool(expected & {"text", "stock", "gifts", "playerok"})
             and value.get("manual_delivery_confirmed") is not True
         )
 
@@ -116,7 +124,7 @@ class ListingLaunch:
             value = source if source is not None else self.source_configuration(owner, target)
             order, day = self.gifts.limits()
             mode = value.get("delivery", value.get("mode", "manual"))
-            if mode not in {"manual", "text", "stock", "gifts"}:
+            if mode not in {"manual", "text", "stock", "gifts", "playerok"}:
                 mode = "manual"
             gift_code = value.get("gift_code")
             if mode == "gifts" and not gift_code:
@@ -139,6 +147,8 @@ class ListingLaunch:
                     "greeting": "",
                     "after": "",
                     "auto_complete": False,
+                    "platform_reply": False,
+                    "platform_switch_confirmed": False,
                     "refund": False,
                     "order_limit": order,
                     "day_limit": day,
@@ -213,13 +223,13 @@ class ListingLaunch:
                 "Товар уже не является неопубликованным черновиком; нужна сверка результата"
             )
         mode = value["mode"]
-        if mode not in {"manual", "text", "stock", "gifts"}:
+        if mode not in {"manual", "text", "stock", "gifts", "playerok"}:
             raise ValidationError("Выберите способ выдачи")
         if self.needs_delivery_choice(owner, value):
             raise ValidationError(
                 "В исходном товаре выбрана автовыдача. Выберите способ выдачи заново перед публикацией"
             )
-        if mode != "manual":
+        if self.wants_automation(value):
             if not getattr(self.api.account, "automation_enabled", False):
                 raise ValidationError("Автоматизация выключена. Проверьте настройки подключения")
             if not orders_sync_ready(self.store):
@@ -249,6 +259,36 @@ class ListingLaunch:
         }
         if mode != "manual":
             result["enrollment_origin"] = self.creation_origin(owner, item, publication_operation)
+        if mode == "playerok":
+            product = LogicalProducts(self.store, self.api).listing(item["id"])
+            if not product:
+                raise ValidationError(
+                    "Сначала подтвердите постоянную привязку в настройках «Выдаёт Playerok»"
+                )
+            if (
+                product["handler"] == "telegram_gifts"
+                and not json.loads(product["config"]).get("platform_only")
+                and not value.get("platform_switch_confirmed", False)
+            ):
+                raise ValidationError("Сначала подтвердите смену Telegram Gifts на выдачу Playerok")
+            LogicalProducts(self.store, self.api).verify_listing(product, item)
+            schema = await self.products.schema_details(
+                (item.get("category") or {}).get("id"), (item.get("obtaining_type") or {}).get("id")
+            )
+            fields = {field["id"]: field.get("value") for field in item.get("data_fields") or []}
+            for field in schema["form"]:
+                selected = (
+                    item.get("comment")
+                    if field.get("comment")
+                    else fields.get(field["key"])
+                    if field.get("data_field")
+                    else (item.get("attributes") or {}).get(field["key"])
+                )
+                validate_field(field, selected if selected is not None else "")
+            result["platform_schema"] = True
+            result["platform_stop"] = self.store.rows(
+                "SELECT COALESCE(MAX(rowid),0) AS revision FROM audit_log WHERE action='STOP_ALL_DELIVERY_POLICIES'"
+            )[0]["revision"]
         if mode in {"text", "stock"}:
             DeliveryPolicy(
                 enabled=True,
@@ -421,7 +461,31 @@ class ListingLaunch:
             ):
                 raise Conflict("Запуск уже подтверждён или настройки изменились")
             delivery_revision = 0
-            if value["mode"] == "gifts":
+            if value["mode"] == "playerok":
+                from app.services.platform_orders import DEFAULT_REPLY, commit_platform_settings
+
+                previous, _ = self.automation.get(item)
+                policy = DeliveryPolicy(
+                    mode="playerok",
+                    enabled=self.wants_automation(value),
+                    paid_reply=bool(value.get("platform_reply", False)),
+                    mark_sent=value["auto_complete"],
+                    auto_enroll=self.wants_automation(value),
+                    greeting=value["greeting"] or DEFAULT_REPLY,
+                    account_id=value["account_id"],
+                )
+                commit_platform_settings(
+                    db,
+                    owner,
+                    item,
+                    previous,
+                    policy,
+                    switch_confirmed=value.get("platform_switch_confirmed", False),
+                    prepublication_cutoff=(fresh.get("enrollment_origin") or {}).get("created_at"),
+                    inherit=bool(value.get("inherit", False)),
+                )
+                delivery_revision = self.automation.get(item)[0]
+            elif value["mode"] == "gifts":
                 delivery_revision = self._commit_gift_listing(db, owner, item, value, fresh)
             elif value["mode"] in {"text", "stock"}:
                 delivery_revision = self._commit_text_delivery(db, owner, item, value, fresh)
@@ -475,6 +539,14 @@ class ListingLaunch:
         if not product or product["state"] == "LEGACY":
             return None
         logical.verify_listing(product, fresh["item"])
+        if value["mode"] == "playerok":
+            return {
+                "product_id": product["id"],
+                "revision": product["revision"],
+                "control_revision": product["control_revision"],
+                "platform_only": True,
+                "platform_stop": fresh["platform_stop"],
+            }
         if product["enabled"]:
             raise Conflict("Сначала остановите прежнюю выдачу товара")
         handler = {
@@ -530,6 +602,9 @@ class ListingLaunch:
             "text": self.store.rows("SELECT revision FROM delivery_policies WHERE item_id=?", (item,)),
             "gift": self.store.rows("SELECT revision,enabled FROM gift_listings WHERE item_id=?", (item,)),
             "enabled": self.store.setting(f"delivery:{item}:enabled"),
+            "platform_stop": self.store.rows(
+                "SELECT COALESCE(MAX(rowid),0) AS revision FROM audit_log WHERE action='STOP_ALL_DELIVERY_POLICIES'"
+            ),
             "logical": self.store.rows(
                 "SELECT p.id,p.revision,p.control_revision,p.enabled,p.state,p.config FROM logical_products p JOIN logical_listings l ON l.product_id=p.id WHERE l.item_id=?",
                 (item,),
@@ -774,7 +849,7 @@ class ListingLaunch:
             or value.get("launch_revision") != prepared["revision"]
         ):
             raise Conflict("Подтверждение запуска устарело")
-        if config["mode"] != "manual" and not getattr(self.api.account, "automation_enabled", False):
+        if self.wants_automation(config) and not getattr(self.api.account, "automation_enabled", False):
             raise Conflict("Автоматизация остановлена; публикация с автовыдачей заблокирована")
         if prepared.get("logical"):
             context = prepared["logical"]
@@ -785,9 +860,17 @@ class ListingLaunch:
                 or product["revision"] != context["revision"]
                 or product["control_revision"] != context["control_revision"]
                 or product["state"] != "VERIFIED"
-                or (config["mode"] != "manual" and not product["enabled"])
+                or (self.wants_automation(config) and not product["enabled"])
             ):
                 raise Conflict("Привязка выдачи изменилась; публикация остановлена")
+            if (
+                config["mode"] == "playerok"
+                and context.get("platform_stop")
+                != self.store.rows(
+                    "SELECT COALESCE(MAX(rowid),0) AS revision FROM audit_log WHERE action='STOP_ALL_DELIVERY_POLICIES'"
+                )[0]["revision"]
+            ):
+                raise Conflict("Общая остановка изменилась после подтверждения запуска")
         if config["mode"] == "gifts":
             l = self.gifts.listing(action["target"])
             if (
@@ -801,8 +884,14 @@ class ListingLaunch:
             version, policy = self.automation.get(action["target"])
             if (
                 version != prepared["delivery_revision"]
-                or not policy.enabled
-                or self.store.setting(f"delivery:{action['target']}:enabled") is False
+                or (
+                    self.wants_automation(config)
+                    and (
+                        not policy.enabled
+                        or self.store.setting(f"delivery:{action['target']}:enabled") is False
+                    )
+                )
+                or (config["mode"] == "playerok" and policy.mode != "playerok")
             ):
                 raise Conflict("Автовыдача остановлена или настройки изменились")
 

@@ -161,6 +161,7 @@ class Wizard:
                 "text": "Постоянный текст",
                 "stock": "Уникальный запас",
                 "gifts": "Telegram Gifts",
+                "playerok": "Товар выдаёт Playerok; бот не отправляет его повторно",
             }[mode]
         )
         if mode == "stock":
@@ -365,6 +366,7 @@ class Wizard:
                 {"name": "Постоянный текст", "value": "text"},
                 {"name": "Уникальные значения", "value": "stock"},
                 {"name": "Telegram Gifts", "value": "gifts"},
+                {"name": "📦 Выдаёт Playerok", "value": "playerok"},
             ]
         elif step == "gift_picker":
             from app.gifts.core import gift_name
@@ -751,7 +753,7 @@ class Wizard:
                     payload["field_index"] += 1
             elif step == "delivery":
                 payload["delivery"] = choice["value"]
-                payload["managed_delivery"] = choice["value"] in {"text", "stock", "gifts"}
+                payload["managed_delivery"] = choice["value"] in {"text", "stock", "gifts", "playerok"}
                 if choice["value"] == "gifts":
                     from app.gifts.core import gift_code_from_description
                     from app.services.logical_products import LogicalProducts
@@ -774,7 +776,7 @@ class Wizard:
                         return await self.screen(owner, state)
                 payload["step"] = (
                     ("preview" if payload.get("return_preview") else "confirm")
-                    if choice["value"] in {"manual", "gifts"}
+                    if choice["value"] in {"manual", "gifts", "playerok"}
                     else "delivery_data"
                 )
             elif step == "finance_method":

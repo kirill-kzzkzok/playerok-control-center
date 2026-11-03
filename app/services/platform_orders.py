@@ -3,7 +3,7 @@
 import json
 from dataclasses import asdict
 
-from app.database.store import Conflict, encode, now
+from app.database.store import Conflict, encode, now, server_time
 from app.services.automation import Automation, DeliveryPolicy, future_order, message_text
 from app.services.logical_products import LogicalProducts
 from app.services.order_management import deal_details, sale
@@ -229,7 +229,9 @@ def stop_token(db):
     ).fetchone()[0]
 
 
-def commit_platform_settings(db, owner, item_id, revision, policy, *, switch_confirmed=False):
+def commit_platform_settings(
+    db, owner, item_id, revision, policy, *, switch_confirmed=False, prepublication_cutoff=None, inherit=None
+):
     """One local commit, only after independent VERIFIED description evidence."""
     account = db.execute("SELECT value FROM settings WHERE key='playerok:account_id'").fetchone()
     if (
@@ -278,11 +280,20 @@ def commit_platform_settings(db, owner, item_id, revision, policy, *, switch_con
         ).fetchone()
     ):
         raise Conflict("Есть незавершённая выдача или неизвестный результат; сначала разрешите заказ")
-    cutoff = now()
+    cutoff = server_time(prepublication_cutoff) if prepublication_cutoff is not None else now()
+    if not cutoff:
+        raise Conflict("Не подтверждено начало приёма будущих заказов")
     config = {**json.loads(product["config"]), "platform_only": True}
     db.execute(
         "UPDATE logical_products SET config=?,revision=revision+1,control_revision=control_revision+1,enabled=?,inherit_enabled=?,armed_at=?,updated_at=? WHERE id=?",
-        (encode(config), int(policy.enabled), int(policy.enabled), cutoff, cutoff, product["id"]),
+        (
+            encode(config),
+            int(policy.enabled),
+            int(policy.enabled and (inherit if inherit is not None else True)),
+            cutoff,
+            cutoff,
+            product["id"],
+        ),
     )
     db.execute(
         "UPDATE logical_listings SET config_revision=config_revision+1 WHERE product_id=?", (product["id"],)

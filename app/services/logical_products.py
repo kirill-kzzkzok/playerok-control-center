@@ -229,9 +229,12 @@ class LogicalProducts:
     async def prepare_creation(self, owner, value):
         """Read-only preparation for a new wizard-created private draft."""
         account = self.authority(owner, writes=True)
-        handler = {"gifts": "telegram_gifts", "text": "fixed_text", "stock": "unique_stock"}.get(
-            value.get("delivery")
-        )
+        handler = {
+            "gifts": "telegram_gifts",
+            "text": "fixed_text",
+            "stock": "unique_stock",
+            "playerok": "manual",
+        }.get(value.get("delivery"))
         if not handler:
             raise Conflict("Выберите автоматический способ выдачи")
         if marker(value["name"]):
@@ -244,6 +247,7 @@ class LogicalProducts:
                 **({"text": value.get("delivery_data", "")} if handler == "fixed_text" else {}),
                 "after": "",
                 "greeting": "",
+                **({"platform_only": True} if value.get("delivery") == "playerok" else {}),
             },
             max_count=gifts.settings.max_gifts if gifts else 5,
         )
