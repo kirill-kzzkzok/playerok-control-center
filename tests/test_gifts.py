@@ -22,7 +22,7 @@ from app.gifts.worker import GiftWorker
 from app.playerok.adapter import APIError
 from app.services.automation import Automation, DeliveryPolicy
 from app.services.orders import Orders
-from app.services.products import Products
+from app.services.products import Products, ValidationError
 from app.telegram.orders_panel import OrdersPanel
 from app.telegram.storage import SQLiteStorage
 from app.workers.outbox import Executor, OutboxWorker
@@ -699,13 +699,22 @@ def test_defaults_off_and_secrets_repr_hidden(tmp_path):
     assert "test-hash" not in repr(replace(s, api_hash="test-hash"))
 
 
-async def test_description_edit_queue_stops_gifts_before_remote_write(rig):
+async def test_description_edit_cannot_silently_stop_gifts_or_change_paid_obligation(rig):
     r = rig
     await enroll(r)
-    r.store.enqueue(
-        "description-edit", "edit", "item", {"description": "New description\ngift: heart"}, actor=7
-    )
-    assert r.service.listing("item")["enabled"] == 0
+    before = r.store.rows("SELECT * FROM gift_jobs")
+    with pytest.raises(ValidationError, match="Сначала остановите"):
+        r.store.enqueue(
+            "description-edit", "edit", "item", {"description": "New description\ngift: heart"}, actor=7
+        )
+    assert r.service.listing("item")["enabled"] == 1
+    r.service.stop(7)  # Explicit owner STOP, never a hidden consequence of enqueue.
+    with pytest.raises(ValidationError, match="незавершён"):
+        r.store.enqueue(
+            "description-edit", "edit", "item", {"description": "New description\ngift: heart"}, actor=7
+        )
+    assert r.store.rows("SELECT * FROM gift_jobs") == before
+    assert not r.store.rows("SELECT 1 FROM outbox WHERE kind='edit'")
     await r.worker.once()
     assert not r.remote.payments
 

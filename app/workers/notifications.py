@@ -8,7 +8,7 @@ from aiogram.exceptions import TelegramBadRequest
 
 from app.database.store import encode
 from app.services.chat_events import system_event
-from app.services.notification_preferences import NotificationPreferences
+from app.services.notification_preferences import NotificationPreferences, notification_baseline
 from app.telegram.chat_cards import ChatCards
 from app.telegram.errors import TERMINAL_EDIT, telegram_error
 from app.telegram.formatting import escaped
@@ -24,19 +24,42 @@ class Notifications:
     def __init__(self, store, bot):
         self.store, self.bot = store, bot
         self.preferences = NotificationPreferences(store)
+        notification_baseline(store)
 
     async def once(self):
         if not self.store.rows("SELECT user_id FROM administrators LIMIT 1"):
             return
         await self.refresh_actions()
         await OperationResults(self.store).notify(self.bot)
-        # First completed sync establishes baseline: do not flood with historical orders.
+        # Startup, not the last inaccessible historical chat, defines the boundary.
+        boundary = notification_baseline(self.store)
+        critical = (
+            "(i.kind IN ('worker_failed','operation_uncertain','stock_empty','order_problem',"
+            "'promotion_guard','enrollment_blocked','logical_product_blocked') OR "
+            "(i.kind='message' AND json_extract(i.payload,'$.user') IS NULL "
+            "AND json_extract(i.payload,'$.text')='{{DEAL_HAS_PROBLEM}}'))"
+        )
+        transition = (
+            "(i.kind='order' AND EXISTS(SELECT 1 FROM inbox prior WHERE prior.kind='order' "
+            "AND prior.rowid<i.rowid AND json_extract(prior.payload,'$.id')=json_extract(i.payload,'$.id') "
+            "AND json_extract(prior.payload,'$.status')<>json_extract(i.payload,'$.status')))"
+        )
+        fresh_event = (
+            "(server_time(json_extract(i.payload,'$.created_at'))>server_time(?) OR " + transition + ")"
+        )
+        if boundary:
+            self.store.execute(
+                "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) "
+                "SELECT i.key,a.user_id,'BASELINE' FROM inbox i CROSS JOIN administrators a WHERE NOT "
+                + critical
+                + " AND (i.rowid<=? OR (server_time(json_extract(i.payload,'$.created_at'))<=server_time(?) AND NOT "
+                + transition
+                + ")) AND NOT EXISTS(SELECT 1 FROM notifications n WHERE n.event_key=i.key AND n.owner_id=a.user_id)",
+                (boundary["sequence"], boundary["at"]),
+            )
         initialized = self.store.setting("notifications:initialized", False)
         if not initialized and self.store.setting("sync:health", {}).get("status") == "OK":
             with self.store.transaction() as db:
-                db.execute(
-                    "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT i.key,a.user_id,'BASELINE' FROM inbox i CROSS JOIN administrators a WHERE i.kind NOT IN ('worker_failed','operation_uncertain','stock_empty','order_problem','promotion_guard','enrollment_blocked','logical_product_blocked') AND NOT (i.kind='message' AND json_extract(i.payload,'$.user') IS NULL AND json_extract(i.payload,'$.text')='{{DEAL_HAS_PROBLEM}}')"
-                )
                 db.execute(
                     "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                     ("notifications:initialized", encode(True)),
@@ -46,12 +69,9 @@ class Notifications:
             "SELECT i.* FROM inbox i WHERE i.processed_at IS NOT NULL "
             "AND EXISTS (SELECT 1 FROM administrators a WHERE NOT EXISTS "
             "(SELECT 1 FROM notifications n WHERE n.event_key=i.key AND n.owner_id=a.user_id)) "
-            + (
-                "AND (i.kind IN ('worker_failed','operation_uncertain','stock_empty','order_problem','promotion_guard','enrollment_blocked','logical_product_blocked') OR (i.kind='message' AND json_extract(i.payload,'$.user') IS NULL AND json_extract(i.payload,'$.text')='{{DEAL_HAS_PROBLEM}}')) "
-                if not initialized
-                else ""
-            )
-            + "ORDER BY i.received_at,i.key LIMIT 200"
+            + ("AND (" + critical + " OR " + fresh_event + ") " if not initialized else "")
+            + "ORDER BY i.received_at,i.key LIMIT 200",
+            (boundary["at"],) if not initialized else (),
         )
         owners = self.store.rows("SELECT user_id FROM administrators")
         for event in events:

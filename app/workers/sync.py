@@ -5,6 +5,7 @@ import time
 
 from app.database.store import encode, now
 from app.playerok.adapter import APIError
+from app.services.notification_preferences import notification_baseline
 from app.services.sync_health import orders_sync_failed
 from app.workers.pagination import PageScanner
 from playerokapi.enums import ItemDealDirections
@@ -19,6 +20,7 @@ class Synchronizer(PageScanner):
         self.health = {"status": "NOT_STARTED"}
         self.lock = asyncio.Lock()
         self.wake = asyncio.Event()
+        notification_baseline(store)
 
     def request(self, kind, target):
         if (

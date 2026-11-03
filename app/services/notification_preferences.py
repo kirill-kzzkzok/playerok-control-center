@@ -18,6 +18,21 @@ KINDS = {
 }
 
 
+def notification_baseline(store):
+    """Persist the startup boundary before backfill, never move it on recovery."""
+    with store.transaction():
+        value = store.setting("notifications:baseline")
+        if value:
+            return value
+        if store.setting("notifications:initialized", False):
+            return None  # Existing installations already established their baseline.
+        if not store.rows("SELECT 1 FROM administrators LIMIT 1"):
+            return None
+        value = {"at": now(), "sequence": store.rows("SELECT COALESCE(MAX(rowid),0) AS n FROM inbox")[0]["n"]}
+        store.set_setting("notifications:baseline", value)
+        return value
+
+
 class NotificationPreferences:
     def __init__(self, store):
         self.store = store
