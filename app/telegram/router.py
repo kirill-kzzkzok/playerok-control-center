@@ -15,6 +15,7 @@ from app.database.store import Conflict
 from app.localvpn import active_proxy
 from app.playerok.adapter import APIError
 from app.services.discounts import discount_plan
+from app.services.logical_products import LogicalProducts
 from app.services.products import ValidationError, listing_price, listing_text
 from app.services.replies import Replies
 from app.telegram.agreements_panel import AgreementsPanel
@@ -486,7 +487,22 @@ def create_router(store, api, products, synchronizer):
                 )
                 return
             elif action.startswith("editfields:"):
-                text, markup = await wizard.start_edit(owner, state, action.split(":", 1)[1])
+                ident = action.split(":", 1)[1]
+                await products.owned_item(ident)
+                problem = products.critical_edit_problem(ident)
+                if problem:
+                    await state.clear()
+                    path = (
+                        "order:" + problem["order_id"]
+                        if problem["order_id"]
+                        else problem.get("callback", "ops:list:ALL:0")
+                    )
+                    text, markup = (
+                        problem["reason"],
+                        keyboard([[("Проверить и исправить", path)]], back=("К товару", "item:" + ident)),
+                    )
+                else:
+                    text, markup = await wizard.start_edit(owner, state, ident)
             elif action.startswith("quote:"):
                 ident = action.split(":", 1)[1]
                 text, markup = await paid_promotions.callback("payp:item:" + ident, owner, state)
@@ -508,6 +524,20 @@ def create_router(store, api, products, synchronizer):
                 item = await api.call("get_item", id=ident)
                 if not api.account.id or (item.get("user") or {}).get("id") != api.account.id:
                     raise ValidationError("Владение товаром не подтверждено")
+                if kind == "editdesc" and (problem := products.critical_edit_problem(ident)):
+                    await state.clear()
+                    path = (
+                        "order:" + problem["order_id"]
+                        if problem["order_id"]
+                        else problem.get("callback", "ops:list:ALL:0")
+                    )
+                    await display(
+                        message,
+                        problem["reason"],
+                        keyboard([[("Проверить и исправить", path)]], back=("К товару", "item:" + ident)),
+                        not preserve,
+                    )
+                    return
                 await products.prepare_item_agreements(item)
                 await state.set_state("editphoto" if kind == "editphoto" else "edit")
                 await state.set_data(
@@ -833,7 +863,14 @@ def create_router(store, api, products, synchronizer):
                 await state.set_state(None)
                 await state.set_data({"pending": pending, "confirm_token": nonce})
                 text, markup = (
-                    "Подтвердите действие:\n\n" + escape(str(value)),
+                    "Подтвердите действие:\n\n"
+                    + escape(str(value))
+                    + (
+                        "\n\nПосле изменения описания выдача останется остановленной. Подтвердите привязку заново перед включением."
+                        if data["field"] == "description"
+                        and LogicalProducts(store, api).listing(data["item_id"])
+                        else ""
+                    ),
                     keyboard([[("✅ Подтвердить", "commit:" + nonce)]]),
                 )
             else:

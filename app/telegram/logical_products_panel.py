@@ -129,6 +129,8 @@ class LogicalProductsPanel:
                 [("🔄 Проверить перевыставление", prefix + "check")],
                 [("Отвязать товар", prefix + "detach")],
             ]
+            if not product["enabled"] and product["state"] == "VERIFIED" and not product["verified_at"]:
+                rows.insert(0, [("🔐 Подтвердить изменённый товар", prefix + "rebind")])
             if platform:
                 rows.append([("Сменить способ выдачи", prefix + "configure")])
             elif product["handler"] != "manual":
@@ -227,6 +229,22 @@ class LogicalProductsPanel:
         command, value = parts[2], parts[3] if len(parts) == 4 else None
         prefix = "lp:" + view["nonce"] + ":"
         product = self.service.product(view["product"], owner) if view.get("product") else None
+        if command == "rebind":
+            if not product or product["enabled"]:
+                raise Conflict("Сначала остановите выдачу товара")
+            from app.services.products import Products
+
+            Products(self.store, self.api).require_critical_edit(view["item"])
+            prepared = await self.service.prepare(
+                owner,
+                view["item"],
+                product["handler"],
+                json.loads(product["config"]),
+                platform_binding=json.loads(product["config"]).get("platform_only") is True,
+            )
+            view["nonce"] = secrets.token_hex(6)
+            await state.update_data(logical_view=view, logical_prepared=prepared)
+            return self.preview(prepared, view)
         if command == "migrate":
             prepared = await self.service.prepare_legacy_description(owner, view["item"])
             view["nonce"] = secrets.token_hex(6)

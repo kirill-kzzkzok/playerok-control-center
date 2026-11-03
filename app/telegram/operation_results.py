@@ -191,6 +191,22 @@ class OperationResults:
             buttons.append([("Диалог", "chat:" + row["target"])])
         elif kind != "delete":
             buttons.append([("Открыть актуальную карточку", "item:" + row["target"])])
+        payload = json.loads(row["payload"])
+        if (
+            status == "SUCCEEDED"
+            and (
+                kind == "edit_fields"
+                or kind == "edit"
+                and "description" in payload
+                and not payload.get("logical_binding")
+                and not payload.get("code_migration")
+            )
+            and self.store.rows("SELECT 1 FROM logical_listings WHERE item_id=?", (row["target"],))
+        ):
+            text += (
+                "\nИзменение сохранено. Выдача остаётся остановленной до повторного подтверждения привязки."
+            )
+            buttons.insert(0, [("🔐 Подтвердить привязку", "lp:item:" + row["target"])])
         buttons += [
             [("Подробности операции", "ops:show:" + ident)],
             [("🔄 Обновить результат", "result:show:" + ident)],

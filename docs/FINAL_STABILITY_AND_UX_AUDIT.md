@@ -5,9 +5,9 @@
 | ID | Замечание | Статус | Причина / исправление / тесты |
 |---|---|---|---|
 | A1 | УСТРАНИТЬ ПУБЛИКАЦИЮ В ОБХОД ЕДИНОГО ЗАПУСКА | FIXED | RED2free+RED2paid;148passed и3paidUI. Free/PREMIUM DRAFT требуют ListingLaunch. Старые publish/payp/FSM безопасно перенаправляются/отклоняются; active promotion/native relist сохранены. Full gate pending |
-| A2 | РЕДАКТИРОВАНИЕ НЕ ДОЛЖНО НЕЗАМЕТНО ЛОМАТЬ АВТОВЫДАЧУ | — | Проверка ещё не выполнена |
+| A2 | РЕДАКТИРОВАНИЕ НЕ ДОЛЖНО НЕЗАМЕТНО ЛОМАТЬ АВТОВЫДАЧУ | CONFIRMED | Critical edits: RED5 behavioral cases →138passed profile; explicit STOP, obligation guards enqueue/dispatch, readback invalidates old approval, actual UI rebind/rearm. Future-only messages remain pending |
 | A3 | ЗАЩИТИТЬ УДАЛЕНИЕ ТОВАРА С НЕЗАВЕРШЁННЫМИ ЗАКАЗАМИ | FIXED | RED5;96passed профиль. Products scope guard в UI/preflight/dispatch, safe completed receipts, late lease/paid/Giftunknown/aliases. Live server status range не проверялся |
-| A4 | СОГЛАСОВАТЬ РЕДАКТИРОВАНИЕ С УЖЕ ЗАРЕЗЕРВИРОВАННЫМИ ЗАКАЗАМИ | — | Проверка ещё не выполнена |
+| A4 | СОГЛАСОВАТЬ РЕДАКТИРОВАНИЕ С УЖЕ ЗАРЕЗЕРВИРОВАННЫМИ ЗАКАЗАМИ | CONFIRMED | Critical edit blocked for paid/reserved/late sale; reserve/history untouched, queued edit blocks rearm, unknown/restart no replay. Safe-message snapshot scenarios still pending |
 | B1 | ОДИН СТАРЫЙ ЧАТ НЕ ДОЛЖЕН ОСТАНАВЛИВАТЬ НЕЗАВИСИМЫЕ ПРОДАЖИ | — | Проверка ещё не выполнена |
 | B2 | ИСПРАВИТЬ BACKOFF РЕЗЕРВНОЙ СИНХРОНИЗАЦИИ ЗАКАЗОВ | — | Проверка ещё не выполнена |
 | B3 | РАЗОБРАТЬ HTTP 403 ОТ НЕДОСТУПНОГО СТАРОГО ЧАТА | — | Проверка ещё не выполнена |

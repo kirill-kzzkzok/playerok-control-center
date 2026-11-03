@@ -210,7 +210,36 @@ class Products:
     def __init__(self, store, api):
         self.store, self.api = store, api
 
-    def deletion_problem(self, item_id, operation_id=None):
+    def critical_edit_problem(self, item_id, operation_id=None):
+        """Changing the purchase contract requires an explicit stop and no obligations."""
+        scope = (
+            "WITH scope(item_id) AS (SELECT ? UNION SELECT peer.item_id "
+            "FROM logical_listings base JOIN logical_listings peer ON peer.product_id=base.product_id "
+            "WHERE base.item_id=?) "
+        )
+        with self.store.transaction():
+            active = self.store.rows(
+                scope + "SELECT 1 FROM logical_products p JOIN logical_listings l ON l.product_id=p.id "
+                "WHERE l.item_id IN scope AND p.enabled=1 UNION ALL "
+                "SELECT 1 FROM gift_listings WHERE item_id IN scope AND enabled=1 UNION ALL "
+                "SELECT 1 FROM delivery_policies WHERE item_id IN scope "
+                "AND json_extract(payload,'$.enabled')=1 LIMIT 1",
+                (item_id, item_id),
+            )
+            if active:
+                return {
+                    "reason": "Сначала остановите выдачу товара. Изменение описания или характеристик требует повторного подтверждения привязки.",
+                    "order_id": None,
+                    "callback": "lp:item:" + item_id,
+                }
+            return self.deletion_problem(item_id, operation_id, action="Редактирование")
+
+    def require_critical_edit(self, item_id, operation_id=None):
+        problem = self.critical_edit_problem(item_id, operation_id)
+        if problem:
+            raise ValidationError(problem["reason"])
+
+    def deletion_problem(self, item_id, operation_id=None, *, action="Удаление"):
         scope = (
             "WITH scope(item_id) AS (SELECT ? UNION SELECT peer.item_id "
             "FROM logical_listings base JOIN logical_listings peer ON peer.product_id=base.product_id "
@@ -243,7 +272,7 @@ class Products:
                 ),
             ),
             (
-                "Подарочная операция выполняется или требует сверки. Удаление пока заблокировано.",
+                f"Подарочная операция выполняется или требует сверки. {action} пока заблокировано.",
                 (
                     "SELECT order_id FROM gift_jobs WHERE item_id IN scope "
                     "AND (state IN ('SPENDING','UNCERTAIN') OR refund_state IN ('QUEUED','SPENDING','UNCERTAIN') "
@@ -438,6 +467,7 @@ class Products:
 
     async def edit_fields_draft(self, owner, item_id):
         item = await self.owned_item(item_id)
+        self.require_critical_edit(item_id)
         category_id = (item.get("category") or {}).get("id")
         if not category_id:
             raise ValidationError("API не вернул категорию товара")

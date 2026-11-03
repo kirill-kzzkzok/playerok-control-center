@@ -253,6 +253,15 @@ class Store:
                     raise Conflict(
                         "Для этого товара уже есть незавершённая операция. Сначала проверьте её результат."
                     )
+            if kind == "edit_fields" or (
+                kind == "edit"
+                and "description" in payload
+                and not payload.get("logical_binding")
+                and not payload.get("code_migration")
+            ):
+                from app.services.products import Products
+
+                Products(self, None).require_critical_edit(target)
             connection.execute(
                 "INSERT OR IGNORE INTO outbox(id,operation_key,kind,target,payload,created_at) VALUES(?,?,?,?,?,?)",
                 (ident, key, kind, target, encode(payload), now()),
@@ -490,6 +499,16 @@ class Store:
                     "UPDATE drafts SET state='UPDATED' WHERE id=? AND state='QUEUED'",
                     (json.loads(row["payload"])["draft_id"],),
                 )
+            payload = json.loads(row["payload"])
+            if status == "SUCCEEDED" and (
+                row["kind"] == "edit_fields"
+                or row["kind"] == "edit"
+                and "description" in payload
+                and not payload.get("logical_binding")
+                and not payload.get("code_migration")
+            ):
+                # A receipt proves the edit, not approval of a new purchase contract.
+                db.execute("UPDATE logical_listings SET verified_at=NULL WHERE item_id=?", (row["target"],))
             if (
                 row["kind"] == "edit"
                 and status == "SUCCEEDED"

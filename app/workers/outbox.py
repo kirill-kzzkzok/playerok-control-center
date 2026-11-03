@@ -95,6 +95,13 @@ class Executor:
             PaidPromotions(self.store, self.api).guard(action)
         if action["kind"] == "delete":
             Products(self.store, self.api).require_deletable(action["target"], action["id"])
+        if action["kind"] == "edit_fields" or (
+            action["kind"] == "edit"
+            and "description" in action["payload"]
+            and not action["payload"].get("logical_binding")
+            and not action["payload"].get("code_migration")
+        ):
+            Products(self.store, self.api).require_critical_edit(action["target"], action["id"])
         if action["payload"].get("chain_id"):
             DeliveryChains(self.store, self.api).dispatchable(action)
         if action["payload"].get("auto_reply"):

@@ -60,6 +60,12 @@ async def test_real_handlers_queue_then_notify_owner_confirmed_result_once(rig, 
         await ui.click("draft:" + draft)
         token = (await state.get_data())["view_token"]
         await ui.click(f"w:{token}:submit")
+    elif kind == "publish":
+        await ui.click("publish:item")
+        nonce = (await state.get_data())["launch"]["nonce"]
+        await ui.click("ln:" + nonce + ":check")
+        nonce = (await state.get_data())["launch"]["nonce"]
+        await ui.click("ln:" + nonce + ":commit")
     else:
         action = {"publish": "publish", "discount": "discount", "edit": "editname", "delete": "delete"}[kind]
         await ui.click(action + ":item")
@@ -70,9 +76,12 @@ async def test_real_handlers_queue_then_notify_owner_confirmed_result_once(rig, 
     assert (
         "Ожидает выполнения" in session.calls[-1].text
         or "Готовим неопубликованный черновик" in session.calls[-1].text
+        or kind == "publish"
+        and "товар пока не объявлен активным" in session.calls[-1].text
     )
     assert "SUCCEEDED" not in session.calls[-1].text
     ident = store.rows("SELECT id FROM outbox")[0]["id"]
+    assert store.rows("SELECT status FROM outbox WHERE id=?", (ident,)) == [{"status": "PENDING"}]
     assert store.rows("SELECT owner_id FROM operation_receipts") == [{"owner_id": 7}]
     if kind == "discount":
         api.account.update_item = lambda **kwargs: {"id": kwargs["id"], "price": 749, "raw_price": 1000}

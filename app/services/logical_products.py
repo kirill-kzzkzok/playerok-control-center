@@ -622,6 +622,17 @@ class LogicalProducts:
         return receipt
 
     def verify_listing(self, product, item):
+        if self.store.rows(
+            "SELECT 1 FROM outbox WHERE target=? "
+            "AND status IN ('PENDING','PROCESSING','RETRYABLE_FAILED','UNCERTAIN') "
+            "AND (kind='edit_fields' OR kind='edit' AND json_type(payload,'$.description') IS NOT NULL "
+            "AND json_extract(payload,'$.logical_binding') IS NULL "
+            "AND json_extract(payload,'$.code_migration') IS NULL) LIMIT 1",
+            (item.get("id"),),
+        ):
+            raise Conflict(
+                "Редактирование товара не завершено. Сначала сверьте операцию, затем подтвердите привязку"
+            )
         link = self.listing(item.get("id"))
         actual = critical(item)
         baseline = json.loads(product["baseline"])
