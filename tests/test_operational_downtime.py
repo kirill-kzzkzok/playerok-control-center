@@ -5,10 +5,15 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from app.database.store import Store
+from app.gifts.worker import GiftWorker
 from app.services.logical_products import LogicalProducts
 from app.services.orders import Orders
+from app.services.products import Products
 from app.workers.delivery_chains import ChainWorker
 from app.workers.enrollment import EnrollmentWorker
+from app.workers.outbox import Executor, OutboxWorker
+from tests.test_playerok_delivery import configure
 from tests.test_product_readiness import shop as shop_fixture
 from tests.test_universal_delivery_e2e import setup_ui
 
@@ -61,6 +66,53 @@ async def test_downtime_does_not_authorize_historical_stopped_or_unproved_orders
     ChainWorker(r.store, r.api).once()
     await r.worker.once()
     assert not r.api.messages and not r.store.rows("SELECT * FROM reservations")
+
+
+@pytest.mark.parametrize("mode", ["telegram_gifts", "playerok"])
+async def test_other_verified_delivery_modes_recover_after_two_hours(shop, monkeypatch, mode):
+    r = await shop(gift=mode == "telegram_gifts")
+    if mode == "telegram_gifts":
+        await setup_ui(r, mode, "gift: heart")
+    else:
+        await configure(r, reply=True, fulfill=False)
+    order = r.api.order("late-sale")
+    if mode == "playerok":
+        order["is_automated"] = True
+    at = time.time()
+    monkeypatch.setattr("app.workers.enrollment.time.time", lambda: at + 7200)
+    Orders(r.store).ingest(order)
+    for _ in range(5):
+        await EnrollmentWorker(r.store, r.api).once()
+        await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+        ChainWorker(r.store, r.api).once()
+        await r.worker.once()
+    assert len(r.api.remote.payments) == int(mode == "telegram_gifts")
+    assert len(r.api.messages) == 1
+    assert not r.store.rows("SELECT * FROM reservations")
+
+
+async def test_unknown_gift_after_downtime_remains_quarantined_after_restart(shop, monkeypatch):
+    r = await shop(gift=True)
+    await setup_ui(r, "telegram_gifts", "gift: heart")
+    order = r.api.order("unknown-late-sale")
+    at = time.time()
+    monkeypatch.setattr("app.workers.enrollment.time.time", lambda: at + 7200)
+    Orders(r.store).ingest(order)
+    r.api.remote.pay_error = TimeoutError()
+    await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+    await r.worker.once()
+    assert len(r.api.remote.payments) == 1
+    for _ in range(2):
+        path = r.store.path
+        r.store.close()
+        r.store = Store(path)
+        r.worker = OutboxWorker(r.store, Executor(r.store, r.api, Products(r.store, r.api)))
+        Orders(r.store).ingest(order)
+        await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+        await r.worker.once()
+        assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "UNCERTAIN"}]
+        assert len(r.api.remote.payments) == 1
+        assert not r.api.messages
 
 
 async def test_missing_server_date_can_be_completed_without_rearming(shop, monkeypatch):
