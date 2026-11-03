@@ -78,3 +78,12 @@ class NotificationPreferences:
                 (owner, key, "ENABLED" if enabled else "DISABLED", now()),
             )
             db.execute("DELETE FROM settings WHERE key=?", (f"notifications:{owner}:preferences_error",))
+            if not enabled:
+                kinds = [kind for kind, preference in KINDS.items() if preference == key]
+                db.execute(
+                    "UPDATE notifications SET status='SUPPRESSED',send_retry_at=0 WHERE owner_id=? "
+                    "AND status='PENDING' AND event_key IN (SELECT key FROM inbox WHERE kind IN ("
+                    + ",".join("?" for _ in kinds)
+                    + "))",
+                    (owner, *kinds),
+                )

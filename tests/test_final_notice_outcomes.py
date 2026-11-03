@@ -9,6 +9,8 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from aiogram.methods import SendMessage
 
 from app.database.store import Store
+from app.services.notification_preferences import NotificationPreferences
+from app.services.orders import Orders
 from app.telegram.operation_results import OperationResults
 from app.workers.notifications import Notifications
 from tests.test_telegram_integration import TelegramSession
@@ -102,4 +104,39 @@ def test_old_receipt_schema_migrates_without_losing_unknown_receipts_or_views(tm
         assert row["send_retry_at"] == 0 and row["send_error"] is None
         assert not store.rows("PRAGMA foreign_key_check")
     finally:
+        store.close()
+
+
+async def test_disabling_optional_notice_during_rate_limit_never_replays_on_reenable(tmp_path):
+    store = Store(tmp_path / "optional.sqlite")
+    store.claim_first_owner(7)
+    store.set_setting("notifications:initialized", True)
+    Orders(store).ingest(
+        {"id": "order", "status": "PAID", "direction": "OUT", "item": {"id": "item", "price": 100}}
+    )
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    attempts = []
+    original = session.make_request
+
+    async def send(bot, method, timeout=None):
+        if isinstance(method, SendMessage):
+            attempts.append(method)
+            if len(attempts) == 1:
+                raise TelegramRetryAfter(method, "rate", retry_after=30)
+        return await original(bot, method, timeout)
+
+    session.make_request = send
+    try:
+        await Notifications(store, bot).once()
+        assert store.rows("SELECT status FROM notifications") == [{"status": "PENDING"}]
+        preferences = NotificationPreferences(store)
+        preferences.set(7, 0, "orders", False)
+        preferences.set(7, 1, "orders", True)
+        store.execute("UPDATE notifications SET send_retry_at=0")
+        await Notifications(store, bot).once()
+        assert len(attempts) == 1
+        assert store.rows("SELECT status FROM notifications") == [{"status": "SUPPRESSED"}]
+    finally:
+        await bot.session.close()
         store.close()
