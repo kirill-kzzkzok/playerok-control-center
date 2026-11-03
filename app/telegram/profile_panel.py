@@ -96,8 +96,10 @@ class ProfilePanel:
 
     async def handle(self, message, *, refresh=False, details=False):
         if self.store is not None:
-            connection = getattr(self.api, "connection", None) or PlayerokConnection(self.store, self.api)
-            status = await connection.check()
+            connection = getattr(self.api, "connection", None)
+            initial_check = connection is None
+            connection = connection or PlayerokConnection(self.store, self.api)
+            status = await connection.check() if refresh or initial_check else dict(connection.state)
             text = self.connection_caption(status)
             withdrawal = self.store.setting(f"finance:{message.chat.id}:withdrawal", {})
             provider = withdrawal.get("provider") or {}

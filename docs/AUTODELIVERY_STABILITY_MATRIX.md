@@ -70,3 +70,4 @@
 | 2.2 Быстро SOLD / private item HTTP404 | logical_products / delivery_chains / Outbox / order_management | RED2failed stock/text + REDconflictingprice;98passed,4deliverymodes(existingPlayerok), sharedstock/oneorder-source/no duplicates | FIXED в проверенных сценариях |
 | 3.1 Независимость chats / orders / auth | sync_health / Gifts / readiness / automation / adapter | RED2failed;396passed+6passed; oldchat failure remains visible, order/unknown error blocked;503 no identity loss,401 disables | FIXED; phase3 latency/load gate pending |
 | 3.2 ACTIVE chain LIMIT50 starvation | workers/delivery_chains | RED1failed; bounded account cursor,77passed;50existing queued chains +new sale actual send once | FIXED; not a mixed-service SLA load test |
+| 3.3 Профиль как просмотр | telegram/profile_panel | RED1failed;44passed;ordinaryopen no get/no disabled flags, explicitcheck fresh authority | FIXED |
