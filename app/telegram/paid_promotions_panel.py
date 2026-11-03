@@ -14,12 +14,27 @@ class PaidPromotionsPanel:
     def __init__(self, store, api):
         self.store, self.api, self.service = store, api, PaidPromotions(store, api)
 
+    async def draft_launch(self, owner, ident, state, quote_id=None):
+        from app.telegram.gifts_panel import GiftsPanel
+        from app.telegram.launch_panel import LaunchPanel
+
+        panel = LaunchPanel(self.store, self.api, GiftsPanel(self.store, self.api).service)
+        launch_id = await panel.service.open(owner, ident)
+        draft = panel.service.load(owner, launch_id)
+        if draft["state"] == "DRAFT":
+            value = draft["payload"]
+            value.update(publication="PREMIUM", quote_id=quote_id, ready=None)
+            self.store.update_draft(launch_id, owner, draft["revision"], value)
+        return await panel.show(owner, state, launch_id)
+
     async def callback(self, action, owner, state):
         self.service.settings.access.orders.owner(owner)
         parts = action.split(":")
         if parts[1] == "item" and len(parts) == 3:
             ident = parts[2]
             item = await self.service.settings.access.item(owner, ident)
+            if item.get("status") == "DRAFT":
+                return await self.draft_launch(owner, ident, state)
             quotes = await self.api.call(
                 "get_item_priority_statuses", item_id=ident, item_price=priority_price_basis(item)
             )
@@ -55,6 +70,8 @@ class PaidPromotionsPanel:
             if view.get("nonce") != parts[2] or not 0 <= int(parts[3]) < len(view.get("ids", [])):
                 raise Conflict("Тариф устарел. Откройте товар заново")
             value = await self.service.preview(owner, view["item_id"], view["ids"][int(parts[3])])
+            if value["item"]["status"] == "DRAFT":
+                return await self.draft_launch(owner, view["item_id"], state, value["quote_id"])
             viewer = await self.api.call("get")
             available, pending, capacity = placement_funds(viewer)
             if viewer.get("id") != value["account_id"] or available is None:
@@ -128,6 +145,8 @@ class PaidPromotionsPanel:
             p = (await state.get_data()).get("paid_pending", {})
             if p.get("nonce") != parts[2]:
                 raise Conflict("Подтверждение устарело или уже использовано")
+            if p["value"]["item"]["status"] == "DRAFT":
+                return await self.draft_launch(owner, p["value"]["item"]["id"], state, p["value"]["quote_id"])
             if parts[1] == "approve":
                 await self.service.approve(owner, p["value"])
                 await self.service.settings.target(owner, p["value"]["item"]["id"], "include")

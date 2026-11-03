@@ -22,7 +22,7 @@ from app.services.reconciliation import Reconciliation, signature
 from app.telegram.storage import SQLiteStorage
 from app.workers.outbox import Executor, OutboxWorker
 from app.workers.promotions import PromotionWorker
-from tests.test_operations import FakeAccount
+from tests.test_operations import FakeAccount, queue_manual_publication
 from tests.test_telegram_integration import Interaction, TelegramSession, dispatcher
 
 
@@ -114,6 +114,18 @@ async def rig(tmp_path):
 
 
 async def enqueue(r, ident="item", key="one", automatic=False):
+    request_keys = getattr(r, "publication_requests", {})
+    if (ident, key) in request_keys:
+        return await r.service.queue(7, {}, request_keys[ident, key])
+    if r.api.items[ident]["status"] == "DRAFT" and not automatic:
+        op = await queue_manual_publication(
+            r.store, r.api, ident, 7, publication="PREMIUM", quote_id="premium"
+        )
+        request_keys[ident, key] = r.store.rows("SELECT operation_key FROM outbox WHERE id=?", (op,))[0][
+            "operation_key"
+        ]
+        r.publication_requests = request_keys
+        return op
     preview = await r.service.preview(7, ident, "premium")
     return await r.service.queue(7, preview, key, automatic=automatic)
 
@@ -130,7 +142,12 @@ async def test_confirmed_publish_and_bump_atomic_expense_and_no_duplicate(rig, s
     assert row["status"] == "SUCCEEDED"
     assert json.loads(row["result"])["paid_rub"] == "10.00"
     assert r.store.rows("SELECT status FROM promotion_expenses") == [{"status": "SUCCEEDED"}]
-    assert await r.service.queue(7, {}, "one") == op
+    assert (
+        await r.service.queue(
+            7, {}, r.store.rows("SELECT operation_key FROM outbox WHERE id=?", (op,))[0]["operation_key"]
+        )
+        == op
+    )
     await r.worker.once()
     assert len(r.api.charges) == 1
     assert r.api.account.calls == ["publishItem" if status == "DRAFT" else "increaseItemPriorityStatus"]
@@ -281,19 +298,17 @@ async def test_legacy_dry_run_policy_no_spend_then_explicit_auto_and_stop(rig):
 
 async def test_two_workers_cannot_start_different_payments_concurrently(rig):
     r = rig
-    await enqueue(r, "item", "first")
-    await enqueue(r, "other", "second")
+    first = await enqueue(r, "item", "first")
+    second = await enqueue(r, "other", "second")
     # Durable in-flight intent from another process blocks, never authorizes a second request.
-    first = r.store.rows("SELECT id FROM outbox WHERE operation_key='first'")[0]["id"]
     r.store.set_setting(intent_key(first), {"pending": True, "started_at": "active"})
-    await r.worker.once(
-        operation_id=r.store.rows("SELECT id FROM outbox WHERE operation_key='second'")[0]["id"]
-    )
+    await r.worker.once(operation_id=second)
     assert not r.api.charges
 
 
 async def test_dispatcher_preview_confirmation_restart_double_click_and_access(rig):
     r = rig
+    r.api.items["item"]["status"] = "APPROVED"
     session = TelegramSession()
     bot = Bot("123:" + "x" * 35, session=session)
     ui = Interaction(bot, dispatcher(r.store, r.api))

@@ -193,6 +193,8 @@ class PaidPromotions:
             )
         ):
             raise Conflict("Тариф, товар или настройки изменились. Подтвердите новое превью")
+        if fresh["item"]["status"] == "DRAFT" and not launch:
+            raise ValidationError("Для черновика сначала настройте выдачу и подтвердите единый запуск товара")
         self.permissions(fresh["account_id"], automatic)
         viewer = await self.api.call("get")
         if viewer.get("id") != fresh["account_id"]:

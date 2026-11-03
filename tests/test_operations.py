@@ -89,11 +89,14 @@ class FakeAPI:
             yield []
 
 
-async def queue_manual_publication(store, api, target, owner=1):
+async def queue_manual_publication(store, api, target, owner=1, *, publication="DEFAULT", quote_id=None):
     """Prepare real manual launch authority before testing a publication receipt."""
+    from dataclasses import asdict
+
     from app.gifts.service import GiftService
     from app.gifts.settings import GiftSettings
     from app.services.listing_launch import ListingLaunch
+    from app.services.promotion_settings import PromotionSettings
 
     store.claim_first_owner(owner)
     settings = GiftSettings(
@@ -104,6 +107,8 @@ async def queue_manual_publication(store, api, target, owner=1):
     ident = await service.open(owner, target, {"delivery": "manual"})
     draft = service.load(owner, ident)
     value = draft["payload"]
+    value.update(publication=publication, quote_id=quote_id)
+    value["promotion_policy"] = asdict(PromotionSettings(store, api).get()[1])
     value["ready"] = await service.check(owner, value)
     store.update_draft(ident, owner, draft["revision"], value)
     return await service.queue(owner, ident, service.load(owner, ident)["revision"])

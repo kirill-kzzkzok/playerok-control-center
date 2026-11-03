@@ -306,8 +306,10 @@ class ListingLaunch:
             viewer = await self.api.call("get")
             _, _, capacity = placement_funds(viewer)
             result["balance"] = str(capacity)
-            if viewer.get("id") != value["account_id"] or capacity < amount:
+            if viewer.get("id") != value["account_id"]:
                 raise ValidationError("Баланс Playerok или его владелец не подтверждены для PREMIUM")
+            if capacity < amount:
+                raise ValidationError("Недостаточно баланса Playerok для выбранного PREMIUM")
         if value["promotion"] and value["publication"] != "PREMIUM":
             raise ValidationError("Платное автоподнятие требует подтверждённого PREMIUM-тарифа")
         result["quote"] = {k: quote.get(k) for k in ("id", "type", "price", "period")}
@@ -693,7 +695,7 @@ class ListingLaunch:
         if not prepared and not value.get("launch_id"):
             # Paid placement retains its existing expense and quote authority.
             # Unprepared free publication cannot bypass launch readiness.
-            if action["kind"] == "premium_publish":
+            if action["kind"] == "premium_publish" and value.get("item", {}).get("status") == "APPROVED":
                 return
             raise Conflict("Нет подтверждённого запуска. Откройте товар → «Настроить и запустить»")
         if not prepared or prepared["operation"] != action["id"] or prepared["id"] != value.get("launch_id"):
