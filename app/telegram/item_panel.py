@@ -79,6 +79,19 @@ class ItemPanel:
             back=("⬅️ К товару", "item:" + ident),
         )
 
+    def permission_help(self, ident, owner):
+        Automation(self.store, self.api).orders.owner(owner)
+        return (
+            (
+                "🔐 <b>Разрешения запуска</b>\n"
+                "Записи разрешает PLAYEROK_WRITES_ENABLED=true в локальном .env. "
+                "Автоматику отдельно разрешает PLAYEROK_AUTOMATION_ENABLED=true; покупки подарков — TG_GIFT_PAYMENTS_ENABLED=true.\n"
+                "Меняйте только нужные разрешения и перезапустите бота. В Telegram эти флаги не переключаются.\n"
+                "После запуска нужна успешная проверка аккаунта. Разрешения не отменяют STOP, лимиты и сверку неизвестных операций."
+            ),
+            keyboard([], back=("⬅️ К товару", "item:" + ident)),
+        )
+
     async def screen(self, ident, section, state, owner, gifts, stock):
         from app.telegram.presentation import status
 

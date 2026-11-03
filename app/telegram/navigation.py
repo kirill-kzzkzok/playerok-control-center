@@ -51,6 +51,8 @@ def safe_route(action):
             "item:",
             "rd:check:",
             "rd:balance:",
+            "rd:permissions:",
+            "lp:limits:",
             "lp:item:",
             "lp:method:",
             "lp:messages:",

@@ -181,7 +181,12 @@ class GiftsPanel:
                         [("Каталог подарков", "gft:catalog")],
                         [("Лимиты расходов", "gft:limits")],
                         [("Проверить метку в описании", "gft:description")],
-                        [("⛔ Остановить выдачу", "gft:stop")],
+                        *(
+                            [[("⛔ Остановить выдачу", "gft:stop")]]
+                            if not self.store.setting("gifts:stopped", True)
+                            or self.store.rows("SELECT 1 FROM gift_listings WHERE enabled=1 LIMIT 1")
+                            else []
+                        ),
                         [("▶️ Снять временную паузу", "gft:unpause")]
                         if self.store.setting("gifts:paused", False)
                         else [("⏸ Временная пауза покупок", "gft:pause")],

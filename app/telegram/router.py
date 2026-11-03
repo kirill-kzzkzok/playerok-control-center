@@ -314,6 +314,8 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await wizard.start(owner, state)
             elif action.startswith(("rd:check:", "rd:balance:")):
                 text, markup = await item_panel.diagnostic(action.split(":", 2)[2], owner)
+            elif action.startswith("rd:permissions:"):
+                text, markup = item_panel.permission_help(action.split(":", 2)[2], owner)
             elif action.startswith("lp:"):
                 text, markup = await logical_panel.callback(action, owner, state)
             elif action.startswith("agv:"):

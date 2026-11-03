@@ -83,6 +83,8 @@ def navigation(action):
             "item:",
             "rd:check:",
             "rd:balance:",
+            "rd:permissions:",
+            "lp:limits:",
             "lp:method:",
             "lp:messages:",
             "lp:completion:",

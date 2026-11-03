@@ -102,8 +102,14 @@ class ProductReadiness:
                 "profile:check",
                 unknown=True,
             )
-        if not getattr(account, "writes_enabled", False):
-            add("WRITES_OFF", "Записи Playerok выключены в настройках запуска.", "Подключения", "profile")
+        manager = getattr(self.api, "connection", None)
+        if not getattr(account, "writes_enabled", False) and not getattr(manager, "desired_writes", False):
+            add(
+                "WRITES_OFF",
+                "PLAYEROK_WRITES_ENABLED выключен в .env. Для разрешения записей измените его локально и перезапустите бота.",
+                "Как разрешить записи",
+                "rd:permissions:" + ident,
+            )
         if not getattr(account, "automation_enabled", False):
             add(
                 "AUTOMATION_OFF",
@@ -197,7 +203,7 @@ class ProductReadiness:
                     "PROJECTION_MISMATCH",
                     "Разрешения товара и способа выдачи расходятся. Подтвердите включение заново либо остановите товар.",
                     "Восстановить разрешение выдачи",
-                    "lp:ready:" + ident,
+                    ("platform:item:" if mode == "playerok" else "lp:ready:") + ident,
                 )
         if item and (item.get("status") and item.get("status") != "APPROVED" or item.get("deleted_at")):
             add(
@@ -370,11 +376,17 @@ class ProductReadiness:
                 (datetime.now(UTC).date().isoformat(),),
             )[0]["n"]
             if required > order_limit or spent + reserved + required > day_limit:
+                global_order, global_day = self.gifts.limits()
+                local_limit = (
+                    required > order_limit
+                    and order_limit < global_order
+                    or (spent + reserved + required > day_limit and day_limit < global_day)
+                )
                 add(
                     "STARS_LIMIT",
-                    "Пакет превышает доступный лимит Stars на заказ или сутки.",
-                    "Настроить лимиты",
-                    "gft:limits",
+                    f"Лимит Stars: {order_limit} на заказ, {day_limit} в сутки. Пакет: {required}; расходы и резервы суток: {spent + reserved}. Для суточного ограничения можно дождаться новых суток UTC.",
+                    "Лимиты этого товара" if local_limit else "Общие лимиты подарков",
+                    "lp:limits:" + ident if local_limit and product else "gft:limits",
                 )
             after = self.store.setting("gifts:listing_options:" + ident, {}).get("after")
             message = (

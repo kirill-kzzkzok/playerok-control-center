@@ -146,7 +146,7 @@ class LogicalProductsPanel:
                 text += "\nПоследний заказ с доставкой: " + local_time(delivered[0]["created_at"])
                 rows.insert(0, [("Последняя подтверждённая выдача", "order:" + delivered[0]["id"])])
         else:
-            text += "\nНастройте выдачу один раз и подтвердите постоянный код в описании."
+            text += "\nНастройте выдачу один раз и подтвердите постоянный код [XXX] в названии."
             rows.append([("Настроить выдачу", prefix + "configure")])
         if product and product["handler"] == "unique_stock":
             rows.insert(0, [("📚 Склад", "stock:view:" + item_id)])
@@ -180,11 +180,26 @@ class LogicalProductsPanel:
 
     async def callback(self, action, owner, state):
         parts = action.split(":")
-        if len(parts) == 3 and parts[1] in {"method", "messages", "completion"}:
+        if len(parts) == 3 and parts[1] in {"method", "messages", "completion", "limits"}:
             await self.card(owner, parts[2], state)
             view = (await state.get_data())["logical_view"]
             product = self.service.product(view["product"], owner) if view.get("product") else None
             prefix = "lp:" + view["nonce"] + ":"
+            if parts[1] == "limits":
+                if not product or product["handler"] != "telegram_gifts":
+                    raise Conflict("Лимиты Stars настраиваются только у подарочного товара")
+                if product["enabled"]:
+                    return (
+                        "Для изменения согласованных лимитов этого товара остановите новые покупки. Уже начатые операции и их резервы сохраняются. Затем откройте лимиты заново.",
+                        keyboard(
+                            [[("⛔ Остановить выдачу", prefix + "stop")]],
+                            back=("⬅️ К товару", "item:" + parts[2]),
+                        ),
+                    )
+                await state.update_data(
+                    logical_setup={"handler": product["handler"], "config": json.loads(product["config"])}
+                )
+                return await self.setup_screen(state)
             if parts[1] == "method":
                 rows = [[(label, prefix + "mode:" + handler)] for handler, label in MODES.items()]
                 rows.append([("📦 Выдаёт Playerok", "platform:item:" + parts[2])])
