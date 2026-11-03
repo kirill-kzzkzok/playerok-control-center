@@ -105,10 +105,17 @@ async def test_stars_lane_is_serial_and_unknown_restart_does_not_repeat(shop, ou
         Orders(r.store).ingest(r.api.order(ident))
     gifts = GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender)
     await gifts.once()
+    # A coarse server/system clock can give both queued operations the same
+    # timestamp. The running operation is identified by its lease, not row order.
+    r.store.execute(
+        "UPDATE outbox SET created_at=(SELECT min(created_at) FROM outbox WHERE kind='gift_send') WHERE kind='gift_send'"
+    )
     stop = asyncio.Event()
     task = asyncio.create_task(outbox_loop(r.worker, stop))
     await asyncio.wait_for(remote.entered.wait(), 3)
-    assert len(r.store.rows("SELECT * FROM outbox WHERE kind='gift_send' AND status='PROCESSING'")) == 1
+    active = r.store.rows("SELECT * FROM outbox WHERE kind='gift_send' AND status='PROCESSING'")
+    assert len(active) == 1
+    operation_id = active[0]["id"]
     # Reconsidering the second order cannot start another Stars payment.
     await gifts.once()
     assert sum(row["state"] == "SPENDING" for row in r.store.rows("SELECT state FROM gift_jobs")) == 1
@@ -125,17 +132,14 @@ async def test_stars_lane_is_serial_and_unknown_restart_does_not_repeat(shop, ou
         stop.set()
         remote.release.set()
         await asyncio.wait_for(task, 5)
-    pending = r.store.rows("SELECT status FROM outbox WHERE kind='gift_send' ORDER BY created_at")
+    pending = r.store.rows("SELECT status FROM outbox WHERE id=?", (operation_id,))
     expected = "SUCCEEDED" if outcome == "stop" else "UNCERTAIN"
     assert pending[0]["status"] == expected
     payment_count = len(remote.payments)
     # Reopen a separate connection, as after restart; do not reconstruct business state.
     reopened = Store(r.store.path)
     try:
-        assert (
-            reopened.rows("SELECT status FROM outbox WHERE kind='gift_send' ORDER BY created_at")[0]["status"]
-            == expected
-        )
+        assert reopened.rows("SELECT status FROM outbox WHERE id=?", (operation_id,))[0]["status"] == expected
     finally:
         reopened.close()
     await gifts.once()
