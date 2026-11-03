@@ -18,6 +18,21 @@ from app.telegram.storage import replace_context
 
 
 class Wizard:
+    @staticmethod
+    def gift_description(description, code, max_count):
+        from app.gifts.core import gift_code_from_description
+
+        previous = gift_code_from_description(description, required=False, max_count=max_count)
+        if previous is None:
+            return description
+        if previous != code:
+            raise ValidationError(
+                "Состав в старой строке не совпадает с выбранными подарками. Измените выбор подарков"
+            )
+        # The strict parser proved this is a single final metadata line.
+        lines = description.rstrip().splitlines()
+        return listing_text("\n".join(lines[:-1]).rstrip(), "description")
+
     def validate_gift(self, payload):
         from app.gifts.core import gift_code_from_description
         from app.gifts.settings import GiftSettings
@@ -160,6 +175,15 @@ class Wizard:
         elif mode == "text":
             lines.append(
                 "Текст выдачи: " + ("подготовлен (скрыт)" if payload.get("delivery_data") else "не задан")
+            )
+        elif mode == "gifts" and payload.get("gift_bundle"):
+            from app.gifts.core import gift_name
+
+            lines.append(
+                "Подарки: " + ", ".join(gift_name(entry["code"]) for entry in payload["gift_bundle"])
+            )
+            lines.append(
+                f"Стоимость пакета по проверенному каталогу: {sum(entry['stars'] for entry in payload['gift_bundle'])} ⭐"
             )
         lines += [
             "",
@@ -727,18 +751,27 @@ class Wizard:
                     payload["field_index"] += 1
             elif step == "delivery":
                 payload["delivery"] = choice["value"]
-                payload["managed_delivery"] = choice["value"] in {"text", "stock"}
-                if choice["value"] == "gifts" and not any(
-                    line.strip().lower().startswith("gift:")
-                    for line in payload.get("description", "").splitlines()
-                ):
+                payload["managed_delivery"] = choice["value"] in {"text", "stock", "gifts"}
+                if choice["value"] == "gifts":
+                    from app.gifts.core import gift_code_from_description
                     from app.services.logical_products import LogicalProducts
 
-                    await LogicalProducts(self.store, self.api).gift_service().refresh()
-                    payload["managed_delivery"] = True
-                    payload["step"] = "gift_picker"
-                    await self.save(owner, state, payload)
-                    return await self.screen(owner, state)
+                    gifts = LogicalProducts(self.store, self.api).gift_service()
+                    await gifts.refresh()
+                    previous = gift_code_from_description(
+                        payload.get("description", ""), required=False, max_count=gifts.settings.max_gifts
+                    )
+                    if previous:
+                        payload["gift_code"] = previous
+                        payload["gift_codes"] = previous.split(", ")
+                        payload["gift_bundle"] = gifts.catalog_bundle(previous)
+                        payload["description"] = self.gift_description(
+                            payload["description"], previous, gifts.settings.max_gifts
+                        )
+                    else:
+                        payload["step"] = "gift_picker"
+                        await self.save(owner, state, payload)
+                        return await self.screen(owner, state)
                 payload["step"] = (
                     ("preview" if payload.get("return_preview") else "confirm")
                     if choice["value"] in {"manual", "gifts"}
@@ -865,6 +898,14 @@ class Wizard:
                 line.strip().lower().startswith("gift:") for line in text.splitlines()
             ):
                 self.validate_gift(payload)
+                if payload.get("managed_delivery") and payload.get("delivery") == "gifts":
+                    from app.services.logical_products import LogicalProducts
+
+                    payload["description"] = self.gift_description(
+                        payload["description"],
+                        payload["gift_code"],
+                        LogicalProducts(self.store, self.api).gift_service().settings.max_gifts,
+                    )
             payload["step"] = (
                 "preview" if payload.get("return_preview") else "description" if step == "name" else "photos"
             )

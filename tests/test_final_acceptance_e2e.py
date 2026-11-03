@@ -182,7 +182,7 @@ class AcceptanceHarness:
         nonce = (await self.state.get_data())["launch"]["nonce"]
         await self.ui.click(f"ln:{nonce}:{action}")
 
-    async def create_and_prepare(self, *, seed_resume=True, prepare_launch=True):
+    async def create_and_prepare(self, *, seed_resume=True, prepare_launch=True, stop_before_delivery=False):
         await self.ui.message("/start")
         bind_account(self.store, self.api.account.id)
         await self.sync.once()
@@ -207,6 +207,8 @@ class AcceptanceHarness:
         )
         await self.wizard_action("photos_done")
         await self.ui.message("100")
+        if stop_before_delivery:
+            return
         await self.wizard_action("choose:3")
         await self.wizard_action("confirm_done")
         self.original_draft = (await self.state.get_data())["draft_id"]

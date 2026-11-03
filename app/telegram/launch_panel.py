@@ -299,31 +299,19 @@ class LaunchPanel:
                 value.pop("ready", None)
                 self.store.update_draft(draft["id"], owner, draft["revision"], value)
                 return await self.show(owner, state, draft["id"])
-            lines = [
-                line
-                for line in (item.get("description") or "").splitlines()
-                if not line.strip().casefold().startswith("gift:")
-            ]
-            description = "\n".join(lines).rstrip() + "\ngift: " + ", ".join(chosen)
-            op = self.store.enqueue(
-                f"launch-gifts:{draft['id']}:{draft['revision']}",
-                "edit",
-                item["id"],
-                {"description": description},
-                actor=owner,
+            from app.telegram.logical_products_panel import LogicalProductsPanel
+
+            panel = LogicalProductsPanel(self.store, self.api)
+            prepared = await panel.service.prepare(
+                owner, item["id"], "telegram_gifts", {"code": ", ".join(chosen)}
             )
+            value["gift_code"] = ", ".join(chosen)
             value.pop("ready", None)
             self.store.update_draft(draft["id"], owner, draft["revision"], value)
-            await state.clear()
-            return (
-                "⏳ Состав сохраняется в неопубликованный черновик. После подтверждения продолжите настройку.",
-                keyboard(
-                    [
-                        [("Результат изменения", "result:show:" + op)],
-                        [("Продолжить настройку запуска", "launch:open:" + draft["id"])],
-                    ]
-                ),
-            )
+            await panel.card(owner, item["id"], state)
+            view = (await state.get_data())["logical_view"]
+            await state.update_data(logical_prepared=prepared)
+            return panel.preview(prepared, view)
         elif command == "check":
             value["ready"] = await self.service.check(owner, value)
             self.store.update_draft(draft["id"], owner, draft["revision"], value)
