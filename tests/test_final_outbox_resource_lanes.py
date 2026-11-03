@@ -1,6 +1,7 @@
 """One shared durable Outbox must not serialize unrelated currencies/transports."""
 
 import asyncio
+import time
 from copy import deepcopy
 
 import pytest
@@ -54,7 +55,8 @@ async def configure_other_item(r, ident, handler):
     await click(r, suffix=":enable:this")
 
 
-async def test_blocked_gift_rpc_does_not_delay_independent_stock_and_text_delivery(shop):
+@pytest.mark.parametrize("expire", [False, True])
+async def test_blocked_gift_rpc_does_not_delay_independent_stock_and_text_delivery(shop, expire):
     r = await shop(gift=True)
     remote = DelayedPayment()
     r.api.remote = remote
@@ -75,6 +77,7 @@ async def test_blocked_gift_rpc_does_not_delay_independent_stock_and_text_delive
     task = asyncio.create_task(outbox_loop(r.worker, stop))
     try:
         await asyncio.wait_for(remote.entered.wait(), 3)
+        started = time.monotonic()
         assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "SPENDING"}]
         for ident in ("stock", "text"):
             Orders(r.store).ingest(r.api.order(ident + "-order", ident))
@@ -85,11 +88,19 @@ async def test_blocked_gift_rpc_does_not_delay_independent_stock_and_text_delive
                 await asyncio.sleep(0.02)
         assert not remote.release.is_set()
         assert len(r.store.rows("SELECT * FROM reservations")) == 1
+        if expire:
+            # Let the actual production 90-second RPC deadline expire. The
+            # other lane has already delivered; no fake clock or sleep is used.
+            stop.set()
+            await asyncio.wait_for(task, 100)
+            assert time.monotonic() - started >= 85
+            assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "UNCERTAIN"}]
+            assert not await r.worker.once()
     finally:
         stop.set()
         remote.release.set()
         await asyncio.wait_for(task, 5)
-    assert len(remote.payments) == 1
+    assert len(remote.payments) == (0 if expire else 1)
     assert len([m for m in r.api.messages if m["text"] == "isolated-stock-secret"]) == 1
     assert len([m for m in r.api.messages if m["text"] == "isolated-fixed-text"]) == 1
 
