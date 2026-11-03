@@ -710,6 +710,8 @@ def create_router(store, api, products, synchronizer):
                     + escaped(store.setting("auto_replies:health", {"status": "NOT_STARTED"}), 200)
                     + "\nНастройки уведомлений: "
                     + escaped(store.setting(f"notifications:{owner}:preferences_error", "OK"), 100)
+                    + "\nХранение резервных копий: "
+                    + escaped(store.setting("backups:retention", {"status": "NOT_STARTED"}), 250)
                     + "\n\n"
                     + "\n".join(
                         escape(f"{a['kind']}: {a['status']} · {a['error_code'] or ''}") for a in actions

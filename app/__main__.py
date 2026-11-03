@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher
@@ -132,9 +131,9 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
         connection = PlayerokConnection(store, api)
         await connection.check(cooldown=0)
         tasks.append(supervisor.start("playerok-connection-recovery", lambda: connection.run(stop), stop))
-        store.backup(
-            Path("data/backups") / (datetime.now(UTC).strftime("startup-%Y%m%dT%H%M%S") + ".sqlite3")
-        )
+        from app.services.backup_retention import startup_backup
+
+        await asyncio.to_thread(startup_backup, store, Path("data/backups"))
         orders = Orders(store)
         products = Products(store, api)
         from app.services.logical_products import LogicalProducts
