@@ -249,7 +249,6 @@ class ItemPanel:
             ]
             if item.get("status") == "DRAFT":
                 rows.insert(0, [("🚦 Настроить и запустить", "launch:item:" + ident)])
-                rows.append([("Опубликовать бесплатно · проверка", "publish:" + ident)])
             rows.append([("🗑 Удалить", "delete:" + ident)])
         else:
             text, rows = details, photos

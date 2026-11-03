@@ -691,7 +691,11 @@ class ListingLaunch:
         value = action["payload"]
         prepared = self.store.setting("launch:prepared:" + action["target"])
         if not prepared and not value.get("launch_id"):
-            return
+            # Paid placement retains its existing expense and quote authority.
+            # Unprepared free publication cannot bypass launch readiness.
+            if action["kind"] == "premium_publish":
+                return
+            raise Conflict("Нет подтверждённого запуска. Откройте товар → «Настроить и запустить»")
         if not prepared or prepared["operation"] != action["id"] or prepared["id"] != value.get("launch_id"):
             raise Conflict("Публикация не соответствует подготовленному запуску")
         draft = self.load(prepared["owner"], prepared["id"])

@@ -15,7 +15,7 @@ from app.database.store import Conflict
 from app.localvpn import active_proxy
 from app.playerok.adapter import APIError
 from app.services.discounts import discount_plan
-from app.services.products import ValidationError, listing_price, listing_text, priority_price_basis
+from app.services.products import ValidationError, listing_price, listing_text
 from app.services.replies import Replies
 from app.telegram.agreements_panel import AgreementsPanel
 from app.telegram.auto_replies_panel import AutoRepliesPanel
@@ -319,7 +319,9 @@ def create_router(store, api, products, synchronizer):
                 text, markup = await agreements_panel.callback(action, state)
             elif action.startswith("gft:"):
                 text, markup = await gifts_panel.callback(action, owner, state)
-            elif action.startswith(("launch:", "ln:")):
+            elif action.startswith(("launch:", "ln:", "publish:")):
+                if action.startswith("publish:"):
+                    action = "launch:item:" + action.split(":", 1)[1]
                 text, markup = await launch_panel.callback(action, owner, state)
             elif finance.handles(action):
                 text, markup = await finance.callback(action, owner, state)
@@ -541,26 +543,13 @@ def create_router(store, api, products, synchronizer):
                     + "</blockquote>\nВведите новое значение. Затем будет подтверждение.",
                     keyboard([]),
                 )
-            elif action.startswith(("delete:", "publish:")):
+            elif action.startswith("delete:"):
                 kind, ident = action.split(":", 1)
                 pending = {"kind": kind, "target": ident, "payload": {}}
-                if kind == "publish":
-                    item = await api.call("get_item", id=ident)
-                    base_price = priority_price_basis(item)
-                    quote = await products.free_priority(ident, base_price)
-                    pending["payload"] = {
-                        "price": item["price"],
-                        "raw_price": base_price,
-                        "priority_id": quote["id"],
-                    }
                 nonce = secrets.token_hex(8)
                 await state.set_data({"pending": pending, "confirm_token": nonce})
                 text, markup = (
-                    (
-                        "Подтвердите удаление лота."
-                        if kind == "delete"
-                        else "API подтвердил бесплатный DEFAULT (0 ₽). Перед публикацией условия будут проверены повторно."
-                    ),
+                    "Подтвердите удаление лота.",
                     keyboard([[("Подтвердить", "commit:" + nonce)]]),
                 )
             elif action.startswith("commit:"):
@@ -570,6 +559,11 @@ def create_router(store, api, products, synchronizer):
                 if not api.account.writes_enabled:
                     raise ValidationError("Записи Playerok отключены в локальном .env")
                 pending = data["pending"]
+                if pending["kind"] == "publish":
+                    await state.clear()
+                    raise ValidationError(
+                        "Подтверждение публикации устарело. Откройте товар → «Настроить и запустить»"
+                    )
                 if pending["kind"] in {"reply", "mark_read"}:
                     await state.clear()
                     raise ValidationError(

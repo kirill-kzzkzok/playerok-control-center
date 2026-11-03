@@ -89,6 +89,26 @@ class FakeAPI:
             yield []
 
 
+async def queue_manual_publication(store, api, target, owner=1):
+    """Prepare real manual launch authority before testing a publication receipt."""
+    from app.gifts.service import GiftService
+    from app.gifts.settings import GiftSettings
+    from app.services.listing_launch import ListingLaunch
+
+    store.claim_first_owner(owner)
+    settings = GiftSettings(
+        1, "test-only", "unused.session", "category", "obtaining", "username", False, 100, 100
+    )
+    api.gift_settings = settings
+    service = ListingLaunch(store, api, GiftService(store, api, settings))
+    ident = await service.open(owner, target, {"delivery": "manual"})
+    draft = service.load(owner, ident)
+    value = draft["payload"]
+    value["ready"] = await service.check(owner, value)
+    store.update_draft(ident, owner, draft["revision"], value)
+    return await service.queue(owner, ident, service.load(owner, ident)["revision"])
+
+
 @pytest.fixture
 def setup(tmp_path):
     store = Store(tmp_path / "operations.sqlite")
@@ -120,19 +140,15 @@ async def test_create_double_click_and_publish(setup):
     assert api.account.calls == ["createItem"]
     assert not await worker.once()
     assert store.rows("SELECT remote_id FROM bindings")[0]["remote_id"] == "remote1"
-    store.enqueue(
-        "publish:remote1", "publish", "remote1", {"priority_id": "free", "price": 100, "raw_price": 100}
-    )
+    await queue_manual_publication(store, api, "remote1")
     await worker.once()
     assert api.account.calls == ["createItem", "publishItem"]
 
 
 async def test_stale_paid_quote_blocks_before_mutation(setup):
     store, api, _, worker = setup
+    await queue_manual_publication(store, api, "remote1")
     api.quote["price"] = 1
-    store.enqueue(
-        "publish:remote1", "publish", "remote1", {"priority_id": "free", "price": 100, "raw_price": 100}
-    )
     await worker.once()
     assert not api.account.calls
     assert store.rows("SELECT status FROM outbox")[0]["status"] == "PERMANENT_FAILED"

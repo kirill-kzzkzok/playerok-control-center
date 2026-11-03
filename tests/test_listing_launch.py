@@ -231,7 +231,7 @@ async def test_stop_after_queue_blocks_publication(launch):
     assert not r.publications and not r.remote.payments
 
 
-async def test_failed_preparation_releases_launch_marker_for_plain_publish(launch):
+async def test_failed_preparation_releases_marker_but_cannot_bypass_launch(launch):
     r = launch
     # A running text auto-delivery on the same item makes manual-mode queue() fail
     # exactly at the stop-check, after launch:prepared was already recorded.
@@ -252,7 +252,15 @@ async def test_failed_preparation_releases_launch_marker_for_plain_publish(launc
     )
     await r.worker.once()
     row = r.store.rows("SELECT status FROM outbox WHERE id=?", (op,))[0]
-    assert row["status"] == "SUCCEEDED", row
+    assert row["status"] == "PERMANENT_FAILED", row
+    assert not r.publications and r.api.item["status"] == "DRAFT"
+    r.launch.automation.stop_all(7)
+    draft = r.launch.load(7, ident)
+    value = draft["payload"]
+    value["ready"] = await r.launch.check(7, value)
+    r.store.update_draft(ident, 7, draft["revision"], value)
+    await r.launch.queue(7, ident, r.launch.load(7, ident)["revision"])
+    await r.worker.once()
     assert r.publications and r.api.item["status"] == "APPROVED"
 
 

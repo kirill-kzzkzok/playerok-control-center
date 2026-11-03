@@ -10,7 +10,7 @@ from app.database.store import Store
 from app.playerok.adapter import SafeAccount
 from app.services.products import Products
 from app.workers.outbox import Executor, OutboxWorker
-from tests.test_operations import FakeAPI
+from tests.test_operations import FakeAPI, queue_manual_publication
 
 
 @pytest.fixture
@@ -45,9 +45,7 @@ async def test_publish_incomplete_or_nonpublished_receipt_is_unknown_without_rep
         return receipt
 
     api.account.publish_item = publish
-    ident = store.enqueue(
-        "publish", "publish", "item", {"priority_id": "free", "price": 100, "raw_price": 100}
-    )
+    ident = await queue_manual_publication(store, api, "item")
     worker = OutboxWorker(store, Executor(store, api, Products(store, api)))
     assert await worker.once()
     assert not await worker.once()
@@ -82,7 +80,7 @@ async def test_explicit_published_or_moderation_status_is_retained(store, status
         return {"id": "item", "status": status}
 
     api.account.publish_item = publish
-    store.enqueue("publish", "publish", "item", {"priority_id": "free", "price": 100, "raw_price": 100})
+    await queue_manual_publication(store, api, "item")
     await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
     row = store.rows("SELECT status,result FROM outbox")[0]
     assert row["status"] == "SUCCEEDED"
