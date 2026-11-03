@@ -49,41 +49,83 @@ class AutoReplyWorker:
             "WHERE i.received_at>=? AND NOT EXISTS(SELECT 1 FROM auto_reply_events e WHERE e.account_id=? AND e.message_id=m.id) "
             "AND (? OR m.chat_id IN (SELECT id FROM sync_chats WHERE initial_complete=1 AND error_code IS NULL "
             "AND id NOT IN (SELECT value FROM json_each(?)))) "
+            "AND NOT EXISTS(SELECT 1 FROM settings s WHERE s.key='auto_replies:check:'||?||':'||m.id "
+            "AND json_extract(s.value,'$.not_before')>?) "
             "ORDER BY i.received_at,m.id LIMIT 20",
-            (cutoff, account, complete, encode(failed_chats)),
+            (cutoff, account, complete, encode(failed_chats), account, time.time()),
         )
-        processed, waiting = 0, 0
+        processed, waiting, errors = 0, 0, []
         for row in candidates:
             if not chat_sync_ready(self.store, row["chat_id"]):
                 waiting += 1
                 continue
             processed += 1
+            retry_key = "auto_replies:check:" + account + ":" + row["id"]
             try:
                 await self.service.consider(row)
             except APIError as error:
-                self.store.execute(
-                    "INSERT OR IGNORE INTO auto_reply_events VALUES(?,?,?,NULL,NULL,'BLOCKED',NULL,?,?)",
-                    (account, row["id"], row["chat_id"], error.code, now()),
-                )
+                errors.append(error.code)
                 delay = max(60, int(error.retry_after)) if str(error.retry_after or "").isdigit() else 60
                 deadline = time.time() + delay
-                self.store.set_setting("auto_replies:not_before", deadline)
+                with self.store.transaction():
+                    # consider() awaits only free reads before its atomic enqueue.
+                    # Never retry if another worker already registered a send.
+                    if self.store.rows(
+                        "SELECT 1 FROM auto_reply_events WHERE account_id=? AND message_id=? UNION ALL "
+                        "SELECT 1 FROM outbox WHERE operation_key=? LIMIT 1",
+                        (account, row["id"], "auto_reply:" + account + ":" + row["id"]),
+                    ):
+                        continue
+                    attempts = self.store.setting(retry_key, {}).get("attempts", 0) + 1
+                    retryable = error.code in {
+                        "NETWORK_ERROR",
+                        "HTTP_502",
+                        "HTTP_503",
+                        "HTTP_504",
+                        "RATE_LIMITED",
+                        "CALL_TIMEOUT",
+                    }
+                    if retryable and attempts < 3:
+                        deadline = max(deadline, time.time() + min(180, 60 * attempts))
+                        self.store.set_setting(retry_key, {"attempts": attempts, "not_before": deadline})
+                    else:
+                        self.store.execute(
+                            "INSERT OR IGNORE INTO auto_reply_events VALUES(?,?,?,NULL,NULL,'BLOCKED',NULL,?,?)",
+                            (account, row["id"], row["chat_id"], error.code, now()),
+                        )
+                        self.store.execute("DELETE FROM settings WHERE key=?", (retry_key,))
                 self.store.set_setting(
                     "auto_replies:health",
                     {"status": "ERROR", "code": error.code, "retry_at": deadline, "at": now()},
                 )
-                return len(candidates)
+                if error.code == "RATE_LIMITED":
+                    self.store.set_setting("auto_replies:not_before", deadline)
+                    return processed
+                continue
             except (Conflict, ValidationError, ValueError, KeyError, TypeError):
                 self.store.execute(
                     "INSERT OR IGNORE INTO auto_reply_events VALUES(?,?,?,NULL,NULL,'BLOCKED',NULL,'REVIEW_REQUIRED',?)",
                     (account, row["id"], row["chat_id"], now()),
                 )
+            self.store.execute("DELETE FROM settings WHERE key=?", (retry_key,))
+        pending_reads = self.store.rows(
+            "SELECT MIN(json_extract(value,'$.not_before')) AS due FROM settings WHERE key GLOB ?",
+            ("auto_replies:check:" + account + ":*",),
+        )[0]["due"]
         self.store.set_setting(
             "auto_replies:health",
             {
-                "status": "WAITING_SYNC_BASELINE" if waiting and not processed else "ACTIVE",
+                "status": "ERROR"
+                if errors
+                else "BACKOFF"
+                if pending_reads
+                else "WAITING_SYNC_BASELINE"
+                if waiting and not processed
+                else "ACTIVE",
                 "processed": processed,
                 "waiting": waiting,
+                "retry_at": pending_reads,
+                "errors": sorted(set(errors)),
                 "at": now(),
             },
         )
