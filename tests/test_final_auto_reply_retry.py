@@ -1,5 +1,6 @@
 """Only free pre-send reads may retry; durable replies never replay."""
 
+import asyncio
 import time
 
 import pytest
@@ -65,3 +66,36 @@ async def test_dialog_continued_during_read_backoff_is_not_answered(shop, monkey
     await AutoReplyWorker(store, api).once()
     assert not store.rows("SELECT * FROM outbox") and not api.account.sent
     assert store.rows("SELECT status FROM auto_reply_events") == [{"status": "BLOCKED"}]
+
+
+async def test_concurrent_success_clears_an_obsolete_free_read_backoff(shop, monkeypatch):
+    store, api, messages, service = shop
+    enable(service)
+    incoming(store, messages)
+    read = api.call.side_effect
+    api.call.side_effect = APIError("HTTP_503")
+    await AutoReplyWorker(store, api).once()
+    at = time.time()
+    monkeypatch.setattr("app.workers.auto_replies.time.time", lambda: at + 121)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def concurrent_read(*args, **kwargs):
+        if not entered.is_set():
+            entered.set()
+            await release.wait()
+            raise APIError("HTTP_503")
+        return await read(*args, **kwargs)
+
+    api.call.side_effect = concurrent_read
+    first = asyncio.create_task(AutoReplyWorker(store, api).once())
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        await AutoReplyWorker(store, api).once()
+    finally:
+        release.set()
+        await first
+    await AutoReplyWorker(store, api).once()
+    assert not store.rows("SELECT key FROM settings WHERE key LIKE 'auto_replies:check:%'")
+    assert store.setting("auto_replies:health")["status"] == "ACTIVE"
+    await OutboxWorker(store, Executor(store, api, None)).once()
+    assert len(api.account.sent) == 1

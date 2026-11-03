@@ -106,7 +106,7 @@ class ProductReadiness:
         if not getattr(account, "writes_enabled", False) and not getattr(manager, "desired_writes", False):
             add(
                 "WRITES_OFF",
-                "PLAYEROK_WRITES_ENABLED выключен в .env. Для разрешения записей измените его локально и перезапустите бота.",
+                "Записи Playerok выключены: PLAYEROK_WRITES_ENABLED=false в .env. Для разрешения записей измените его локально и перезапустите бота.",
                 "Как разрешить записи",
                 "rd:permissions:" + ident,
             )

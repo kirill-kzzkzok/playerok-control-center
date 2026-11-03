@@ -58,8 +58,20 @@ async def test_prechange_backup_reopens_wal_preserves_gifts_stock_policies_and_l
     operations = r.store.rows("SELECT id,operation_key,status,payload,attempts FROM outbox")
     for table, columns in {
         "outbox": ["started_at", "retry_at"],
-        "operation_receipts": ["view_message_id", "view_token", "rendered_status"],
-        "notifications": ["rendered_payload", "refresh_after", "refresh_failures"],
+        "operation_receipts": [
+            "view_message_id",
+            "view_token",
+            "rendered_status",
+            "send_retry_at",
+            "send_error",
+        ],
+        "notifications": [
+            "rendered_payload",
+            "refresh_after",
+            "refresh_failures",
+            "send_retry_at",
+            "send_error",
+        ],
     }.items():
         for column in columns:
             r.store.execute(f"ALTER TABLE {table} DROP COLUMN {column}")

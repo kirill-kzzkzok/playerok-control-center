@@ -93,10 +93,16 @@ class LaunchPanel:
             if value["mode"] == "stock" and value["data"]:
                 values, empty, duplicates = stock_values(value["data"])
                 text += f" · {len(values)} ед.; пустых строк {empty}, повторов {duplicates}"
-        text += "\nПриветствие: " + ("задано" if value["greeting"] else "нет")
-        text += "\nПосле выдачи: " + (
-            "задано" if value["after"] else "стандартное / без дополнительного текста"
-        )
+        if value["mode"] in {"text", "stock"}:
+            text += "\nПриветствие: " + ("задано" if value["greeting"] else "выключено")
+        if value["mode"] in {"text", "stock", "gifts"}:
+            text += "\nПосле выдачи: " + (
+                "своё сообщение"
+                if value["after"]
+                else "стандартное уведомление"
+                if value["mode"] == "gifts"
+                else "выключено"
+            )
         if value["mode"] == "gifts":
             text += f"\nЛимиты Stars: {value['order_limit']} за заказ / {value['day_limit']} в сутки"
             text += "\nВозврат: " + (

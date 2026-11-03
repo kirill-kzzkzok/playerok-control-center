@@ -97,7 +97,8 @@ class LogicalProducts:
                 and not platform
                 or platform
                 and field != "greeting"
-                or product["handler"] == "telegram_gifts"
+                or not platform
+                and product["handler"] == "telegram_gifts"
                 and field != "after"
             ):
                 raise Conflict("Сообщение доступно после подтверждения автоматического способа выдачи")

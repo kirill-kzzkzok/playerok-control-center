@@ -54,6 +54,9 @@ async def test_confirmed_rejection_and_unknown_outcome_have_distinct_recovery(
         row = store.rows(f"SELECT * FROM {table}")[0]
         assert row[status] == outcome
         assert "private" not in str(row.get("send_error"))
+        store.close()
+        store = Store(tmp_path / "notice.sqlite")
+        run = OperationResults(store).notify if receipt else Notifications(store, bot).once
         await run(bot) if receipt else await run()
         assert len(attempts) == 1
         if failure == "rate":
