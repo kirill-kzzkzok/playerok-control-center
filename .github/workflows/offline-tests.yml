@@ -13,8 +13,13 @@ concurrency:
 
 jobs:
   offline:
+    name: offline shard ${{ matrix.shard }}
     runs-on: windows-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
     env:
       PYTHONUTF8: "1"
     steps:
@@ -30,4 +35,12 @@ jobs:
       - run: python -m ruff format --check .
       - run: python -m compileall -q app tests
       - run: python -m app.selfcheck
-      - run: python -m pytest -q
+      - run: python tools/ci_pytest_shard.py --index ${{ matrix.shard }} --count 3
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: offline-shard-${{ matrix.shard }}
+          path: |
+            data/ci-shard-*-manifest.json
+            data/ci-shard-*.xml
+          if-no-files-found: error
