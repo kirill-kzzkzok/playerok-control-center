@@ -314,7 +314,9 @@ class AutoReplies:
             or self.api.account.id != metadata["account_id"]
         ):
             raise ValidationError("Runtime или аккаунт изменился")
-        if self.store.setting("sync:health", {}).get("status") != "OK":
+        from app.services.sync_health import chat_sync_ready
+
+        if not chat_sync_ready(self.store, action["target"]):
             raise ValidationError("Нет актуальной базовой сверки")
         rows = self.store.rows("SELECT * FROM auto_reply_rules WHERE id=?", (metadata["rule_id"],))
         rule = rows[0] if rows else None

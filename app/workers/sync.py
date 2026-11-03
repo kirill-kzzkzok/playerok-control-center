@@ -5,6 +5,7 @@ import time
 
 from app.database.store import encode, now
 from app.playerok.adapter import APIError
+from app.services.sync_health import orders_sync_failed
 from app.workers.pagination import PageScanner
 from playerokapi.enums import ItemDealDirections
 
@@ -145,6 +146,7 @@ class Synchronizer(PageScanner):
 
     async def _once(self):
         errors, counts = {}, {}
+        orders_retry_after = 0
         streams = [
             ("orders", "get_deals", "deals", self.orders.ingest, {"direction": ItemDealDirections.OUT}),
             ("chats", "get_chats", "chats", self.ingest_chat, {}),
@@ -156,6 +158,8 @@ class Synchronizer(PageScanner):
                     self.store.set_setting("orders:last_complete_sync", now())
             except APIError as error:
                 errors[key] = error.code
+                if key == "orders" and str(error.retry_after or "").isdigit():
+                    orders_retry_after = int(error.retry_after)
         self.queue_order_details()
         # Oldest attempted chat first. An inaccessible chat cannot starve the others.
         chats = self.store.rows(
@@ -195,6 +199,7 @@ class Synchronizer(PageScanner):
             "orders": counts.get("orders", 0),
             "chat_backlog": backlog,
             "errors": errors,
+            "orders_retry_after": orders_retry_after,
         }
         self.store.set_setting("sync:health", self.health)
 
@@ -206,10 +211,13 @@ class Synchronizer(PageScanner):
             try:
                 if time.monotonic() >= next_full:
                     await self.once()
-                    failures = failures + 1 if self.health["status"] == "ERROR" else 0
+                    failures = failures + 1 if orders_sync_failed(self.store) else 0
                     next_full = (
                         time.monotonic()
-                        + (min(900, 60 * 2 ** min(failures, 4)) if failures else 30)
+                        + max(
+                            min(900, 60 * 2 ** min(failures, 4)) if failures else 30,
+                            self.health.get("orders_retry_after", 0),
+                        )
                         + random.uniform(0, 5)
                     )
                 processed = await self.process_requests()

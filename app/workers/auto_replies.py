@@ -1,10 +1,11 @@
 import asyncio
 import time
 
-from app.database.store import Conflict, now
+from app.database.store import Conflict, encode, now
 from app.playerok.adapter import APIError
 from app.services.auto_replies import AutoReplies
 from app.services.products import ValidationError
+from app.services.sync_health import chat_sync_ready, orders_sync_ready
 
 
 class AutoReplyWorker:
@@ -27,9 +28,6 @@ class AutoReplyWorker:
                 "auto_replies:health", {"status": "BACKOFF", "retry_at": deadline, "at": now()}
             )
             return 0
-        if self.store.setting("sync:health", {}).get("status") != "OK":
-            self.store.set_setting("auto_replies:health", {"status": "WAITING_SYNC_BASELINE", "at": now()})
-            return 0
         rules = self.store.rows(
             "SELECT MIN(updated_at) AS cutoff FROM auto_reply_rules WHERE account_id=? AND enabled=1",
             (account,),
@@ -38,13 +36,28 @@ class AutoReplyWorker:
         if not cutoff:
             self.store.set_setting("auto_replies:health", {"status": "NO_ENABLED_RULES", "at": now()})
             return 0
+        health = self.store.setting("sync:health", {})
+        complete = health.get("status") == "OK"
+        if not complete and not orders_sync_ready(self.store):
+            self.store.set_setting("auto_replies:health", {"status": "WAITING_SYNC_BASELINE", "at": now()})
+            return 0
+        failed_chats = [
+            key.split(":", 1)[1] for key in (health.get("errors") or {}) if key.startswith("messages:")
+        ]
         candidates = self.store.rows(
             "SELECT m.id,m.chat_id,m.payload,i.received_at FROM chat_messages m JOIN inbox i ON i.key='message:'||m.id "
             "WHERE i.received_at>=? AND NOT EXISTS(SELECT 1 FROM auto_reply_events e WHERE e.account_id=? AND e.message_id=m.id) "
+            "AND (? OR m.chat_id IN (SELECT id FROM sync_chats WHERE initial_complete=1 AND error_code IS NULL "
+            "AND id NOT IN (SELECT value FROM json_each(?)))) "
             "ORDER BY i.received_at,m.id LIMIT 20",
-            (cutoff, account),
+            (cutoff, account, complete, encode(failed_chats)),
         )
+        processed, waiting = 0, 0
         for row in candidates:
+            if not chat_sync_ready(self.store, row["chat_id"]):
+                waiting += 1
+                continue
+            processed += 1
             try:
                 await self.service.consider(row)
             except APIError as error:
@@ -66,9 +79,15 @@ class AutoReplyWorker:
                     (account, row["id"], row["chat_id"], now()),
                 )
         self.store.set_setting(
-            "auto_replies:health", {"status": "ACTIVE", "processed": len(candidates), "at": now()}
+            "auto_replies:health",
+            {
+                "status": "WAITING_SYNC_BASELINE" if waiting and not processed else "ACTIVE",
+                "processed": processed,
+                "waiting": waiting,
+                "at": now(),
+            },
         )
-        return len(candidates)
+        return processed
 
     async def run(self, stop):
         while not stop.is_set():

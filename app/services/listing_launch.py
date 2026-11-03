@@ -27,6 +27,7 @@ from app.services.paid_promotions import PaidPromotions, placement_funds
 from app.services.products import Products, ValidationError, priority_price_basis
 from app.services.promotion_settings import PromotionSettings
 from app.services.promotions import PromotionPolicy, dry_run
+from app.services.sync_health import orders_sync_ready
 
 
 def digest(value):
@@ -221,10 +222,7 @@ class ListingLaunch:
         if mode != "manual":
             if not getattr(self.api.account, "automation_enabled", False):
                 raise ValidationError("Автоматизация выключена. Проверьте настройки подключения")
-            if (
-                not self.store.setting("orders:last_complete_sync")
-                or self.store.setting("sync:health", {}).get("status") != "OK"
-            ):
+            if not orders_sync_ready(self.store):
                 raise ValidationError("Сначала завершите успешную синхронизацию заказов")
         message_text(value["greeting"])
         message_text(value["after"])
