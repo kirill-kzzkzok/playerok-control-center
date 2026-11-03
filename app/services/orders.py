@@ -32,6 +32,10 @@ class Orders:
                 return False
             old_payload = json.loads(previous["payload"]) if previous else {}
             old_item = old_payload.get("item") or {}
+            previous_created = server_time(old_payload.get("created_at"))
+            observed_created = server_time(order.get("created_at"))
+            if previous_created and observed_created and previous_created != observed_created:
+                raise Conflict("Серверные карточки расходятся по дате покупки. Автовыдача не разрешена")
             for before, after in (
                 (old_item.get("id"), item.get("id")),
                 ((old_item.get("user") or {}).get("id"), (item.get("user") or {}).get("id")),

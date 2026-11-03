@@ -57,7 +57,7 @@
 
 | Сценарий | Модули | Доказательство / причина / исправление | Статус |
 |---|---|---|---|
-| 1.1 Reserve → пополнение → resume → отправка | delivery_chains / automation / stock_panel | RED2failed; control fence в immutable chain.policy, одинаковая политика после resume разрешена;77passed+3passed (STOP/rearm/no duplicate/actual delivery). Legacy без fence сохраняет строгую блокировку | FIXED для новых подтверждённых цепочек |
+| 1.1 Reserve → пополнение → resume → отправка | delivery_chains / automation / stock_panel | RED2failed; control fence в immutable chain.policy, одинаковая политика после resume разрешена;77passed+3passed (STOP/rearm/no duplicate/actual delivery). Legacy snapshot получает fence только при доказанном совпадении текущей монотонной revision/config/owner/order_scope до resume; divergent legacy не активируется.6passed всех комбинаций | FIXED для новых и доказанно совместимых legacy цепочек |
 | Дополнительный legacy Wizard/ListingLaunch | wizard / listing_launch / LogicalProducts | Проверить отдельно в фазе 4; прежние записи не удаляются | Проверка не начата |
 
 | 1.2 Enrollment lease после рестарта | instance / __main__ / enrollment | RED2failed; реальный InstanceLock, PENDING-only fencing;289passed, single confirmed delivery, old-token refusal | FIXED |
@@ -71,3 +71,19 @@
 | 3.1 Независимость chats / orders / auth | sync_health / Gifts / readiness / automation / adapter | RED2failed;396passed+6passed; oldchat failure remains visible, order/unknown error blocked;503 no identity loss,401 disables | FIXED; phase3 latency/load gate pending |
 | 3.2 ACTIVE chain LIMIT50 starvation | workers/delivery_chains | RED1failed; bounded account cursor,77passed;50existing queued chains +new sale actual send once | FIXED; not a mixed-service SLA load test |
 | 3.3 Профиль как просмотр | telegram/profile_panel | RED1failed;44passed;ordinaryopen no get/no disabled flags, explicitcheck fresh authority | FIXED |
+
+
+## Точка продолжения после 411af78
+
+Это промежуточный результат, не приёмка всех пяти фаз.
+
+- Фаза 1: перечисленные выше корневые причины исправлены; 152 профильных теста, дополнительные регрессии в отдельных запусках. Полный контрольный прогон указан в PROGRESS.md с точным HEAD collection.
+- Фаза 2: shared scan lock, stale success/error fences, private sold purchase для Gifts/stock/text/Playerok проверены. Не объявляется доказанным каждый интерфейсный переход с отсутствующим публичным item; это входит в оставшуюся UI-приёмку.
+- Фаза 3: chat/order/auth isolation, ordinary profile, LIMIT50 chain fairness исправлены. Остались измерения задержек и mixed-service load (100 listings/50 orders/slow API/2 failures/restart); нельзя подменять их быстрыми fake transport тестами.
+- Фаза 4: не начата. Нужны пять способов в Wizard/ListingLaunch, прекращение создания новых legacy Gifts через старые пути, наследование до публикации, title length с [XXX], массовый STOP с nonce/owner/revision и классификация callback, исправления причин/лимитов/переходов, главный экран и уведомления.
+- Фаза 5: текущий full suite и quality checkpoint не равен проверке всех 30 целевых сценариев; завершить load/restart/concurrency/UI coverage, full latest HEAD, secret scan и CI.
+
+Следующая безопасная единица: измерить head-of-line ожидание в production outbox_loop при медленном Gift RPC одновременно с независимо оплаченной текстовой/складской выдачей. Сначала воспроизведение на границе API и тайминги; не добавлять конкурентные денежные workers без доказательства независимости и paid safety regression.
+
+Индивидуальные формулировки 46 IDs в приложенном ТЗ отсутствуют. Существующие AUDIT_FINDINGS/REPRODUCTIONS/COVERAGE относятся к другому набору G*/F*; они не дают доказанного соответствия A1–D10. Групповые исправления не отмечены как 46 отдельных GREEN.
+| 1.3c Неизменяемая подтверждённая дата покупки | orders | RED1failed;82passed; historical date cannot be replaced by a future timestamp; atomic ingest refusal | FIXED, full latest gate pending |

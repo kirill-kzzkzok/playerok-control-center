@@ -39,3 +39,19 @@ async def test_later_server_timestamp_recovers_only_verified_future_sale(shop, d
     Orders(r.store).ingest(full)
     await EnrollmentWorker(r.store, r.api).once()
     assert len(r.store.rows("SELECT * FROM delivery_chains")) == int(date == "fresh")
+
+
+async def test_known_historical_timestamp_cannot_be_rewritten_as_future_authority(shop):
+    from app.database.store import Conflict, now
+
+    r = await shop()
+    await setup_ui(r, "fixed_text", "private-unit")
+    order = r.api.order("date-conflict")
+    order["created_at"] = "2020-01-01T00:00:00Z"
+    Orders(r.store).ingest(order)
+    assert await EnrollmentWorker(r.store, r.api).once() == 0
+    order["created_at"] = now()
+    with pytest.raises(Conflict):
+        Orders(r.store).ingest(order)
+    assert not r.store.rows("SELECT * FROM delivery_chains")
+    assert r.store.rows("SELECT status FROM auto_enrollment") == [{"status": "SKIPPED"}]
