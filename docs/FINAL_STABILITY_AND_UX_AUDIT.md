@@ -42,51 +42,51 @@
 | № | Сценарий | Доказательство |
 |---|---|---|
 | 1 | Новый складской товар → подготовленный запас → попытка старой бесплатной публикации. | Не проверен в новом ТЗ |
-| 2 | Новый Telegram Gift → попытка публикации в обход настройки. | Не проверен в новом ТЗ |
-| 3 | Новый ручной товар → корректная бесплатная публикация. | Не проверен в новом ТЗ |
+| 2 | Новый Telegram Gift → попытка публикации в обход настройки. | test_final_launch_source_intent: actual Wizard Gift → old free/paid entry; mode preserved, no queue bypass (109passed profile). |
+| 3 | Новый ручной товар → корректная бесплатная публикация. | test_listing_launch + test_final_publish_authority: actual manual PREPARE/COMMIT and worker publication; no stock/Stars requirement. |
 | 4 | Новый товар со встроенной выдачей Playerok → единый запуск. | Не проверен в новом ТЗ |
-| 5 | Повторное нажатие старого publish callback. | Не проверен в новом ТЗ |
-| 6 | Потерянный ответ публикации. | Не проверен в новом ТЗ |
+| 5 | Повторное нажатие старого publish callback. | test_dispatch_recovery concurrent publish and test_final_publish_authority old FSM refusal; one real transport mutation. |
+| 6 | Потерянный ответ публикации. | test_listing_launch::test_publication_failure_and_unknown_never_republish; UNKNOWN never queues another publication. |
 | 7 | Изменение условий между preview и dispatch. | Не проверен в новом ТЗ |
-| 8 | Активный складской товар → изменение описания. | Не проверен в новом ТЗ |
-| 9 | Активный товар → изменение характеристик. | Не проверен в новом ТЗ |
+| 8 | Активный складской товар → изменение описания. | test_final_critical_edits active description input requires explicit STOP; no projection side effect. |
+| 9 | Активный товар → изменение характеристик. | test_final_critical_edits active editfields callback blocked before schema input. |
 | 10 | Изменение названия с сохранением [XXX]. | Не проверен в новом ТЗ |
-| 11 | Изменение благодарности без STOP. | Не проверен в новом ТЗ |
-| 12 | Изменение текста уже поставленного в Outbox сообщения. | Не проверен в новом ТЗ |
-| 13 | Оплаченный заказ во время редактирования. | Не проверен в новом ТЗ |
+| 11 | Изменение благодарности без STOP. | test_final_future_messages: future after for stock/text/Gifts, old orders keep their text;9passed profile. Greeting/Playerok reply pending. |
+| 12 | Изменение текста уже поставленного в Outbox сообщения. | Partial: test_final_future_messages asserts existing Outbox payloads unchanged; already queued AFTER-message-specific case still pending. |
+| 13 | Оплаченный заказ во время редактирования. | test_final_critical_edits::test_payment_after_edit_queue_prevents_mutation_without_destroying_reserve. |
 | 14 | Запоздалый ответ после изменения ревизии. | Не проверен в новом ТЗ |
-| 15 | Изменение критического параметра другим клиентом Playerok. | Не проверен в новом ТЗ |
-| 16 | Безопасное повторное подтверждение привязки. | Не проверен в новом ТЗ |
-| 17 | Удаление пустого черновика. | Не проверен в новом ТЗ |
-| 18 | Удаление товара без активных заказов. | Не проверен в новом ТЗ |
-| 19 | Удаление при PAID. | Не проверен в новом ТЗ |
-| 20 | Удаление при RESERVED. | Не проверен в новом ТЗ |
-| 21 | Удаление при ACTIVE. | Не проверен в новом ТЗ |
-| 22 | Удаление при UNCERTAIN. | Не проверен в новом ТЗ |
-| 23 | Удаление при незавершённой операции Gifts. | Не проверен в новом ТЗ |
-| 24 | Удаление после завершения всех обязательств. | Не проверен в новом ТЗ |
-| 25 | Запоздалый результат удаления. | Не проверен в новом ТЗ |
-| 26 | Старый чат возвращает HTTP 503, новая продажа продолжается. | Не проверен в новом ТЗ |
-| 27 | Старый чат возвращает HTTP 403, viewer подтверждает аккаунт. | Не проверен в новом ТЗ |
-| 28 | Старый чат возвращает HTTP 403, viewer возвращает HTTP 401. | Не проверен в новом ТЗ |
-| 29 | Действительная потеря авторизации. | Не проверен в новом ТЗ |
+| 15 | Изменение критического параметра другим клиентом Playerok. | test_final_paid_attention external description change→actual Enrollment BLOCKED, no delivery. |
+| 16 | Безопасное повторное подтверждение привязки. | test_final_critical_edits actual STOP→edit→readback→rebind preview/commit→worker→arm; same product/code/stock. |
+| 17 | Удаление пустого черновика. | test_final_delete_obligations safe draft variant; actual Dispatcher confirmation/worker. |
+| 18 | Удаление товара без активных заказов. | test_final_delete_obligations safe completed variants; history/reservations unchanged. |
+| 19 | Удаление при PAID. | test_final_delete_obligations paid + late-paid preview/read/dispatch cases. |
+| 20 | Удаление при RESERVED. | test_final_delete_obligations reserved variant; same reservations remain. |
+| 21 | Удаление при ACTIVE. | test_final_delete_obligations queued active delivery variant. |
+| 22 | Удаление при UNCERTAIN. | test_final_delete_obligations unknown stock and unknown delete block repeat. |
+| 23 | Удаление при незавершённой операции Gifts. | test_final_delete_obligations unknown Stars payment remains blocking even after CONFIRMED deal. |
+| 24 | Удаление после завершения всех обязательств. | test_final_delete_obligations complete/reminder variants require exact succeeded step receipts. |
+| 25 | Запоздалый результат удаления. | test_final_delete_obligations late receipt after lease recovery remains UNCERTAIN; no replay. |
+| 26 | Старый чат возвращает HTTP 503, новая продажа продолжается. | test_stability_subsystem_isolation actual Gift worker continues new paid sale under unrelated chat503. |
+| 27 | Старый чат возвращает HTTP 403, viewer подтверждает аккаунт. | test_final_chat_identity HTTP boundary: get_chat/get_chat_messages403→fresh same-account viewer→restore only desired flags. |
+| 28 | Старый чат возвращает HTTP 403, viewer возвращает HTTP 401. | test_final_chat_identity viewer401/403/503/mismatch keep writes disabled. |
+| 29 | Действительная потеря авторизации. | test_playerok_connection + test_stability_subsystem_isolation genuine auth loss disables writes; included in35passed profile. |
 | 30 | WebSocket не доставляет оплату, polling обнаруживает её. | Не проверен в новом ТЗ |
-| 31 | Исторический чат постоянно недоступен, polling новых заказов не увеличивается до 900 секунд только из-за него. | Не проверен в новом ТЗ |
-| 32 | Восстановление после временной деградации. | Не проверен в новом ТЗ |
+| 31 | Исторический чат постоянно недоступен, polling новых заказов не увеличивается до 900 секунд только из-за него. | test_final_sync_isolation actual Synchronizer.run sleep remains30s for old chat failure (not120/900). |
+| 32 | Восстановление после временной деградации. | test_final_notification_baseline actual later chat recovery + restart; test_final_auto_reply_retry free read recovery. |
 | 33 | Заказы не обрабатываются при неподтверждённой идентичности. | Не проверен в новом ТЗ |
-| 34 | notifications:initialized=False. | Не проверен в новом ТЗ |
-| 35 | Ошибка старого чата. | Не проверен в новом ТЗ |
-| 36 | Новое сообщение покупателя. | Не проверен в новом ТЗ |
-| 37 | Новая оплаченная сделка. | Не проверен в новом ТЗ |
-| 38 | Последующее восстановление старого чата. | Не проверен в новом ТЗ |
-| 39 | Новые события не превращаются в исторический BASELINE. | Не проверен в новом ТЗ |
-| 40 | Историческая переписка не засыпает владельца уведомлениями. | Не проверен в новом ТЗ |
-| 41 | Временный HTTP 503 на проверке чата. | Не проверен в новом ТЗ |
-| 42 | Безопасный повтор после восстановления. | Не проверен в новом ТЗ |
+| 34 | notifications:initialized=False. | test_final_notification_baseline starts uninitialized with durable startup boundary. |
+| 35 | Ошибка старого чата. | test_final_notification_baseline old history503; new stream remains operational. |
+| 36 | Новое сообщение покупателя. | test_final_notification_baseline confirmed new buyer message creates one active ChatCard. |
+| 37 | Новая оплаченная сделка. | test_final_notification_baseline new PAID and earlier-PENDING→PAID transition notify during backfill. |
+| 38 | Последующее восстановление старого чата. | test_final_notification_baseline old chat recovers; boundary survives worker reconstruction. |
+| 39 | Новые события не превращаются в исторический BASELINE. | test_final_notification_baseline old/new notification statuses remain correctly separated after globalOK. |
+| 40 | Историческая переписка не засыпает владельца уведомлениями. | test_final_notification_baseline historical dated chat message is BASELINE; legacy initialized DB regression preserved. |
+| 41 | Временный HTTP 503 на проверке чата. | test_final_auto_reply_retry temporary HTTP503 creates no outgoing operation or terminal failure on first free check. |
+| 42 | Безопасный повтор после восстановления. | test_final_auto_reply_retry real fresh verification→single Outbox send after durable backoff/restart. |
 | 43 | Сообщение уже удалено. | Не проверен в новом ТЗ |
-| 44 | Диалог продолжился до повторной проверки. | Не проверен в новом ТЗ |
+| 44 | Диалог продолжился до повторной проверки. | test_final_auto_reply_retry continued dialog during backoff cancels answer. |
 | 45 | Правило изменилось или отключено. | Не проверен в новом ТЗ |
-| 46 | Неизвестный результат отправки не повторяется. | Не проверен в новом ТЗ |
+| 46 | Неизвестный результат отправки не повторяется. | test_auto_replies unknown-send guard + test_final_future_messages UNKNOWN stock/Stars regression; no replay. |
 | 47 | Массовая остановка правил требует подтверждения. | Не проверен в новом ТЗ |
 | 48 | Медленный Gift RPC на 90 секунд. | Не проверен в новом ТЗ |
 | 49 | Одновременная независимая складская продажа. | Не проверен в новом ТЗ |
@@ -97,9 +97,9 @@
 | 54 | STOP при активных задачах. | Не проверен в новом ТЗ |
 | 55 | Потеря lease. | Не проверен в новом ТЗ |
 | 56 | Запоздалый ответ. | Не проверен в новом ТЗ |
-| 57 | Карантин UNCERTAIN. | Не проверен в новом ТЗ |
-| 58 | Отсутствие повторного платежа. | Не проверен в новом ТЗ |
-| 59 | Отсутствие двойной выдачи. | Не проверен в новом ТЗ |
+| 57 | Карантин UNCERTAIN. | test_final_future_messages unknown inventory send stays QUARANTINED after safe message update. |
+| 58 | Отсутствие повторного платежа. | test_final_future_messages lost Stars RPC + restart remains one payment and UNCERTAIN. |
+| 59 | Отсутствие двойной выдачи. | test_final_future_messages real workers old/new orders each receive one stock unit plus their pinned after text. |
 | 60 | Проверка нагрузки с 50 одновременно оплаченными заказами. | Не проверен в новом ТЗ |
 | 61 | Все пять типов товара создаются через основной мастер. | Не проверен в новом ТЗ |
 | 62 | Новые Gifts не используют независимый gift: путь. | Не проверен в новом ТЗ |
@@ -121,20 +121,20 @@
 | 78 | WRITES_OFF, STARS_LIMIT и PROJECTION_MISMATCH ведут в правильные места. | Не проверен в новом ТЗ |
 | 79 | Нет инструкций о старом коде в описании для новых товаров. | Не проверен в новом ТЗ |
 | 80 | Пользователь может вернуться к товару после исправления проблемы. | Не проверен в новом ТЗ |
-| 81 | Enrollment BLOCKED отображается на главном экране. | Не проверен в новом ТЗ |
+| 81 | Enrollment BLOCKED отображается на главном экране. | test_final_paid_attention actual BLOCKED Enrollment appears on Home with direct order callback despite no notification. |
 | 82 | DeliveryChain BLOCKED отображается на главном экране. | Не проверен в новом ТЗ |
-| 83 | NEEDS_FULFILLMENT виден. | Не проверен в новом ТЗ |
+| 83 | NEEDS_FULFILLMENT виден. | test_final_paid_attention actual delivered chain NEEDS_FULFILLMENT appears with completion action. |
 | 84 | UNCERTAIN виден. | Не проверен в новом ТЗ |
-| 85 | Уведомление не доставлено, проблема остаётся видимой. | Не проверен в новом ТЗ |
-| 86 | Worker постоянно ошибается, появляется сигнал. | Не проверен в новом ТЗ |
-| 87 | Обычная разовая временная ошибка не создаёт ложную критическую тревогу. | Не проверен в новом ТЗ |
+| 85 | Уведомление не доставлено, проблема остаётся видимой. | test_final_paid_attention local state, not Telegram notification status, determines attention. |
+| 86 | Worker постоянно ошибается, появляется сигнал. | test_final_worker_cycles real caught SQLite JSON fault3times→durable counter/one alert/Home/diagnostics; recovery clears active fault. |
+| 87 | Обычная разовая временная ошибка не создаёт ложную критическую тревогу. | test_final_worker_cycles normal90s simulated cycle within180s deadline does not alarm; context observation spends nothing. |
 | 88 | Критическое уведомление не голодает за большой очередью. | Не проверен в новом ТЗ |
 | 89 | Некритические уведомления тоже когда-нибудь обрабатываются. | Не проверен в новом ТЗ |
 | 90 | Stock_empty учитывает stock_scope и перевыставления. | Не проверен в новом ТЗ |
 | 91 | Несколько перезапусков создают корректные копии. | Не проверен в новом ТЗ |
 | 92 | Политика очистки не удаляет нужные файлы. | Не проверен в новом ТЗ |
-| 93 | Основная SQLite остаётся целой. | Не проверен в новом ТЗ |
-| 94 | Сохраняемые копии можно открыть и проверить. | Не проверен в новом ТЗ |
+| 93 | Основная SQLite остаётся целой. | selfcheck temporary WAL quick_check/foreign_key_check OK; working database never opened. |
+| 94 | Сохраняемые копии можно открыть и проверить. | selfcheck temporary backup reopens with schema1..32. Production backups not modified. |
 | 95 | Финальный offline pytest проходит целиком. | Не проверен в новом ТЗ |
 | 96 | Финальный GitHub Actions завершается SUCCESS. | Не проверен в новом ТЗ |
 
