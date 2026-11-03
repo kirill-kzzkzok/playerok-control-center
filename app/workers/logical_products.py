@@ -24,10 +24,13 @@ class LogicalProductWorker:
             store.logical_scan_lock = asyncio.Lock()
 
     async def once(self):
-        async with self.store.logical_scan_lock:
-            return await self.scan()
+        return await self.scan()
 
     async def scan(self, *, product_id=None):
+        async with self.store.logical_scan_lock:
+            return await self._scan(product_id=product_id)
+
+    async def _scan(self, *, product_id=None):
         products = self.store.rows(
             "SELECT * FROM logical_products WHERE state='VERIFIED' AND "
             + ("id=?" if product_id else "enabled=1 AND inherit_enabled=1"),
@@ -240,6 +243,7 @@ class LogicalProductWorker:
                         paid_order=paid_items.get(item["id"]),
                         source_order_id=source_order,
                         snapshot_item_ids=frozenset(snapshot_orders),
+                        expected_product=product,
                     )
                 except (ValueError, Conflict):
                     self.problem(product, "RELIST_CONFIRMATION_REQUIRED")
@@ -255,11 +259,32 @@ class LogicalProductWorker:
 
     def problem(self, product, code):
         with self.store.transaction() as db:
-            db.execute("UPDATE logical_products SET error_code=? WHERE id=?", (code, product["id"]))
+            changed = db.execute(
+                "UPDATE logical_products SET error_code=? WHERE id=? AND revision=? AND control_revision=? "
+                "AND state=? AND enabled=? AND inherit_enabled=?",
+                (
+                    code,
+                    product["id"],
+                    product["revision"],
+                    product["control_revision"],
+                    product["state"],
+                    product["enabled"],
+                    product["inherit_enabled"],
+                ),
+            ).rowcount
+            if not changed:
+                return
             db.execute(
                 "INSERT OR IGNORE INTO inbox(key,kind,payload,received_at,processed_at) VALUES(?,'logical_product_blocked',?,?,?)",
                 (
-                    "logical-problem:" + product["id"] + ":" + str(product["revision"]) + ":" + code,
+                    "logical-problem:"
+                    + product["id"]
+                    + ":"
+                    + str(product["revision"])
+                    + ":"
+                    + str(product["control_revision"])
+                    + ":"
+                    + code,
                     encode({"product_id": product["id"], "code": code}),
                     now(),
                     now(),

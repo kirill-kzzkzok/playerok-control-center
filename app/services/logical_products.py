@@ -787,9 +787,15 @@ class LogicalProducts:
         paid_order=None,
         source_order_id=None,
         snapshot_item_ids=(),
+        expected_product=None,
     ):
         """Called only with a completed account scan; never discover or spend here."""
         product = self.product(product_id, owner)
+        if expected_product and any(
+            product[key] != expected_product[key]
+            for key in ("revision", "control_revision", "state", "enabled", "inherit_enabled")
+        ):
+            raise Conflict("Управление товаром изменилось во время сверки; старый результат отклонён")
         self.authority(owner, product["account_id"], writes=True)
         existing = self.listing(item.get("id"))
         if existing:
