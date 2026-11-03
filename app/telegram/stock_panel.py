@@ -131,6 +131,9 @@ class StockPanel:
             if not policy.enabled or policy.mode != "stock" or not self.service.counts(ident)["AVAILABLE"]:
                 raise Conflict("Сначала настройте политику и пополните доступный запас")
             nonce = secrets.token_hex(8)
+            from app.services.logical_products import LogicalProducts
+
+            product = LogicalProducts(self.store, self.service.automation.api).listing(ident)
             await state.set_data(
                 {
                     "stock_resume": {
@@ -138,6 +141,7 @@ class StockPanel:
                         "revision": revision,
                         "values": asdict(policy),
                         "nonce": nonce,
+                        "logical": product,
                     }
                 }
             )
@@ -154,14 +158,26 @@ class StockPanel:
                 raise Conflict("Подтверждение устарело")
             if not self.service.counts(pending["id"])["AVAILABLE"]:
                 raise Conflict("Доступный запас закончился")
-            await self.service.automation.save(
-                owner,
-                pending["id"],
-                pending["revision"],
-                pending["values"],
-                future_confirmed=True,
-                stock_resume=True,
-            )
+            from app.services.logical_products import LogicalProducts
+
+            logical = LogicalProducts(self.store, self.service.automation.api)
+            if logical.listing(pending["id"]):
+                if not pending.get("logical"):
+                    raise Conflict("Привязка появилась после подтверждения. Откройте склад заново")
+                await logical.resume_stock(
+                    owner, pending["id"], pending["logical"], pending["revision"], pending["values"]
+                )
+            else:
+                if pending.get("logical"):
+                    raise Conflict("Привязка изменилась. Откройте склад заново")
+                await self.service.automation.save(
+                    owner,
+                    pending["id"],
+                    pending["revision"],
+                    pending["values"],
+                    future_confirmed=True,
+                    stock_resume=True,
+                )
             await state.clear()
             return await self.card(owner, pending["id"])
         raise Conflict("Действие склада недоступно")

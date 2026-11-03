@@ -821,6 +821,47 @@ class LogicalProducts:
             )[0]["updated_at"]
         return cutoff
 
+    async def resume_stock(self, owner, item_id, expected, policy_revision, values):
+        """Restore admission after replenishment without changing paid-order authority."""
+        product = self.listing(item_id)
+        if not product or any(
+            product[key] != expected.get(key)
+            for key in ("id", "revision", "control_revision", "config", "enabled", "inherit_enabled")
+        ):
+            raise Conflict("Настройки или остановка изменились. Откройте склад заново")
+        self.authority(owner, product["account_id"], writes=True)
+        self.require_delivery(item_id, "unique_stock")
+        if product["owner_id"] != owner or not self.api.account.automation_enabled:
+            raise Conflict("Автоматизация выключена или владелец не подтверждён")
+        automation = Automation(self.store, self.api)
+        for alias in self.store.rows(
+            "SELECT item_id FROM logical_listings WHERE product_id=? AND source_order_id IS NULL "
+            "AND (server_status='APPROVED' OR item_id=?)",
+            (product["id"], item_id),
+        ):
+            item = await automation.item(owner, alias["item_id"])
+            self.verify_listing(product, item)
+            if alias["item_id"] != item_id and item.get("status") == "APPROVED":
+                raise Conflict("С одним кодом опубликовано несколько товаров. Сначала разрешите конфликт")
+        context = {
+            "product_id": product["id"],
+            "revision": product["revision"],
+            "control_revision": product["control_revision"],
+            "expected_enabled": product["enabled"],
+            "source_config": product["config"],
+            "inherit": bool(product["inherit_enabled"]),
+            "stock_resume": True,
+        }
+        return await automation.save(
+            owner,
+            item_id,
+            policy_revision,
+            values,
+            future_confirmed=True,
+            stock_resume=True,
+            logical_arm=context,
+        )
+
     def commit_arm(self, db, owner, item_id, context, cutoff):
         """Same transaction as the existing execution policy: STOP always fences late arm."""
         product = self.product(context["product_id"], owner)
@@ -855,6 +896,12 @@ class LogicalProducts:
                 "gifts:listing_options:" + item_id,
                 {**config.get("options", {}), "after": config.get("after", "")},
             )
+        if context.get("stock_resume"):
+            if product["handler"] != "unique_stock" or not product["enabled"]:
+                raise Conflict("Возобновить можно только разрешённый складской товар")
+            # This is admission, not STOP/re-arm: existing reservations retain
+            # their control fence and immutable order snapshots.
+            return
         changed = db.execute(
             "UPDATE logical_products SET enabled=1,inherit_enabled=?,armed_at=?,updated_at=?,control_revision=control_revision+? WHERE id=? AND revision=? AND control_revision=? AND enabled=?",
             (
