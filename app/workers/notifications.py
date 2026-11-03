@@ -65,14 +65,27 @@ class Notifications:
                     ("notifications:initialized", encode(True)),
                 )
             initialized = True
+        priority = (
+            "CASE WHEN i.kind IN ('worker_failed','operation_uncertain','order_problem',"
+            "'promotion_guard','enrollment_blocked','logical_product_blocked') "
+            "OR (i.kind='order' AND json_extract(i.payload,'$.status')='PAID') "
+            "OR (i.kind='message' AND json_extract(i.payload,'$.text')='{{DEAL_HAS_PROBLEM}}') THEN 1 "
+            "WHEN i.kind IN ('message','order','stock_empty','promotion_error') THEN 2 ELSE 3 END"
+        )
         events = self.store.rows(
-            "SELECT i.* FROM inbox i WHERE i.processed_at IS NOT NULL "
+            "WITH eligible AS (SELECT i.*, "
+            + priority
+            + " priority FROM inbox i WHERE i.processed_at IS NOT NULL "
             "AND EXISTS (SELECT 1 FROM administrators a WHERE NOT EXISTS "
             "(SELECT 1 FROM notifications n WHERE n.event_key=i.key AND n.owner_id=a.user_id) "
             "OR EXISTS(SELECT 1 FROM notifications n WHERE n.event_key=i.key AND n.owner_id=a.user_id "
             "AND n.status='PENDING' AND n.send_retry_at<=strftime('%s','now'))) "
             + ("AND (" + critical + " OR " + fresh_event + ") " if not initialized else "")
-            + "ORDER BY i.received_at,i.key LIMIT 200",
+            + "), ranked AS (SELECT *,row_number() OVER(PARTITION BY priority ORDER BY received_at,key) position FROM eligible) "
+            ", quota AS (SELECT * FROM ranked WHERE position<=CASE priority WHEN 1 THEN 100 WHEN 2 THEN 75 ELSE 25 END), "
+            "extra AS (SELECT * FROM ranked WHERE position>CASE priority WHEN 1 THEN 100 WHEN 2 THEN 75 ELSE 25 END "
+            "ORDER BY priority,received_at,key LIMIT (SELECT max(0,200-count(*)) FROM quota)) "
+            "SELECT * FROM (SELECT * FROM quota UNION ALL SELECT * FROM extra) ORDER BY priority,received_at,key",
             (boundary["at"],) if not initialized else (),
         )
         owners = self.store.rows("SELECT user_id FROM administrators")

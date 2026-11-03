@@ -321,7 +321,14 @@ class OperationResults:
 
     async def notify(self, bot):
         rows = self.store.rows(
-            "SELECT r.operation_id,r.owner_id,r.view_message_id,r.view_token FROM operation_receipts r JOIN outbox o ON o.id=r.operation_id WHERE r.notice_status='PENDING' AND r.send_retry_at<=? AND NOT (o.status='SUCCEEDED' AND o.operation_key LIKE 'chat-card-reply:%') AND NOT EXISTS(SELECT 1 FROM notification_actions a WHERE a.operation_id=o.id) AND o.status IN ('SUCCEEDED','UNCERTAIN','PERMANENT_FAILED') LIMIT 20",
+            "WITH eligible AS (SELECT r.operation_id,r.owner_id,r.view_message_id,r.view_token,o.created_at,"
+            "CASE o.status WHEN 'UNCERTAIN' THEN 1 ELSE 2 END priority FROM operation_receipts r "
+            "JOIN outbox o ON o.id=r.operation_id WHERE r.notice_status='PENDING' AND r.send_retry_at<=? "
+            "AND NOT (o.status='SUCCEEDED' AND o.operation_key LIKE 'chat-card-reply:%') "
+            "AND NOT EXISTS(SELECT 1 FROM notification_actions a WHERE a.operation_id=o.id) "
+            "AND o.status IN ('SUCCEEDED','UNCERTAIN','PERMANENT_FAILED')), ranked AS "
+            "(SELECT *,row_number() OVER(PARTITION BY priority ORDER BY created_at,operation_id,owner_id) position FROM eligible) "
+            "SELECT * FROM ranked WHERE position<=CASE priority WHEN 1 THEN 15 ELSE 5 END ORDER BY priority,created_at",
             (time.time(),),
         )
         for row in rows:
