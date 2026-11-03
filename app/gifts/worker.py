@@ -61,6 +61,14 @@ class GiftWorker:
                     "UPDATE gift_jobs SET completion_state='MANUAL' WHERE order_id=?", (j["order_id"],)
                 )
                 continue
+            if (
+                self.store.setting("gifts:paused", False)
+                and not self.store.setting("gifts:stopped", True)
+                and listing["enabled"]
+            ):
+                # Temporary admission pause does not revoke post-delivery intent.
+                # Resume still runs fresh fulfillment checks and revision CAS.
+                continue
             if not listing["enabled"] or not service.runtime():
                 self.store.execute(
                     "UPDATE gift_jobs SET completion_state='MANUAL' WHERE order_id=?", (j["order_id"],)

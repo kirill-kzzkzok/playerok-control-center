@@ -135,7 +135,7 @@ async def click(r, *, action=None, suffix=None):
     return key
 
 
-async def setup_ui(r, handler, value=None):
+async def setup_ui(r, handler, value=None, *, completion=False):
     await click(r, action="items")
     await click(r, action="item:lot")
     await click(r, action="iv:delivery:lot")
@@ -150,6 +150,8 @@ async def setup_ui(r, handler, value=None):
         await click(r, suffix=":stock_commit")
     await click(r, suffix=":input:after")
     await r.ui.message("Спасибо за покупку!")
+    if completion:
+        await click(r, suffix=":completion")
     await click(r, suffix=":preview")
     assert not r.store.rows("SELECT * FROM outbox")
     # Dispatcher/FSM is recreated, as on restart. The durable preview survives.

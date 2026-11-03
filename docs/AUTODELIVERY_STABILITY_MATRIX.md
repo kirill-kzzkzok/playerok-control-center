@@ -65,3 +65,4 @@
 | 1.3b Поздняя серверная дата | orders / enrollment | RED1failed; SKIPPED текущей revision восстанавливается после подтверждённой future date;51passed включая реальные workers, исторические даты не допускаются | FIXED |
 | 1.4 Исторические PAID блокируют Gift discovery | gifts/service | RED1failed; bounded persistent account cursor;111passed, новый заказ доставлен один раз после100исторических | FIXED |
 | 1.5 Бесплатная Gift проверка / restart | outcomes / service / Outbox / Store | RED3failed; explicit unstarted journal predicate,4attempts/backoff/FloodWait, atomic started_at+SPENDING;147passed, STOP/budget/unknown/concurrency safeguards | FIXED; graceful cancellation сохраняет безопасную ручную блокировку |
+| 1.6 Completion после временной паузы | gifts/worker | RED1failed; WAITING при pause, fresh recheck при resume, STOP/manual отдельно;115passed | FIXED |
