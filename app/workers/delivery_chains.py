@@ -18,7 +18,11 @@ class ChainWorker:
                 "AND order_id>? ORDER BY order_id LIMIT 50",
                 (self.store.setting(key, ""),),
             )
-            self.store.set_setting(key, rows[-1]["order_id"] if rows else "")
+            if not rows and self.store.setting(key, ""):
+                rows = self.store.rows(
+                    "SELECT order_id FROM delivery_chains WHERE status='ACTIVE' ORDER BY order_id LIMIT 50"
+                )
+            self.store.set_setting(key, rows[-1]["order_id"] if len(rows) == 50 else "")
             return sum(self.service.advance(row["order_id"]) for row in rows)
 
     async def run(self, stop):

@@ -86,4 +86,4 @@
 Следующая безопасная единица: измерить head-of-line ожидание в production outbox_loop при медленном Gift RPC одновременно с независимо оплаченной текстовой/складской выдачей. Сначала воспроизведение на границе API и тайминги; не добавлять конкурентные денежные workers без доказательства независимости и paid safety regression.
 
 Индивидуальные формулировки 46 IDs в приложенном ТЗ отсутствуют. Существующие AUDIT_FINDINGS/REPRODUCTIONS/COVERAGE относятся к другому набору G*/F*; они не дают доказанного соответствия A1–D10. Групповые исправления не отмечены как 46 отдельных GREEN.
-| 1.3c Неизменяемая подтверждённая дата покупки | orders | RED1failed;82passed; historical date cannot be replaced by a future timestamp; atomic ingest refusal | FIXED, full latest gate pending |
+| 1.3c Консервативная подтверждённая дата покупки | orders | RED1failed;82passed; historical date cannot be lifted across the cutoff: retain earliest confirmed server evidence, including coarse timestamps | FIXED, full latest gate pending |

@@ -42,7 +42,7 @@ async def test_later_server_timestamp_recovers_only_verified_future_sale(shop, d
 
 
 async def test_known_historical_timestamp_cannot_be_rewritten_as_future_authority(shop):
-    from app.database.store import Conflict, now
+    from app.database.store import now, server_time
 
     r = await shop()
     await setup_ui(r, "fixed_text", "private-unit")
@@ -51,7 +51,30 @@ async def test_known_historical_timestamp_cannot_be_rewritten_as_future_authorit
     Orders(r.store).ingest(order)
     assert await EnrollmentWorker(r.store, r.api).once() == 0
     order["created_at"] = now()
-    with pytest.raises(Conflict):
-        Orders(r.store).ingest(order)
+    Orders(r.store).ingest(order)
+    assert await EnrollmentWorker(r.store, r.api).once() == 0
+    payload = r.store.rows("SELECT json_extract(payload,'$.created_at') AS date FROM orders")[0]["date"]
+    assert server_time(payload) == server_time("2020-01-01T00:00:00Z")
     assert not r.store.rows("SELECT * FROM delivery_chains")
     assert r.store.rows("SELECT status FROM auto_enrollment") == [{"status": "SKIPPED"}]
+
+
+async def test_coarse_server_time_is_not_lifted_over_original_owner_cutoff(shop):
+    from datetime import datetime
+
+    from app.database.store import server_time
+
+    r = await shop()
+    await setup_ui(r, "fixed_text", "private-unit")
+    cutoff = datetime.fromisoformat(r.store.rows("SELECT updated_at FROM delivery_policies")[0]["updated_at"])
+    coarse = cutoff.replace(microsecond=0).isoformat()
+    order = r.api.order("coarse-date")
+    order["created_at"] = coarse
+    Orders(r.store).ingest(order)
+    assert await EnrollmentWorker(r.store, r.api).once() == 0
+    order["created_at"] = cutoff.replace(microsecond=999999).isoformat()
+    Orders(r.store).ingest(order)
+    assert await EnrollmentWorker(r.store, r.api).once() == 0
+    assert not r.store.rows("SELECT * FROM delivery_chains")
+    payload = r.store.rows("SELECT json_extract(payload,'$.created_at') AS date FROM orders")[0]["date"]
+    assert server_time(payload) == server_time(coarse)
