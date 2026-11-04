@@ -127,10 +127,10 @@ async def test_critical_error_offers_actual_configuration_action(shop):
     await setup_ui(r, "telegram_gifts", "gift: heart")
     await r.ui.click("lp:item:lot")
     await click(r, suffix=":stop")
-    r.api.item["description"] += " changed"
+    r.api.item["attributes"] = {"delivery-critical": "changed"}
     await click(r, action="lp:item:lot")
     await click(r, suffix=":arm")
-    assert "Изменилось описание" in r.session.last_panel.text
+    assert "характеристики или поля получения" in r.session.last_panel.text
     await click(r, suffix=":configure")
     assert "Способ выдачи" in r.session.last_panel.text
     assert any(k.endswith(":mode:telegram_gifts") for k in buttons(r.session.last_panel))
@@ -150,11 +150,11 @@ async def test_second_read_critical_edit_cannot_enable_text_projection(shop):
         if method == "get_item":
             reads += 1
             if reads == 2:
-                r.api.item["description"] += " changed during check"
+                r.api.item["attributes"] = {"delivery-critical": "changed during check"}
         return await call(method, **kwargs)
 
     r.api.call = changing_read
-    with pytest.raises(ValueError, match="описание"):
+    with pytest.raises(ValueError, match="характеристики"):
         await logical.arm(7, product["id"], product["revision"])
     assert not logical.listing("lot")["enabled"]
     assert not ProductReadiness(r.store, r.api).automation.get("lot")[1].enabled
@@ -179,7 +179,7 @@ async def test_explicit_check_recovers_stale_price_blocker_while_stopped(shop):
 async def test_active_changed_product_error_has_direct_stop_then_configuration(shop):
     r = await shop(gift=True)
     await setup_ui(r, "telegram_gifts", "gift: heart")
-    r.api.item["description"] += " changed"
+    r.api.item["attributes"] = {"delivery-critical": "changed"}
     await r.ui.click("lp:ready:lot")
     assert "Запуск пока невозможен" in r.session.last_panel.text
     await click(r, suffix=":stop")

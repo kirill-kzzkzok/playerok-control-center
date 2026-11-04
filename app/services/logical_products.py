@@ -752,13 +752,16 @@ class LogicalProducts:
         return receipt
 
     def verify_listing(self, product, item):
+        return self._verify_listing(product, item, check_description=True)
+
+    def _verify_listing(self, product, item, *, check_description):
         if self.store.rows(
             "SELECT 1 FROM outbox WHERE target=? "
             "AND status IN ('PENDING','PROCESSING','RETRYABLE_FAILED','UNCERTAIN') "
-            "AND (kind='edit_fields' OR kind='edit' AND json_type(payload,'$.description') IS NOT NULL "
+            "AND (kind='edit_fields' OR kind='edit' AND (?=0 OR json_type(payload,'$.description') IS NOT NULL "
             "AND json_extract(payload,'$.logical_binding') IS NULL "
-            "AND json_extract(payload,'$.code_migration') IS NULL) LIMIT 1",
-            (item.get("id"),),
+            "AND json_extract(payload,'$.code_migration') IS NULL)) LIMIT 1",
+            (item.get("id"), int(check_description)),
         ):
             raise Conflict(
                 "Редактирование товара не завершено. Сначала сверьте операцию, затем подтвердите привязку"
@@ -779,7 +782,7 @@ class LogicalProducts:
                 raise Conflict("Изменились " + label + ". Проверьте настройки и подтвердите привязку заново")
         if link and marked_title(item["name"], product["code"]) != link["title_snapshot"]:
             raise Conflict("Изменилось название товара. Проверьте настройки и подтвердите привязку заново")
-        if link and digest(item["description"]) != link["description_sha256"]:
+        if check_description and link and digest(item["description"]) != link["description_sha256"]:
             raise Conflict("Изменилось описание товара. Проверьте настройки и подтвердите привязку заново")
         if (
             product["state"] != "VERIFIED"
@@ -790,7 +793,8 @@ class LogicalProducts:
             or link["config_revision"] != product["revision"]
             or marker(item.get("name")) != product["code"]
             or marked_title(item["name"], product["code"]) != link["title_snapshot"]
-            or digest(item["description"]) != link["description_sha256"]
+            or check_description
+            and digest(item["description"]) != link["description_sha256"]
         ):
             raise Conflict("Код, описание или критичные параметры товара не подтверждены")
 
@@ -849,9 +853,12 @@ class LogicalProducts:
         }
 
     async def refresh_title(self, item):
-        """Standing permission for proven title-only changes; never arm or spend."""
+        """Standing permission for verified marketing text; never arm or spend."""
         product = self.listing(item.get("id"))
-        if not product or product["title_snapshot"] == item.get("name"):
+        if not product or not isinstance(item.get("description"), str):
+            return False
+        description_changed = digest(item["description"]) != product["description_sha256"]
+        if product["title_snapshot"] == item.get("name") and not description_changed:
             return False
         locks = getattr(self.store, "logical_title_locks", None)
         if locks is None:
@@ -859,11 +866,81 @@ class LogicalProducts:
         key = (self.api.account.id, item.get("id"))
         async with locks.setdefault(key, asyncio.Lock()):
             product = self.listing(item.get("id"))
+            if digest(item["description"]) != product["description_sha256"]:
+                return await self._refresh_description(product, item)
             if not self.title_change_allowed(product, item):
                 return False
             prepared = self.title_evidence(product["owner_id"], product, item)
             await self.confirm_title_change(product["owner_id"], prepared, automatic=True)
             return True
+
+    async def _refresh_description(self, product, item):
+        # Description is marketing text, not delivery content. Never infer a
+        # new Gift, stock unit or recipient from it; preserve the approved config.
+        if (
+            product["source_order_id"]
+            or product["error_code"] not in {None, "RELIST_CONFIRMATION_REQUIRED"}
+            or marker(item.get("name")) != product["code"]
+            or item.get("deleted_at")
+            or item.get("status") not in {"APPROVED", "DRAFT", "SOLD"}
+        ):
+            return False
+        self.authority(product["owner_id"], product["account_id"])
+        self._verify_listing(product, {**item, "name": product["title_snapshot"]}, check_description=False)
+        proof = digest(encode(product))
+        expected = {key: item.get(key) for key in ("id", "name", "description", "status", "deleted_at")}
+        identity = critical(item)
+        for _ in range(2):
+            fresh = await self.api.call("get_item", id=item["id"])
+            if {key: fresh.get(key) for key in expected} != expected or critical(fresh) != identity:
+                raise Conflict("Объявление изменилось во время фоновой проверки; проверка будет повторена")
+        with self.store.transaction() as db:
+            current = self.listing(item["id"])
+            if not current or digest(encode(current)) != proof:
+                raise Conflict("Настройки или остановка изменились во время фоновой проверки")
+            self.authority(product["owner_id"], product["account_id"])
+            self._verify_listing(
+                current, {**fresh, "name": current["title_snapshot"]}, check_description=False
+            )
+            config = json.loads(current["config"])
+            gift = db.execute("SELECT * FROM gift_listings WHERE item_id=?", (item["id"],)).fetchone()
+            if current["handler"] == "telegram_gifts" and gift:
+                if (
+                    gift["owner_id"] != current["owner_id"]
+                    or gift["gift_code"] != config["code"]
+                    or json.loads(gift["bundle"]) != config["bundle"]
+                    or gift["category_id"] != identity["category"]
+                    or gift["obtaining_type_id"] != identity["obtaining"]
+                    or gift["description_sha256"] != current["description_sha256"]
+                ):
+                    raise Conflict("Подарочная настройка не совпадает с подтверждённым товаром")
+                db.execute(
+                    "UPDATE gift_listings SET description_sha256=? WHERE item_id=?",
+                    (digest(fresh["description"]), item["id"]),
+                )
+            db.execute(
+                "UPDATE logical_listings SET title_snapshot=?,description_sha256=?,verified_at=? "
+                "WHERE item_id=? AND product_id=? AND config_revision=?",
+                (
+                    fresh["name"],
+                    digest(fresh["description"]),
+                    now(),
+                    item["id"],
+                    product["id"],
+                    product["revision"],
+                ),
+            )
+            db.execute(
+                "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,?,?,?,?)",
+                (
+                    product["owner_id"],
+                    "REFRESH_LISTING_METADATA",
+                    item["id"],
+                    digest(fresh["description"]),
+                    now(),
+                ),
+            )
+        return True
 
     async def confirm_title_change(self, owner, prepared, *, automatic=False):
         if prepared.get("owner") != owner:
@@ -1163,10 +1240,25 @@ class LogicalProducts:
             "SELECT * FROM logical_listings WHERE product_id=? AND config_revision=? AND verified_at IS NOT NULL",
             (product_id, product["revision"]),
         )
-        if not links or any(link["description_sha256"] != digest(item["description"]) for link in links):
-            raise Conflict("Описание нового объявления отличается от подтверждённого")
-        if not any(link["title_snapshot"] == marked_title(item["name"], product["code"]) for link in links):
-            raise Conflict("Изменилось название перевыставленного товара. Подтвердите привязку заново")
+        if not links:
+            raise Conflict("Нет подтверждённого исходного объявления для наследования")
+        if not isinstance(item.get("description"), str):
+            raise Conflict("Описание нового объявления не получено; ожидаем полную серверную карточку")
+        if any(link["description_sha256"] != digest(item["description"]) for link in links) or not any(
+            link["title_snapshot"] == marked_title(item["name"], product["code"]) for link in links
+        ):
+            if source_order_id:
+                from app.services.order_management import compatible_detail
+
+                detail = await self.api.call("get_delivery_deal", deal_id=source_order_id)
+                compatible_detail(paid_order, detail)
+                fresh = detail.get("item") or {}
+            else:
+                fresh = await self.api.call("get_item", id=item["id"])
+            if critical(fresh) != critical(item) or any(
+                fresh.get(k) != item.get(k) for k in ("id", "name", "description", "status", "deleted_at")
+            ):
+                raise Conflict("Перевыставленный товар изменился во время фоновой проверки")
         config = json.loads(product["config"])
         platform = config.get("platform_only") is True
         if product["handler"] == "telegram_gifts" and not platform:
@@ -1236,7 +1328,13 @@ class LogicalProducts:
                     + ") VALUES("
                     + ",".join("?" for _ in range(len(columns) + 1))
                     + ")",
-                    (item["id"], *(old[key] for key in columns)),
+                    (
+                        item["id"],
+                        *(
+                            digest(item["description"]) if key == "description_sha256" else old[key]
+                            for key in columns
+                        ),
+                    ),
                 )
                 self.store.set_setting(
                     "gifts:listing_options:" + item["id"],

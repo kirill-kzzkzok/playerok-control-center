@@ -216,7 +216,7 @@ async def test_relist_rejects_active_duplicate_but_accepts_confirmed_sale_price(
     assert adopted["armed_at"] == service.product(product["id"])["armed_at"]
 
 
-async def test_relist_cannot_change_name_while_reusing_a_valid_code(logical):
+async def test_relist_cannot_adopt_changed_name_without_matching_fresh_server_item(logical):
     store, api, service = logical
     result = service.commit(7, await service.prepare(7, "lot", "fixed_text", {"text": "Delivery"}))
     await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
@@ -224,7 +224,7 @@ async def test_relist_cannot_change_name_while_reusing_a_valid_code(logical):
     await service.arm(7, product["id"], product["revision"], inherit=True)
     old = {**copy.deepcopy(api.item), "status": "SOLD"}
     new = {**copy.deepcopy(api.item), "id": "relisted", "name": "Different " + api.item["name"]}
-    with pytest.raises(ValueError, match="название"):
+    with pytest.raises(ValueError, match="изменился во время фоновой проверки"):
         await service.adopt(7, product["id"], new, [old, new])
     assert not service.listing("relisted")
 

@@ -16,6 +16,15 @@ from app.workers.pagination import PageScanner
 from playerokapi.enums import ItemStatuses
 
 
+def require_listing_details(item):
+    try:
+        critical(item)
+        if not isinstance(item.get("description"), str):
+            raise TypeError
+    except (ValueError, KeyError, TypeError):
+        raise APIError("LOGICAL_CATALOG_ITEM_INCOMPLETE") from None
+
+
 class LogicalProductWorker:
     def __init__(self, store, api):
         self.store, self.api = store, api
@@ -85,6 +94,7 @@ class LogicalProductWorker:
             item = await self.api.call("get_item", id=row["item_id"])
             if item.get("id") != row["item_id"] or (item.get("user") or {}).get("id") != account:
                 raise APIError("LOGICAL_CATALOG_ACCOUNT_OR_ID_CHANGED")
+            require_listing_details(item)
             self.store.execute(
                 "UPDATE logical_scan_items SET payload=?,checked_at=? WHERE account_id=? AND item_id=? AND generation=?",
                 (encode(item), now(), account, row["item_id"], generation),
@@ -230,6 +240,7 @@ class LogicalProductWorker:
                         paid_items[item["id"]] = current_deal
                     else:
                         fresh = await self.api.call("get_item", id=item["id"])
+                    require_listing_details(fresh)
                     if (
                         fresh.get("id") != item["id"]
                         or fresh.get("status") != item.get("status")
