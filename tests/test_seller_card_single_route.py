@@ -7,6 +7,45 @@ from tests.test_ux_redesign import buttons
 shop = shop_fixture
 
 
+async def test_main_unknown_edit_offers_exact_readonly_resolution_without_menu_search(shop):
+    r = await shop(gift=True)
+    await setup_ui(r, "telegram_gifts", "gift: heart")
+    ident = r.store.enqueue("unknown-edit", "edit", "lot", {"name": r.api.item["name"]}, actor=7)
+    action = r.store.claim(operation_id=ident)
+    r.store.mark_started(action)
+    r.store.finish(ident, action["lease_token"], "UNCERTAIN", error="EDIT_NOT_CONFIRMED")
+    await r.ui.click("item:lot")
+    assert "ops:show:" + ident in buttons(r.session.last_panel)
+    await click(r, action="ops:show:" + ident)
+    assert "ops:confirm:" + ident in buttons(r.session.last_panel)
+    await click(r, action="ops:confirm:" + ident)
+    assert "нет сохранённого подтверждения" in r.session.last_panel.text
+    assert r.store.rows("SELECT status FROM outbox WHERE id=?", (ident,)) == [{"status": "UNCERTAIN"}]
+    assert not r.api.messages and not r.api.remote.payments
+
+
+async def test_main_unknown_gift_links_to_gift_reconcile_without_second_payment(shop):
+    from app.gifts.worker import GiftWorker
+    from app.services.orders import Orders
+
+    r = await shop(gift=True)
+    await setup_ui(r, "telegram_gifts", "gift: heart")
+    Orders(r.store).ingest(r.api.order("paid-unknown"))
+    r.api.remote.pay_error = TimeoutError()
+    await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+    await r.worker.once()
+    assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "UNCERTAIN"}]
+    count = len(r.api.remote.payments)
+    await r.ui.click("item:lot")
+    await click(r, action="gft:details:paid-unknown")
+    assert "gft:reconcile:paid-unknown" in buttons(r.session.last_panel)
+    await r.ui.click("gft:reconcile:paid-unknown")
+    assert "Достоверного подтверждения пока нет" in r.session.last_panel.text
+    assert len(r.api.remote.payments) == count == 1
+    assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "UNCERTAIN"}]
+    assert not await r.worker.once()
+
+
 async def test_gift_main_card_has_single_settings_and_readiness_route(shop):
     r = await shop(gift=True)
     await setup_ui(r, "telegram_gifts", "gift: heart")

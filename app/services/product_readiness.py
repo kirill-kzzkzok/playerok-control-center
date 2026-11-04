@@ -257,18 +257,23 @@ class ProductReadiness:
             ]
         marks = ",".join("?" for _ in ids)
         operations = self.store.rows(
-            f"SELECT b.id,b.status,b.error_code FROM outbox b LEFT JOIN orders o ON o.id=b.target WHERE (o.item_id IN ({marks}) OR b.target IN ({marks})) AND (b.status IN ('UNCERTAIN','PROCESSING','PENDING','RETRYABLE_FAILED') OR b.error_code='MANUALLY_STOPPED_UNCERTAIN') ORDER BY b.created_at DESC LIMIT 10",
+            f"SELECT b.id,b.kind,b.target,b.status,b.error_code,EXISTS(SELECT 1 FROM gift_jobs g WHERE g.order_id=b.target) AS gift_job FROM outbox b LEFT JOIN orders o ON o.id=b.target WHERE (o.item_id IN ({marks}) OR b.target IN ({marks})) AND (b.status IN ('UNCERTAIN','PROCESSING','PENDING','RETRYABLE_FAILED') OR b.error_code='MANUALLY_STOPPED_UNCERTAIN') ORDER BY b.created_at DESC LIMIT 10",
             ids + ids,
         )
         for op in operations:
             uncertain = op["status"] == "UNCERTAIN" or op["error_code"] == "MANUALLY_STOPPED_UNCERTAIN"
+            route = (
+                "gft:details:" + op["target"]
+                if op["kind"] in {"gift_send", "gift_refund"} and op["gift_job"]
+                else "ops:show:" + op["id"]
+            )
             add(
                 "UNCERTAIN" if uncertain else "IN_PROGRESS",
                 "Результат операции неизвестен. Повтор запрещён до сверки."
                 if uncertain
                 else "Есть незавершённая операция. Посмотрите её состояние.",
                 "Сверить без повторной отправки" if uncertain else "Посмотреть операцию",
-                "ops:show:" + op["id"],
+                route,
                 terminal=uncertain,
                 blocking=uncertain,
             )

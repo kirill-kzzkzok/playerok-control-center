@@ -181,6 +181,10 @@ class ItemPanel:
                 [("📋 История и операции", "iv:history:" + ident)],
                 [("⋯ Другие действия", "iv:other:" + ident)],
             ]
+            if readiness["problems"]:
+                label, route = readiness["problems"][0]["action"]
+                if route not in {callback for row in rows for _, callback in row}:
+                    rows.insert(0, [("🔎 " + label, route)])
             if item.get("status") == "DRAFT":
                 rows.insert(0, [("🚀 Запустить продажи", "launch:item:" + ident)])
             elif item.get("status") == "SOLD":
