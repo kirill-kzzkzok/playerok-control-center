@@ -172,6 +172,19 @@ class ListingsPanel:
         values, next_cursor = validate_page(page, kind, seen)
         if kind == "items":
             values = [item for item in values if matches_item(item, filters)]
+            if (
+                self.store
+                and not cursor
+                and filters.get("status") == "APPROVED"
+                and not any(value for key, value in filters.items() if key != "status")
+            ):
+                self.store.set_setting(
+                    "shop:active:" + str(self.api.account.id),
+                    {
+                        "count": None if next_cursor else sum(not item.get("deleted_at") for item in values),
+                        "at": now(),
+                    },
+                )
         # An empty page with continuation still offers Next; it does not mean EOF.
         rows = [[("➕ Создать товар", "create")]] if kind == "items" and not promotion_picker else []
         for value in values:

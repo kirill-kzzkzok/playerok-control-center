@@ -121,7 +121,7 @@ def create_router(store, api, products, synchronizer):
         if panel.get("sending") or panel.get("editing"):
             return await navigator.recovery_prompt(message, message.from_user.id)
         message, _ = await navigator.enter(message, message.from_user.id, state, "home")
-        text, markup = home_panel.home()
+        text, markup = home_panel.home(owner=message.from_user.id)
         await message.answer(text, reply_markup=markup)
 
     @router.message(Command("status"))
@@ -168,7 +168,7 @@ def create_router(store, api, products, synchronizer):
         if panel.get("id"):
             store.set_setting(key, {"route": None, "history": [], "abandoned_id": panel["id"]})
         message, _ = await navigator.enter(message, message.from_user.id, state, "home")
-        text, markup = home_panel.home()
+        text, markup = home_panel.home(owner=message.from_user.id)
         await message.answer(text, reply_markup=markup)
 
     @router.callback_query()
@@ -282,7 +282,7 @@ def create_router(store, api, products, synchronizer):
                 await state.clear()
             if action == "home":
                 await state.clear()
-                text, markup = home_panel.home()
+                text, markup = home_panel.home(owner=owner)
                 return await display(message, text, markup, not preserve)
             if action in {"more", "attention", "tools"} or action.startswith(("tools:", "attention:")):
                 await state.clear()

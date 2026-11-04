@@ -328,6 +328,16 @@ def profit_statistics(store, actor, account_id, days=7, at=None):
     return result
 
 
+def cache_shop_profit(store, account_id):
+    """Observed historical evidence only, never a spending/delivery permission."""
+    for owner in store.rows("SELECT user_id FROM administrators"):
+        result = profit_statistics(store, owner["user_id"], account_id, days=0)
+        store.set_setting(
+            f"shop:profit:{account_id}:{owner['user_id']}",
+            {**result, "profit": str(result["profit"]), "at": now()},
+        )
+
+
 def settlement_statistics(store, actor, account_id, days=7, at=None):
     if not store.rows("SELECT 1 FROM administrators WHERE user_id=?", (actor,)):
         raise Conflict("Доступ закрыт")

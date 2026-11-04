@@ -65,6 +65,10 @@ class TransactionWorker:
             except (ValueError, TypeError, KeyError, AttributeError):
                 self.health = {"status": "ERROR", "at": now(), "code": "TRANSACTION_SCHEMA_ERROR"}
             self.store.set_setting("transactions:health", self.health)
+            if self.health["status"] == "OK":
+                from app.services.order_finance import cache_shop_profit
+
+                cache_shop_profit(self.store, account_id)
 
     async def run(self, stop):
         failures = 0

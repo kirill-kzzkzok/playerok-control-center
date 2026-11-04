@@ -132,8 +132,83 @@ class HomePanel:
                 rows.append([("⚠️ " + label + " требует проверки", "diagnostics:workers")])
         return rows
 
-    def home(self):
-        problems = self.problems()
+    def overview(self, owner, *, paid_problems=0):
+        from app.services.product_readiness import fresh
+        from app.services.statistics import parsed_time
+        from app.telegram.presentation import local_time
+
+        account = getattr(self.api.account, "id", None)
+        cache = self.store.setting("ui:catalog:" + str(account), {})
+        observed = self.store.setting("shop:active:" + str(account), {})
+        observations = []
+        if fresh(observed.get("at")):
+            observations.append((parsed_time(observed["at"]), observed.get("count")))
+        if cache.get("complete") and fresh(cache.get("at")):
+            observations.append(
+                (
+                    parsed_time(cache["at"]),
+                    sum(item.get("status") == "APPROVED" for item in cache.get("items", [])),
+                )
+            )
+        complete = self.store.setting("logical:scan:" + str(account) + ":completed", {})
+        if complete.get("generation") and fresh(complete.get("at")):
+            count = self.store.rows(
+                "SELECT COUNT(*) AS n FROM logical_scan_items WHERE account_id=? AND generation=? "
+                "AND json_extract(payload,'$.status')='APPROVED' "
+                "AND json_extract(payload,'$.deleted_at') IS NULL",
+                (account, complete["generation"]),
+            )[0]["n"]
+            observations.append((parsed_time(complete["at"]), count))
+        active = max(observations, key=lambda observation: observation[0])[1] if observations else None
+        paid = self.store.rows(
+            "SELECT COUNT(*) AS n FROM orders WHERE status IN ('PAID','SENT') "
+            "AND json_extract(payload,'$.direction')='OUT' "
+            "AND json_extract(payload,'$.item.user.id')=?",
+            (account,),
+        )[0]["n"]
+        text = "\n\n📦 Активные товары: " + (str(active) if active is not None else "обновляем данные")
+        text += f"\n🛒 Оплаченные заказы: {paid}"
+        if paid_problems:
+            text += f" · требуют действия: {paid_problems}"
+        enabled = self.store.rows(
+            "SELECT COUNT(*) AS n FROM logical_products WHERE account_id=? AND enabled=1", (account,)
+        )[0]["n"]
+        text += f"\n⚡ Автовыдача включена у товаров: {enabled}"
+        if enabled and (
+            not getattr(self.api.account, "writes_enabled", False)
+            or not getattr(self.api.account, "automation_enabled", False)
+        ):
+            text += "\n⏸ Запуск автоматики запрещён настройками подключения"
+        elif enabled and not getattr(self.api.account, "connection_verified", False):
+            text += "\n🔄 Ожидаем подтверждения подключения"
+        has_gifts = self.store.rows("SELECT 1 FROM gift_listings LIMIT 1")
+        if has_gifts and self.store.setting("gifts:stopped", True):
+            text += "\n⛔ Подарочные покупки остановлены владельцем"
+        elif has_gifts and self.store.setting("gifts:paused", False):
+            text += "\n⏸ Подарочные покупки временно приостановлены"
+        balance = self.store.setting("gifts:balance", {})
+        if type(balance.get("stars")) is int and fresh(balance.get("at")):
+            text += f"\n⭐ Баланс: {balance['stars']} ⭐"
+        else:
+            text += "\n⭐ Баланс: обновляем данные"
+        profit = self.store.setting(f"shop:profit:{account}:{owner}", {}) if owner else {}
+        if not fresh(profit.get("at")):
+            text += "\n💰 Прибыль: ожидаем подтверждённые данные"
+        else:
+            missing = profit["incomplete_orders"] + profit["unattributed_orders"]
+            if missing and not profit["reviewed_orders"]:
+                text += f"\n💰 Прибыль: не хватает данных по {missing} сделкам"
+            else:
+                text += "\n💰 Подтверждённая прибыль за всё время: " + escaped(profit["profit"], 30) + " ₽"
+                if missing:
+                    text += f" · ещё {missing} сделок без полного расчёта"
+            text += "\nРасчёт: " + local_time(profit["at"])
+        return text
+
+    def home(self, owner=None):
+        paid = self.paid_issues()
+        paid_total = paid[0]["total"] if paid else 0
+        problems = self.problems(include_paid=False) or bool(paid_total)
         connection = connection_summary(self.api)
         note = (
             "Есть вопросы, требующие решения."
@@ -145,7 +220,14 @@ class HomePanel:
                 else "Проверьте подключение в профиле."
             )
         )
-        return "🏠 <b>Мой магазин</b>\n\n" + connection + "\n" + note, main_menu(attention=bool(problems))
+        return (
+            "🏠 <b>Мой магазин</b>\n\n"
+            + connection
+            + self.overview(owner, paid_problems=paid_total)
+            + "\n"
+            + note,
+            main_menu(attention=bool(problems)),
+        )
 
     def show(self, action, owner):
         if not self.store.rows("SELECT 1 FROM administrators WHERE user_id=?", (owner,)):
