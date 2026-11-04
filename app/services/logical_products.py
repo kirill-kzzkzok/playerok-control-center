@@ -878,7 +878,10 @@ class LogicalProducts:
         # Description is marketing text, not delivery content. Never infer a
         # new Gift, stock unit or recipient from it; preserve the approved config.
         if (
-            product["source_order_id"]
+            product["state"] != "VERIFIED"
+            or not product["verified_at"]
+            or product["config_revision"] != product["revision"]
+            or product["source_order_id"]
             or product["error_code"] not in {None, "RELIST_CONFIRMATION_REQUIRED"}
             or marker(item.get("name")) != product["code"]
             or item.get("deleted_at")
@@ -886,7 +889,12 @@ class LogicalProducts:
         ):
             return False
         self.authority(product["owner_id"], product["account_id"])
-        self._verify_listing(product, {**item, "name": product["title_snapshot"]}, check_description=False)
+        try:
+            self._verify_listing(
+                product, {**item, "name": product["title_snapshot"]}, check_description=False
+            )
+        except (ValueError, KeyError, TypeError):
+            return False  # Preserve the existing critical-reconfiguration route.
         proof = digest(encode(product))
         expected = {key: item.get(key) for key in ("id", "name", "description", "status", "deleted_at")}
         identity = critical(item)
@@ -1278,6 +1286,15 @@ class LogicalProducts:
             raise Conflict("Нет подтверждённого исходного объявления для наследования")
         if not isinstance(item.get("description"), str):
             raise Conflict("Описание нового объявления не получено; ожидаем полную серверную карточку")
+        if source_order_id and (
+            any(link["description_sha256"] != digest(item["description"]) for link in links)
+            or not any(
+                link["title_snapshot"] == marked_title(item["name"], product["code"]) for link in links
+            )
+        ):
+            # A private purchased snapshot cannot inherit a later marketing
+            # edit of the public listing. Preserve its original identity proof.
+            raise Conflict("Снимок оплаченного товара отличается от подтверждённого объявления")
         if any(link["description_sha256"] != digest(item["description"]) for link in links) or not any(
             link["title_snapshot"] == marked_title(item["name"], product["code"]) for link in links
         ):

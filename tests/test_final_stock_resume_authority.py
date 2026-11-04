@@ -37,7 +37,7 @@ async def test_stock_resume_cannot_ignore_changed_logical_identity(shop):
         Orders.empty_stock(db, "lot", "no-order")
     await r.ui.click("stock:resume:lot")
     confirmation = next(key for key in buttons(r.session.last_panel) if key.startswith("stock:resumeok:"))
-    r.api.item["description"] += " changed by another client"
+    r.api.item["attributes"] = {"delivery-critical": "changed by another client"}
     await r.ui.click(confirmation)
     assert r.store.setting("delivery:lot:enabled") is False
     assert not r.api.messages and not r.api.remote.payments

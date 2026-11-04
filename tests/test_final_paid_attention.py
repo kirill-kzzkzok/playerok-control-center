@@ -41,7 +41,7 @@ async def test_missing_gift_recipient_is_visible_to_owner_without_a_stars_paymen
 async def test_blocked_paid_order_is_visible_even_if_notification_is_missing(shop):
     r = await shop()
     await setup_ui(r, "unique_stock")
-    r.api.item["description"] = "Внешнее критическое изменение описания"
+    r.api.item["attributes"] = {"delivery-critical": "changed"}
     Orders(r.store).ingest(r.api.order("blocked-paid"))
     await EnrollmentWorker(r.store, r.api).once()
     assert r.store.rows("SELECT status FROM auto_enrollment") == [{"status": "BLOCKED"}]
@@ -55,7 +55,7 @@ async def test_blocked_paid_order_is_visible_even_if_notification_is_missing(sho
     assert "1" in r.session.last_panel.text
     await r.ui.click("order:blocked-paid")
     assert "Статус: Оплачен" in r.session.last_panel.text
-    assert "Изменилось описание" in r.session.last_panel.text
+    assert "характеристики или поля получения" in r.session.last_panel.text
     assert not r.api.messages and not r.api.remote.payments
 
 
@@ -102,7 +102,7 @@ async def test_unknown_stock_send_and_blocked_chain_remain_visible_when_telegram
 async def test_closed_order_with_stale_blocked_enrollment_is_not_counted_as_unpaid_problem(shop):
     r = await shop()
     await setup_ui(r, "unique_stock")
-    r.api.item["description"] = "Изменено снаружи"
+    r.api.item["attributes"] = {"delivery-critical": "changed outside"}
     order = r.api.order("closed")
     Orders(r.store).ingest(order)
     await EnrollmentWorker(r.store, r.api).once()
@@ -136,7 +136,7 @@ async def test_needs_fulfillment_order_is_actionable_after_confirmed_delivery(sh
 async def test_attention_paginates_real_paid_problems_without_page_size_counter(shop):
     r = await shop()
     await setup_ui(r, "unique_stock")
-    r.api.item["description"] = "Изменение критического описания"
+    r.api.item["attributes"] = {"delivery-critical": "changed"}
     for index in range(12):
         Orders(r.store).ingest(r.api.order("blocked-" + str(index)))
     for _ in range(3):
