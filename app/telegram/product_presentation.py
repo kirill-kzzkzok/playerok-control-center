@@ -25,12 +25,17 @@ def summary(result, *, compact=False):
     if result["mode"] == "manual":
         text = "Выдача: вручную\nАвтоматическая выдача не настроена."
     problems = result["problems"]
+    waiting = {"IN_PROGRESS", "GIFT_IN_PROGRESS"}
+    if result["state"] == "UNKNOWN" and any(p["code"] == "GIFT_IN_PROGRESS" for p in problems):
+        text = (
+            "Способ выдачи: " + MODES[result["mode"]] + "\n⏳ Отправляем подарок, следующие покупки ожидают"
+        )
     actionable = [p for p in problems if not p["unknown"] or p["code"] == "CHECK_FAILED"]
     if actionable:
         text += (
             f"\n{'Перед включением' if result['state'] == 'OFF' else 'Требует внимания'}: {len(actionable)}"
         )
-    if any(p["unknown"] and p["code"] != "CHECK_FAILED" for p in problems):
+    if any(p["unknown"] and p["code"] not in waiting | {"CHECK_FAILED"} for p in problems):
         text += (
             "\nПроверки актуальности обновляются автоматически."
             if result["enabled"]

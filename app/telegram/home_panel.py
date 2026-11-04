@@ -30,6 +30,15 @@ class HomePanel:
             "(g.state='UNCERTAIN' OR g.refund_state='UNCERTAIN')) AS payment_unknown, "
             "EXISTS(SELECT 1 FROM gift_jobs g WHERE g.order_id=o.id "
             "AND g.state IN ('BLOCKED','INVALID_RECIPIENT')) AS gift_blocked, "
+            "EXISTS(SELECT 1 FROM gift_listings g "
+            "LEFT JOIN logical_listings l ON l.item_id=g.item_id "
+            "LEFT JOIN logical_products p ON p.id=l.product_id "
+            "WHERE (g.item_id=o.item_id OR EXISTS(SELECT 1 FROM logical_order_scopes s "
+            "WHERE s.order_id=o.id AND s.product_id=p.id)) "
+            "AND (g.enabled=0 OR p.enabled=0 OR EXISTS(SELECT 1 FROM settings st "
+            "WHERE st.key='delivery:'||g.item_id||':enabled' AND st.value='false')) "
+            "AND NOT EXISTS(SELECT 1 FROM gift_jobs j WHERE j.order_id=o.id AND j.state='SUCCEEDED')) "
+            "AS stopped_delivery, "
             "EXISTS(SELECT 1 FROM (" + DELAYED_PREFLIGHT_SQL + ") q WHERE q.target=o.id) AS delayed, "
             "EXISTS(SELECT 1 FROM gift_listings g JOIN logical_listings l ON l.item_id=g.item_id "
             "JOIN logical_products p ON p.id=l.product_id WHERE g.item_id=o.item_id "
@@ -37,7 +46,7 @@ class HomePanel:
             "AND NOT EXISTS(SELECT 1 FROM gift_jobs j WHERE j.order_id=o.id)) AS binding_unverified FROM orders o), "
             "actionable AS (SELECT * FROM issues WHERE uncertain OR payment_unknown OR "
             "status IN ('PAID','SENT') AND (enrollment OR chain IN ('BLOCKED','NEEDS_FULFILLMENT') "
-            "OR quarantine OR gift_blocked OR binding_unverified OR delayed)) "
+            "OR quarantine OR gift_blocked OR binding_unverified OR delayed OR stopped_delivery)) "
             "SELECT *,COUNT(*) OVER() AS total FROM actionable "
             "ORDER BY (uncertain OR payment_unknown OR quarantine) DESC,id LIMIT 10 OFFSET ?",
             (time.time(), page * 10),
@@ -52,6 +61,8 @@ class HomePanel:
             reasons.append("Выдача запаса требует проверки; данные остаются в карантине")
         if row.get("delayed"):
             reasons.append("Выдача долго ожидает соединения. Безопасные проверки продолжаются автоматически")
+        if row.get("stopped_delivery"):
+            reasons.append("Выдача товара выключена, но оплаченный заказ ещё не выдан")
         if row["enrollment"] or row["chain"] == "BLOCKED":
             reasons.append("Оплаченная выдача заблокирована. Проверьте причину в заказе")
         if row["chain"] == "NEEDS_FULFILLMENT":

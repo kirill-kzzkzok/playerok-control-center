@@ -352,6 +352,7 @@ class ProductReadiness:
                 route,
                 terminal=uncertain,
                 blocking=uncertain,
+                unknown=not uncertain,
             )
         if self.store.rows(
             f"SELECT 1 FROM delivery_chains WHERE item_id IN ({marks}) AND status='BLOCKED' LIMIT 1", ids
@@ -426,14 +427,22 @@ class ProductReadiness:
                     "gft:settings",
                 )
             if self.store.rows(
-                "SELECT 1 FROM gift_jobs WHERE state IN ('SPENDING','UNCERTAIN') OR refund_state='UNCERTAIN' LIMIT 1"
+                "SELECT 1 FROM gift_jobs WHERE state='UNCERTAIN' OR refund_state='UNCERTAIN' LIMIT 1"
             ):
                 add(
                     "GIFT_UNCERTAIN",
-                    "Есть начатый платёж или неизвестный результат. Новые покупки заблокированы.",
+                    "Есть неизвестный результат платежа. Новые покупки заблокированы до сверки.",
                     "Проверить подарочные операции",
                     "gft:list:all:0",
                     terminal=True,
+                )
+            elif self.store.rows("SELECT 1 FROM gift_jobs WHERE state='SPENDING' LIMIT 1"):
+                add(
+                    "GIFT_IN_PROGRESS",
+                    "Отправляем подарок. Следующие покупки ожидают завершения текущей отправки.",
+                    "Посмотреть отправку",
+                    "gft:list:all:0",
+                    unknown=True,
                 )
             reserved = self.store.rows("SELECT COALESCE(SUM(reserved_stars),0) AS n FROM gift_jobs")[0]["n"]
             if type(balance.get("stars")) is int:

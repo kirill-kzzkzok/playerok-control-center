@@ -1329,6 +1329,12 @@ class LogicalProducts:
         binding = self.listing(item_id)
         if not binding:
             return None
+        # Empty stock closes admission for new orders, not a previously reserved
+        # chain. Gifts have no stock reservation and must obey this gate at send.
+        if (not order_id or handler == "telegram_gifts") and self.store.setting(
+            "delivery:" + item_id + ":enabled", True
+        ) is False:
+            raise Conflict("Выдача товара выключена владельцем")
         if binding["state"] == "LEGACY" or len(binding["code"]) != 3:
             raise Conflict("Требуется подтверждённый код в названии товара")
         self.authority(binding["owner_id"], binding["account_id"])
