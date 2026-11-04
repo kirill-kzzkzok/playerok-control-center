@@ -109,7 +109,8 @@ async def test_new_modern_gift_draft_is_visible_before_arming(shop):
     assert "gft:item:item" in buttons(r.session.calls[-1])
     await r.ui.click("gft:item:item")
     assert "logical_view" in await r.state.get_data()
-    assert "Постоянный код" in r.session.calls[-1].text
+    product = LogicalProducts(r.store, r.api).listing("item")
+    assert "[" + product["code"] + "]" in r.session.calls[-1].text
     assert not r.api.published and not r.remote.payments
 
 

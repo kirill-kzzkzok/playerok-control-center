@@ -78,7 +78,9 @@ class EnrollmentWorker:
             return 0
         self.discover()
         processed = 0
-        for _ in range(4):
+        # Match the bounded discovery page: four admissions per10s left a
+        # healthy burst of50 paid orders waiting over two minutes.
+        for _ in range(20):
             row = self.claim()
             if not row:
                 break
