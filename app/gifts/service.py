@@ -271,22 +271,40 @@ class GiftService:
         self.store.set_setting("gifts:limits", {"order": per_order, "day": daily})
 
     def runtime(self):
-        return (
-            self.settings.payment_enabled
-            and (
-                self.settings.telegram_transport != "localvpn"
-                or (active_proxy.get() is not None and active_proxy.get().ready)
-            )
-            and getattr(self.api.account, "writes_enabled", False)
+        return self.runtime_reason() is None
+
+    def runtime_reason(self):
+        """Same admission gates, distinguishing owner prohibitions from free-read waits."""
+        if not self.settings.payment_enabled or self.store.setting("gifts:stopped", True):
+            return "AUTOMATION_STOPPED_OR_STALE"
+        expected_account = self.store.setting("playerok:account_id")
+        if expected_account and self.api.account.id and self.api.account.id != expected_account:
+            return "AUTOMATION_STOPPED_OR_STALE"
+        if not (
+            getattr(self.api.account, "writes_enabled", False)
             and getattr(self.api.account, "automation_enabled", False)
-            and not self.store.setting("gifts:stopped", True)
-            and not self.store.setting("gifts:paused", False)
-            and bool(self.store.setting("orders:last_complete_sync"))
-            and not orders_sync_failed(self.store)
-            and not self.store.rows(
-                "SELECT 1 FROM gift_jobs WHERE state='UNCERTAIN' OR refund_state='UNCERTAIN' LIMIT 1"
-            )
-        )
+        ):
+            connection = getattr(self.api, "connection", None)
+            if (
+                connection
+                and getattr(connection, "desired_writes", False)
+                and getattr(connection, "desired_automation", False)
+            ):
+                return "CONNECTION_NOT_VERIFIED"
+            return "AUTOMATION_STOPPED_OR_STALE"
+        if self.store.setting("gifts:paused", False):
+            return "GIFT_TEMPORARY_PAUSE"
+        if self.settings.telegram_transport == "localvpn" and not (
+            active_proxy.get() is not None and active_proxy.get().ready
+        ):
+            return "PROXY_UNAVAILABLE"
+        if not self.store.setting("orders:last_complete_sync") or orders_sync_failed(self.store):
+            return "GIFT_SYNC_PENDING"
+        if self.store.rows(
+            "SELECT 1 FROM gift_jobs WHERE state='UNCERTAIN' OR refund_state='UNCERTAIN' LIMIT 1"
+        ):
+            return "PAYMENT_LOCKED"
+        return None
 
     def pause(self, owner, paused):
         """Temporary admission gate, distinct from the destructive emergency STOP."""
@@ -505,8 +523,7 @@ class GiftService:
         l = self.listing(j["item_id"])
         lease = self.store.rows("SELECT * FROM outbox WHERE id=?", (action["id"],))[0]
         if (
-            not self.runtime()
-            or not l
+            not l
             or not l["enabled"]
             or l["revision"] != j["listing_revision"]
             or l["gift_code"] != j["gift_code"]
@@ -519,6 +536,9 @@ class GiftService:
             or j["state"] not in ({"SPENDING"} if spending else {"PENDING", "CHECKING"})
         ):
             raise GiftFailure("AUTOMATION_STOPPED_OR_STALE")
+        reason = self.runtime_reason()
+        if reason is not None:
+            raise GiftFailure(reason)
         local = self.store.rows("SELECT status,payload FROM orders WHERE id=?", (j["order_id"],))[0]
         if local["status"] != "PAID" or self.store.rows(
             "SELECT 1 FROM order_annotations WHERE order_id=? AND problem=1", (j["order_id"],)

@@ -1,6 +1,43 @@
 """Atomic gift journal hooks called inside Store's existing finish/recover transaction."""
 
+import json
+import uuid
+
 from app.database.store import encode, now
+
+DELAYED_PREFLIGHT_SQL = (
+    "SELECT b.id,b.target FROM outbox b WHERE b.status='RETRYABLE_FAILED' AND b.kind='gift_send' "
+    "AND b.started_at IS NULL AND b.attempts>=3 AND julianday(b.created_at)<julianday('now','-5 minutes') "
+    "AND b.error_code NOT IN ('GIFT_TEMPORARY_PAUSE','PAYMENT_LOCKED') "
+    "AND EXISTS(SELECT 1 FROM gift_jobs g JOIN gift_listings l ON l.item_id=g.item_id "
+    "WHERE g.operation_id=b.id AND l.enabled=1 AND g.state IN ('PENDING','CHECKING')) "
+    "AND COALESCE((SELECT json_extract(value,'$') FROM settings WHERE key='gifts:stopped'),1)=0 "
+    "AND COALESCE((SELECT json_extract(value,'$') FROM settings WHERE key='gifts:paused'),0)=0"
+)
+
+
+def track_preflight_wait(db):
+    """One diagnostic incident for a prolonged outage, not one alert per paid order."""
+    waiting = db.execute(DELAYED_PREFLIGHT_SQL).fetchall()
+    row = db.execute("SELECT value FROM settings WHERE key='gifts:preflight_incident'").fetchone()
+    try:
+        incident = json.loads(row[0]) if row else {}
+    except (ValueError, TypeError):
+        incident = {}
+    if not waiting:
+        if row:
+            db.execute("UPDATE settings SET value='{}' WHERE key='gifts:preflight_incident'")
+        return
+    if not isinstance(incident, dict) or not isinstance(incident.get("id"), str):
+        incident = {"id": uuid.uuid4().hex, "at": now()}
+        db.execute(
+            "INSERT INTO settings VALUES('gifts:preflight_incident',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (encode(incident),),
+        )
+    db.execute(
+        "INSERT OR IGNORE INTO inbox(key,kind,payload,received_at,processed_at) VALUES(?,'delivery_delayed',?,?,?)",
+        ("gift-wait:" + incident["id"], encode({"incident": incident["id"]}), now(), now()),
+    )
 
 
 def unstarted_preflight(db, action):

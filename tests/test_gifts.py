@@ -493,7 +493,7 @@ async def test_account_switch_blocks_payment_and_receipt_adoption(rig):
     assert not r.remote.payments and r.service.job("order")["error_code"] == "PERSONAL_ACCOUNT_CHANGED"
 
 
-async def test_two_concurrent_orders_payment_lock_and_explicit_safe_retry(rig):
+async def test_two_concurrent_orders_payment_lock_and_automatic_safe_retry(rig):
     r = rig
     await enroll(r)
     await enroll(r, ident="order2")
@@ -512,11 +512,17 @@ async def test_two_concurrent_orders_payment_lock_and_explicit_safe_retry(rig):
     waiting = next(i for i in ("order", "order2") if i != spending)
     await r.worker.once()
     assert r.service.job(waiting)["error_code"] == "PAYMENT_LOCKED"
+    assert r.service.job(waiting)["state"] == "PENDING"
     assert r.service.job(spending)["state"] == "SPENDING"
+    assert not r.remote.payments
+    operation = r.service.job(waiting)["operation_id"]
     release.set()
     await first
-    r.service.retry_preflight(7, waiting)
+    # A proven free check now waits in the original operation with backoff;
+    # no new owner confirmation or new operation is needed after the lock clears.
+    r.store.execute("UPDATE outbox SET retry_at=0 WHERE id=?", (operation,))
     await r.worker.once()
+    assert r.service.job(waiting)["operation_id"] == operation
     assert len(r.remote.payments) == 2
     assert all(r.service.job(i)["state"] == "SUCCEEDED" for i in ["order", "order2"])
 

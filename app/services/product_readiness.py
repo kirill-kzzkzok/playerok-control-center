@@ -366,6 +366,14 @@ class ProductReadiness:
         balance = self.store.setting("gifts:balance", {})
         required = reserved = shortage = None
         if mode == "telegram_gifts":
+            if self.gifts.runtime_reason() == "PROXY_UNAVAILABLE":
+                add(
+                    "PROXY_UNAVAILABLE",
+                    "Соединение Telegram восстанавливается. Новые отправки ожидают подключения.",
+                    "Проверить подключение",
+                    "rd:check:" + ident,
+                    unknown=True,
+                )
             required = (
                 gift["approved_stars"]
                 if gift and not prepared_gift

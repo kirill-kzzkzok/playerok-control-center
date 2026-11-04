@@ -9,6 +9,7 @@ from html import escape
 from aiogram.exceptions import TelegramBadRequest
 
 from app.database.store import encode
+from app.gifts.outcomes import DELAYED_PREFLIGHT_SQL
 from app.services.chat_events import system_event
 from app.services.notification_preferences import NotificationPreferences, notification_baseline
 from app.telegram.chat_cards import ChatCards
@@ -41,7 +42,7 @@ class Notifications:
         # Startup, not the last inaccessible historical chat, defines the boundary.
         boundary = notification_baseline(self.store)
         critical = (
-            "(i.kind IN ('worker_failed','operation_uncertain','stock_empty','order_problem',"
+            "(i.kind IN ('worker_failed','operation_uncertain','stock_empty','order_problem','delivery_delayed',"
             "'promotion_guard','promotion_error','enrollment_blocked','logical_product_blocked') OR "
             "(i.kind='message' AND json_extract(i.payload,'$.user') IS NULL "
             "AND json_extract(i.payload,'$.text')='{{DEAL_HAS_PROBLEM}}'))"
@@ -73,7 +74,7 @@ class Notifications:
                 )
             initialized = True
         priority = (
-            "CASE WHEN i.kind IN ('worker_failed','operation_uncertain','order_problem',"
+            "CASE WHEN i.kind IN ('worker_failed','operation_uncertain','order_problem','delivery_delayed',"
             "'promotion_guard','enrollment_blocked','logical_product_blocked') "
             "OR (i.kind='order' AND json_extract(i.payload,'$.status')='PAID') "
             "OR (i.kind='message' AND json_extract(i.payload,'$.text')='{{DEAL_HAS_PROBLEM}}') THEN 1 "
@@ -284,6 +285,27 @@ class Notifications:
                     continue
                 text = "❗ <b>Проблема в сделке Playerok</b>\n" + escaped(payload["item_name"], 300)
                 markup = keyboard([[("Открыть заказ", "order:" + payload["order_id"])]])
+            elif event["kind"] == "delivery_delayed":
+                incident = self.store.setting("gifts:preflight_incident", {})
+                waiting = self.store.rows(DELAYED_PREFLIGHT_SQL)
+                if not waiting or incident.get("id") != payload.get("incident"):
+                    if not waiting:
+                        self.store.execute(
+                            "UPDATE settings SET value='{}' WHERE key='gifts:preflight_incident' AND json_extract(value,'$.id')=?",
+                            (payload.get("incident"),),
+                        )
+                    self.store.execute(
+                        "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT ?,user_id,'SKIPPED' FROM administrators",
+                        (event["key"],),
+                    )
+                    continue
+                text = (
+                    "⚠️ <b>Подарки ожидают восстановления</b>\n"
+                    + f"Заказов с задержкой более пяти минут: {len(waiting)}.\n"
+                    + "Оплата этих подарков ещё не начиналась. Бот продолжает безопасные проверки. "
+                    + "Если подключение не восстанавливается, проверьте прокси и соединение. Повторно включать товары не нужно."
+                )
+                markup = keyboard([[("Оплаченные заказы", "orderpage:0:PAID")]])
             elif event["kind"] == "operation_uncertain":
                 ident = payload["operation_id"]
                 current = self.store.rows("SELECT status FROM outbox WHERE id=?", (ident,))

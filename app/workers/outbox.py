@@ -929,25 +929,35 @@ class OutboxWorker:
                 "RETRYABLE_FAILED"
                 if (
                     action["kind"] in {"delivery", "delivery_text", "chain_message", "reply", "mark_read"}
+                    and action["attempts"] < 4
                     or gift_retry
-                    and action["attempts"] + 1 < 4
                 )
                 and not error.uncertain
-                and error.code
-                in {
-                    "NETWORK_ERROR",
-                    "HTTP_503",
-                    "HTTP_502",
-                    "HTTP_504",
-                    "HTTP_500",
-                    "HTTP_429",
-                    "RATE_LIMITED",
-                    "CONNECTION_NOT_VERIFIED",
-                    "SESSION_EXPIRED",
-                    "UNAUTHORIZED_OR_CHALLENGE",
-                    "GIFT_PREFLIGHT_NETWORK",
-                }
-                and action["attempts"] < 4
+                and (
+                    error.code
+                    in {
+                        "NETWORK_ERROR",
+                        "HTTP_503",
+                        "HTTP_502",
+                        "HTTP_504",
+                        "HTTP_500",
+                        "HTTP_429",
+                        "RATE_LIMITED",
+                        "CONNECTION_NOT_VERIFIED",
+                        "SESSION_EXPIRED",
+                        "UNAUTHORIZED_OR_CHALLENGE",
+                        "GIFT_PREFLIGHT_NETWORK",
+                    }
+                    or gift_retry
+                    and error.code
+                    in {
+                        "PROXY_UNAVAILABLE",
+                        "MTPROTO_TIMEOUT",
+                        "GIFT_TEMPORARY_PAUSE",
+                        "GIFT_SYNC_PENDING",
+                        "PAYMENT_LOCKED",
+                    }
+                )
                 else "UNCERTAIN"
                 if error.uncertain
                 else "PERMANENT_FAILED",

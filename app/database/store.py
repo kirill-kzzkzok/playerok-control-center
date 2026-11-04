@@ -458,12 +458,7 @@ class Store:
                 status = "PERMANENT_FAILED"  # Proven no POST; hold reserve for explicit owner recovery.
             if status == "RETRYABLE_FAILED" and evidence["started_at"] is not None:
                 status = "UNCERTAIN"
-            if (
-                status == "UNCERTAIN"
-                and error == "PROCESS_CANCELLED"
-                and evidence["kind"] == "gift_send"
-                and evidence["attempts"] < 4
-            ):
+            if status == "UNCERTAIN" and error == "PROCESS_CANCELLED" and evidence["kind"] == "gift_send":
                 from app.gifts.outcomes import unstarted_preflight
 
                 if unstarted_preflight(db, {"id": ident}):
@@ -528,9 +523,11 @@ class Store:
                     else "FAILED",
                 )
             if row["kind"] in {"gift_send", "gift_refund"}:
-                from app.gifts.outcomes import finish
+                from app.gifts.outcomes import finish, track_preflight_wait
 
                 finish(db, {**dict(row), "id": ident}, status, result, error, store=self)
+                if row["kind"] == "gift_send":
+                    track_preflight_wait(db)
             if row[0].startswith("delivery:"):
                 order = row[0].removeprefix("delivery:")
                 state = (
@@ -578,7 +575,7 @@ class Store:
                 (time.time(),),
             )
             for row in affected:
-                if row["kind"] == "gift_send" and row["attempts"] < 4:
+                if row["kind"] == "gift_send":
                     from app.gifts.outcomes import finish, unstarted_preflight
 
                     if unstarted_preflight(db, row):

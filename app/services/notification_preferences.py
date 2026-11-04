@@ -15,6 +15,7 @@ KINDS = {
     "stock_empty": "stock",
     "promotion_guard": "promotions",
     "enrollment_blocked": "enrollment",
+    "delivery_delayed": "enrollment",
 }
 
 
