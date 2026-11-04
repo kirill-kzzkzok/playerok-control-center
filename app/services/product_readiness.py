@@ -265,11 +265,12 @@ class ProductReadiness:
                     self.logical.verify_listing(product, item)
                     listing_verified = True
                 except (Conflict, ValueError) as exc:
+                    title_only = self.logical.title_change_allowed(product, item)
                     add(
                         "ITEM_CHANGED",
                         str(exc),
-                        "Проверить объявление",
-                        "lp:item:" + ident,
+                        "Подтвердить новое название" if title_only else "Проверить объявление",
+                        ("lp:title:" if title_only else "lp:item:") + ident,
                     )
             if not for_arm and enabled != projection_enabled:
                 add(

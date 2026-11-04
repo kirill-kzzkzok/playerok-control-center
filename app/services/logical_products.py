@@ -793,6 +793,83 @@ class LogicalProducts:
         ):
             raise Conflict("Код, описание или критичные параметры товара не подтверждены")
 
+    def verify_title_change(self, product, item):
+        """Narrow exception for an explicitly confirmed title, never delivery authority."""
+        if (
+            not product
+            or product["source_order_id"]
+            or product["error_code"] not in {None, "RELIST_CONFIRMATION_REQUIRED"}
+            or not product["title_snapshot"]
+            or item.get("id") != product["item_id"]
+            or marker(item.get("name")) != product["code"]
+            or item.get("deleted_at")
+            or item.get("status") not in {"APPROVED", "DRAFT"}
+        ):
+            raise Conflict("Изменение не ограничивается названием подтверждённого товара")
+        if self.store.rows(
+            "SELECT 1 FROM outbox WHERE target=? AND kind IN ('edit','edit_fields') "
+            "AND status IN ('PENDING','PROCESSING','RETRYABLE_FAILED','UNCERTAIN') LIMIT 1",
+            (product["item_id"],),
+        ):
+            raise Conflict("Сначала сверьте незавершённую правку. Повторная запись не выполняется")
+        # Validate the real marker above before substituting ONLY the old title.
+        # All other current server fields still pass the original binding guard.
+        self.verify_listing(product, {**item, "name": product["title_snapshot"]})
+
+    def title_change_allowed(self, product, item):
+        try:
+            self.verify_title_change(product, item)
+        except (ValueError, KeyError, TypeError):
+            return False
+        return item["name"] != product["title_snapshot"]
+
+    async def prepare_title_change(self, owner, item_id):
+        account = self.authority(owner)
+        product = self.listing(item_id)
+        if not product or product["owner_id"] != owner or product["account_id"] != account:
+            raise Conflict("Привязка товара принадлежит другому владельцу")
+        item = await self.api.call("get_item", id=item_id)
+        self.verify_title_change(product, item)
+        return {
+            "owner": owner,
+            "item": item_id,
+            "product": digest(encode(product)),
+            "old_title": product["title_snapshot"],
+            "title": item["name"],
+            "evidence": digest(
+                encode(
+                    {"critical": critical(item), "description": item["description"], "status": item["status"]}
+                )
+            ),
+        }
+
+    async def confirm_title_change(self, owner, prepared):
+        if prepared.get("owner") != owner:
+            raise Conflict("Подтверждение принадлежит другому владельцу")
+        observed = await self.prepare_title_change(owner, prepared["item"])
+        if observed != prepared:
+            raise Conflict("Товар, настройки или остановка изменились. Проверьте новое название заново")
+        with self.store.transaction() as db:
+            product = self.listing(prepared["item"])
+            if digest(encode(product)) != prepared["product"]:
+                raise Conflict("Настройки изменились во время проверки. Откройте товар заново")
+            self.authority(owner, product["account_id"])
+            # Recheck local pending mutations inside the same SQLite transaction.
+            if db.execute(
+                "SELECT 1 FROM outbox WHERE target=? AND kind IN ('edit','edit_fields') "
+                "AND status IN ('PENDING','PROCESSING','RETRYABLE_FAILED','UNCERTAIN') LIMIT 1",
+                (prepared["item"],),
+            ).fetchone():
+                raise Conflict("Есть незавершённая правка. Сначала сверьте её результат")
+            db.execute(
+                "UPDATE logical_listings SET title_snapshot=? WHERE item_id=? AND product_id=?",
+                (prepared["title"], prepared["item"], product["id"]),
+            )
+            db.execute(
+                "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'CONFIRM_LISTING_TITLE',?,?,?)",
+                (owner, prepared["item"], digest(prepared["title"]), now()),
+            )
+
     async def arm(self, owner, product_id, revision, *, inherit=False, item_id=None):
         product = self.product(product_id, owner)
         if json.loads(product["config"]).get("platform_only"):

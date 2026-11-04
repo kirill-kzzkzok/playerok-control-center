@@ -131,6 +131,8 @@ class LogicalProductsPanel:
             ]
             if not product["enabled"] and product["state"] == "VERIFIED" and not product["verified_at"]:
                 rows.insert(0, [("🔐 Подтвердить изменённый товар", prefix + "rebind")])
+            if self.service.title_change_allowed(product, item):
+                rows.insert(0, [("🔐 Подтвердить новое название", prefix + "title")])
             if platform:
                 rows.append([("Сменить способ выдачи", prefix + "configure")])
             elif product["handler"] != "manual":
@@ -160,7 +162,9 @@ class LogicalProductsPanel:
         from app.services.product_readiness import ProductReadiness
         from app.telegram.product_presentation import STATES
 
-        readiness = ProductReadiness(self.store, self.api).snapshot(item_id, item=item)
+        readiness_service = ProductReadiness(self.store, self.api)
+        readiness_service.remember_item(item)
+        readiness = readiness_service.snapshot(item_id, item=item)
         text += "\n" + STATES[readiness["state"]]
         if readiness["problems"]:
             text += "\n" + "\n".join("• " + escaped(p["text"], 180) for p in readiness["problems"][:6])
@@ -186,6 +190,10 @@ class LogicalProductsPanel:
 
     async def callback(self, action, owner, state):
         parts = action.split(":")
+        if len(parts) == 3 and parts[1] == "title":
+            await self.card(owner, parts[2], state)
+            view = (await state.get_data())["logical_view"]
+            return await self.callback("lp:" + view["nonce"] + ":title", owner, state)
         if len(parts) == 3 and parts[1] in {"method", "messages", "completion", "limits"}:
             await self.card(owner, parts[2], state)
             view = (await state.get_data())["logical_view"]
@@ -250,9 +258,54 @@ class LogicalProductsPanel:
         command, value = parts[2], parts[3] if len(parts) == 4 else None
         prefix = "lp:" + view["nonce"] + ":"
         product = self.service.product(view["product"], owner) if view.get("product") else None
+        if command == "title":
+            prepared = await self.service.prepare_title_change(owner, view["item"])
+            await state.update_data(logical_title=prepared)
+            config = json.loads(product["config"])
+            gift = (
+                "\nОтправляться будет: "
+                + escaped(gift_summary(config.get("bundle", [])), 250)
+                + f" · {sum(g['stars'] for g in config.get('bundle', []))} ⭐."
+                if product["handler"] == "telegram_gifts"
+                else ""
+            )
+            return (
+                "🔐 <b>Подтвердить новое название</b>\nБыло: "
+                + escaped(prepared["old_title"], 200)
+                + "\nСтало: "
+                + escaped(prepared["title"], 200)
+                + "\nКод, описание, категория и поля получения совпадают с привязкой."
+                + gift
+                + "\nНастроенный подарок не меняется. Подтверждайте только если он соответствует новому названию."
+                + "\nМеняется только подтверждённое название в боте. Разрешения и история сохраняются; новые отправки по-прежнему проходят все проверки.",
+                keyboard(
+                    [
+                        [("✅ Подтвердить новое название", prefix + "title_apply")],
+                        [("Остановить и открыть настройки", prefix + "stopconfigure")],
+                    ],
+                    back=("Отмена", "lp:item:" + view["item"]),
+                ),
+            )
+        if command == "title_apply":
+            prepared = (await state.get_data()).get("logical_title")
+            if not prepared or prepared.get("item") != view["item"]:
+                raise Conflict("Подтверждение названия устарело. Откройте проверку заново")
+            await self.service.confirm_title_change(owner, prepared)
+            await state.update_data(logical_title=None)
+            from app.services.product_readiness import ProductReadiness
+
+            # This is a fresh read-only check, NOT arm(). It also rechecks the
+            # full catalogue before clearing an existing relist-scan blocker.
+            await ProductReadiness(self.store, self.api).check(owner, view["item"], for_arm=True)
+            return await self.card(owner, view["item"], state)
+        if command == "stopconfigure":
+            if not product:
+                raise Conflict("Сначала откройте актуальную настройку товара")
+            self.service.stop(owner, product["id"])
+            return await self.callback(prefix + "configure", owner, state)
         if command == "rebind":
             if not product or product["enabled"]:
-                raise Conflict("Сначала остановите выдачу товара")
+                return await self.callback(prefix + "configure", owner, state)
             from app.services.products import Products
 
             Products(self.store, self.api).require_critical_edit(view["item"])
@@ -273,7 +326,17 @@ class LogicalProductsPanel:
             return self.preview(prepared, view)
         if command == "configure":
             if product and product["enabled"]:
-                raise Conflict("Сначала остановите выдачу товара. Уже начатые операции не будут повторяться")
+                return (
+                    (
+                        "Разрешение выдачи включено, но проверка привязки может временно блокировать отправку. "
+                        "Для изменения подарка или способа выдачи остановите новые отправки. "
+                        "Уже начатые операции и история сохраняются и не повторяются."
+                    ),
+                    keyboard(
+                        [[("⛔ Остановить и открыть настройки", prefix + "stopconfigure")]],
+                        back=("К товару", "lp:item:" + view["item"]),
+                    ),
+                )
             await state.update_data(logical_prepared=None, logical_stock_pending=None)
             rows = [[(label, prefix + "mode:" + handler)] for handler, label in MODES.items()]
             return "⚡ <b>Способ выдачи</b>\nВыберите, что получит покупатель.", keyboard(
@@ -312,7 +375,7 @@ class LogicalProductsPanel:
             )
         if command == "mode":
             if product and product["enabled"]:
-                raise Conflict("Сначала остановите текущую выдачу в настройках товара")
+                return await self.callback(prefix + "configure", owner, state)
             if value not in MODES:
                 raise Conflict("Неизвестный способ выдачи")
             config = json.loads(product["config"]) if product and product["handler"] == value else {}
