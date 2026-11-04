@@ -63,7 +63,9 @@ async def test_fixed_text_ui_preview_queues_real_edit_and_requires_separate_arm(
         await r.panel.callback(commit, 7, r.state)
     await OutboxWorker(r.store, Executor(r.store, r.api, Products(r.store, r.api))).once()
     text, markup = await r.panel.callback("lp:item:lot", 7, r.state)
-    assert "подтверждено Playerok" in text
+    product = r.store.rows("SELECT state,code,enabled FROM logical_products")[0]
+    assert product["state"] == "VERIFIED" and not product["enabled"]
+    assert "[" + product["code"] + "]" in text
     assert any(key.endswith(":arm") for key in callbacks(markup))
     assert len(r.api.mutations) == 1
 
@@ -195,7 +197,7 @@ async def test_explicit_enable_stop_and_confirmed_detach_preserve_listing(panel)
     product = r.store.rows("SELECT * FROM logical_products")[0]
     assert product["enabled"] == 1 and product["inherit_enabled"] == 1
     await r.panel.callback(next(key for key in callbacks(markup) if key.endswith(":stop")), 7, r.state)
-    _, markup = await r.panel.callback("lp:item:lot", 7, r.state)
+    _, markup = await r.panel.callback("lp:details:lot", 7, r.state)
     _, markup = await r.panel.callback(
         next(key for key in callbacks(markup) if key.endswith(":detach")), 7, r.state
     )

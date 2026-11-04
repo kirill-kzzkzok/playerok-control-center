@@ -10,9 +10,8 @@ shop = shop_fixture
 
 
 async def open_picker(r):
-    for route in ("items", "item:lot", "iv:delivery:lot", "lp:item:lot"):
+    for route in ("items", "item:lot", "iv:delivery:lot", "lp:method:lot"):
         await click(r, action=route)
-    await click(r, suffix=":configure")
     await click(r, suffix=":mode:telegram_gifts")
 
 

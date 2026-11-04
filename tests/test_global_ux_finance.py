@@ -79,7 +79,7 @@ async def test_global_withdrawal_selection_never_requests_amount(ux):
 
 async def test_item_exposes_net_calculator_on_primary_card(ux):
     await ux.ui.click("item:lot")
-    assert buttons(ux.session.calls[-1])["finance:lot"] == "💰 Сколько получу чистыми"
+    assert buttons(ux.session.calls[-1])["finance:lot"] == "💰 Прибыль"
 
 
 async def test_per_sale_forecast_quote_matches_display(ux):
@@ -322,7 +322,14 @@ async def test_explicit_navigation_reset_does_not_restore_money_confirmation(ux)
     await ux.ui.click(recover)
     assert not ux.store.setting("navigation:123:7").get("sending")
     assert await ux.state.get_data() == {}
-    assert set(buttons(ux.session.last_panel)) == {"items", "orders", "chats", "gft:home", "more"}
+    assert set(buttons(ux.session.last_panel)) == {
+        "items",
+        "orders",
+        "chats",
+        "promotions",
+        "stats:7",
+        "settings",
+    }
     assert not ux.store.rows("SELECT * FROM outbox")
 
 
@@ -359,13 +366,13 @@ async def test_offer_group_rejects_unconfirmed_or_different_product(ux, variant)
     assert not ux.store.rows("SELECT * FROM outbox")
 
 
-async def test_explicit_saved_item_filter_is_not_overwritten_by_temporary_browsing(ux):
+async def test_legacy_saved_filter_is_preserved_without_hiding_active_products_on_fresh_entry(ux):
     await ux.ui.click("items")
     await ux.ui.click("itemfilter:DRAFT")
     await ux.ui.click("il:remember")
     await ux.ui.click("itemfilter:APPROVED")
     await ux.ui.click("home")
     await ux.ui.click("items")
-    assert (await ux.state.get_data())["item_filters"]["status"] == "DRAFT"
+    assert (await ux.state.get_data())["item_filters"]["status"] == "APPROVED"
     assert ux.store.setting("ui:7:item_filters")["status"] == "DRAFT"
     assert not ux.store.rows("SELECT * FROM outbox")

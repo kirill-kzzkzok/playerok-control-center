@@ -52,13 +52,14 @@ async def test_item_offers_start_and_relisting_permission_without_claiming_platf
     # are configured there, rather than duplicated on the main card.
     assert "iv:delivery:lot" in visible
     assert (
-        "Код товара: " + r.store.rows("SELECT code FROM logical_products")[0]["code"]
-        in r.session.last_panel.text
+        "[" + r.store.rows("SELECT code FROM logical_products")[0]["code"] + "]" in r.session.last_panel.text
     )
     assert "Перевыставление включено" not in r.session.last_panel.text
     assert "private-text" not in r.session.last_panel.text
     await r.ui.click("iv:delivery:lot")
+    await click(r, action="lp:details:lot")
     assert "Наследование перевыставлений" in r.session.last_panel.text
+    await r.ui.click("lp:item:lot")
     await click(r, suffix=":arm")
     assert any(":enable:inherit" in key for key in buttons(r.session.last_panel))
     await click(r, suffix=":enable:inherit")

@@ -9,9 +9,13 @@ shop = shop_fixture
 async def test_launch_explains_both_inheritance_choices_without_implicitly_arming(shop):
     r = shop
     await r.create_and_prepare()
-    assert "каждое новое объявление проверяется отдельно" in r.session.last_panel.text
+    assert "перевыставления с тем же кодом" in r.session.last_panel.text
     product = LogicalProducts(r.store, r.api).listing("item")
     assert not product["inherit_enabled"] and not product["enabled"]
+    await r.launch_action("advanced")
+    await r.launch_action("inherit")
+    assert "каждое новое объявление проверяется отдельно" in r.session.last_panel.text
+    await r.launch_action("advanced")
     await r.launch_action("inherit")
     assert "перевыставления с тем же кодом" in r.session.last_panel.text
     assert "денежные разрешения" in r.session.last_panel.text

@@ -42,15 +42,17 @@ async def test_network_read_retry_rechecks_then_pays_exactly_once(shop):
     assert r.store.rows("SELECT started_at FROM outbox WHERE kind='gift_send'")[0]["started_at"]
 
 
-async def test_free_read_retries_are_bounded_and_never_pay(shop):
+async def test_free_read_retries_have_backoff_without_exhausting_or_paying(shop):
     r = await pending(shop)
     r.api.remote.resolve_error = TimeoutError()
     for _ in range(6):
         r.store.execute("UPDATE outbox SET retry_at=0 WHERE kind='gift_send'")
         await r.worker.once()
+        assert not await r.worker.once()  # Bounded frequency, no retry busy loop.
     assert r.store.rows("SELECT attempts,status FROM outbox WHERE kind='gift_send'") == [
-        {"attempts": 4, "status": "PERMANENT_FAILED"}
+        {"attempts": 6, "status": "RETRYABLE_FAILED"}
     ]
+    assert r.store.rows("SELECT started_at FROM outbox WHERE kind='gift_send'") == [{"started_at": None}]
     assert not r.api.remote.payments
 
 

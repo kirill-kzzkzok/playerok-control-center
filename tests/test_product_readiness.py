@@ -46,16 +46,19 @@ async def test_platform_optional_actions_do_not_create_false_problems(shop, repl
         assert result["state"] == "OFF"
 
 
-async def test_status_and_card_link_same_readonly_diagnostic_and_back(shop):
+async def test_status_opens_same_card_and_saved_diagnostic_callback_is_readonly(shop):
     r = await shop()
     await configure(r)
     mutations = len(r.api.mutations)
     await r.ui.message("/status")
-    assert "rd:check:lot" in buttons(r.session.last_panel)
-    await click(r, action="rd:check:lot")
-    assert "Проверка готовности" in r.session.last_panel.text
+    assert "item:lot" in buttons(r.session.last_panel)
     await click(r, action="item:lot")
-    assert "rd:check:lot" in buttons(r.session.last_panel)
+    assert "iv:delivery:lot" in buttons(r.session.last_panel)
+    await r.ui.click("rd:check:lot")  # Compatibility with an already-sent diagnostic button.
+    assert "Проверка готовности" in r.session.last_panel.text
+    back = next(key for key in buttons(r.session.last_panel) if key.startswith("nav:back:"))
+    await click(r, action=back)
+    assert "iv:delivery:lot" in buttons(r.session.last_panel)
     assert len(r.api.mutations) == mutations and not r.api.messages and not r.api.remote.payments
 
 
@@ -128,7 +131,7 @@ async def test_every_mode_navigation_refresh_restart_and_no_duplicate_side_effec
         assert not r.session.last_panel.text.startswith("❗")
     r.ui.dp = production_dispatcher(r.store, r.api)
     await r.ui.message("/status")
-    assert "rd:check:lot" in buttons(r.session.last_panel)
+    assert "item:lot" in buttons(r.session.last_panel)
     await click(r, action="item:lot")
     assert value is None or value not in r.session.last_panel.text
     assert r.store.rows("SELECT id,status FROM outbox") == before

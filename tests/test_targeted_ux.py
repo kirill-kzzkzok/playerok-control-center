@@ -237,7 +237,9 @@ async def test_moscow_dates_and_distinct_draft_labels(financial):
     await r.ui.message("/start")
     await r.ui.click("items")
     labels = [b.text for row in r.session.last_panel.reply_markup.inline_keyboard for b in row]
-    assert "💾 Локальные черновики" in labels and "Черновики на Playerok" in labels
+    assert "💾 Черновики" in labels
+    await r.ui.click("itemfilter:DRAFT")
+    assert "Черновики · локально и на Playerok" in r.session.last_panel.text
 
 
 async def test_legacy_server_change_after_preview_prevents_description_write(legacy):

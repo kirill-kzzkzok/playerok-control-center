@@ -40,6 +40,8 @@ async def test_caught_chain_failures_are_counted_coalesced_and_recover_without_d
         assert len(r.store.rows("SELECT * FROM inbox WHERE kind='worker_failed'")) == 1
         assert "broken-secret-policy" not in json.dumps(r.store.setting("runtime:cycle:chains"))
         await r.ui.click("home")
+        assert "Есть вопросы, требующие решения" in r.session.last_panel.text
+        await r.ui.click("orders")
         assert "attention" in buttons(r.session.last_panel)
         await r.ui.click("attention")
         assert "diagnostics:workers" in buttons(r.session.last_panel)

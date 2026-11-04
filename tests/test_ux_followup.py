@@ -62,7 +62,14 @@ async def test_start_exposes_explicit_menu_recovery_after_unknown_send(ux):
     action = next(k for k in buttons(ux.session.last_panel) if k.startswith("nav:recover:"))
     await ux.ui.click(action)
     assert not ux.store.setting("navigation:123:7").get("sending")
-    assert set(buttons(ux.session.last_panel)) == {"items", "orders", "chats", "gft:home", "more"}
+    assert set(buttons(ux.session.last_panel)) == {
+        "items",
+        "orders",
+        "chats",
+        "promotions",
+        "stats:7",
+        "settings",
+    }
     assert not ux.store.rows("SELECT * FROM outbox")
 
 
@@ -99,6 +106,9 @@ async def test_rank_proposes_related_offers_without_entering_numbers(ux):
 
 
 async def test_item_schedule_starts_with_single_participation_choice(ux):
+    from app.services.account_binding import bind_account
+
+    bind_account(ux.store, ux.api.account.id)
     ux.api.value["raw_price"] = 100
     original = ux.api.call
 
@@ -152,9 +162,11 @@ async def test_visible_routes_execute_real_dispatcher_and_context_back(ux, tmp_p
     from pathlib import Path
 
     from app.database.store import now
+    from app.services.account_binding import bind_account
     from app.services.orders import Orders
     from tests.test_withdrawals import snapshot
 
+    bind_account(ux.store, ux.api.account.id)
     ux.api.value["raw_price"] = 100
     original = ux.api.call
 
@@ -182,27 +194,27 @@ async def test_visible_routes_execute_real_dispatcher_and_context_back(ux, tmp_p
         (["items", "item:lot"], "Опубликован"),
         (["items", "item:lot", "iv:edit:lot"], "Что изменить"),
         (["items", "item:lot", "iv:delivery:lot"], "выдач"),
-        (["items", "item:lot", "iv:other:lot"], "Другие действия"),
+        (["items", "item:lot", "iv:edit:lot", "iv:other:lot"], "Другие действия"),
         (["items", "item:lot", "finance:lot"], "Прогноз будущей продажи"),
         (["items", "item:lot", "finance:lot", "fin:options:lot"], "Параметры прогноза"),
         (["chats", "chat:chat"], "Переписка"),
         (["orders", "order:paid"], "Оплачен"),
-        (["gft:home"], "подарки"),
-        (["gft:home", "gft:bindings"], "Товары"),
-        (["more", "profile"], "Профиль"),
-        (["more", "profile", "providers"], "Способы вывода"),
-        (["more", "settings"], "Настройки"),
-        (["more", "stats:7"], "Статистика"),
-        (["more", "stats:7", "sr:7:charts"], "Графики"),
-        (["more", "stats:7", "sr:7:top"], "Лучшие товары"),
-        (["more", "stats:7", "sr:7:finance"], "Финансы"),
-        (["more", "tools", "tools:operations"], "История и результаты"),
-        (["more", "tools", "tools:delivery"], "Выдача и цепочки"),
-        (["more", "tools", "tools:data"], "Диагностика и данные"),
-        (["more", "promotions"], "Автопродвижение"),
-        (["more", "promotions", "promo:catalog"], "продвижения"),
-        (["more", "promotions", "promo:catalog", "payp:item:lot"], "Продвижение товара"),
-        (["more", "promotions", "promo:catalog", "payp:item:lot", "promo:item:lot"], "Автоподнятие товара"),
+        (["settings", "sp:connections", "gft:settings"], "Настройки подарков"),
+        (["settings", "gft:limits"], "лимит"),
+        (["settings", "sp:connections", "profile"], "Профиль"),
+        (["settings", "providers"], "Способы вывода"),
+        (["settings"], "Настройки"),
+        (["stats:7"], "Статистика"),
+        (["stats:7", "sr:7:charts"], "Графики"),
+        (["stats:7", "sr:7:top"], "Лучшие товары"),
+        (["stats:7", "sr:7:finance"], "Финансы"),
+        (["settings", "tools", "tools:operations"], "История и результаты"),
+        (["settings", "tools", "tools:delivery"], "Выдача и цепочки"),
+        (["settings", "tools", "tools:data"], "Диагностика и данные"),
+        (["promotions"], "Автопродвижение"),
+        (["promotions", "promo:catalog"], "продвижения"),
+        (["promotions", "promo:catalog", "payp:item:lot"], "Продвижение товара"),
+        (["promotions", "promo:catalog", "payp:item:lot", "promo:item:lot"], "Автоподнятие товара"),
     ]
     executed, seen, reports = set(), set(), []
     for path, expected in paths:
@@ -330,6 +342,9 @@ async def test_promotion_picker_survives_category_input_and_returns_to_promotion
 
 
 async def test_advanced_promotion_keeps_real_quote_choices_and_inheritance(ux):
+    from app.services.account_binding import bind_account
+
+    bind_account(ux.store, ux.api.account.id)
     ux.api.value["raw_price"] = 100
     original = ux.api.call
 
@@ -378,7 +393,14 @@ async def test_start_recovers_without_any_known_panel_and_old_button_is_inert(ux
     action = next(k for k in buttons(ux.session.last_panel) if k.startswith("nav:recover:"))
     ident = ux.store.setting("navigation:123:7")["recovery_id"]
     await ux.ui.click(action, message_id=ident)
-    assert set(buttons(ux.session.last_panel)) == {"items", "orders", "chats", "gft:home", "more"}
+    assert set(buttons(ux.session.last_panel)) == {
+        "items",
+        "orders",
+        "chats",
+        "promotions",
+        "stats:7",
+        "settings",
+    }
     await ux.ui.click("finance:lot")
     await ux.ui.click("fin:cost:lot")
     assert await ux.state.get_state() == "finance:cost"
@@ -414,5 +436,12 @@ async def test_start_recovers_after_media_edit_applied_but_ack_lost(ux):
     await ux.ui.message("/start")
     action = next(k for k in buttons(ux.session.calls[-1]) if k.startswith("nav:recover:"))
     await ux.ui.click(action)
-    assert set(buttons(ux.session.last_panel)) == {"items", "orders", "chats", "gft:home", "more"}
+    assert set(buttons(ux.session.last_panel)) == {
+        "items",
+        "orders",
+        "chats",
+        "promotions",
+        "stats:7",
+        "settings",
+    }
     assert not ux.store.rows("SELECT * FROM outbox")

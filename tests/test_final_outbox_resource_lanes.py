@@ -33,7 +33,7 @@ class DelayedPayment(BundleTransport):
         return await super().__call__(request)
 
 
-async def configure_other_item(r, ident, handler):
+async def configure_other_item(r, ident, handler, *, content=None):
     r.api.items[ident] = {
         **deepcopy(r.api.item),
         "id": ident,
@@ -42,10 +42,10 @@ async def configure_other_item(r, ident, handler):
     await r.ui.click("lp:method:" + ident)
     await click(r, suffix=":mode:" + handler)
     if handler == "fixed_text":
-        await r.ui.message("isolated-fixed-text")
+        await r.ui.message(content or "isolated-fixed-text")
     else:
         await click(r, suffix=":stockinput")
-        await r.ui.message("isolated-stock-secret")
+        await r.ui.message(content or "isolated-stock-secret")
         await click(r, suffix=":stock_commit")
     await click(r, suffix=":preview")
     await click(r, suffix=":commit")

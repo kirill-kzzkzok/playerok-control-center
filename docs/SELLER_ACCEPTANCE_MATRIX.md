@@ -4,11 +4,10 @@
 
 | ID | Статус | Доказательство / следующий шаг |
 |---|---|---|
-| ID | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
 | AUDIT | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
-| HOME | NOT VERIFIED | 582d2d0: шесть целевых входов, Orders → Attention; краткие актуальные метрики ещё не завершены |
+| HOME | NOT VERIFIED | 237984d: шесть входов, локальная сводка реальных заказов/намерения/Stars/подтверждённой прибыли;64passed. Неполный каталог не выдаётся за итоговый счётчик; финальный CI ещё не пройден |
 | ITEM | NOT VERIFIED | 582d2d0: четыре основных действия; настроенный склад/подарок, прямая выдача, terminal-сверка. Профиль93passed; финальная регрессия впереди |
-| UI | FAIL | A03/A08: дублирование входов и разделов черновиков |
+| UI | NOT VERIFIED | 80e7433/d310660: единая вкладка черновиков, основная карточка и прямое управление выдачей;65+19 и100 профильных тестов. Проверка всех остальных экранов ещё не завершена |
 | STATE | NOT VERIFIED | d56040f: local STOP соблюдается Gift-worker, SPENDING отделён от UNKNOWN, остановленный оплаченный долг виден; профиль60passed. Остальные пути в финальной регрессии |
 | CREATE | NOT VERIFIED | 16ce184: supported completion/inheritance defaults и подтверждённая выдача до SENT;127passed. Полный новый путь и упрощение Wizard ещё не приняты |
 | GIFTS | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
@@ -18,18 +17,19 @@
 | COMPLETE | NOT VERIFIED | 16ce184: Gift/Playerok и stock/text завершение только при подтверждении/без отчёта; old reminder не даёт новых прав. Профиль127passed, финальный CI впереди |
 | SCOPE | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
 | RENAME | PASS | 262df19: реальные Gift/stock/text workers, scanner, гонки и STOP;24focused+76adjacent, CI41840599484 SUCCESS |
-| RECOVER | NOT VERIFIED | a440e8d: доказанно неначатый Gift preflight восстанавливается автоматически, неизвестный платёж не повторяется;152+31passed. Non-Gift retry caps/partial packages ещё открыты |
+| RECOVER | NOT VERIFIED | a440e8d/b529a04: неначатые Gift/stock/text preflight восстанавливаются с durable fencing;152+31 и63+168 профильных проверок. Начатые/UNKNOWN не повторяются. Частичные подарочные пакеты сохраняют строгие ограничения; финальная регрессия впереди |
 | CALLBACK | NOT VERIFIED | e9539a4:76passed; offline40actions ACKp95.001957s/local.013611s/card.026105s,1read/card; stalled A не задерживает B. Native/live измерения не выполнены |
 | NAV | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
-| VPN | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
-| SETTINGS | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
-| PROMOTE | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
+| VPN | NOT VERIFIED | 7f679dc: проверены текущие native исходники/установленный hash, исправлен предел3 попытки,9Go-тестов/vet/build. Нет запущенной службы/1080 listener; реальные маршруты не проверены |
+| SETTINGS | NOT VERIFIED | 2f6015e: шесть групп, безопасность и ручное завершение сохранены в обслуживании;21+14passed, FSM restart/foreign/stale и отсутствие сетевых вызовов. Финальная приёмка ещё идёт |
+| PROMOTE | NOT VERIFIED | 83f5569: простой enable/stop/суточный потолок и прежнее явное финансовое согласие;79passed, реальные тестовые worker/confirmed/UNKNOWN/restart/STOP. Итоговый CI не подтверждён |
 | MESSAGES | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
 | NOTICES | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
 | FINANCE | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
 | RELIST | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
 | DATA | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
-| SLA | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
+| SLA | NOT VERIFIED | 140dee4/b26c7c8: polling deadline от начала цикла25–30s;19passed,429 соблюдается. 50независимых настроенных лотов/50оплат:49подтверждений за28.093s при5ms boundary-чтениях,1потерянный ACK остаётся в карантине;restart без повтора. Это один офлайн-замер, не live SLA/p95 |
+| E2E | NOT VERIFIED | Новый профиль создания/публикации/первой продажи:30passed1старое UI-ожидание, после исправления ожидания профиль admission/downtime/creation53passed. Финальный полный набор и повторный обзор всех путей ещё не завершены |
 | METRICS | FAIL | Сравнение всех сценариев до/после ещё не выполнено |
 | ACCEPT | FAIL | Новая переработка ещё не прошла итоговую приёмку |
 | CURRENT | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
@@ -43,3 +43,13 @@
 - Полная базовая регрессия:2133passed/0failed/0skipped; CI41827473939SUCCESS.
 - p50/p95, полное число экранов/кликов/подтверждений,50 независимых настроенных лотов, native live и два рабочих лота: NOT VERIFIED.
 - Внешняя среда не считается проверенной offline-транспортами.
+
+## Текущий контрольный прогон
+
+Полный pytest запущен на runtime/tests `b26c7c8`; лог
+`data/seller-autonomy-regression.txt`, итоговый exit code появится в соседнем
+`.exit`. Изменения `7f679dc` затрагивают только отдельный native patch и документы.
+GitHub Actions `41864944411` на `b26c7c8` при последнем наблюдении QUEUED,
+не SUCCESS. Ruff check/format, compileall, pip check прошли; selfcheck OK139imports,
+схема1..33, временная резервная копия открыта, внешних запросов0.
+Это промежуточная фиксация, не окончательная приёмка всего задания.

@@ -27,7 +27,12 @@ async def test_fifty_independent_lots_keep_delivering_when_one_ack_is_lost(shop,
 
     r.api.account.update_item = update
     for index in range(50):
-        await configure_other_item(r, f"lot-{index:02}", "unique_stock" if index % 2 else "fixed_text")
+        await configure_other_item(
+            r,
+            f"lot-{index:02}",
+            "unique_stock" if index % 2 else "fixed_text",
+            content=f"content-lot-{index:02}",
+        )
     assert r.store.rows("SELECT count(*) n FROM logical_products WHERE enabled=1") == [{"n": 50}]
     assert r.store.rows("SELECT count(DISTINCT code) n FROM logical_products") == [{"n": 50}]
     original_read, original_send = r.api.call, r.api.account.send_message
@@ -39,7 +44,7 @@ async def test_fifty_independent_lots_keep_delivering_when_one_ack_is_lost(shop,
 
     def send(chat_id, text):
         result = original_send(chat_id, text)
-        if text in {"isolated-fixed-text", "isolated-stock-secret"}:
+        if text.startswith("content-lot-"):
             sent_at[chat_id] = monotonic()
         if chat_id == "chat-sale-00":
             lost_calls.append(text)
@@ -70,6 +75,8 @@ async def test_fifty_independent_lots_keep_delivering_when_one_ack_is_lost(shop,
     assert elapsed < 60
     assert len(sent_at) == 50
     assert set(sent_at) == {f"chat-sale-{index:02}" for index in range(50)}
+    delivered = [(m["chat_id"], m["text"]) for m in r.api.messages if m["text"].startswith("content-lot-")]
+    assert sorted(delivered) == [(f"chat-sale-{index:02}", f"content-lot-{index:02}") for index in range(50)]
     assert len(lost_calls) == 1
     assert r.store.rows("SELECT count(*) n FROM inventory WHERE status='DELIVERED'") == [{"n": 25}]
     assert len(r.store.rows("SELECT 1 FROM outbox WHERE status='UNCERTAIN'")) == 1

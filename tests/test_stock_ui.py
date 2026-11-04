@@ -10,6 +10,7 @@ from app.database.store import Store, now
 from app.services.automation import DeliveryPolicy
 from app.services.inventory import Inventory
 from app.services.orders import Orders
+from app.services.product_readiness import ProductReadiness
 from app.telegram.storage import SQLiteStorage
 from tests.test_telegram_integration import Interaction, TelegramSession, dispatcher
 
@@ -181,14 +182,24 @@ async def test_item_order_and_policy_share_actual_readiness(rig, condition, expe
         "item": {"id": "item", "user": {"id": "seller"}},
         "chat": {"id": "chat"},
     }
+    readiness = ProductReadiness(store, api).snapshot("item", item=await api.call("get_item", id="item"))
+    assert readiness["state"] == (
+        "OFF" if condition == "disabled" else "STOPPED" if condition == "guard" else "BLOCKED"
+    )
+    assert "BINDING" in {problem["code"] for problem in readiness["problems"]}
     for action in ("item:item", "order:order", "auto:item:item"):
         await ui.click(action)
         text = session.calls[-1].text
-        assert expected.lower() in text.lower()
+        compact = (
+            "выключена — отправка остановлена"
+            if condition == "disabled"
+            else "приостановлена"
+            if condition == "guard"
+            else "ожидает устранения проблемы"
+        )
+        assert (compact if action.startswith("item:") else expected).lower() in text.lower()
         assert "Автодействия: выключены" not in text
-        if action.startswith("auto:"):
-            assert "Постоянная привязка не подтверждена" in text
-        else:
+        if action.startswith("order:"):
             assert ("Перед включением:" if condition == "disabled" else "Требует внимания:") in text
         if action.startswith("auto:"):
             assert "со склада" in text.lower()
@@ -200,10 +211,9 @@ async def test_item_order_and_policy_share_actual_readiness(rig, condition, expe
             assert "Постоянная привязка не подтверждена" in session.calls[-1].text
             await ui.click("item:item")
             await ui.click("iv:delivery:item")
-            assert (
-                expected.lower() in session.calls[-1].text.lower()
-                and "со склада" in session.calls[-1].text.lower()
-            )
+            assert compact in session.calls[-1].text.lower() and "со склада" in session.calls[-1].text.lower()
+    assert not store.rows("SELECT * FROM outbox")
+    assert not store.rows("SELECT * FROM reservations")
 
 
 async def test_stock_resume_does_not_reenable_after_last_unit_reserved_during_api_check(rig):

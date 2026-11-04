@@ -38,12 +38,14 @@ async def test_status_reuses_recent_verified_details_without_extra_item_reads(sh
     r.api.calls.clear()
     await r.ui.message("/status")
     text = r.session.last_panel.text
-    assert "Требует внимания: 1" in text
+    assert [p["code"] for p in ProductReadiness(r.store, r.api).snapshot("lot")["problems"]] == [
+        "STARS_LIMIT"
+    ]
     assert "Лимит Stars" in text
     assert "описания и параметров" not in text
     assert [method for method, _ in r.api.calls] == ["get_my_items"]
     await r.ui.click("item:lot")
-    assert "Требует внимания: 1" in r.session.last_panel.text
+    assert "Лимит Stars" in r.session.last_panel.text
     assert not r.api.remote.payments and not r.api.messages
 
 
@@ -66,7 +68,9 @@ async def test_opened_card_updates_the_same_observation_used_by_status(shop):
     r.api.call = abbreviated
     await r.ui.message("/status")
     assert "Изменилось описание" in r.session.last_panel.text
-    assert "Требует внимания: 1" in r.session.last_panel.text
+    assert [p["code"] for p in ProductReadiness(r.store, r.api).snapshot("lot")["problems"]] == [
+        "ITEM_CHANGED"
+    ]
 
 
 async def test_readiness_uses_one_item_read_and_debounces_repeated_owner_clicks(shop):
