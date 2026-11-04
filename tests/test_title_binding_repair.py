@@ -40,11 +40,8 @@ async def test_title_only_confirmation_preserves_code_authority_and_delivers_onc
     journal = r.store.rows("SELECT * FROM outbox")
     await r.ui.click("item:lot")
     await r.ui.click("rd:check:lot")
-    assert "lp:title:lot" in buttons(r.session.last_panel)
-    await click(r, action="lp:title:lot")
-    assert "Было:" in r.session.last_panel.text and "Стало:" in r.session.last_panel.text
-    assert "подарок не меняется" in r.session.last_panel.text
-    confirm = await click(r, suffix=":title_apply")
+    # New standing permission removes the previous required owner confirmation.
+    assert "lp:title:lot" not in buttons(r.session.last_panel)
     current = service.listing("lot")
     assert current["title_snapshot"] == r.api.item["name"]
     for key in (
@@ -61,7 +58,7 @@ async def test_title_only_confirmation_preserves_code_authority_and_delivers_onc
         assert current[key] == before[key]
     assert r.store.rows("SELECT * FROM gift_listings") == gifts
     assert r.store.rows("SELECT * FROM outbox") == journal
-    await r.ui.click(confirm)  # Old callback cannot repeat confirmation or a payment.
+    await r.ui.click("item:lot")  # Reopening cannot repeat a payment.
     Orders(r.store).ingest(r.api.order("after-rename"))
     await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
     await r.worker.once()
@@ -175,8 +172,8 @@ async def test_confirmed_rename_preserves_relist_inheritance(shop):
 async def test_authority_changed_during_server_read_cannot_commit_title(shop, revoke):
     r = await renamed(shop)
     service = LogicalProducts(r.store, r.api)
-    old_title = service.listing("lot")["title_snapshot"]
     await r.ui.click("lp:title:lot")
+    old_title = service.listing("lot")["title_snapshot"]
     confirm = next(k for k in buttons(r.session.last_panel) if k.endswith(":title_apply"))
     original = r.api.call
 
@@ -201,7 +198,7 @@ async def test_title_repair_after_background_scan_conflict_rechecks_catalog(shop
     r = await renamed(shop)
     service = LogicalProducts(r.store, r.api)
     await LogicalProductWorker(r.store, r.api).once()
-    assert service.listing("lot")["error_code"] == "RELIST_CONFIRMATION_REQUIRED"
+    assert service.listing("lot")["error_code"] is None
     await r.ui.click("lp:title:lot")
     await click(r, suffix=":title_apply")
     assert service.listing("lot")["error_code"] is None

@@ -87,6 +87,8 @@ class GiftService:
             raise GiftValidationError("Не совпадает настроенная категория или способ «Подарок»")
         from app.services.logical_products import LogicalProducts
 
+        if preview_code is None:
+            await LogicalProducts(self.store, self.api).refresh_title(item)
         logical_code = (
             LogicalProducts(self.store, self.api).configured_gifts(item) if preview_code is None else None
         )

@@ -29,6 +29,7 @@ class ItemPanel:
         if self.store:
             from app.services.product_readiness import ProductReadiness
 
+            await LogicalProducts(self.store, self.api).refresh_title(item)
             ProductReadiness(self.store, self.api).remember_item(item)
         return item
 

@@ -591,7 +591,7 @@ class ProductReadiness:
                     item = await self.automation.item(owner, ident)
                     self.remember_item(item, version=version)
                     product = self.logical.listing(ident)
-                    if not automatic and product and product["error_code"] == "RELIST_CONFIRMATION_REQUIRED":
+                    if product and product["error_code"] == "RELIST_CONFIRMATION_REQUIRED":
                         from app.workers.logical_products import LogicalProductWorker
 
                         # Clear an old scan blocker only through a complete

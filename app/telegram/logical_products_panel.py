@@ -42,6 +42,7 @@ class LogicalProductsPanel:
         account = self.service.authority(owner)
         if item.get("id") != item_id or (item.get("user") or {}).get("id") != account:
             raise Conflict("Владелец объявления не подтверждён")
+        await self.service.refresh_title(item)
         product = self.service.listing(item_id)
         if product and product["owner_id"] != owner:
             raise Conflict("Настройки принадлежат другому владельцу")

@@ -71,6 +71,9 @@ class Automation:
         item = await self.api.call("get_item", id=ident)
         if item.get("id") != ident or (item.get("user") or {}).get("id") != self.api.account.id:
             raise ValidationError("Товар не принадлежит текущей сессии")
+        from app.services.logical_products import LogicalProducts
+
+        await LogicalProducts(self.store, self.api).refresh_title(item)
         return item
 
     def get(self, ident):

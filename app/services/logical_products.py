@@ -1,5 +1,6 @@
 """Identity and verified item projections; execution stays in Gifts/DeliveryChains."""
 
+import asyncio
 import hashlib
 import json
 import sqlite3
@@ -803,7 +804,7 @@ class LogicalProducts:
             or item.get("id") != product["item_id"]
             or marker(item.get("name")) != product["code"]
             or item.get("deleted_at")
-            or item.get("status") not in {"APPROVED", "DRAFT"}
+            or item.get("status") not in {"APPROVED", "DRAFT", "SOLD"}
         ):
             raise Conflict("Изменение не ограничивается названием подтверждённого товара")
         if self.store.rows(
@@ -829,10 +830,14 @@ class LogicalProducts:
         if not product or product["owner_id"] != owner or product["account_id"] != account:
             raise Conflict("Привязка товара принадлежит другому владельцу")
         item = await self.api.call("get_item", id=item_id)
+        return self.title_evidence(owner, product, item)
+
+    def title_evidence(self, owner, product, item):
+        self.authority(owner, product["account_id"])
         self.verify_title_change(product, item)
         return {
             "owner": owner,
-            "item": item_id,
+            "item": item["id"],
             "product": digest(encode(product)),
             "old_title": product["title_snapshot"],
             "title": item["name"],
@@ -843,7 +848,24 @@ class LogicalProducts:
             ),
         }
 
-    async def confirm_title_change(self, owner, prepared):
+    async def refresh_title(self, item):
+        """Standing permission for proven title-only changes; never arm or spend."""
+        product = self.listing(item.get("id"))
+        if not product or product["title_snapshot"] == item.get("name"):
+            return False
+        locks = getattr(self.store, "logical_title_locks", None)
+        if locks is None:
+            self.store.logical_title_locks = locks = {}
+        key = (self.api.account.id, item.get("id"))
+        async with locks.setdefault(key, asyncio.Lock()):
+            product = self.listing(item.get("id"))
+            if not self.title_change_allowed(product, item):
+                return False
+            prepared = self.title_evidence(product["owner_id"], product, item)
+            await self.confirm_title_change(product["owner_id"], prepared, automatic=True)
+            return True
+
+    async def confirm_title_change(self, owner, prepared, *, automatic=False):
         if prepared.get("owner") != owner:
             raise Conflict("Подтверждение принадлежит другому владельцу")
         observed = await self.prepare_title_change(owner, prepared["item"])
@@ -866,8 +888,14 @@ class LogicalProducts:
                 (prepared["title"], prepared["item"], product["id"]),
             )
             db.execute(
-                "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'CONFIRM_LISTING_TITLE',?,?,?)",
-                (owner, prepared["item"], digest(prepared["title"]), now()),
+                "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,?,?,?,?)",
+                (
+                    owner,
+                    "REFRESH_LISTING_TITLE" if automatic else "CONFIRM_LISTING_TITLE",
+                    prepared["item"],
+                    digest(prepared["title"]),
+                    now(),
+                ),
             )
 
     async def arm(self, owner, product_id, revision, *, inherit=False, item_id=None):
@@ -1065,6 +1093,7 @@ class LogicalProducts:
         self.authority(owner, product["account_id"], writes=True)
         existing = self.listing(item.get("id"))
         if existing:
+            await self.refresh_title(item)
             self.verify_listing(product, item)
         if (
             product["state"] != "VERIFIED"
@@ -1354,6 +1383,7 @@ class LogicalProducts:
             or item.get("status") not in {"APPROVED", "SOLD"}
         ):
             raise Conflict("Состояние объявления не подтверждает выдачу оплаченного товара")
+        await self.refresh_title(item)
         self.verify_listing(product, item)
 
     def pin_order(self, db, order_id, item_id, handler):
