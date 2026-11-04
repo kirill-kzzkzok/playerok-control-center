@@ -36,7 +36,7 @@ class LogicalProductsPanel:
         if not self.store.rows("SELECT 1 FROM administrators WHERE user_id=?", (owner,)):
             raise Conflict("Доступ закрыт")
 
-    async def card(self, owner, item_id, state):
+    async def card(self, owner, item_id, state, *, details=False):
         self.owner(owner)
         item = await self.api.call("get_item", id=item_id)
         account = self.service.authority(owner)
@@ -170,6 +170,40 @@ class LogicalProductsPanel:
         if readiness["problems"]:
             text += "\n" + "\n".join("• " + escaped(p["text"], 180) for p in readiness["problems"][:6])
         rows.append([("Подробности готовности", "rd:check:" + item_id)])
+        if not details:
+            from app.telegram.product_presentation import brief
+
+            text = "📦 <b>Выдача</b>\n" + escaped(view["title"], 120) + "\n" + brief(readiness)
+            if product and product["handler"] == "telegram_gifts":
+                text += "\n🎁 " + escaped(gift_summary(config.get("bundle", [])), 220)
+                text += f" · {sum(g['stars'] for g in config.get('bundle', []))} ⭐"
+            if readiness.get("stock"):
+                text += f"\nОстаток: {readiness['stock']['AVAILABLE']} · в резерве: {readiness['stock']['RESERVED']}"
+            if product and product["handler"] != "manual":
+                text += "\n💬 " + escaped(readiness["message"], 150)
+                text += "\n✅ Завершение: " + (
+                    readiness.get("completion_note")
+                    or ("после доставки, если не нужен отчёт" if readiness["complete"] else "вручную")
+                )
+            keep = {"stop", "arm", "configure", "editafter", "migrate", "reconcile", "rebind", "title"}
+            rows = [
+                [
+                    (label, route)
+                    for label, route in row
+                    if route.split(":")[-1] in keep or route.startswith("stock:view:")
+                ]
+                for row in rows
+            ]
+            rows = [row for row in rows if row]
+            if not product:
+                rows = []
+            rows.append(
+                [("🔄 Изменить способ выдачи" if product else "Настроить выдачу", "lp:method:" + item_id)]
+            )
+            problem = next((p for p in readiness["problems"] if p["terminal"]), None)
+            if problem and problem["action"][1] not in {"lp:item:" + item_id, "iv:delivery:" + item_id}:
+                rows.insert(0, [tuple(problem["action"])])
+            rows.append([("Подробности и история", "lp:details:" + item_id)])
         return text, keyboard(rows, back=("⬅️ К товару", "item:" + item_id))
 
     async def view(self, owner, state, nonce):
@@ -190,6 +224,8 @@ class LogicalProductsPanel:
         return [p for p in result["problems"] if p["blocking"]]
 
     async def callback(self, action, owner, state):
+        if action.startswith("lp:details:"):
+            return await self.card(owner, action.split(":", 2)[2], state, details=True)
         parts = action.split(":")
         if len(parts) == 3 and parts[1] == "title":
             await self.card(owner, parts[2], state)

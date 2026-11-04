@@ -71,7 +71,7 @@ def brief(result):
     """Seller summary; detailed evidence stays in the existing diagnostics."""
     mode, state = result["mode"], result["state"]
     if mode == "manual":
-        return "📦 Выдача вручную"
+        return "📦 Выдача: вручную"
     if mode == "playerok":
         text = "📦 Товар выдаёт Playerok"
         if state == "OFF":
@@ -80,20 +80,25 @@ def brief(result):
         text = "Выдача: " + MODES[mode]
     labels = {
         "READY": "✅ Автовыдача работает" if mode != "playerok" else "✅ Сопровождение готово",
-        "OFF": "⏸ Автовыдача выключена",
+        "OFF": "⏸ Автовыдача выключена — отправка остановлена",
         "UNKNOWN": "🔄 Проверяем готовность",
         "BLOCKED": "⚠️ Автовыдача ожидает устранения проблемы",
-        "STOPPED": "⛔ Нужна проверка — откройте «Выдача»",
+        "STOPPED": "⛔ Автовыдача приостановлена",
     }
     text += "\n" + labels[state]
     problems = result["problems"]
     if any(p["code"] == "GIFT_IN_PROGRESS" for p in problems) and state == "UNKNOWN":
         text = "Выдача: " + MODES[mode] + "\n⏳ Отправляем подарок, следующие покупки ожидают"
-    actionable = [p for p in problems if p["blocking"] and not p["unknown"]]
+    actionable = sorted(
+        (p for p in problems if p["blocking"] and not p["unknown"]),
+        key=lambda p: not p["terminal"],
+    )
     if actionable:
         text += "\n" + escaped(actionable[0]["text"], 170)
         if len(actionable) > 1:
-            text += f"\nЕщё причин: {len(actionable) - 1} — в «Выдача»"
+            text += f"\nЕщё причин: {len(actionable) - 1}"
+    if mode == "playerok":
+        text += "\n💬 " + escaped(result["message"], 150)
     return text
 
 

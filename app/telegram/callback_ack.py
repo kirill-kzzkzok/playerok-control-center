@@ -96,6 +96,7 @@ def navigation(action):
             "auto:check:",
             "stock:view:",
             "lp:item:",
+            "lp:details:",
             "lp:ready:",
             "nav:back:",
             "nav:recover:",

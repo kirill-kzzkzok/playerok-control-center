@@ -139,7 +139,7 @@ async def setup_ui(r, handler, value=None, *, completion=False):
     await click(r, action="items")
     await click(r, action="item:lot")
     await click(r, action="iv:delivery:lot")
-    await click(r, suffix=":configure")
+    await click(r, action="lp:method:lot")
     await click(r, suffix=":mode:" + handler)
     if handler in {"fixed_text", "telegram_gifts"}:
         await r.ui.message(value)

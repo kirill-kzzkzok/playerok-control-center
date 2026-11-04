@@ -19,7 +19,7 @@ async def _simulation(tmp_path):
 
 
 async def open_logical(r):
-    for route in ("items", "item:lot", "iv:delivery:lot", "lp:item:lot"):
+    for route in ("items", "item:lot", "iv:delivery:lot"):
         await click(r, action=route)
 
 
@@ -34,9 +34,9 @@ async def test_logical_back_restores_product_section_without_new_messages(simula
     for _ in range(3):
         back = next(key for key in buttons(r.session.last_panel) if key.startswith("nav:back:"))
         await click(r, action=back)
-        assert "lp:item:lot" in buttons(r.session.last_panel)
+        assert "iv:delivery:lot" in buttons(r.session.last_panel)
         r.ui.dp = production_dispatcher(r.store, r.api)
-        await click(r, action="lp:item:lot")
+        await click(r, action="iv:delivery:lot")
     assert r.store.setting("navigation:123:7")["id"] == original_id
     assert sum(c.__api_method__ == "sendMessage" for c in r.session.calls) == 1
     assert not r.store.rows("SELECT * FROM outbox")
@@ -46,7 +46,7 @@ async def test_logical_back_restores_product_section_without_new_messages(simula
 async def test_cancel_and_restart_invalidates_stale_commit_and_preserves_new_input(simulation):
     r = await simulation()
     await open_logical(r)
-    await click(r, suffix=":configure")
+    await click(r, action="lp:method:lot")
     await click(r, suffix=":mode:fixed_text")
     await r.ui.message("private-delivery")
     await click(r, suffix=":preview")
@@ -67,7 +67,7 @@ async def test_cancel_and_restart_invalidates_stale_commit_and_preserves_new_inp
 async def test_owner_only_logical_callbacks_and_group_messages_do_not_touch_fsm(simulation):
     r = await simulation()
     await open_logical(r)
-    await click(r, suffix=":configure")
+    await click(r, action="lp:method:lot")
     await click(r, suffix=":mode:fixed_text")
     current = await state(r).get_data()
     await r.ui.message("private-group-data", group=True)
@@ -97,7 +97,7 @@ async def test_owner_only_logical_callbacks_and_group_messages_do_not_touch_fsm(
 async def test_uncertain_description_ui_allows_only_read_reconcile_not_duplicate_commit(simulation):
     r = await simulation()
     await open_logical(r)
-    await click(r, suffix=":configure")
+    await click(r, action="lp:method:lot")
     await click(r, suffix=":mode:fixed_text")
     await r.ui.message("private-delivery")
     await click(r, suffix=":preview")
@@ -106,7 +106,7 @@ async def test_uncertain_description_ui_allows_only_read_reconcile_not_duplicate
     await r.worker.once()
     assert r.store.rows("SELECT status FROM outbox")[0]["status"] == "UNCERTAIN"
     await click(r, action="lp:item:lot")
-    assert "Результат неизвестен" in r.session.last_panel.text
+    assert "неизвестен" in r.session.last_panel.text
     assert not any(key.endswith(":arm") for key in buttons(r.session.last_panel))
     reconcile = next(key for key in buttons(r.session.last_panel) if key.endswith(":reconcile"))
     r.ui.dp = production_dispatcher(r.store, r.api)

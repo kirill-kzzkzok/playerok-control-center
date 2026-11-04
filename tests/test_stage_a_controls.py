@@ -32,6 +32,7 @@ async def test_price_change_stop_restart_and_worker_agree(shop):
     # Optional detailed readiness lives inside the single Delivery controller.
     await r.ui.click("item:lot")
     await click(r, action="iv:delivery:lot")
+    await click(r, action="lp:details:lot")
     await click(r, action="rd:check:lot")
     result = ProductReadiness(r.store, r.api).snapshot("lot", item=r.api.item)
     assert result["ready"], result["problems"]

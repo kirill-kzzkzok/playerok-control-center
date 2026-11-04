@@ -99,7 +99,7 @@ async def test_item_delivery_has_one_configuration_entry_and_truthful_stopped_st
     assert "остановлена" in r.session.last_panel.text.lower()
     await r.ui.click("iv:delivery:lot")
     visible = buttons(r.session.last_panel)
-    assert "lp:item:lot" in visible
+    assert any(key.endswith(":configure") for key in visible)
     assert "gft:item:lot" not in visible and "auto:item:lot" not in visible
     assert not r.api.remote.payments
 
@@ -132,6 +132,7 @@ async def test_text_product_keeps_a_read_only_paid_order_check(shop):
     Orders(r.store).ingest(r.api.order("check-order"))
     before = r.store.rows("SELECT id,status FROM outbox")
     await r.ui.click("iv:delivery:lot")
+    await click(r, action="lp:details:lot")
     await click(r, action="auto:check:lot")
     await click(r, suffix=":simulate:0")
     assert "Проверка без отправки" in r.session.last_panel.text
@@ -143,9 +144,9 @@ async def test_text_product_keeps_a_read_only_paid_order_check(shop):
 
 async def test_intentionally_manual_product_is_not_reported_as_broken_automation(shop):
     r = await shop()
-    for route in ("items", "item:lot", "iv:delivery:lot", "lp:item:lot"):
+    for route in ("items", "item:lot", "iv:delivery:lot"):
         await click(r, action=route)
-    await click(r, suffix=":configure")
+    await click(r, action="lp:method:lot")
     await click(r, suffix=":mode:manual")
     await click(r, suffix=":preview")
     await click(r, suffix=":commit")

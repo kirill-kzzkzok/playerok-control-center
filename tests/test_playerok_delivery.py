@@ -253,6 +253,7 @@ async def test_same_name_without_marker_never_inherits(shop):
 async def test_durable_input_restart_old_nonce_and_existing_item_card(shop):
     r = await shop()
     await r.ui.click("iv:delivery:lot")
+    await click(r, action="lp:method:lot")
     await click(r, action="platform:item:lot")
     await click(r, suffix=":reply")
     await click(r, suffix=":text")
@@ -264,7 +265,7 @@ async def test_durable_input_restart_old_nonce_and_existing_item_card(shop):
     await r.ui.click(nonce)
     assert Automation(r.store, r.api).get("lot")[0] == revision
     await r.ui.click("item:lot")
-    assert "Способ выдачи: 📦 Playerok" in r.session.last_panel.text
+    assert "Товар выдаёт Playerok" in r.session.last_panel.text
     assert "После оплаты: включён" in r.session.last_panel.text
     assert not r.api.messages
     purchase(r)

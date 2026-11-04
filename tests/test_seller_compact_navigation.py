@@ -36,3 +36,11 @@ async def test_item_has_four_actions_and_opens_existing_delivery_controller(shop
     assert (await state(r).get_data()).get("logical_view", {}).get("item") == "lot"
     assert any(key.endswith(":stop") for key in buttons(r.session.last_panel))
     assert "Настройки текущего способа" not in r.session.last_panel.text
+    assert "Сверка каталога:" not in r.session.last_panel.text
+    assert "Разрешение выдачи:" not in r.session.last_panel.text
+    visible = buttons(r.session.last_panel)
+    assert "lp:details:lot" in visible
+    assert not any(key.endswith((":detach", ":links", ":check")) for key in visible)
+    await r.ui.click("lp:details:lot")
+    assert any(key.endswith(":links") for key in buttons(r.session.last_panel))
+    assert "rd:check:lot" in buttons(r.session.last_panel)
