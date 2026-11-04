@@ -10,9 +10,26 @@ class DispatchOutcome(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
-def dispatch_outcome(started_at, status):
+AUTOMATIC_DELIVERY_KINDS = frozenset({"delivery", "delivery_text", "chain_message", "fulfill"})
+
+
+def unstarted_delivery(db, action):
+    """Positive journal proof for free preflight, never a post-send retry."""
+    return bool(
+        db.execute(
+            "SELECT 1 FROM outbox o WHERE o.id=? AND o.kind IN ('delivery','delivery_text','chain_message','fulfill') "
+            "AND o.started_at IS NULL AND (o.result IS NULL OR o.result='null') "
+            "AND NOT EXISTS(SELECT 1 FROM outbox_late_results l WHERE l.operation_id=o.id)",
+            (action["id"],),
+        ).fetchone()
+    )
+
+
+def dispatch_outcome(started_at, status, *, late_result=False):
     if status == "SUCCEEDED":
         return DispatchOutcome.CONFIRMED_SUCCESS
+    if late_result:
+        return DispatchOutcome.UNKNOWN
     if started_at is None:
         return DispatchOutcome.NOT_DISPATCHED
     # No current adapter error has a documented no-effect receipt after POST.

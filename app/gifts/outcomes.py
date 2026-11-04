@@ -6,13 +6,18 @@ import uuid
 from app.database.store import encode, now
 
 DELAYED_PREFLIGHT_SQL = (
-    "SELECT b.id,b.target FROM outbox b WHERE b.status='RETRYABLE_FAILED' AND b.kind='gift_send' "
+    "SELECT b.id,b.target FROM outbox b WHERE b.status='RETRYABLE_FAILED' "
     "AND b.started_at IS NULL AND b.attempts>=3 AND julianday(b.created_at)<julianday('now','-5 minutes') "
+    "AND NOT EXISTS(SELECT 1 FROM outbox_late_results x WHERE x.operation_id=b.id) AND ((b.kind='gift_send' "
     "AND b.error_code NOT IN ('GIFT_TEMPORARY_PAUSE','PAYMENT_LOCKED') "
     "AND EXISTS(SELECT 1 FROM gift_jobs g JOIN gift_listings l ON l.item_id=g.item_id "
     "WHERE g.operation_id=b.id AND l.enabled=1 AND g.state IN ('PENDING','CHECKING')) "
     "AND COALESCE((SELECT json_extract(value,'$') FROM settings WHERE key='gifts:stopped'),1)=0 "
-    "AND COALESCE((SELECT json_extract(value,'$') FROM settings WHERE key='gifts:paused'),0)=0"
+    "AND COALESCE((SELECT json_extract(value,'$') FROM settings WHERE key='gifts:paused'),0)=0) OR "
+    "(b.kind IN ('delivery','delivery_text','chain_message','fulfill') "
+    "AND EXISTS(SELECT 1 FROM orders o WHERE o.id=b.target AND o.status='PAID') "
+    "AND EXISTS(SELECT 1 FROM delivery_chains c JOIN delivery_policies p ON p.item_id=c.item_id "
+    "WHERE c.order_id=b.target AND c.status='ACTIVE' AND json_extract(p.payload,'$.enabled')=1)))"
 )
 
 

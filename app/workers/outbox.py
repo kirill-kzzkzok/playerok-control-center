@@ -89,6 +89,12 @@ class Executor:
             or (rows[0]["lease_until"] or 0) <= time.time()
         ):
             raise ValidationError("Lease операции истёк или потерян; отправка запрещена")
+        from app.services.operation_outcomes import AUTOMATIC_DELIVERY_KINDS
+
+        if action["kind"] in AUTOMATIC_DELIVERY_KINDS and self.store.rows(
+            "SELECT 1 FROM outbox_late_results WHERE operation_id=? LIMIT 1", (action["id"],)
+        ):
+            raise APIError("DELIVERY_PREFLIGHT_EVIDENCE_CONFLICT", uncertain=True)
         if action["kind"] in {"premium_publish", "premium_bump"}:
             from app.services.paid_promotions import PaidPromotions
 
@@ -219,6 +225,12 @@ class Executor:
 
     async def __call__(self, action):
         kind, target, payload = action["kind"], action["target"], action["payload"]
+        from app.services.operation_outcomes import AUTOMATIC_DELIVERY_KINDS, unstarted_delivery
+
+        if kind in AUTOMATIC_DELIVERY_KINDS:
+            with self.store.transaction() as db:
+                if not unstarted_delivery(db, action):
+                    raise APIError("DELIVERY_PREFLIGHT_EVIDENCE_CONFLICT", uncertain=True)
         if kind in {"publish", "premium_publish"} and not payload.get("native_relist"):
             from app.services.listing_launch import ListingLaunch
 
@@ -920,6 +932,10 @@ class OutboxWorker:
             # request was never sent: PERMANENT_FAILED, not an uncertain external outcome.
             self.finish(action["id"], action["lease_token"], "PERMANENT_FAILED", error="VALIDATION_FAILED")
         except APIError as error:
+            from app.services.operation_outcomes import unstarted_delivery
+
+            with self.store.transaction() as db:
+                delivery_retry = unstarted_delivery(db, action)
             gift_retry = False
             if action["kind"] == "gift_send":
                 from app.gifts.outcomes import unstarted_preflight
@@ -934,6 +950,7 @@ class OutboxWorker:
                     action["kind"] in {"delivery", "delivery_text", "chain_message", "reply", "mark_read"}
                     and action["attempts"] < 4
                     or gift_retry
+                    or delivery_retry
                 )
                 and not error.uncertain
                 and (

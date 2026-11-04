@@ -174,7 +174,7 @@ async def test_prolonged_outage_groups_orders_into_one_owner_notice(shop):
     notices = [
         c
         for c in r.session.calls
-        if c.__api_method__ == "sendMessage" and "Подарки ожидают восстановления" in c.text
+        if c.__api_method__ == "sendMessage" and "Выдача ожидает восстановления" in c.text
     ]
     assert len(notices) == 1 and "2" in notices[0].text
     assert not r.api.remote.payments

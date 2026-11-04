@@ -442,7 +442,9 @@ class Store:
         # cannot POST after a preflight-only retry/stop has won the race.
         with self.transaction() as db:
             changed = db.execute(
-                "UPDATE outbox SET started_at=COALESCE(started_at,?) WHERE id=? AND status='PROCESSING' AND lease_token=? AND lease_until>?",
+                "UPDATE outbox SET started_at=COALESCE(started_at,?) WHERE id=? AND status='PROCESSING' AND lease_token=? AND lease_until>? "
+                "AND (kind NOT IN ('delivery','delivery_text','chain_message','fulfill') OR "
+                "NOT EXISTS(SELECT 1 FROM outbox_late_results l WHERE l.operation_id=outbox.id))",
                 (now(), action["id"], action["lease_token"], time.time()),
             ).rowcount
             if changed != 1:
@@ -453,11 +455,14 @@ class Store:
             raise ValueError("Недопустимый результат операции")
         with self.transaction() as db:
             evidence = db.execute(
-                "SELECT kind,started_at,attempts FROM outbox WHERE id=? AND status='PROCESSING' AND lease_token=?",
+                "SELECT kind,started_at,attempts,EXISTS(SELECT 1 FROM outbox_late_results l WHERE l.operation_id=o.id) AS late_result "
+                "FROM outbox o WHERE id=? AND status='PROCESSING' AND lease_token=?",
                 (ident, token),
             ).fetchone()
             if not evidence:
                 raise Conflict("Lease операции потерян")
+            from app.services.operation_outcomes import AUTOMATIC_DELIVERY_KINDS, unstarted_delivery
+
             if (
                 evidence["kind"] not in {"gift_send", "gift_refund"}
                 and evidence["started_at"] is not None
@@ -468,9 +473,21 @@ class Store:
                 status == "UNCERTAIN"
                 and error == "PROCESS_CANCELLED"
                 and evidence["started_at"] is None
-                and evidence["kind"] in {"delivery", "delivery_text", "chain_message", "reply", "mark_read"}
+                and evidence["kind"] in {"reply", "mark_read"}
             ):
                 status = "PERMANENT_FAILED"  # Proven no POST; hold reserve for explicit owner recovery.
+            if (
+                status == "UNCERTAIN"
+                and error == "PROCESS_CANCELLED"
+                and unstarted_delivery(db, {"id": ident})
+            ):
+                status = "RETRYABLE_FAILED"
+            if (
+                status in {"RETRYABLE_FAILED", "PERMANENT_FAILED"}
+                and evidence["kind"] in AUTOMATIC_DELIVERY_KINDS
+                and not unstarted_delivery(db, {"id": ident})
+            ):
+                status = "UNCERTAIN"
             if status == "RETRYABLE_FAILED" and evidence["started_at"] is not None:
                 status = "UNCERTAIN"
             if status == "UNCERTAIN" and error == "PROCESS_CANCELLED" and evidence["kind"] == "gift_send":
@@ -501,7 +518,13 @@ class Store:
 
             db.execute(
                 "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(NULL,'DISPATCH_OUTCOME',?,?,?)",
-                (ident, str(dispatch_outcome(evidence["started_at"], status)), now()),
+                (
+                    ident,
+                    str(
+                        dispatch_outcome(evidence["started_at"], status, late_result=evidence["late_result"])
+                    ),
+                    now(),
+                ),
             )
             # Delivery state and external outcome must commit together.
             row = db.execute(
@@ -538,11 +561,9 @@ class Store:
                     else "FAILED",
                 )
             if row["kind"] in {"gift_send", "gift_refund"}:
-                from app.gifts.outcomes import finish, track_preflight_wait
+                from app.gifts.outcomes import finish
 
                 finish(db, {**dict(row), "id": ident}, status, result, error, store=self)
-                if row["kind"] == "gift_send":
-                    track_preflight_wait(db)
             if row[0].startswith("delivery:"):
                 order = row[0].removeprefix("delivery:")
                 state = (
@@ -569,6 +590,10 @@ class Store:
                     "INSERT INTO order_history(order_id,source,new_status,note,created_at) SELECT id,'FULFILLMENT_RESULT',status,?,? FROM orders WHERE id=?",
                     (status, now(), row["target"]),
                 )
+            if row["kind"] == "gift_send" or row["kind"] in AUTOMATIC_DELIVERY_KINDS:
+                from app.gifts.outcomes import track_preflight_wait
+
+                track_preflight_wait(db)
 
     @staticmethod
     def uncertain_event(db, ident):
@@ -590,6 +615,15 @@ class Store:
                 (time.time(),),
             )
             for row in affected:
+                from app.services.operation_outcomes import unstarted_delivery
+
+                if unstarted_delivery(db, row):
+                    db.execute(
+                        "UPDATE outbox SET status='RETRYABLE_FAILED',error_code='PREFLIGHT_INTERRUPTED',"
+                        "retry_at=?,lease_token=NULL,lease_until=NULL WHERE id=?",
+                        (time.time() + 30, row["id"]),
+                    )
+                    continue
                 if row["kind"] == "gift_send":
                     from app.gifts.outcomes import finish, unstarted_preflight
 
@@ -602,9 +636,6 @@ class Store:
                         finish(db, row, "RETRYABLE_FAILED", None, "PREFLIGHT_INTERRUPTED", self)
                         continue
                 if row["started_at"] is None and row["kind"] in {
-                    "delivery",
-                    "delivery_text",
-                    "chain_message",
                     "reply",
                     "mark_read",
                 }:
