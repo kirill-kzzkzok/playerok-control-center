@@ -12,6 +12,7 @@ from app.gifts.settings import GiftSettings
 from app.playerok.adapter import APIError
 from app.security.logging import event
 from app.services.automation import Automation, DeliveryPolicy
+from app.services.edit_confirmation import is_ordinary_edit
 from app.services.inventory import Inventory
 from app.services.logical_products import LogicalProducts
 from app.services.playerok_connection import REASONS
@@ -167,6 +168,7 @@ class ProductReadiness:
                 "Подтвердить привязку",
                 "lp:item:" + ident,
             )
+        listing_verified = False
         if product:
             if (mode == "playerok" and gift and gift["enabled"]) or (
                 mode != "manual"
@@ -203,6 +205,7 @@ class ProductReadiness:
             if complete_item and product["state"] == "VERIFIED":
                 try:
                     self.logical.verify_listing(product, item)
+                    listing_verified = True
                 except (Conflict, ValueError) as exc:
                     add(
                         "ITEM_CHANGED",
@@ -257,10 +260,24 @@ class ProductReadiness:
             ]
         marks = ",".join("?" for _ in ids)
         operations = self.store.rows(
-            f"SELECT b.id,b.kind,b.target,b.status,b.error_code,EXISTS(SELECT 1 FROM gift_jobs g WHERE g.order_id=b.target) AS gift_job FROM outbox b LEFT JOIN orders o ON o.id=b.target WHERE (o.item_id IN ({marks}) OR b.target IN ({marks})) AND (b.status IN ('UNCERTAIN','PROCESSING','PENDING','RETRYABLE_FAILED') OR b.error_code='MANUALLY_STOPPED_UNCERTAIN') ORDER BY b.created_at DESC LIMIT 10",
+            f"SELECT b.id,b.kind,b.target,b.payload,b.status,b.error_code,EXISTS(SELECT 1 FROM gift_jobs g WHERE g.order_id=b.target) AS gift_job FROM outbox b LEFT JOIN orders o ON o.id=b.target WHERE (o.item_id IN ({marks}) OR b.target IN ({marks})) AND (b.status IN ('UNCERTAIN','PROCESSING','PENDING','RETRYABLE_FAILED') OR b.error_code='MANUALLY_STOPPED_UNCERTAIN') ORDER BY b.created_at DESC LIMIT 10",
             ids + ids,
         )
         for op in operations:
+            if (
+                op["status"] == "PERMANENT_FAILED"
+                and op["error_code"] == "MANUALLY_STOPPED_UNCERTAIN"
+                and is_ordinary_edit(op)
+            ):
+                if not listing_verified:
+                    add(
+                        "CLOSED_EDIT_RECHECK",
+                        "Запись правки закрыта. Проверьте текущую привязку товара; результат старой правки не подтверждён.",
+                        "Проверить текущую привязку",
+                        "rd:check:" + ident,
+                        unknown=True,
+                    )
+                continue
             uncertain = op["status"] == "UNCERTAIN" or op["error_code"] == "MANUALLY_STOPPED_UNCERTAIN"
             route = (
                 "gft:details:" + op["target"]

@@ -10,6 +10,7 @@ from aiogram.types import InlineKeyboardButton
 
 from app.database.store import Conflict
 from app.gifts.core import gift_name
+from app.services.edit_confirmation import is_ordinary_edit
 from app.telegram.errors import TERMINAL_EDIT, send_failure, telegram_error
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
@@ -64,6 +65,9 @@ class OperationResults:
             "UNCERTAIN": "Результат неизвестен",
             "PERMANENT_FAILED": "Операция остановлена",
         }[status]
+        closed_edit = is_ordinary_edit(row) and row["error_code"] == "MANUALLY_STOPPED_UNCERTAIN"
+        if closed_edit:
+            label = "Запись правки закрыта. Выдача этой кнопкой не выключалась."
         text = f"🧾 <b>{title}</b>\n{label}"
         receipt = self.store.rows(
             "SELECT notice_status FROM operation_receipts WHERE operation_id=? AND owner_id=?", (ident, owner)
@@ -126,6 +130,8 @@ class OperationResults:
             text += "\n⚠️ Запрос мог выполниться. Не повторяйте его. Сначала проверьте фактический результат."
             if kind == "edit":
                 text += edit_readback_note(self.store.setting("edit:confirmation:" + ident, {}))
+                if closed_edit:
+                    buttons.append([("🔍 Проверить товар и выдачу", "rd:check:" + row["target"])])
             buttons.append(
                 [
                     (

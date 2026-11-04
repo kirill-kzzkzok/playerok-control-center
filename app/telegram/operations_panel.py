@@ -2,6 +2,7 @@ import json
 import secrets
 
 from app.database.store import Conflict
+from app.services.edit_confirmation import is_ordinary_edit
 from app.services.reconciliation import Reconciliation, signature
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
@@ -55,10 +56,22 @@ class OperationsPanel:
             data = (await state.get_data()).get("resolution", {})
             if ident != data.get("nonce") or not data.get("reason"):
                 raise Conflict("Подтверждение решения устарело")
+            closing_edit = data["decision"] == "STOP_UNCERTAIN" and is_ordinary_edit(
+                self.service.action(owner, data["id"])
+            )
             await self.service.resolve(
                 owner, data["id"], data["signature"], data["decision"], data["reason"], data.get("message_id")
             )
             await state.clear()
+            if closing_edit:
+                row = self.service.action(owner, data["id"])
+                return (
+                    "🗃 Запись правки закрыта без повторной отправки.\nТовар этой кнопкой не остановлен: разрешения выдачи не менялись. Исходная правка не объявлена успешной.\nПроверьте текущее объявление и привязку. Если вы отдельно выключали выдачу, включите её в настройках товара после проверки.",
+                    keyboard(
+                        [[("🔍 Проверить товар и выдачу", "rd:check:" + row["target"])]],
+                        back=("⬅️ К товару", "item:" + row["target"]),
+                    ),
+                )
             return "Решение сохранено. Новые запросы отправки не создавались.", keyboard(
                 [[("Операция", "ops:show:" + data["id"])]]
             )
@@ -92,7 +105,10 @@ class OperationsPanel:
             uploads = self.store.rows(
                 "SELECT position,status FROM chat_uploads WHERE operation_id=? ORDER BY position", (ident,)
             )
-            text = f"🧾 <b>Операция</b>\nID: <code>{escaped(ident, 100)}</code>\nТип: {escaped(row['kind'], 60)}\nСтатус: {escaped(row['status'], 60)}\nЦель: {escaped(row['target'], 100)}\nСоздана: {local_time(row['created_at'])}\nПопыток: {row['attempts']}\nОшибка: {escaped(row['error_code'] or '—', 100)}"
+            closed_edit = is_ordinary_edit(row) and row["error_code"] == "MANUALLY_STOPPED_UNCERTAIN"
+            shown_status = "Запись правки закрыта владельцем" if closed_edit else status_label(row["status"])
+            shown_error = "Исходная правка не подтверждена" if closed_edit else row["error_code"] or "—"
+            text = f"🧾 <b>Операция</b>\nID: <code>{escaped(ident, 100)}</code>\nТип: {escaped(operation_name(row['kind']), 60)}\nСтатус: {escaped(shown_status, 100)}\nЦель: {escaped(row['target'], 100)}\nСоздана: {local_time(row['created_at'])}\nПопыток: {row['attempts']}\nРезультат: {escaped(shown_error, 100)}"
             if (
                 row["started_at"] is None
                 and row["status"] == "PERMANENT_FAILED"
@@ -114,12 +130,17 @@ class OperationsPanel:
                     text += " · ID сообщения: <code>" + escaped(evidence["message_id"], 100) + "</code>"
                 text += "\nОсновной статус не изменён. Проверьте результат перед ручным решением."
             if row["error_code"] == "MANUALLY_STOPPED_UNCERTAIN":
-                text += "\nПовтор остановлен владельцем; внешний результат остался неизвестен."
+                text += (
+                    "\nЗакрыта только запись правки. Кнопка не выключает товар и не меняет разрешения выдачи."
+                    if closed_edit
+                    else "\nПовтор остановлен владельцем; внешний результат остался неизвестен."
+                )
             if row["kind"] == "edit" and row["status"] != "SUCCEEDED":
                 text += edit_readback_note(self.store.setting("edit:confirmation:" + ident, {}))
             if resolutions:
                 resolution = resolutions[0]
-                text += f"\n\nРешение владельца {resolution['actor']}: {resolution['decision']}\n{escaped(resolution['reason'], 600)}\n{local_time(resolution['resolved_at'])}"
+                decision = "Закрыта запись правки" if closed_edit else resolution["decision"]
+                text += f"\n\nРешение владельца {resolution['actor']}: {decision}\n{escaped(resolution['reason'], 600)}\n{local_time(resolution['resolved_at'])}"
             rows = []
             if (
                 row["started_at"] is None
@@ -143,7 +164,16 @@ class OperationsPanel:
                     "premium_bump",
                 }:
                     rows.append([("🔍 Проверить результат на Playerok", "ops:confirm:" + ident)])
-                rows.append([("⛔ Закрыть без повторной отправки", "ops:stop:" + ident)])
+                rows.append(
+                    [
+                        (
+                            "🗃 Закрыть запись правки"
+                            if is_ordinary_edit(row)
+                            else "⛔ Закрыть без повторной отправки",
+                            "ops:stop:" + ident,
+                        )
+                    ]
+                )
             elif (
                 row["error_code"] == "MANUALLY_STOPPED_UNCERTAIN"
                 and row["kind"] in {"edit", "premium_publish", "premium_bump"}
@@ -151,6 +181,8 @@ class OperationsPanel:
             ):
                 text += "\n\nЗапись закрыта без подтверждения успеха. Сверка без записи по-прежнему доступна; повторной отправки не будет."
                 rows.append([("🔍 Проверить результат на Playerok", "ops:confirm:" + ident)])
+                if closed_edit:
+                    rows.append([("🔍 Проверить товар и выдачу", "rd:check:" + row["target"])])
             rows.append([("История операций", "ops:list:ALL:0")])
             return text, keyboard(rows)
         if command not in {"stop", "confirm"} or (
@@ -163,7 +195,12 @@ class OperationsPanel:
             )
         ):
             raise Conflict("Операция уже разрешена или действие недоступно")
-        data = {"id": ident, "signature": signature(row), "decision": "STOP_UNCERTAIN"}
+        data = {
+            "id": ident,
+            "signature": signature(row),
+            "decision": "STOP_UNCERTAIN",
+            "ordinary_edit": is_ordinary_edit(row),
+        }
         if command == "confirm":
             if row["kind"] == "edit":
                 evidence = await self.service.evidence(owner, ident)
@@ -172,7 +209,16 @@ class OperationsPanel:
                     return "🔍 Playerok проверен\n" + evidence["reason"], keyboard(
                         [
                             *(
-                                [[("⛔ Закрыть без повторной отправки", "ops:stop:" + ident)]]
+                                [
+                                    [
+                                        (
+                                            "🗃 Закрыть запись правки"
+                                            if is_ordinary_edit(row)
+                                            else "⛔ Закрыть без повторной отправки",
+                                            "ops:stop:" + ident,
+                                        )
+                                    ]
+                                ]
                                 if row["status"] == "UNCERTAIN"
                                 else []
                             ),
@@ -201,6 +247,12 @@ class OperationsPanel:
                 raise Conflict("Проверка успешности этого типа операции пока недоступна")
         await state.set_state("resolve:reason")
         await state.set_data({"resolution": data})
+        if command == "stop" and data["ordinary_edit"]:
+            return (
+                "🗃 Закрыть запись правки?\n\nЭто не остановка товара. Разрешения выдачи этой кнопкой не меняются. Закрытие не отменяет изменения на Playerok и не подтверждает успех. Повторная правка не отправляется.\nРезервы платежей и карантин выдачи сохраняются. После закрытия проверьте текущую привязку товара.\n\n"
+                + self.reason_prompt(data),
+                keyboard([[("⬅️ Отмена", "ops:show:" + ident)]]),
+            )
         if command == "stop":
             return (
                 "⛔ Закрыть без повторной отправки?\n\nДействие на Playerok могло успешно выполниться. Закрытие не отменяет изменения и не подтверждает успех. Повторный запрос не отправляется.\n\nРезервы начатых и неизвестных платежей и карантин выдачи сохраняются. Только доказанно неиспользованный денежный резерв может быть снят существующей проверкой. Привязки не подтверждаются, автовыдача не включается. Для обычного редактирования закрытие снимает ожидание этой записи в очереди; перед новой правкой проверьте текущее объявление.\n\n"
@@ -212,6 +264,8 @@ class OperationsPanel:
     @staticmethod
     def reason_prompt(data):
         if data["decision"] == "STOP_UNCERTAIN":
+            if data.get("ordinary_edit"):
+                return "Опишите причину закрытия записи правки (10–500 символов). Товар не выключается; исходный результат не объявляется успешным. Не пишите секреты."
             return "Опишите причину остановки (10–500 символов). Внешний результат останется неизвестен; резерв останется в карантине. Повторная отправка не создаётся. Не пишите секреты или данные выдачи."
         return "API подтвердил доступное сообщение/состояние. Решение остаётся ручным. Если есть фото, содержимое файлов нужно лично сверить на Playerok: совпадение их числа этого не доказывает. Опишите проверку (10–500 символов), без секретов и данных выдачи."
 
@@ -246,7 +300,9 @@ class OperationsPanel:
             [
                 [
                     (
-                        "⛔ Закрыть запись без повтора"
+                        "🗃 Закрыть запись правки"
+                        if data["decision"] == "STOP_UNCERTAIN" and data.get("ordinary_edit")
+                        else "⛔ Закрыть запись без повтора"
                         if data["decision"] == "STOP_UNCERTAIN"
                         else "✅ Сохранить решение",
                         "ops:apply:" + data["nonce"],

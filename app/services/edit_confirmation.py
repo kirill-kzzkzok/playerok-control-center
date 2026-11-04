@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 import time
 from datetime import UTC, datetime, timedelta
 
@@ -15,6 +16,20 @@ def payload_hash(payload):
 
 
 CRITICAL_FIELDS = {"category", "obtaining_type", "attributes", "data_fields", "comment"}
+
+
+def is_ordinary_edit(action):
+    payload = action.get("payload")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (ValueError, TypeError):
+            return False
+    return (
+        action.get("kind") == "edit"
+        and isinstance(payload, dict)
+        and not any(payload.get(key) for key in ("logical_binding", "code_migration", "platform_binding"))
+    )
 
 
 def compact_item(item):
