@@ -119,7 +119,6 @@ async def prepare(ui, state, *, long=False):
     await ui.message("1000")
     await click(ui, state, "choose:2")
     await ui.message("first-private-unit\nfirst-private-unit\nsecond-private-unit")
-    await click(ui, state, "confirm_done")
 
 
 async def test_complete_preview_real_wizard_then_create_and_one_time_stock_transfer(rig):

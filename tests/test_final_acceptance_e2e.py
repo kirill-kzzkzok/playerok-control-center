@@ -212,7 +212,6 @@ class AcceptanceHarness:
         if stop_before_delivery:
             return
         await self.wizard_action("choose:3")
-        await self.wizard_action("confirm_done")
         self.original_draft = (await self.state.get_data())["draft_id"]
         await self.wizard_action("submit")
         await self.worker.once()

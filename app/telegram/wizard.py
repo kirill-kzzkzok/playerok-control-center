@@ -672,7 +672,7 @@ class Wizard:
                     raise ValidationError("Выберите хотя бы один подарок")
                 payload["gift_code"] = ", ".join(chosen)
                 payload["gift_bundle"] = gifts.catalog_bundle(payload["gift_code"])
-                payload["step"] = "preview" if payload.get("return_preview") else "confirm"
+                payload["step"] = "preview"
             payload["gift_codes"] = chosen
         elif action == "back":
             if step == "fields" and payload.get("field_index", 0) > 0:
@@ -787,9 +787,7 @@ class Wizard:
                         await self.save(owner, state, payload)
                         return await self.screen(owner, state)
                 payload["step"] = (
-                    ("preview" if payload.get("return_preview") else "confirm")
-                    if choice["value"] in {"manual", "gifts", "playerok"}
-                    else "delivery_data"
+                    "preview" if choice["value"] in {"manual", "gifts", "playerok"} else "delivery_data"
                 )
             elif step == "finance_method":
                 payload["withdrawal"] = await withdrawal_snapshot(self.api, choice["id"])
@@ -838,7 +836,7 @@ class Wizard:
                 # Validate cleanup scope before committing a changed draft.
                 self.attachments.path(removed_photo)
                 payload.pop("replace_photo_index", None)
-        elif action == "confirm_done" and step == "confirm":
+        elif action == "confirm_done" and step in {"confirm", "preview"}:
             payload["step"] = "preview"
         elif action == "edit" and step == "preview":
             target = parts[3] if len(parts) > 3 else "name"
@@ -965,7 +963,7 @@ class Wizard:
             elif len(text.encode("utf-16-le")) // 2 > 3500:
                 raise ValidationError("Текст выдачи: до 3500 символов")
             payload["delivery_data"] = text
-            payload["step"] = "preview" if payload.get("return_preview") else "confirm"
+            payload["step"] = "preview"
         else:
             raise ValidationError("На этом шаге используйте кнопки")
         try:

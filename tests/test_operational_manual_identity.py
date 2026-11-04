@@ -13,7 +13,6 @@ async def test_manual_wizard_reserves_one_code_with_no_automation(shop, name):
     r = shop
     await r.create_and_prepare(stop_before_delivery=True, description="Description unchanged")
     await r.wizard_action("choose:0")
-    await r.wizard_action("confirm_done")
     await r.wizard_action("edit:name")
     await r.ui.message(name)
     submit = "w:" + (await r.state.get_data())["view_token"] + ":submit"

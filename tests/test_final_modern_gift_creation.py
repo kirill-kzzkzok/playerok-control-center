@@ -34,7 +34,6 @@ async def test_editing_description_cannot_silently_change_the_selected_gift(shop
     r = shop
     await r.create_and_prepare(stop_before_delivery=True)
     await r.wizard_action("choose:3")
-    await r.wizard_action("confirm_done")
     ident = (await r.state.get_data())["draft_id"]
     before = r.store.get_draft(ident, 7)["payload"]
     assert before["gift_code"] == "heart" and "gift:" not in before["description"]

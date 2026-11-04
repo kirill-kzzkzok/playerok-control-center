@@ -23,7 +23,6 @@ async def test_clean_wizard_creation_launch_and_immediate_first_sale(shop, mode,
     if mode == "gifts":
         await r.wizard_action("gift_add:heart")
         await r.wizard_action("gift_done")
-    await r.wizard_action("confirm_done")
     draft = (await r.state.get_data())["draft_id"]
     await r.wizard_action("submit")
     await r.worker.once()

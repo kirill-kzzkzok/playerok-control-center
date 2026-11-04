@@ -39,7 +39,6 @@ async def platform_draft(r):
         stop_before_delivery=True, description="Товар передаёт покупателю сама площадка"
     )
     await r.wizard_action("choose:4")
-    await r.wizard_action("confirm_done")
     ident = (await r.state.get_data())["draft_id"]
     await r.wizard_action("submit")
     await r.worker.once()
