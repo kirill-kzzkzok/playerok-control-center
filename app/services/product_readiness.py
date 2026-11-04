@@ -1,7 +1,9 @@
 """Read-only evidence for UI. Execution authority remains in the existing guards."""
 
 import asyncio
+import hashlib
 import json
+from copy import deepcopy
 from datetime import UTC, datetime
 
 from app.database.store import Conflict, now
@@ -40,7 +42,63 @@ class ProductReadiness:
             sender or getattr(api, "gift_sender", None),
         )
 
+    def observed_item(self, ident, projection=None):
+        """UI evidence only; never supplies execution guards with cached authority."""
+        key = (self.api.account.id, ident)
+        cached = getattr(self.api, "readiness_items", {}).get(key)
+        at = getattr(self.api, "readiness_item_times", {}).get(key)
+        version = getattr(self.api, "readiness_item_versions", {}).get(key)
+        if not cached or not fresh(at, 120) or version != self.item_version(ident):
+            return projection
+        if projection:
+            fields = (
+                "id",
+                "name",
+                "description",
+                "price",
+                "status",
+                "deleted_at",
+                "category",
+                "obtaining_type",
+                "attributes",
+                "data_fields",
+            )
+            if any(k in projection and projection[k] != cached.get(k) for k in fields):
+                return projection
+            if (projection.get("user") or {}).get("id") != self.api.account.id:
+                return projection
+        return cached
+
+    def item_version(self, ident):
+        # An edit queued/closed after the observation invalidates UI evidence too.
+        rows = self.store.rows(
+            "SELECT id,status,attempts,error_code,started_at FROM outbox "
+            "WHERE target=? AND kind IN ('edit','edit_fields') ORDER BY id",
+            (ident,),
+        )
+        return hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
+
+    def remember_item(self, item, *, version=None):
+        """Record a freshly owner-checked read for consistent UI projections."""
+        key = (self.api.account.id, item["id"])
+        if (item.get("user") or {}).get("id") != key[0]:
+            raise Conflict("Владелец наблюдаемого объявления не подтверждён")
+        for name in ("readiness_items", "readiness_item_times", "readiness_item_versions"):
+            if not hasattr(self.api, name):
+                setattr(self.api, name, {})
+        if len(self.api.readiness_items) >= 200:
+            self.api.readiness_items.clear()
+            self.api.readiness_item_times.clear()
+            self.api.readiness_item_versions.clear()
+        self.api.readiness_items[key] = deepcopy(item)
+        self.api.readiness_item_times[key] = now()
+        self.api.readiness_item_versions[key] = self.item_version(item["id"]) if version is None else version
+
     def snapshot(self, ident, *, item=None, for_arm=False):
+        if not for_arm and (
+            not item or any(item.get(k) is None for k in ("description", "category", "obtaining_type"))
+        ):
+            item = self.observed_item(ident, item)
         product = self.logical.listing(ident)
         policy_error = False
         try:
@@ -197,7 +255,7 @@ class ProductReadiness:
             if item and product["state"] == "VERIFIED" and not complete_item:
                 add(
                     "ITEM_UNCHECKED",
-                    "В списке товаров нет полного описания и параметров. Для проверки привязки откройте товар или выполните проверку.",
+                    "Актуальность объявления ещё не подтверждена серверной проверкой.",
                     "Проверить объявление",
                     "rd:check:" + ident,
                     unknown=True,
@@ -503,30 +561,36 @@ class ProductReadiness:
             "manual": any(p["manual"] for p in problems),
         }
 
-    async def check(self, owner, ident, *, for_arm=False):
+    async def check(self, owner, ident, *, for_arm=False, automatic=False):
         self.logical.authority(owner)
         locks = getattr(self.api, "readiness_locks", None)
         if locks is None:
             self.api.readiness_locks = locks = {}
-        lock = locks.setdefault(ident, asyncio.Lock())
+        lock = locks.setdefault((self.api.account.id, ident), asyncio.Lock())
         old = self.store.setting("readiness:" + ident, {})
         cached_items = getattr(self.api, "readiness_items", None)
         if cached_items is None:
             self.api.readiness_items = cached_items = {}
+        cached_times = getattr(self.api, "readiness_item_times", None)
+        if cached_times is None:
+            self.api.readiness_item_times = cached_times = {}
+        cached_versions = getattr(self.api, "readiness_item_versions", None)
+        if cached_versions is None:
+            self.api.readiness_item_versions = cached_versions = {}
         cache_key = (self.api.account.id, ident)
-        if not for_arm and (lock.locked() or fresh(old.get("attempt"), 3)):
-            return {**self.snapshot(ident, item=cached_items.get(cache_key), for_arm=for_arm), "busy": True}
+        version = self.item_version(ident)
+        changed = old.get("edit_version", cached_versions.get(cache_key)) != version
+        if not for_arm and (lock.locked() or fresh(old.get("attempt"), 30) and not changed):
+            return {**self.snapshot(ident), "busy": True}
         async with lock:
             item, error = None, None
-            self.store.set_setting("readiness:" + ident, {**old, "attempt": now()})
+            self.store.set_setting("readiness:" + ident, {**old, "attempt": now(), "edit_version": version})
             try:
                 async with asyncio.timeout(30):
                     item = await self.automation.item(owner, ident)
-                    if len(cached_items) >= 200:
-                        cached_items.clear()
-                    cached_items[cache_key] = item
+                    self.remember_item(item, version=version)
                     product = self.logical.listing(ident)
-                    if product and product["error_code"] == "RELIST_CONFIRMATION_REQUIRED":
+                    if not automatic and product and product["error_code"] == "RELIST_CONFIRMATION_REQUIRED":
                         from app.workers.logical_products import LogicalProductWorker
 
                         # Clear an old scan blocker only through a complete
@@ -541,7 +605,7 @@ class ProductReadiness:
                         await self.gifts.refresh()
                         if item.get("status") == "APPROVED":
                             code = gift["gift_code"] if gift else json.loads(product["config"])["code"]
-                            await self.gifts.inspect_item(owner, ident, preview_code=code)
+                            await self.gifts.inspect_item(owner, ident, preview_code=code, observed_item=item)
             except (
                 APIError,
                 GiftFailure,
@@ -588,3 +652,40 @@ class ProductReadiness:
                 {**record, "error": error, "success": old.get("success") if error else now()},
             )
             return self.snapshot(ident, item=item, for_arm=for_arm)
+
+    async def refresh_due(self):
+        """One due enabled listing, no auto-enable, reconciliation or external write."""
+        account = self.api.account
+        if (
+            not account.id
+            or account.id != self.store.setting("playerok:account_id")
+            or getattr(account, "connection_verified", True) is not True
+        ):
+            return 0
+        candidates = self.store.rows(
+            "SELECT l.item_id,p.owner_id FROM logical_listings l JOIN logical_products p ON p.id=l.product_id "
+            "JOIN administrators a ON a.user_id=p.owner_id "
+            "WHERE p.account_id=? AND p.enabled=1 AND p.state='VERIFIED' "
+            "AND l.source_order_id IS NULL AND l.server_status='APPROVED'",
+            (account.id,),
+        )
+        candidates.sort(
+            key=lambda row: self.store.setting("readiness:" + row["item_id"], {}).get("attempt", "")
+        )
+        for row in candidates:
+            record = self.store.setting("readiness:" + row["item_id"], {})
+            if not fresh(record.get("attempt"), 120):
+                await self.check(row["owner_id"], row["item_id"], automatic=True)
+                return 1
+        return 0
+
+    async def run(self, stop):
+        from app.workers.supervisor import worker_cycle
+
+        while not stop.is_set():
+            with worker_cycle(self.store, "readiness", 30, max_seconds=45) as cycle:
+                cycle["processed"] = await self.refresh_due()
+            try:
+                await asyncio.wait_for(stop.wait(), 15)
+            except TimeoutError:
+                pass

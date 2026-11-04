@@ -14,6 +14,7 @@ CYCLE_LABELS = {
     "gifts": "Telegram-подарки",
     "auto-replies": "Автоответы",
     "logical-products": "Перевыставления",
+    "readiness": "Проверка готовности товаров",
     "sync": "Синхронизация",
     "transactions": "История расходов",
     "promotions": "Продвижение",

@@ -45,7 +45,9 @@ class GiftService:
             raise GiftFailure("GIFT_ORDER_NOT_FOUND")
         return rows[0]
 
-    async def inspect_item(self, owner, item_id, *, preview_code=None, order_id=None, paid_order=None):
+    async def inspect_item(
+        self, owner, item_id, *, preview_code=None, order_id=None, paid_order=None, observed_item=None
+    ):
         self.owner(owner)
         s = self.settings
         if not (s.category_id and s.obtaining_type_id and s.buyer_username_field_id):
@@ -53,6 +55,14 @@ class GiftService:
         from app.services.logical_products import LogicalProducts
 
         binding = LogicalProducts(self.store, self.api).listing(item_id)
+        if observed_item is not None and (
+            preview_code is None
+            or order_id is not None
+            or paid_order is not None
+            or binding
+            and binding["source_order_id"]
+        ):
+            raise Conflict("Сохранённое наблюдение допустимо только для проверки настроек")
         if binding and binding["source_order_id"]:
             if order_id != binding["source_order_id"]:
                 raise Conflict("Снимок доступен только для своей оплаченной сделки")
@@ -64,7 +74,7 @@ class GiftService:
             deliverable(fresh, order_id, self.api.account.id)
             item = fresh.get("item") or {}
         else:
-            item = await self.api.call("get_item", id=item_id)
+            item = observed_item if observed_item is not None else await self.api.call("get_item", id=item_id)
         if (
             item.get("id") != item_id
             or not self.api.account.id

@@ -167,6 +167,15 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
             )
         )
         tasks.append(supervisor.start("playerok-sync", lambda: when_connected(lambda: sync.run(stop)), stop))
+        from app.services.product_readiness import ProductReadiness
+
+        tasks.append(
+            supervisor.start(
+                "product-readiness",
+                lambda: when_connected(lambda: ProductReadiness(store, api).run(stop)),
+                stop,
+            )
+        )
         if config.realtime_enabled:
             tasks.append(
                 supervisor.start(

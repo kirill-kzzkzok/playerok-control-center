@@ -25,11 +25,20 @@ def summary(result, *, compact=False):
     if result["mode"] == "manual":
         text = "Выдача: вручную\nАвтоматическая выдача не настроена."
     problems = result["problems"]
-    if problems:
-        text += f"\n{'Перед включением' if result['state'] == 'OFF' else 'Требует внимания'}: {len(problems)}"
-        text += "\n" + "\n".join(
-            "• " + escaped(p["text"], 130) for p in (problems[:1] if compact else problems)
+    actionable = [p for p in problems if not p["unknown"] or p["code"] == "CHECK_FAILED"]
+    if actionable:
+        text += (
+            f"\n{'Перед включением' if result['state'] == 'OFF' else 'Требует внимания'}: {len(actionable)}"
         )
+    if any(p["unknown"] and p["code"] != "CHECK_FAILED" for p in problems):
+        text += (
+            "\nПроверки актуальности обновляются автоматически."
+            if result["enabled"]
+            else "\nАктуальность проверяется перед включением."
+        )
+    visible = actionable[:1] if compact else problems
+    if visible:
+        text += "\n" + "\n".join("• " + escaped(p["text"], 130) for p in visible)
     elif result["state"] == "READY":
         text += "\nСохранённые разрешения, привязка, синхронизация и данные проверены."
     if not compact:

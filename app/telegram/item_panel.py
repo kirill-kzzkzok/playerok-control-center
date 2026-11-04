@@ -26,6 +26,10 @@ class ItemPanel:
             or (item.get("user") or {}).get("id") != self.api.account.id
         ):
             raise ValidationError("Владение лотом не подтверждено")
+        if self.store:
+            from app.services.product_readiness import ProductReadiness
+
+            ProductReadiness(self.store, self.api).remember_item(item)
         return item
 
     def images(self, item):
