@@ -460,7 +460,17 @@ def create_router(store, api, products, synchronizer):
                     ident, section = action.split(":", 1)[1], "card"
                 else:
                     _, section, ident = action.split(":", 2)
-                text, markup = await item_panel.screen(ident, section, state, owner, gifts_panel, stock_panel)
+                if section == "delivery" and logical_panel.service.listing(ident):
+                    _, policy = automation_panel.service.get(ident)
+                    text, markup = await (
+                        platform_panel.callback("platform:item:" + ident, owner, state)
+                        if policy.mode == "playerok"
+                        else logical_panel.callback("lp:item:" + ident, owner, state)
+                    )
+                else:
+                    text, markup = await item_panel.screen(
+                        ident, section, state, owner, gifts_panel, stock_panel
+                    )
             elif action.startswith("itemmedia:"):
                 image, caption, markup = await item_panel.media(action, state)
                 await message.answer_photo(

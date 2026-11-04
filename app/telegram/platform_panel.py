@@ -33,9 +33,9 @@ class PlatformPanel:
                 [("✏️ Изменить текст ответа", prefix + "text")],
                 [("✅ Автовыполнение: " + ("Вкл" if data["fulfill"] else "Выкл"), prefix + "fulfill")],
                 [("💾 Сохранить", prefix + "save")],
-                [("🔍 Проверить готовность", "rd:check:" + data["id"])],
+                [("🔄 Изменить способ выдачи", "lp:method:" + data["id"])],
             ],
-            back=("⬅️ К выдаче товара", "iv:delivery:" + data["id"]),
+            back=("⬅️ К товару", "item:" + data["id"]),
         )
 
     async def save(self, data, owner, state, *, switching=False):

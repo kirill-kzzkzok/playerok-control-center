@@ -169,45 +169,13 @@ class ItemPanel:
                 text += "\n🔐 Код товара: " + (
                     escaped(product["code"], 3) if len(product["code"]) == 3 else "требуется перенос"
                 )
-                text += "\nНаследовать настройки: " + (
-                    "разрешено" if product["inherit_enabled"] else "выключено"
-                )
-            text += "\n" + summary(readiness)
-            from app.database.store import now
-            from app.services.finance import selected_fee_multiplier
-            from app.services.withdrawals import draft_calculation
-
-            cost = self.store.setting(f"finance:{owner}:cost:{ident}")
-            estimate = (
-                draft_calculation(
-                    {
-                        "price": item.get("price"),
-                        "cost": cost,
-                        "fee_multiplier": selected_fee_multiplier(
-                            item.get("fee_multiplier"),
-                            (item.get("obtaining_type") or {}).get("fee_multiplier"),
-                        ),
-                        "fee_checked_at": now(),
-                    }
-                )
-                if item.get("price") is not None
-                else None
-            )
-            text += "\nСебестоимость: " + (str(cost) + " ₽" if cost is not None else "не задана")
-            if estimate is not None and estimate.after_platform is not None and estimate.cost is not None:
-                text += f"\nДо вывода и размещения: ≈ {estimate.after_platform - estimate.cost} ₽"
+            text += "\n" + summary(readiness, compact=True)
+            text += "\n💬 " + escaped(readiness["message"], 180)
+            if len(readiness["problems"]) > 1:
+                text += "\nОстальные причины — в «Проверить готовность»."
             rows = [
                 [("🔍 Проверить готовность", "rd:check:" + ident)],
-                *(
-                    [[("🔄 Обновить баланс", "rd:balance:" + ident)]]
-                    if readiness["mode"] == "telegram_gifts"
-                    else []
-                ),
                 [("⚙️ Настроить выдачу", "iv:delivery:" + ident)],
-                [
-                    ("💬 Сообщения покупателю", "iv:messages:" + ident),
-                    ("✅ Завершение заказа", "iv:completion:" + ident),
-                ],
                 [("💰 Сколько получу чистыми", "finance:" + ident)],
                 [("✏️ Редактировать", "iv:edit:" + ident), ("⭐ Продвижение", "payp:item:" + ident)],
                 [("📋 История и операции", "iv:history:" + ident)],
@@ -229,8 +197,6 @@ class ItemPanel:
                         "\nВозможность повторного размещения или его базовая цена не подтверждены сервером."
                     )
                     rows.insert(0, [("Проверить возможность перевыставления", "relist:item:" + ident)])
-            elif product and not platform and not product["enabled"] and product["handler"] != "manual":
-                rows.insert(0, [("🚀 Запустить продажи", "lp:ready:" + ident)])
         elif section == "edit":
             text = title + "\nЧто изменить?"
             rows = [
@@ -251,7 +217,6 @@ class ItemPanel:
                 rows = [
                     [("⚙️ Настройки текущего способа", route)],
                     [("🔄 Изменить способ выдачи", "lp:method:" + ident)],
-                    [("🔍 Проверить готовность", "rd:check:" + ident)],
                 ]
                 if readiness["mode"] == "unique_stock":
                     rows.insert(1, [("📚 Пополнить склад", "stock:view:" + ident)])

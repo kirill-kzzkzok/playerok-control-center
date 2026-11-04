@@ -150,6 +150,13 @@ class LogicalProductsPanel:
             rows.append([("Настроить выдачу", prefix + "configure")])
         if product and product["handler"] == "unique_stock":
             rows.insert(0, [("📚 Склад", "stock:view:" + item_id)])
+        rows.append([("🔄 Изменить способ выдачи", "lp:method:" + item_id)])
+        if (
+            product
+            and product["handler"] in {"unique_stock", "fixed_text"}
+            and not json.loads(product["config"]).get("platform_only")
+        ):
+            rows.append([("Проверить конкретный заказ без отправки", "auto:check:" + item_id)])
         from app.services.product_readiness import ProductReadiness
         from app.telegram.product_presentation import STATES
 
@@ -157,7 +164,6 @@ class LogicalProductsPanel:
         text += "\n" + STATES[readiness["state"]]
         if readiness["problems"]:
             text += "\n" + "\n".join("• " + escaped(p["text"], 180) for p in readiness["problems"][:6])
-        rows.append([("🔍 Проверить готовность", "rd:check:" + item_id)])
         rows.append([("🔄 Обновить", "lp:item:" + item_id)])
         return text, keyboard(rows, back=("⬅️ К товару", "item:" + item_id))
 
