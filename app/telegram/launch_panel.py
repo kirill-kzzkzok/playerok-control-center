@@ -6,6 +6,7 @@ from dataclasses import asdict
 
 from app.database.store import Conflict
 from app.gifts.core import gift_name
+from app.playerok.adapter import APIError
 from app.services.automation import message_text
 from app.services.inventory import stock_values
 from app.services.listing_launch import ListingLaunch, launch_prefix
@@ -37,7 +38,7 @@ class LaunchPanel:
         self.service = ListingLaunch(store, api, gifts)
         self.store, self.api = store, api
 
-    async def show(self, owner, state, ident):
+    async def show(self, owner, state, ident, *, advanced=False):
         draft = self.service.load(owner, ident)
         value = draft["payload"]
         item = await self.service.automation.item(owner, value["launch_target"])
@@ -54,6 +55,29 @@ class LaunchPanel:
                     else [[("Обновить состояние", "launch:open:" + ident)]]
                 ),
             )
+        preparation_error = None
+        if not self.api.account.writes_enabled:
+            preparation_error = "Записи Playerok выключены. Публикация недоступна."
+        elif self.service.wants_automation(value) and not self.api.account.automation_enabled:
+            preparation_error = "Автоматизация выключена в подключении. Запуск выдачи недоступен."
+        elif value["mode"] == "gifts" and self.store.setting("gifts:stopped", True):
+            preparation_error = (
+                "Подарочная выдача остановлена владельцем. Возобновите её в настройках Telegram-подарков."
+            )
+        if preparation_error and value.pop("ready", None):
+            self.store.update_draft(ident, owner, draft["revision"], value)
+            draft = self.service.load(owner, ident)
+        if not value.get("ready") and not preparation_error:
+            try:
+                prepared = await self.service.check(owner, value)
+            except (APIError, ValueError) as error:
+                from app.telegram.presentation import error_text
+
+                preparation_error = error_text(error)
+            else:
+                value["ready"] = prepared
+                self.store.update_draft(ident, owner, draft["revision"], value)
+                draft = self.service.load(owner, ident)
         nonce = secrets.token_hex(6)
         await replace_context(
             state, None, {"launch": {"id": ident, "revision": draft["revision"], "nonce": nonce}}
@@ -180,7 +204,19 @@ class LaunchPanel:
             rows.append([("🚀 Опубликовать и запустить", p + "commit")])
         if needs_choice:
             text += "\n⚠️ Ранее выбрана автовыдача. Выберите способ выдачи заново; прежний ручной режим не подтверждён."
-        rows.append([("💾 Сохранить и выйти", "home")])
+        if preparation_error:
+            text += "\n⚠️ " + preparation_error
+        if not advanced:
+            rows = [[("📦 Способ выдачи", p + "modes"), ("⭐ Размещение", p + "quotes")]]
+            if value["mode"] in {"text", "stock"}:
+                rows.append([("📦 Данные товара", p + "edit:data")])
+            elif value["mode"] == "gifts":
+                rows.append([("🎁 Выбрать подарок", p + "catalog")])
+            rows.append([("Дополнительные параметры", p + "advanced")])
+            if ready:
+                rows.append([("🚀 Опубликовать и запустить", p + "commit")])
+        else:
+            rows.append([("⬅️ К запуску", p + "basic")])
         return text, keyboard(rows, back=("⬅️ К товару", "item:" + value["launch_target"]))
 
     async def callback(self, action, owner, state):
@@ -240,6 +276,8 @@ class LaunchPanel:
             raise Conflict("Настройки уже изменены или запуск подтверждён")
         value, command = draft["payload"], parts[2]
         p = f"ln:{parts[1]}:"
+        if command in {"advanced", "basic"}:
+            return await self.show(owner, state, draft["id"], advanced=command == "advanced")
         if command == "modes":
             return "⚡ Выберите выдачу до публикации.", keyboard(
                 [[(label, p + "mode:" + mode)] for mode, label in MODES.items()],
