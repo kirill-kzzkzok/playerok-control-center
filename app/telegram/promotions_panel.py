@@ -9,7 +9,7 @@ from app.services.products import ValidationError, priority_price_basis
 from app.services.promotion_settings import PromotionSettings
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
-from app.telegram.presentation import local_time
+from app.telegram.presentation import item_label, local_time, status
 
 EDIT = {
     "interval_seconds": "Интервал, секунд (от 600)",
@@ -69,11 +69,11 @@ class PromotionsPanel:
                 permission.get("revision") == data["revision"]
                 and permission.get("account_id") == self.api.account.id
             )
-            status = "Остановлено" if not values["enabled"] else "Проверка без оплаты: расходы не разрешены"
+            status = "Выключено" if not values["enabled"] else "Подготовлено; расходы ещё не разрешены"
             if values["enabled"] and (scoped or global_authority):
                 try:
                     paid.permissions(automatic=True)
-                    status = "Платное расписание разрешено; тарифы проверяются перед выполнением"
+                    status = "Включено для подтверждённых товаров"
                 except ValidationError as error:
                     status = str(error)
             due = self.service.store.rows(
@@ -106,11 +106,13 @@ class PromotionsPanel:
                 if health.get("last_success"):
                     text += "\nПоследняя успешная проверка: " + local_time(health["last_success"])
             rows = [
+                [("⛔ Остановить автоподнятие", "promo:stop")]
+                if values["enabled"] and (scoped or global_authority)
+                else [("▶️ Включить автоподнятие", "promo:enable")],
+                [("💳 Предел расходов", "promo:budget")],
                 [("📦 Товары для продвижения", "promo:catalog")],
-                [("💳 Разрешить платное расписание", "payp:arm")],
-                [("🗓 Расписание и лимиты", f"pp:{nonce}:advanced")],
-                [("История продвижения", "tools:promotion")],
-                [("⛔ Остановить продвижение", "promo:stop")],
+                [("Результаты и затраты", "promo:expenses")],
+                [("Дополнительные параметры", f"pp:{nonce}:advanced")],
             ]
         else:
             group = data.get("group", "general")
@@ -176,6 +178,41 @@ class PromotionsPanel:
     async def callback(self, action, owner, state):
         self.service.access.orders.owner(owner)
         parts = action.split(":")
+        if action == "promo:budget":
+            revision, policy, selection = self.service.get()
+            await state.set_data(
+                {
+                    "promotion": {
+                        "revision": revision,
+                        "values": asdict(policy),
+                        "selection": selection,
+                        "account": self.api.account.id,
+                        "field": "daily_budget",
+                    }
+                }
+            )
+            await state.set_state("promotion:value")
+            return (
+                (
+                    f"Дневной предел сейчас: {policy.daily} ₽. Введите новый предел в рублях.\n"
+                    "Существующие более низкие лимиты сохранятся. Для новой настройки: операция не выше дневного предела, "
+                    "месяц — не выше 30 дневных пределов, до 30 поднятий на товар. "
+                    "Все границы будут показаны перед отдельным разрешением расходов. Ввод суммы ничего не оплачивает."
+                ),
+                keyboard([], back=("Отмена", "promotions")),
+            )
+        if action == "promo:enable":
+            revision, policy, selection = self.service.get()
+            if (
+                min(money(policy.per_operation), money(policy.daily), money(policy.monthly)) <= 0
+                or policy.max_operations_per_item < 1
+            ):
+                return await self.callback("promo:budget", owner, state)
+            if not policy.enabled:
+                self.service.save(owner, revision, {**asdict(policy), "enabled": True}, selection)
+            from app.telegram.paid_promotions_panel import PaidPromotionsPanel
+
+            return await PaidPromotionsPanel(self.service.store, self.api).callback("payp:arm", owner, state)
         if action == "promo:expenses":
             rows = self.service.store.rows(
                 "SELECT item_id,amount,status,created_at FROM promotion_expenses ORDER BY created_at DESC LIMIT 20"
@@ -183,7 +220,10 @@ class PromotionsPanel:
             text = "💰 <b>Сохранённые расходы продвижения</b>\n" + (
                 "\n".join(
                     escaped(
-                        f"{local_time(row['created_at'])} · {row['amount']} ₽ · {row['status']} · {row['item_id']}",
+                        f"{local_time(row['created_at'])} · {row['amount']} ₽ · "
+                        + ("Зарезервировано" if row["status"] == "RESERVED" else status(row["status"]))
+                        + " · "
+                        + item_label(self.service.store, row["item_id"]),
                         160,
                     )
                     for row in rows
@@ -285,6 +325,27 @@ class PromotionsPanel:
         self.service.access.orders.owner(message.from_user.id)
         data = (await state.get_data())["promotion"]
         field = data.get("field")
+        if field == "daily_budget":
+            if data.get("account") != self.api.account.id:
+                raise Conflict("Аккаунт изменился. Откройте предел расходов заново")
+            daily = money((message.text or "").replace(",", "."))
+            if daily <= 0:
+                raise ValidationError("Введите положительный предел; для отключения используйте «Остановить»")
+            values = data["values"]
+            previous_operation, previous_month = money(values["per_operation"]), money(values["monthly"])
+            values.update(
+                daily=str(daily),
+                per_operation=str(min(previous_operation, daily) if previous_operation > 0 else daily),
+                monthly=str(previous_month if previous_month > 0 else daily * 30),
+                max_operations_per_item=values["max_operations_per_item"] or 30,
+            )
+            with self.service.store.transaction():
+                data["revision"] = self.service.save(
+                    message.from_user.id, data["revision"], values, data["selection"]
+                )
+                self.service.store.set_setting("promotions:paid_authority", {})
+            data.pop("field", None)
+            return await self.show(data, state)
         if field not in EDIT:
             raise ValidationError("Поле устарело")
         value = message.text or ""
