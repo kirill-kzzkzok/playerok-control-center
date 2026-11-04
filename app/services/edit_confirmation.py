@@ -66,43 +66,83 @@ class EditConfirmation:
         self.store.set_setting(self.key(action["id"]), proof)
         return proof
 
-    def matches(self, target, proof, observed):
-        if not edit_receipt_matches(target, proof["expected"], observed, keep_attachment_ids=proof["keep"]):
-            return False
+    def differences(self, target, proof, observed):
+        """Safe field names only; never retain values in diagnostic messages."""
+        if not isinstance(observed, dict):
+            return ["response"]
+        different = []
+        if observed.get("id") != target:
+            different.append("id")
+        for field in ("name", "description", "price"):
+            if field in proof["expected"] and not edit_receipt_matches(
+                target, {field: proof["expected"][field]}, observed
+            ):
+                different.append(field)
+        images = {
+            field: proof["expected"][field]
+            for field in ("add_attachments", "remove_attachments")
+            if field in proof["expected"]
+        }
+        if images and not edit_receipt_matches(target, images, observed, keep_attachment_ids=proof["keep"]):
+            different.append("attachments")
         if (observed.get("user") or {}).get("id") != proof["account"]:
-            return False
+            different.append("owner")
         # Missing evidence is never filled with the old snapshot. In particular,
         # a successful edit cannot attest an externally changed delivery contract.
         before = proof["before"]
-        if any(
-            payload_hash(observed.get(field)) != digest
+        different.extend(
+            field
             for field, digest in proof.get("critical_hashes", {}).items()
-        ):
-            return False
+            if payload_hash(observed.get(field)) != digest
+        )
         fields = set(CRITICAL_FIELDS)
         fields |= {"name", "description", "price"} - proof["expected"].keys()
-        return all(
-            before.get(field) is None
-            or (
+        different.extend(
+            field
+            for field in fields
+            if before.get(field) is not None
+            and not (
                 edit_receipt_matches(target, {"price": before[field]}, observed)
                 if field == "price"
                 else observed.get(field) == before[field]
             )
-            for field in fields
         )
+        return sorted(set(different))
+
+    def matches(self, target, proof, observed):
+        return not self.differences(target, proof, observed)
 
     async def readback(self, action, proof):
-        for delay in (0, 0.1, 0.3):
+        for attempt, delay in enumerate((0, 0.2, 0.8, 2), 1):
             if delay:
                 await asyncio.sleep(delay)  # Bounded visibility backoff; never a write retry.
+            if not self.live(action, proof):
+                raise Conflict("Lease проверки редактирования потерян")
             try:
                 observed = await self.api.call("get_item", id=action["target"])
-            except APIError:
+            except APIError as error:
+                self.record(
+                    action,
+                    {**proof, "last_readback": {"attempts": attempt, "fields": ["network"]}},
+                    {},
+                    None,
+                    confirmed=False,
+                )
+                if error.retry_after is not None:
+                    break  # Respect server throttling; never retry before RetryAfter.
                 continue
             if self.api.account.id != proof["account"]:
                 break
-            if self.matches(action["target"], proof, observed):
+            different = self.differences(action["target"], proof, observed)
+            if not different:
                 return observed
+            self.record(
+                action,
+                {**proof, "last_readback": {"attempts": attempt, "fields": different}},
+                observed if isinstance(observed, dict) else {},
+                None,
+                confirmed=False,
+            )
         raise APIError("EDIT_NOT_CONFIRMED", uncertain=True)
 
     def live(self, action, proof):

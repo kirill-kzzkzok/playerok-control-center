@@ -29,13 +29,15 @@ async def test_price_change_stop_restart_and_worker_agree(shop):
     logical = LogicalProducts(r.store, r.api)
     original = dict(logical.listing("lot"))
     r.api.item.update(price=90, discount=10, attachments=[{"id": "new-photo"}])
+    # Readiness has one entry on the main card after settings are complete.
+    await r.ui.click("item:lot")
     await click(r, action="rd:check:lot")
     result = ProductReadiness(r.store, r.api).snapshot("lot", item=r.api.item)
     assert result["ready"], result["problems"]
     await LogicalProductWorker(r.store, r.api).once()
     assert not logical.listing("lot")["error_code"]
     logical.require_delivery("lot", "telegram_gifts")
-    await click(r, action="item:lot")
+    await click(r, action=next(key for key in buttons(r.session.last_panel) if key.startswith("nav:back:")))
     await r.ui.click("lp:item:lot")
     await click(r, suffix=":stop")
     assert not logical.listing("lot")["enabled"]

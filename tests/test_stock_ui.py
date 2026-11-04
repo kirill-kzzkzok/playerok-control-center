@@ -186,14 +186,19 @@ async def test_item_order_and_policy_share_actual_readiness(rig, condition, expe
         text = session.calls[-1].text
         assert expected.lower() in text.lower()
         assert "Автодействия: выключены" not in text
-        if not action.startswith("order:"):
-            assert "Постоянная привязка не подтверждена" in text  # Full product screens show all reasons.
+        if action.startswith("auto:"):
+            assert "Постоянная привязка не подтверждена" in text
         else:
             assert ("Перед включением:" if condition == "disabled" else "Требует внимания:") in text
         if action.startswith("auto:"):
             assert "со склада" in text.lower()
         # Full reasons and stock remain available from the nested delivery screen.
         if action.startswith("item:"):
+            # The compact card keeps the same state; complete reasons are one
+            # explicit read-only check away rather than repeated on every card.
+            await ui.click("rd:check:item")
+            assert "Постоянная привязка не подтверждена" in session.calls[-1].text
+            await ui.click("item:item")
             await ui.click("iv:delivery:item")
             assert (
                 expected.lower() in session.calls[-1].text.lower()

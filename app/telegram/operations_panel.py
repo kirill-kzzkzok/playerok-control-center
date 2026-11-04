@@ -5,7 +5,7 @@ from app.database.store import Conflict
 from app.services.reconciliation import Reconciliation, signature
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
-from app.telegram.presentation import local_time, operation_name
+from app.telegram.presentation import edit_readback_note, local_time, operation_name
 from app.telegram.presentation import status as status_label
 
 
@@ -115,6 +115,8 @@ class OperationsPanel:
                 text += "\nОсновной статус не изменён. Проверьте результат перед ручным решением."
             if row["error_code"] == "MANUALLY_STOPPED_UNCERTAIN":
                 text += "\nПовтор остановлен владельцем; внешний результат остался неизвестен."
+            if row["kind"] == "edit" and row["status"] != "SUCCEEDED":
+                text += edit_readback_note(self.store.setting("edit:confirmation:" + ident, {}))
             if resolutions:
                 resolution = resolutions[0]
                 text += f"\n\nРешение владельца {resolution['actor']}: {resolution['decision']}\n{escaped(resolution['reason'], 600)}\n{local_time(resolution['resolved_at'])}"

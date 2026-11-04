@@ -5,6 +5,39 @@ from zoneinfo import ZoneInfo
 
 from app.telegram.formatting import escaped
 
+
+def edit_readback_note(proof):
+    """Explain failed server evidence without exposing submitted values."""
+    if not isinstance(proof, dict) or not isinstance(proof.get("last_readback"), dict):
+        return ""
+    labels = {
+        "id": "ID объявления",
+        "owner": "владелец объявления",
+        "name": "название",
+        "description": "описание",
+        "price": "цена",
+        "attachments": "состав фотографий",
+        "category": "категория",
+        "obtaining_type": "способ получения",
+        "attributes": "характеристики",
+        "data_fields": "поля товара",
+        "comment": "комментарий товара",
+        "network": "ответ Playerok недоступен",
+        "response": "неполный ответ Playerok",
+    }
+    fields = proof["last_readback"].get("fields")
+    if not isinstance(fields, list):
+        return ""
+    names = [labels[field] for field in fields if isinstance(field, str) and field in labels]
+    if not names:
+        return ""
+    return (
+        "\nПоследняя проверка не подтвердила: "
+        + ", ".join(names)
+        + ". Значения отсутствуют в ответе или отличаются. Запрос изменения повторно не отправлялся."
+    )
+
+
 COMMON = {
     "QUEUED": "Ожидает выполнения",
     "PENDING": "Ожидает",

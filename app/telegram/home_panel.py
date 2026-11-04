@@ -68,7 +68,12 @@ class HomePanel:
             (
                 "Действия не выполнены",
                 "ops:list:ALL:0",
-                "SELECT 1 FROM outbox WHERE status='PERMANENT_FAILED' AND COALESCE(error_code,'') NOT IN ('MANUALLY_STOPPED','OWNER_STOPPED') LIMIT 1",
+                (
+                    "SELECT 1 FROM outbox WHERE status='PERMANENT_FAILED' AND COALESCE(error_code,'') NOT IN ('MANUALLY_STOPPED','OWNER_STOPPED') "
+                    "AND NOT (COALESCE(error_code,'')='MANUALLY_STOPPED_UNCERTAIN' AND kind='edit' "
+                    "AND COALESCE(json_extract(payload,'$.logical_binding'),0)=0 "
+                    "AND COALESCE(json_extract(payload,'$.code_migration'),0)=0) LIMIT 1"
+                ),
             ),
             (
                 "Подарки требуют проверки",

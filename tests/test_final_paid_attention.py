@@ -14,6 +14,30 @@ from tests.test_ux_redesign import buttons
 shop = shop_fixture
 
 
+async def test_missing_gift_recipient_is_visible_to_owner_without_a_stars_payment(shop):
+    from app.gifts.worker import GiftWorker
+
+    r = await shop(gift=True)
+    await setup_ui(r, "telegram_gifts", "gift: heart")
+    r.store.set_setting("notifications:initialized", True)
+    order = r.api.order("missing-recipient")
+    order["obtaining_fields"] = []
+    Orders(r.store).ingest(order)
+    await EnrollmentWorker(r.store, r.api).once()
+    await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+    await r.worker.once()
+    await Notifications(r.store, r.bot).once()
+    await r.ui.click("attention")
+    assert "order:missing-recipient" in buttons(r.session.last_panel)
+    assert not r.api.remote.payments
+    assert r.store.rows("SELECT 1 FROM notifications WHERE status='SUCCEEDED'")
+    # Repeated observations and fresh worker instances cannot guess a recipient.
+    Orders(r.store).ingest(order)
+    await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+    await r.worker.once()
+    assert not r.api.remote.payments
+
+
 async def test_blocked_paid_order_is_visible_even_if_notification_is_missing(shop):
     r = await shop()
     await setup_ui(r, "unique_stock")

@@ -48,14 +48,24 @@ async def test_item_offers_start_and_relisting_permission_without_claiming_platf
     await stop(r)
     await r.ui.click("item:lot")
     visible = buttons(r.session.last_panel)
-    assert any("Запустить продажи" in label for label in visible.values())
+    # Seller card deliberately has one settings entry; launch and inheritance
+    # are configured there, rather than duplicated on the main card.
+    assert "iv:delivery:lot" in visible
     assert (
         "Код товара: " + r.store.rows("SELECT code FROM logical_products")[0]["code"]
         in r.session.last_panel.text
     )
-    assert "Наследовать настройки" in r.session.last_panel.text
     assert "Перевыставление включено" not in r.session.last_panel.text
     assert "private-text" not in r.session.last_panel.text
+    await r.ui.click("iv:delivery:lot")
+    assert "Наследование перевыставлений" in r.session.last_panel.text
+    await click(r, suffix=":arm")
+    assert any(":enable:inherit" in key for key in buttons(r.session.last_panel))
+    await click(r, suffix=":enable:inherit")
+    assert r.store.rows("SELECT enabled,inherit_enabled FROM logical_products") == [
+        {"enabled": 1, "inherit_enabled": 1}
+    ]
+    assert not r.api.messages
 
 
 async def test_gift_readiness_checks_receiving_field_before_offering_financial_confirmation(shop):

@@ -12,7 +12,7 @@ from app.workers.outbox import Executor, OutboxWorker
 from tests.test_operations import FakeAPI
 
 
-@pytest.mark.parametrize("reply", ["partial", "stale", "delayed"])
+@pytest.mark.parametrize("reply", ["partial", "stale", "delayed", "fourth-read"])
 async def test_incomplete_mutation_is_confirmed_by_fresh_read_without_repeating_write(tmp_path, reply):
     store = Store(tmp_path / "readback.sqlite")
     api = FakeAPI()
@@ -32,12 +32,14 @@ async def test_incomplete_mutation_is_confirmed_by_fresh_read_without_repeating_
         reads.append(method)
         if reply == "delayed" and len(reads) == 2:
             return deepcopy(original)
+        if reply == "fourth-read" and 2 <= len(reads) <= 4:
+            return deepcopy(original)
         return deepcopy(item)
 
     def update(**kwargs):
         calls.append(kwargs)
         item.update(changes)
-        return {"id": "item"} if reply in {"partial", "delayed"} else original
+        return {"id": "item"} if reply in {"partial", "delayed", "fourth-read"} else original
 
     api.call, api.account.update_item = read, update
     ident = store.enqueue("edit", "edit", "item", changes)
@@ -168,6 +170,16 @@ async def test_failed_readback_remains_unknown_and_never_repeats_mutation(tmp_pa
         await worker.once()
         assert store.rows("SELECT status FROM outbox") == [{"status": "UNCERTAIN"}]
         assert len(writes) == 1 and not await worker.once()
+        from app.services.edit_confirmation import EditConfirmation
+        from app.telegram.presentation import edit_readback_note
+
+        proof = store.setting(EditConfirmation.key(store.rows("SELECT id FROM outbox")[0]["id"]))
+        assert proof["confirmed"] is False
+        assert proof["last_readback"]["attempts"] == 4
+        expected = {"old": "name", "offline": "network", "wrong-owner": "owner", "wrong-id": "id"}
+        assert expected[fault] in proof["last_readback"]["fields"]
+        assert "не подтвердила" in edit_readback_note(proof)
+        assert "Updated product name" not in edit_readback_note(proof)
     finally:
         store.close()
 

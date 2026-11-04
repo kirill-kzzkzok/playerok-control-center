@@ -39,7 +39,8 @@ async def test_lost_edit_response_reads_only_with_live_lease_and_stays_unattribu
     try:
         await worker.once()
         assert len(writes) == 1
-        assert len(reads) == (1 if fault == "expired" else 4 if fault == "unavailable" else 2)
+        # One preflight read plus the new bounded four-read visibility window.
+        assert len(reads) == (1 if fault == "expired" else 5 if fault == "unavailable" else 2)
         proof = store.setting(EditConfirmation.key(ident))
         if fault == "lost":
             assert proof["readback_only"] and not proof["confirmed"]

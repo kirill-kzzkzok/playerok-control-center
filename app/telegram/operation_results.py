@@ -13,6 +13,7 @@ from app.gifts.core import gift_name
 from app.telegram.errors import TERMINAL_EDIT, send_failure, telegram_error
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
+from app.telegram.presentation import edit_readback_note
 from app.telegram.presentation import status as human_status
 
 TITLES = {
@@ -123,6 +124,8 @@ class OperationResults:
             text += "\nПостановка в очередь не означает выполнения."
         elif status == "UNCERTAIN" or row["error_code"] == "MANUALLY_STOPPED_UNCERTAIN":
             text += "\n⚠️ Запрос мог выполниться. Не повторяйте его. Сначала проверьте фактический результат."
+            if kind == "edit":
+                text += edit_readback_note(self.store.setting("edit:confirmation:" + ident, {}))
             buttons.append(
                 [
                     (
