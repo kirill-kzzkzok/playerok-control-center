@@ -49,12 +49,12 @@ async def test_status_reuses_recent_verified_details_without_extra_item_reads(sh
     assert not r.api.remote.payments and not r.api.messages
 
 
-async def test_opened_card_updates_the_same_observation_used_by_status(shop):
+async def test_opened_card_refreshes_safe_description_for_the_same_status_observation(shop):
     r = await configured(shop)
     await r.ui.click("rd:check:lot")
     r.api.item["description"] += " changed outside bot"
     await r.ui.click("item:lot")
-    assert "Изменилось описание" in r.session.last_panel.text
+    assert "Изменилось описание" not in r.session.last_panel.text
     original = r.api.call
 
     async def abbreviated(method, **kwargs):
@@ -67,10 +67,8 @@ async def test_opened_card_updates_the_same_observation_used_by_status(shop):
 
     r.api.call = abbreviated
     await r.ui.message("/status")
-    assert "Изменилось описание" in r.session.last_panel.text
-    assert [p["code"] for p in ProductReadiness(r.store, r.api).snapshot("lot")["problems"]] == [
-        "ITEM_CHANGED"
-    ]
+    assert "Изменилось описание" not in r.session.last_panel.text
+    assert ProductReadiness(r.store, r.api).snapshot("lot")["ready"]
 
 
 async def test_readiness_uses_one_item_read_and_debounces_repeated_owner_clicks(shop):
@@ -170,7 +168,7 @@ async def test_cached_ui_evidence_never_authorizes_worker_after_external_edit(sh
     service = ProductReadiness(r.store, r.api)
     await service.check(7, "lot")
     assert service.snapshot("lot")["ready"]
-    r.api.item["description"] += " changed externally"
+    r.api.item["attributes"] = {"delivery-critical": "changed externally"}
     Orders(r.store).ingest(r.api.order("changed-after-observation"))
     await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
     await r.worker.once()

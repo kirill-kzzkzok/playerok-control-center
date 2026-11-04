@@ -40,3 +40,27 @@ async def test_completion_after_delivered_gift_distinguishes_pause_and_stop(shop
         await r.worker.once()
     assert r.api.orders["completion-pause"]["status"] == ("PAID" if emergency else "SENT")
     assert len(r.api.remote.payments) == 1
+
+
+@pytest.mark.parametrize("failure", ["connection", "sync"])
+async def test_temporary_runtime_loss_does_not_revoke_already_approved_completion(shop, failure):
+    r = await shop(gift=True)
+    await setup_ui(r, "telegram_gifts", "gift: heart", completion=True)
+    Orders(r.store).ingest(r.api.order("completion-recovery"))
+    worker = GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender)
+    await worker.once()
+    await r.worker.once()
+    if failure == "connection":
+        r.api.account.writes_enabled = False
+    else:
+        r.store.set_setting("sync:health", {"status": "ERROR", "errors": {"orders": "NETWORK_ERROR"}})
+    await worker.once()
+    assert r.store.rows("SELECT completion_state FROM gift_jobs") == [{"completion_state": "WAITING"}]
+    assert not r.store.rows("SELECT 1 FROM outbox WHERE kind='fulfill'")
+    r.api.account.writes_enabled = True
+    r.store.set_setting("sync:health", {"status": "OK"})
+    for _ in range(5):
+        await worker.once()
+        await r.worker.once()
+    assert r.api.orders["completion-recovery"]["status"] == "SENT"
+    assert len(r.api.remote.payments) == 1

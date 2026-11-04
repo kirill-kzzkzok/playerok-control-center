@@ -70,10 +70,14 @@ class GiftWorker:
                 # Temporary admission pause does not revoke post-delivery intent.
                 # Resume still runs fresh fulfillment checks and revision CAS.
                 continue
-            if not listing["enabled"] or not service.runtime():
+            if not listing["enabled"] or self.store.setting("gifts:stopped", True):
                 self.store.execute(
                     "UPDATE gift_jobs SET completion_state='MANUAL' WHERE order_id=?", (j["order_id"],)
                 )
+                continue
+            if not service.runtime():
+                # Connection/sync recovery must not revoke already approved
+                # post-delivery intent. Fresh fulfillment guards run on resume.
                 continue
             try:
                 prepared = await Fulfillment(self.store, self.api).load(j["order_id"])
