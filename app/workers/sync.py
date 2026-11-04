@@ -213,6 +213,7 @@ class Synchronizer(PageScanner):
             self.wake.clear()
             try:
                 if time.monotonic() >= next_full:
+                    scan_started = time.monotonic()
                     with worker_cycle(self.store, "sync", min(900, 60 * 2 ** min(failures + 1, 4))) as cycle:
                         await self.once()
                         cycle["processed"] = self.health.get("orders", 0)
@@ -224,14 +225,19 @@ class Synchronizer(PageScanner):
                             cycle["retry_delay"], self.health.get("orders_retry_after", 0)
                         )
                     failures = failures + 1 if orders_sync_failed(self.store) else 0
-                    next_full = (
-                        time.monotonic()
-                        + max(
-                            min(900, 60 * 2 ** min(failures, 4)) if failures else 30,
-                            self.health.get("orders_retry_after", 0),
+                    if failures:
+                        next_full = (
+                            time.monotonic()
+                            + max(
+                                min(900, 60 * 2 ** min(failures, 4)),
+                                self.health.get("orders_retry_after", 0),
+                            )
+                            + random.uniform(0, 5)
                         )
-                        + random.uniform(0, 5)
-                    )
+                    else:
+                        # Include read time in the healthy cadence. Positive
+                        # jitter after30s silently exceeded the detection target.
+                        next_full = max(time.monotonic(), scan_started + 30 - random.uniform(0, 5))
                 processed = await self.process_requests()
                 if processed == 8:
                     self.wake.set()
