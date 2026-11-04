@@ -697,6 +697,21 @@ class Executor:
                     changes["remove_attachments"] = removed
             if not changes:
                 raise ValidationError("Нет разрешённых изменений")
+            if (
+                payload.get("logical_binding")
+                and not payload.get("code_migration")
+                and set(changes) <= {"name", "description"}
+                and not {"add_photos", "keep_attachment_ids", "replace_attachment_ids"} & payload.keys()
+                and all(current.get(key) == value for key, value in changes.items())
+            ):
+                # Explicitly confirmed binding of text already on the server:
+                # refresh evidence, not an unnecessary updateItem mutation.
+                observed = await self.owned_item(target)
+                logical = LogicalProducts(self.store, self.api)
+                logical.binding_guard(action, observed)
+                self.dispatch_guard(action)
+                receipt = logical.confirm_binding(action, observed)
+                return {**self.item_result(observed), "logical_binding": receipt, "already_present": True}
             from app.services.edit_confirmation import EditConfirmation
 
             confirmation = EditConfirmation(self.store, self.api)
