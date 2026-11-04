@@ -1012,7 +1012,7 @@ class LogicalProducts:
                         "Состав подарков расходится с привязкой. Остановите выдачу и подтвердите настройки"
                     )
                 if product["enabled"]:
-                    raise Conflict("Выдача уже включена. Обновите карточку")
+                    return await self._active_inheritance(owner, product, item, inherit, listing)
             else:
                 await gifts.bind(owner, item["id"], config["code"], expected_bundle=config["bundle"])
                 listing = gifts.listing(item["id"])
@@ -1038,7 +1038,10 @@ class LogicalProducts:
             automation = Automation(self.store, self.api)
             old_revision, old_policy = automation.get(item["id"])
             if product["enabled"] and old_policy.enabled:
-                raise Conflict("Выдача уже включена. Обновите карточку")
+                if old_policy != policy:
+                    raise Conflict("Политика выдачи расходится с подтверждёнными настройками")
+                projection = self.store.rows("SELECT * FROM delivery_policies WHERE item_id=?", (ident,))[0]
+                return await self._active_inheritance(owner, product, item, inherit, projection)
             await automation.save(
                 owner,
                 item["id"],
@@ -1051,6 +1054,37 @@ class LogicalProducts:
                 "SELECT updated_at FROM delivery_policies WHERE item_id=?", (item["id"],)
             )[0]["updated_at"]
         return cutoff
+
+    async def _active_inheritance(self, owner, product, item, inherit, projection):
+        if bool(product["inherit_enabled"]) == bool(inherit):
+            raise Conflict("Выдача уже включена. Обновите карточку")
+        fresh = await self.api.call("get_item", id=item["id"])
+        self.verify_listing(product, fresh)
+        if critical(fresh) != critical(item) or any(
+            fresh.get(k) != item.get(k) for k in ("id", "name", "description", "status", "deleted_at")
+        ):
+            raise Conflict("Объявление изменилось во время настройки наследования")
+        table = "gift_listings" if product["handler"] == "telegram_gifts" else "delivery_policies"
+        with self.store.transaction() as db:
+            self.authority(owner, product["account_id"], writes=True)
+            current = self.product(product["id"], owner)
+            rows = self.store.rows(f"SELECT * FROM {table} WHERE item_id=?", (item["id"],))
+            if (
+                current != product
+                or rows != [projection]
+                or not getattr(self.api.account, "automation_enabled", False)
+            ):
+                raise Conflict("Настройки или остановка изменились; наследование не изменено")
+            self.verify_listing(current, fresh)
+            db.execute(
+                "UPDATE logical_products SET inherit_enabled=?,updated_at=? WHERE id=?",
+                (int(bool(inherit)), now(), product["id"]),
+            )
+            db.execute(
+                "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,?,?,?,?)",
+                (owner, "SET_NATIVE_INHERITANCE", product["id"], str(bool(inherit)), now()),
+            )
+        return product["armed_at"]
 
     async def resume_stock(self, owner, item_id, expected, policy_revision, values):
         """Restore admission after replenishment without changing paid-order authority."""
