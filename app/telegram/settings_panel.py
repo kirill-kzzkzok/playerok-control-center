@@ -1,7 +1,8 @@
 from app.database.store import Conflict
 from app.services.notification_preferences import LABELS, NotificationPreferences
+from app.services.product_readiness import fresh
 from app.telegram.keyboards import keyboard
-from app.telegram.presentation import connection_summary, status
+from app.telegram.presentation import connection_summary
 
 
 class SettingsPanel:
@@ -43,12 +44,11 @@ class SettingsPanel:
                 "⚙️ <b>Настройки</b>\nВыберите, что настроить.",
                 keyboard(
                     [
+                        [("🔌 Подключения", "sp:connections")],
+                        [("💳 Вывод средств", "providers")],
+                        [("⭐ Лимиты Stars", "gft:limits")],
                         [("🔔 Уведомления", "sp:notifications")],
-                        [("💬 Автоответы", "ar:menu")],
-                        [("Подключения", "sp:connections"), ("Безопасность", "sp:security")],
-                        [("Telegram-подарки и Stars", "gft:settings")],
-                        [("Финансовые параметры", "providers")],
-                        [("Подтверждение выполнения", "sp:fulfillment")],
+                        [("💬 Глобальные ответы на фразы", "ar:menu")],
                         [("Диагностика и обслуживание", "tools")],
                     ],
                     back=("⬅️ Мой магазин", "home"),
@@ -63,16 +63,20 @@ class SettingsPanel:
             self.preferences.set(owner, int(revision), key, enabled == "1")
             return self.notifications(owner)
         if action == "sp:connections":
+            telegram = self.store.setting("gifts:connection", {})
+            telegram_status = (
+                "✅ Подключён"
+                if telegram.get("status") == "OK" and fresh(telegram.get("at"))
+                else "Ожидает актуальной проверки"
+            )
             return (
                 "🔐 <b>Подключения</b>\n"
                 + connection_summary(self.api)
-                + "\nСверка заказов: "
-                + status(self.store.setting("sync:health", {}).get("status", "NOT_STARTED"))
-                + "\nТранзакции: "
-                + status(self.store.setting("transactions:health", {}).get("status", "NOT_STARTED"))
-                + "\nНовая проверка доступна в профиле. Состояния синхронизации сохранены ранее.",
+                + "\nЛичный Telegram: "
+                + telegram_status
+                + "\nПоказаны сохранённые результаты. Управление подключениями — ниже.",
                 keyboard(
-                    [[("Проверить Playerok", "profile:check")], [("Диагностика", "diagnostics")]],
+                    [[("Playerok", "profile"), ("Личный Telegram", "gft:settings")]],
                     back=("⬅️ Настройки", "settings"),
                 ),
             )

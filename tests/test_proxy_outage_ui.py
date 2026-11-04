@@ -13,9 +13,8 @@ shop = shop_fixture
 
 async def test_picker_proxy_loss_then_recovery_without_purchase_or_uncaught_exception(shop):
     r = await shop(gift=True)
-    for route in ("items", "item:lot", "iv:delivery:lot", "lp:item:lot"):
+    for route in ("items", "item:lot", "iv:delivery:lot", "lp:method:lot"):
         await click(r, action=route)
-    await click(r, suffix=":configure")
     action = next(k for k in buttons(r.session.last_panel) if k.endswith(":mode:telegram_gifts"))
     r.api.gift_sender.settings = replace(r.api.gift_sender.settings, telegram_transport="localvpn")
     proxy = SimpleNamespace(ready=False, state={"generation": 1})
@@ -26,9 +25,8 @@ async def test_picker_proxy_loss_then_recovery_without_purchase_or_uncaught_exce
         assert not r.api.remote.payments and not r.store.rows("SELECT * FROM outbox")
         proxy.ready = True
         await click(r, action="home")
-        for route in ("items", "item:lot", "iv:delivery:lot", "lp:item:lot"):
+        for route in ("items", "item:lot", "iv:delivery:lot", "lp:method:lot"):
             await click(r, action=route)
-        await click(r, suffix=":configure")
         await click(r, suffix=":mode:telegram_gifts")
         await click(r, suffix=":giftpick:heart")
         assert any(k.endswith(":giftdone") for k in buttons(r.session.last_panel)), r.session.last_panel.text
