@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from telethon import TelegramClient, errors, functions, types
 
 from app.gifts.core import telegram_username
-from app.localvpn import mtproto_proxy, require_proxy
+from app.localvpn import ProxyUnavailable, mtproto_proxy, require_proxy
 from app.security.instance import InstanceLock
 from app.security.logging import event
 
@@ -54,10 +54,17 @@ class PersonalGiftSender:
         self.session_lock = None
         self.closed = False
 
+    @staticmethod
+    def read_proxy():
+        try:
+            return require_proxy()
+        except ProxyUnavailable:
+            raise GiftFailure("PROXY_UNAVAILABLE") from None
+
     async def connect(self):
         async with self.lock:
             if self.settings.telegram_transport == "localvpn":
-                require_proxy()
+                self.read_proxy()
             if self.closed:
                 raise GiftFailure("SESSION_CLOSED")
             if self.me is not None and getattr(self.client, "is_connected", lambda: True)():
@@ -206,7 +213,7 @@ class PersonalGiftSender:
         ):
             raise GiftFailure("PAYMENT_FORM_MISMATCH")
         generation = (
-            require_proxy().state["generation"] if self.settings.telegram_transport == "localvpn" else None
+            self.read_proxy().state["generation"] if self.settings.telegram_transport == "localvpn" else None
         )
         return PreparedGift(recipient, gift_id, gift.stars, form.form_id, invoice, generation)
 

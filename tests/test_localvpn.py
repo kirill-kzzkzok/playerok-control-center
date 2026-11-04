@@ -92,7 +92,7 @@ async def test_personal_sender_uses_same_socks_and_no_paid_retries(tmp_path, mon
         assert captured["proxy"] == mtproto_proxy("localvpn")
         assert captured["request_retries"] == 0 and captured["auto_reconnect"] is False
         proxy.ready = False
-        with pytest.raises(ProxyUnavailable):
+        with pytest.raises(GiftFailure, match="PROXY_UNAVAILABLE"):
             await sender.connect()
         assert client.connect.await_count == 1
     finally:
