@@ -339,7 +339,7 @@ class Navigation:
     ):
         await cleanup_input()
         bot, key = message.bot, self.key(message.bot, owner)
-        lock = self.store.navigation_locks.setdefault((bot.id, owner), asyncio.Lock())
+        lock = self.store.navigation_locks.setdefault((bot.id, owner, key), asyncio.Lock())
         waiting = time.perf_counter()
         async with lock:
             record("navigation_lock", time.perf_counter() - waiting)

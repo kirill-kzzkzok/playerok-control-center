@@ -26,6 +26,28 @@ def panel_key(store, bot_id, owner, message_id):
     return f"{primary}:message:{message_id}"
 
 
+def callback_panel_key(store, bot_id, owner, message):
+    """The same identity for isolation and rendering, including lost send ACKs."""
+    from app.telegram.navigation import Navigation
+
+    primary = f"navigation:{bot_id}:{owner}"
+    key = panel_key(store, bot_id, owner, message.message_id)
+    if not store.setting(key):
+        candidates = [(primary, store.setting(primary, {}))]
+        candidates += [
+            (row["key"], json.loads(row["value"]))
+            for row in store.rows(
+                "SELECT key,value FROM settings WHERE key GLOB ?", (primary + ":message:*",)
+            )
+        ]
+        observed = [candidate for candidate, panel in candidates if Navigation.observed(message, panel)]
+        if len(observed) == 1:
+            key = observed[0]
+    if key != primary and not store.setting(primary, {}).get("id") and not message.reply_markup:
+        key = primary
+    return key
+
+
 class MessageNavigation(BaseMiddleware):
     def __init__(self, store):
         self.store = store
@@ -60,25 +82,7 @@ class MessageNavigation(BaseMiddleware):
         active = self.store.setting(active_key, primary)
         key = active
         if callback:
-            from app.telegram.navigation import Navigation
-
-            key = panel_key(self.store, bot.id, owner, message.message_id)
-            if not self.store.setting(key):
-                candidates = [(primary, self.store.setting(primary, {}))]
-                candidates += [
-                    (row["key"], json.loads(row["value"]))
-                    for row in self.store.rows(
-                        "SELECT key,value FROM settings WHERE key GLOB ?",
-                        (primary + ":message:*",),
-                    )
-                ]
-                observed = [
-                    candidate for candidate, panel in candidates if Navigation.observed(message, panel)
-                ]
-                if len(observed) == 1:
-                    key = observed[0]
-            if key != primary and not self.store.setting(primary, {}).get("id") and not message.reply_markup:
-                key = primary  # Old bootstrap callbacks without a known panel.
+            key = callback_panel_key(self.store, bot.id, owner, message)
             if key != primary and not self.store.setting(key):
                 if not navigation(event.data or "") and not (event.data or "").startswith("cc:"):
                     return await bot.send_message(

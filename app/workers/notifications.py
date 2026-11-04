@@ -602,7 +602,8 @@ class Notifications:
         bot_id = getattr(self.bot, "id", None)
         if not hasattr(self.store, "navigation_locks"):
             self.store.navigation_locks = {}
-        lock = self.store.navigation_locks.setdefault((bot_id, chat_id), asyncio.Lock())
+        key = panel_key(self.store, bot_id, chat_id, message_id)
+        lock = self.store.navigation_locks.setdefault((bot_id, chat_id, key), asyncio.Lock())
         async with lock:
             key = panel_key(self.store, bot_id, chat_id, message_id)
             panel = self.store.setting(key, {})

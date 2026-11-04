@@ -135,14 +135,18 @@ class CallbackAcknowledgements(BaseMiddleware):
         self.access = access
 
     async def __call__(self, handler, event, data):
+        from app.telegram.event_isolation import card_scope, scope_for
+
         started = time.perf_counter()
         values = {}
         token = measurements.set(values)
+        scope = card_scope.set(scope_for(self.access.store, event, data["bot"].id))
         try:
             return await self.dispatch(handler, event, data)
         finally:
             finish(started, values)
             measurements.reset(token)
+            card_scope.reset(scope)
 
     async def dispatch(self, handler, event, data):
         query = getattr(event, "callback_query", None)
@@ -176,6 +180,9 @@ class CallbackAdmission(BaseMiddleware):
 
 
 def install_callback_ack(dispatcher, access):
+    from app.telegram.event_isolation import CardEventIsolation
+
+    dispatcher.fsm.events_isolation = CardEventIsolation()
     # Public middleware registration API: acknowledge before the per-owner FSM
     # lock, but leave FSM isolation and the normal owner guard intact.
     dispatcher.update.outer_middleware.unregister(dispatcher.fsm)

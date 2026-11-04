@@ -287,12 +287,13 @@ class OperationResults:
             "SELECT r.*,o.status FROM operation_receipts r JOIN outbox o ON o.id=r.operation_id WHERE r.view_message_id IS NOT NULL AND (r.rendered_status IS NULL OR r.rendered_status!=o.status) LIMIT 50"
         )
         for row in rows:
-            lock = getattr(self.store, "navigation_locks", {}).get((bot.id, row["owner_id"]))
-            if lock is None:
-                lock = asyncio.Lock()
-            async with lock:
-                from app.telegram.navigation_context import panel_key
+            from app.telegram.navigation_context import panel_key
 
+            key = panel_key(self.store, bot.id, row["owner_id"], row["view_message_id"])
+            if not hasattr(self.store, "navigation_locks"):
+                self.store.navigation_locks = {}
+            lock = self.store.navigation_locks.setdefault((bot.id, row["owner_id"], key), asyncio.Lock())
+            async with lock:
                 key = panel_key(self.store, bot.id, row["owner_id"], row["view_message_id"])
                 panel = self.store.setting(key, {})
                 if (

@@ -153,7 +153,12 @@ class ChatCards:
         if not hasattr(self.store, "navigation_locks"):
             self.store.navigation_locks = {}
         bot_id = getattr(self.bot, "id", None)
-        lock = self.store.navigation_locks.setdefault((bot_id, row["owner_id"]), asyncio.Lock())
+        key = (
+            panel_key(self.store, bot_id, row["owner_id"], row["telegram_message_id"])
+            if row["telegram_message_id"]
+            else "chatcard:" + row["token"]
+        )
+        lock = self.store.navigation_locks.setdefault((bot_id, row["owner_id"], key), asyncio.Lock())
         async with lock:
             if row["telegram_message_id"]:
                 panel = self.store.setting(
