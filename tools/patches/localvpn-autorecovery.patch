@@ -1,0 +1,89 @@
+--- a/playerok_service_windows.go
++++ b/playerok_service_windows.go
+@@ -281,12 +281,18 @@
+ }
+ func (p *playerokService) watchdog(ctx context.Context, health bool) {
+ 	p.validate(ctx, health)
+-	if p.wanted && p.state == "DEGRADED" && p.attempts < 3 && time.Now().After(p.next) {
+-		p.attempts++
++	if p.wanted && p.state == "DEGRADED" && time.Now().After(p.next) {
++		if p.attempts < 6 {
++			p.attempts++
++		}
+ 		attempt := p.attempts
+ 		p.connect(ctx, "")
+ 		if p.state != "READY" {
+-			p.next = time.Now().Add(time.Duration(10*(1<<uint(attempt-1))) * time.Second)
++			delay := time.Duration(10*(1<<uint(attempt-1))) * time.Second
++			if delay > 5*time.Minute {
++				delay = 5 * time.Minute
++			}
++			p.next = time.Now().Add(delay)
+ 		}
+ 	}
+ }
+--- a/playerok_service_windows_test.go
++++ b/playerok_service_windows_test.go
+@@ -209,8 +209,8 @@
+ 		p.next = time.Time{}
+ 		p.watchdog(context.Background(), false)
+ 	}
+-	if p.attempts != 3 {
+-		t.Fatal("unbounded recovery")
++	if p.attempts != 6 {
++		t.Fatal("recovery backoff counter must saturate")
+ 	}
+ 	p.command(context.Background(), "stop", "")
+ 	before := attempts
+@@ -233,3 +233,51 @@
+ 		t.Fatal("unconfirmed stop reported as complete")
+ 	}
+ }
++
++func TestPlayerokRecoversAfterProlongedOutageWithoutOverridingStop(t *testing.T) {
++	b, n := playerokFixture(t)
++	p := newPlayerokService(b)
++	p.wanted = true
++	p.state = "DEGRADED"
++	available := false
++	connects := 0
++	p.catalog = func() ([]discoveredNode, error) { return []discoveredNode{n}, nil }
++	p.listener = func() (uint32, error) { return 0, nil }
++	p.action = func(ctx context.Context, cmd string, ids ...string) response {
++		if cmd == "connect" {
++			connects++
++			return response{"ok": available}
++		}
++		return response{"ok": true}
++	}
++	for i := 0; i < 8; i++ {
++		p.next = time.Time{}
++		p.watchdog(context.Background(), false)
++		if p.state == "READY" {
++			t.Fatal("unavailable route reported ready")
++		}
++		delay := time.Until(p.next)
++		if delay <= 0 || delay > 5*time.Minute {
++			t.Fatal("recovery must have bounded backoff")
++		}
++		before := connects
++		p.watchdog(context.Background(), false)
++		if connects != before {
++			t.Fatal("retried before deadline")
++		}
++	}
++	available = true
++	generation := p.generation
++	p.next = time.Time{}
++	p.watchdog(context.Background(), false)
++	if p.state != "READY" || p.generation != generation+1 {
++		t.Fatal("route did not recover after prolonged outage")
++	}
++	p.command(context.Background(), "stop", "")
++	before := connects
++	p.next = time.Time{}
++	p.watchdog(context.Background(), false)
++	if p.state != "STOPPED" || connects != before {
++		t.Fatal("STOP overridden")
++	}
++}
