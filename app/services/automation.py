@@ -41,6 +41,7 @@ class DeliveryPolicy:
     auto_enroll: bool = False
     paid_reply: bool = False
     account_id: str = ""
+    automatic_completion: bool = False
 
     def __post_init__(self):
         if (
@@ -48,6 +49,7 @@ class DeliveryPolicy:
             or type(self.mark_sent) is not bool
             or type(self.auto_enroll) is not bool
             or type(self.paid_reply) is not bool
+            or type(self.automatic_completion) is not bool
             or not isinstance(self.account_id, str)
             or self.mode not in {"manual", "text", "stock", "playerok"}
         ):

@@ -272,13 +272,18 @@ class LaunchPanel:
                         ),
                     )
             if previous != parts[3]:
-                value.update(auto_complete=False, platform_reply=False, refund=False)
+                value.update(
+                    auto_complete=parts[3] != "manual",
+                    inherit=parts[3] != "manual",
+                    platform_reply=False,
+                    refund=False,
+                )
             value["manual_delivery_confirmed"] = parts[3] == "manual"
         elif command == "platform_switch":
             if value["mode"] != "playerok":
                 raise Conflict("Выбран другой способ выдачи")
             value["platform_switch_confirmed"] = True
-            value.update(auto_complete=False, platform_reply=False, refund=False)
+            value.update(auto_complete=True, inherit=True, platform_reply=False, refund=False)
             value.pop("prior_mode", None)
         elif command == "platform_cancel":
             if value["mode"] != "playerok" or value.get("platform_switch_confirmed"):

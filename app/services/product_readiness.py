@@ -523,9 +523,11 @@ class ProductReadiness:
                 if mode == "playerok"
                 else ("Своё сообщение после выдачи" if policy.after else "После выдачи: выключено")
             )
-            complete = policy.mark_sent
+            complete = policy.mark_sent and (mode == "playerok" or policy.automatic_completion)
         measurement = self.store.setting("readiness:" + ident, {})
         completion_note = None
+        if mode in {"fixed_text", "unique_stock"} and policy.mark_sent and not policy.automatic_completion:
+            completion_note = "вручную; напоминание включено"
         if complete and item and item.get("seller_type") == "SYSTEM":
             completion_note = "Отметку выполнения делает Playerok: системный товар. Выдача и сообщения проверяются независимо."
             add(

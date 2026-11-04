@@ -126,6 +126,8 @@ class DeliveryChains:
             )
             if policy.after:
                 steps.append(("chain_message", policy.after))
+            if policy.mark_sent and policy.automatic_completion:
+                steps.append(("fulfill", ""))
             db.executemany(
                 "INSERT INTO delivery_chain_steps(order_id,position,kind,text) VALUES(?,?,?,?)",
                 [(ident, index, kind, text) for index, (kind, text) in enumerate(steps)],
@@ -154,6 +156,7 @@ class DeliveryChains:
         if not policy.enabled:
             return False
         saved = json.loads(chain["policy"])
+        saved.setdefault("automatic_completion", False)
         authority = saved.pop("_logical_authority", None)
         if authority:
             from app.services.logical_products import LogicalProducts
@@ -200,6 +203,7 @@ class DeliveryChains:
             (item_id, binding["owner_id"], revision, binding["id"], binding["revision"], binding["config"]),
         ).fetchall():
             saved = json.loads(chain["policy"])
+            saved.setdefault("automatic_completion", False)
             if saved != asdict(policy):
                 continue
             saved["_logical_authority"] = {
@@ -244,6 +248,8 @@ class DeliveryChains:
                 payload = {"chain_id": ident, "chain_position": step["position"], "text": step["text"]}
                 if json.loads(chain["policy"]).get("mode") == "playerok":
                     payload.update(platform_followup=True, mode="legacy", report={})
+                elif step["kind"] == "fulfill":
+                    payload.update(delivery_proof=True, mode="legacy", report={}, attested=True)
                 if step["kind"] == "delivery":
                     payload["inventory_id"] = db.execute(
                         "SELECT inventory_id FROM reservations WHERE order_id=?", (ident,)
@@ -260,7 +266,9 @@ class DeliveryChains:
             saved = json.loads(chain["policy"])
             status = (
                 "NEEDS_FULFILLMENT"
-                if saved.get("mark_sent") and saved.get("mode") != "playerok"
+                if saved.get("mark_sent")
+                and not saved.get("automatic_completion", False)
+                and saved.get("mode") != "playerok"
                 else "SUCCEEDED"
             )
             db.execute("UPDATE delivery_chains SET status=? WHERE order_id=?", (status, ident))
@@ -304,6 +312,20 @@ class DeliveryChains:
         )
         if any(row["status"] != "SUCCEEDED" for row in earlier):
             raise ValidationError("Предыдущий шаг ещё не подтверждён")
+        if action["kind"] == "fulfill" and not platform:
+            policy = json.loads(step["policy"])
+            if (
+                not policy.get("automatic_completion")
+                or not policy.get("mark_sent")
+                or payload.get("delivery_proof") is not True
+                or not self.store.rows(
+                    "SELECT 1 FROM delivery_chain_steps s JOIN outbox o ON o.id=s.operation_id "
+                    "WHERE s.order_id=? AND s.position<? AND s.kind IN ('delivery','delivery_text') "
+                    "AND o.status='SUCCEEDED' AND json_extract(o.result,'$.message_id') IS NOT NULL",
+                    (ident, step["position"]),
+                )
+            ):
+                raise ValidationError("Нет разрешения и подтверждения доставки для отметки выполнения")
         if self.store.rows("SELECT 1 FROM order_annotations WHERE order_id=? AND problem=1", (ident,)):
             raise ValidationError("Локальная проблема блокирует автоматическую отправку")
         current = self.store.rows("SELECT status,payload FROM orders WHERE id=?", (ident,))

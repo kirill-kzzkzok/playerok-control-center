@@ -78,7 +78,7 @@ async def test_platform_draft_is_prepared_before_publication_and_never_resends_g
         await r.launch_action("platform_reply")
         await r.launch_action("edit:greeting")
         await r.ui.message("Спасибо за покупку на площадке")
-    if complete:
+    if not complete:
         await r.launch_action("complete")
     if not (reply or complete):
         r.api.account.automation_enabled = False
@@ -148,7 +148,7 @@ async def test_switch_from_gifts_needs_confirmation_and_cancel_preserves_intent(
     await r.launch_action("platform_switch")
     confirmed = r.store.get_draft(view["id"], 7)["payload"]
     assert confirmed["mode"] == "playerok" and confirmed["platform_switch_confirmed"]
-    assert not confirmed["auto_complete"] and not confirmed["platform_reply"]
+    assert confirmed["auto_complete"] and not confirmed["platform_reply"]
     product = LogicalProducts(r.store, r.api).listing("item")
     assert product["handler"] == "telegram_gifts" and not product["enabled"]
     assert not r.api.published and not r.remote.payments

@@ -299,9 +299,12 @@ class Executor:
                         return confirmed
                     raise ValidationError("Отметка не требуется; статус изменился")
             prepared = await service.load(target, platform=platform)
-            if (not platform and prepared["snapshot"] != payload.get("snapshot")) or prepared[
-                "mode"
-            ] != payload.get("mode"):
+            delivered = payload.get("delivery_proof") is True and bool(payload.get("chain_id"))
+            if delivered:
+                DeliveryChains(self.store, self.api).dispatchable(action)
+            if (
+                not platform and not delivered and prepared["snapshot"] != payload.get("snapshot")
+            ) or prepared["mode"] != payload.get("mode"):
                 raise ValidationError("Сделка или требование исполнения изменились")
             values = {key: value for key, value in payload.get("report", {}).items() if key != "state"}
             report = {} if platform else await service.validate(prepared, values, payload.get("attested"))

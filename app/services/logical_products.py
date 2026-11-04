@@ -956,6 +956,7 @@ class LogicalProducts:
                 greeting=config.get("greeting", ""),
                 after=config.get("after", ""),
                 mark_sent=config.get("mark_sent", False),
+                automatic_completion=config.get("automatic_completion", False),
             )
             automation = Automation(self.store, self.api)
             old_revision, old_policy = automation.get(item["id"])
@@ -1329,11 +1330,12 @@ class LogicalProducts:
         binding = self.listing(item_id)
         if not binding:
             return None
-        # Empty stock closes admission for new orders, not a previously reserved
-        # chain. Gifts have no stock reservation and must obey this gate at send.
-        if (not order_id or handler == "telegram_gifts") and self.store.setting(
-            "delivery:" + item_id + ":enabled", True
-        ) is False:
+        # Stock has its own admission-only gate: depletion must not revoke
+        # reservations or prevent verified replenishment. Gifts obey local STOP.
+        if (
+            handler == "telegram_gifts"
+            and self.store.setting("delivery:" + item_id + ":enabled", True) is False
+        ):
             raise Conflict("Выдача товара выключена владельцем")
         if binding["state"] == "LEGACY" or len(binding["code"]) != 3:
             raise Conflict("Требуется подтверждённый код в названии товара")

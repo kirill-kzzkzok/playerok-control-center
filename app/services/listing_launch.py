@@ -142,11 +142,11 @@ class ListingLaunch:
                     "mode": mode,
                     "manual_delivery_confirmed": False,
                     "gift_code": gift_code,
-                    "inherit": False,
+                    "inherit": mode != "manual",
                     "data": "" if imported else value.get("delivery_data", ""),
                     "greeting": "",
                     "after": "",
-                    "auto_complete": False,
+                    "auto_complete": mode != "manual",
                     "platform_reply": False,
                     "platform_switch_confirmed": False,
                     "refund": False,
@@ -564,6 +564,11 @@ class ListingLaunch:
                 "after": value["after"],
                 "auto_fulfill": value["auto_complete"],
                 "mark_sent": value["auto_complete"],
+                **(
+                    {"automatic_completion": value["auto_complete"]}
+                    if value["mode"] in {"text", "stock"}
+                    else {}
+                ),
             },
             max_count=self.gifts.settings.max_gifts if handler == "telegram_gifts" else 5,
         )
@@ -695,6 +700,7 @@ class ListingLaunch:
             value["after"],
             value["auto_complete"],
             True,
+            automatic_completion=value["auto_complete"],
         )
         db.execute(
             "INSERT INTO delivery_policies(item_id,revision,actor,payload,updated_at) VALUES(?,?,?,?,?) "

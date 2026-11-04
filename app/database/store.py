@@ -202,11 +202,26 @@ class Store:
                     chain
                     and kind == "fulfill"
                     and not (
-                        payload.get("platform_followup") is True
+                        (payload.get("platform_followup") is True or payload.get("delivery_proof") is True)
                         and payload.get("chain_id") == target
                         and connection.execute(
-                            "SELECT 1 FROM delivery_chains c JOIN delivery_chain_steps s ON s.order_id=c.order_id WHERE c.order_id=? AND c.status='ACTIVE' AND json_extract(c.policy,'$.mode')='playerok' AND s.position=? AND s.kind='fulfill' AND s.operation_id IS NULL",
-                            (target, payload.get("chain_position")),
+                            "SELECT 1 FROM delivery_chains c JOIN delivery_chain_steps s ON s.order_id=c.order_id "
+                            "WHERE c.order_id=? AND c.status='ACTIVE' AND s.position=? "
+                            "AND s.kind='fulfill' AND s.operation_id IS NULL AND "
+                            "(? AND json_extract(c.policy,'$.mode')='playerok' OR "
+                            "? AND json_extract(c.policy,'$.mode') IN ('text','stock') "
+                            "AND json_extract(c.policy,'$.automatic_completion')=1 "
+                            "AND json_extract(c.policy,'$.mark_sent')=1 "
+                            "AND EXISTS(SELECT 1 FROM delivery_chain_steps d JOIN outbox o ON o.id=d.operation_id "
+                            "WHERE d.order_id=c.order_id AND d.position<s.position "
+                            "AND d.kind IN ('delivery','delivery_text') AND o.status='SUCCEEDED' "
+                            "AND json_extract(o.result,'$.message_id') IS NOT NULL))",
+                            (
+                                target,
+                                payload.get("chain_position"),
+                                payload.get("platform_followup") is True,
+                                payload.get("delivery_proof") is True,
+                            ),
                         ).fetchone()
                         and not connection.execute(
                             "SELECT 1 FROM delivery_chain_steps s LEFT JOIN outbox o ON o.id=s.operation_id WHERE s.order_id=? AND s.position<? AND (o.status IS NULL OR o.status!='SUCCEEDED')",

@@ -224,7 +224,11 @@ class AcceptanceHarness:
         await self.ui.click("launch:from:" + self.original_draft)
         await self.launch_action("edit:after")
         await self.ui.message(NOTICE)
-        await self.launch_action("complete")
+        # New launch defaults include supported completion. Preserve an explicit
+        # prior opt-out instead of toggling the new default off in this fixture.
+        launch_view = (await self.state.get_data())["launch"]
+        if not self.store.get_draft(launch_view["id"], 7)["payload"]["auto_complete"]:
+            await self.launch_action("complete")
         await self.launch_action("check")
         self.launch_id = (await self.state.get_data())["launch"]["id"]
         assert self.store.get_draft(self.launch_id, 7)["payload"].get("ready"), self.session.calls[-1].text

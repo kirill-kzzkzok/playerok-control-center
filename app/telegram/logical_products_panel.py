@@ -716,10 +716,20 @@ class LogicalProductsPanel:
             )
             rows.append([("📚 Загрузить запас", prefix + "stockinput")])
         if handler in {"fixed_text", "unique_stock"}:
-            text += "\nЗавершение: вручную" + ("; напоминание включено" if config.get("mark_sent") else "")
+            automatic = config.get("automatic_completion", False)
+            text += "\nЗавершение: " + (
+                "автоматически после доставки, если не нужен отчёт"
+                if automatic and config.get("mark_sent")
+                else "вручную" + ("; напоминание включено" if config.get("mark_sent") else "")
+            )
             rows += [
                 [("Приветствие", prefix + "input:greeting")],
-                [("Напоминать о завершении", prefix + "completion")],
+                [
+                    (
+                        "Автоматическая отметка выполнения" if automatic else "Напоминать о завершении",
+                        prefix + "completion",
+                    )
+                ],
             ]
         if handler != "manual":
             text += "\nСообщение после выдачи: " + (
