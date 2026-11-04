@@ -46,10 +46,12 @@ class SettingsPanel:
                         [("🔔 Уведомления", "sp:notifications")],
                         [("💬 Автоответы", "ar:menu")],
                         [("Подключения", "sp:connections"), ("Безопасность", "sp:security")],
+                        [("Telegram-подарки и Stars", "gft:settings")],
                         [("Финансовые параметры", "providers")],
                         [("Подтверждение выполнения", "sp:fulfillment")],
+                        [("Диагностика и обслуживание", "tools")],
                     ],
-                    back=("⬅️ Ещё", "more"),
+                    back=("⬅️ Мой магазин", "home"),
                 ),
             )
         if action == "sp:notifications":

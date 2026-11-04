@@ -46,7 +46,7 @@ class StatisticsPanel:
                 [("💰 Финансы", f"sr:{days}:finance"), ("📋 Подробный отчёт", f"sd:{days}:details")],
                 [("⏱ Скорость выдачи", f"sr:{days}:delivery")],
             ]
-            return keyboard(rows, back=("⬅️ Ещё", "more"))
+            return keyboard(rows, back=("⬅️ Мой магазин", "home"))
         # Historical deep links remain valid; detailed reports return to this summary.
         rows += [
             [("Графики", f"sr:{days}:charts"), ("Лучшие товары", f"sr:{days}:top")],

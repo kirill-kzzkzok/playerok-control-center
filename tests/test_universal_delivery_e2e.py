@@ -139,7 +139,6 @@ async def setup_ui(r, handler, value=None, *, completion=False):
     await click(r, action="items")
     await click(r, action="item:lot")
     await click(r, action="iv:delivery:lot")
-    await click(r, action="lp:item:lot")
     await click(r, suffix=":configure")
     await click(r, suffix=":mode:" + handler)
     if handler in {"fixed_text", "telegram_gifts"}:
@@ -165,7 +164,6 @@ async def setup_ui(r, handler, value=None, *, completion=False):
     await click(r, action="items")
     await click(r, action="item:lot")
     await click(r, action="iv:delivery:lot")
-    await click(r, action="lp:item:lot")
     await click(r, suffix=":arm")
     await click(r, suffix=":enable:inherit")
     assert r.store.rows("SELECT enabled FROM logical_products")[0]["enabled"] == 1

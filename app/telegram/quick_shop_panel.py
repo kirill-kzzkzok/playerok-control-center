@@ -108,9 +108,9 @@ class QuickShopPanel:
 
     def automation(self, ident):
         from app.services.product_readiness import ProductReadiness
-        from app.telegram.product_presentation import summary
+        from app.telegram.product_presentation import brief
 
-        return summary(ProductReadiness(self.store, self.api).snapshot(ident), compact=True)
+        return brief(ProductReadiness(self.store, self.api).snapshot(ident))
 
     async def status(self, owner, state, page=0):
         LogicalProducts(self.store, self.api).authority(owner)
@@ -123,7 +123,7 @@ class QuickShopPanel:
         )
         values, next_cursor = validate_page(result, "items", [c for c in cursors[:page] if c])
         from app.services.product_readiness import ProductReadiness
-        from app.telegram.product_presentation import summary
+        from app.telegram.product_presentation import brief
 
         readiness = ProductReadiness(self.store, self.api)
         lines, item_rows = [], []
@@ -150,14 +150,13 @@ class QuickShopPanel:
                 + "</b> — "
                 + escaped(item.get("price"), 20)
                 + " ₽\n"
-                + summary(readiness.snapshot(item["id"], item=item), compact=True)
+                + brief(readiness.snapshot(item["id"], item=item))
                 + "\n⭐ PREMIUM: "
                 + premium
             )
             number = len(lines)
             item_rows.append(
                 [
-                    (f"🔍 {number}. Проверить", "rd:check:" + item["id"]),
                     (f"⚙️ {number}. Открыть товар", "item:" + item["id"]),
                 ]
             )

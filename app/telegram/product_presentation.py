@@ -67,6 +67,36 @@ def summary(result, *, compact=False):
     return text
 
 
+def brief(result):
+    """Seller summary; detailed evidence stays in the existing diagnostics."""
+    mode, state = result["mode"], result["state"]
+    if mode == "manual":
+        return "📦 Выдача вручную"
+    if mode == "playerok":
+        text = "📦 Товар выдаёт Playerok"
+        if state == "OFF":
+            return text + "\nСопровождающие действия бота выключены"
+    else:
+        text = "Выдача: " + MODES[mode]
+    labels = {
+        "READY": "✅ Автовыдача работает" if mode != "playerok" else "✅ Сопровождение готово",
+        "OFF": "⏸ Автовыдача выключена",
+        "UNKNOWN": "🔄 Проверяем готовность",
+        "BLOCKED": "⚠️ Автовыдача ожидает устранения проблемы",
+        "STOPPED": "⛔ Нужна проверка — откройте «Выдача»",
+    }
+    text += "\n" + labels[state]
+    problems = result["problems"]
+    if any(p["code"] == "GIFT_IN_PROGRESS" for p in problems) and state == "UNKNOWN":
+        text = "Выдача: " + MODES[mode] + "\n⏳ Отправляем подарок, следующие покупки ожидают"
+    actionable = [p for p in problems if p["blocking"] and not p["unknown"]]
+    if actionable:
+        text += "\n" + escaped(actionable[0]["text"], 170)
+        if len(actionable) > 1:
+            text += f"\nЕщё причин: {len(actionable) - 1} — в «Выдача»"
+    return text
+
+
 def actions(result):
     rows, seen = [], set()
     for problem in result["problems"]:

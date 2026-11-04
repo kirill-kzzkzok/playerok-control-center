@@ -47,6 +47,8 @@ async def test_blocked_paid_order_is_visible_even_if_notification_is_missing(sho
     assert r.store.rows("SELECT status FROM auto_enrollment") == [{"status": "BLOCKED"}]
     assert not r.store.rows("SELECT * FROM notifications")
     await r.ui.click("home")
+    assert "orders" in buttons(r.session.last_panel)
+    await r.ui.click("orders")
     assert "attention" in buttons(r.session.last_panel)
     await r.ui.click("attention")
     assert "order:blocked-paid" in buttons(r.session.last_panel)
@@ -88,6 +90,8 @@ async def test_unknown_stock_send_and_blocked_chain_remain_visible_when_telegram
     await Notifications(r.store, r.bot).once()
     r.session.make_request = send
     await r.ui.click("home")
+    assert "orders" in buttons(r.session.last_panel)
+    await r.ui.click("orders")
     assert "attention" in buttons(r.session.last_panel)
     await r.ui.click("attention")
     assert "order:unknown-delivery" in buttons(r.session.last_panel)
@@ -120,6 +124,8 @@ async def test_needs_fulfillment_order_is_actionable_after_confirmed_delivery(sh
     assert r.store.rows("SELECT status FROM delivery_chains") == [{"status": "NEEDS_FULFILLMENT"}]
     sent = list(r.api.messages)
     await r.ui.click("home")
+    assert "orders" in buttons(r.session.last_panel)
+    await r.ui.click("orders")
     assert "attention" in buttons(r.session.last_panel)
     await r.ui.click("attention")
     assert "order:needs-owner" in buttons(r.session.last_panel)

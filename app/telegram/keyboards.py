@@ -16,9 +16,8 @@ def main_menu(*, attention=False):
     return keyboard(
         [
             [("📦 Товары", "items"), ("🛒 Заказы", "orders")],
-            [("💬 Сообщения", "chats"), ("🎁 Подарки", "gft:home")],
-            [("⚙️ Ещё", "more")],
-        ]
-        + ([[("⚠️ Требует внимания", "attention")]] if attention else []),
+            [("💬 Сообщения", "chats"), ("🚀 Продвижение", "promotions")],
+            [("📊 Статистика", "stats:7"), ("⚙️ Настройки", "settings")],
+        ],
         home=False,
     )

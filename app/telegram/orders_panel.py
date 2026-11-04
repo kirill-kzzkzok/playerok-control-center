@@ -79,7 +79,7 @@ class OrdersPanel:
             [
                 [("🔎 Поиск", "od:search"), ("Фильтры", "orderfilters")],
                 [("Все", "orderpage:0:ALL"), ("Оплаченные", "orderpage:0:PAID")],
-                [("Требуют внимания", "orderpage:0:PROBLEM")],
+                [("⚠️ Требуют моего действия", "attention")],
                 [("Сбросить поиск", "od:reset")],
             ]
         )

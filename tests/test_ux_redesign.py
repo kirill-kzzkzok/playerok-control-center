@@ -147,15 +147,23 @@ async def test_gift_picker_opens_server_draft_binding_without_enabling_delivery(
     assert not r.store.rows("SELECT * FROM outbox")
 
 
-async def test_home_exactly_five_no_fake_connection_and_conditional_attention(ux):
+async def test_home_exactly_six_no_fake_connection_and_orders_attention(ux):
     r = ux
-    assert set(buttons(r.session.calls[-1])) == {"items", "orders", "chats", "gft:home", "more"}
+    assert set(buttons(r.session.calls[-1])) == {
+        "items",
+        "orders",
+        "chats",
+        "promotions",
+        "stats:7",
+        "settings",
+    }
     assert "🟢" not in r.session.calls[-1].text
     assert not r.api.calls
     r.store.enqueue("uncertain", "reply", "chat", {}, actor=7)
     r.store.execute("UPDATE outbox SET status='UNCERTAIN'")
     await r.ui.click("home")
-    assert "attention" in buttons(r.session.calls[-1])
+    assert "orders" in buttons(r.session.calls[-1])
+    assert "требующ" in r.session.calls[-1].text
     await r.ui.click("attention")
     assert "ops:list:UNCERTAIN:0" in buttons(r.session.calls[-1])
     assert not r.api.calls
@@ -180,7 +188,8 @@ async def test_home_expired_success_is_not_fresh(ux):
 async def test_more_and_all_tools_have_real_routes_without_external_calls(ux):
     r = ux
     await r.ui.click("more")
-    assert len(buttons(r.session.calls[-1])) == 7  # six sections and back
+    assert "tools" in buttons(r.session.calls[-1])  # old More redirects to Settings
+    assert "gft:home" not in buttons(r.session.calls[-1])
     for route in (
         "tools",
         "tools:operations",
@@ -214,13 +223,13 @@ async def test_item_compact_sections_all_old_actions_and_safe_delete(ux):
     card = r.session.calls[-1]
     assert "&lt;Item&gt;" in card.text and "Опубликован" in card.text
     assert "<Description>" not in card.text and "Позиция" not in card.text
-    assert {"finance:lot", "payp:item:lot", "iv:edit:lot", "iv:delivery:lot", "iv:other:lot"} <= buttons(
-        card
-    ).keys()
+    assert {"finance:lot", "payp:item:lot", "iv:edit:lot", "iv:delivery:lot"} <= buttons(card).keys()
     await r.ui.click("iv:edit:lot")
+    assert {"iv:other:lot", "iv:history:lot"} <= buttons(r.session.calls[-1]).keys()
     assert {"discount:lot", "editdesc:lot", "editname:lot", "editphoto:lot", "editfields:lot"} <= buttons(
         r.session.calls[-1]
     ).keys()
+    r.store.set_setting("playerok:account_id", r.api.account.id)
     await r.ui.click("iv:delivery:lot")
     assert "lp:method:lot" in buttons(r.session.calls[-1])
     assert "stock:view:lot" not in buttons(r.session.calls[-1])  # No unrelated stock before selecting it.
@@ -309,7 +318,7 @@ def test_unknown_states_never_become_success_or_pending():
     assert "не распознан" in status("FUTURE_UNKNOWN_STATUS")
     assert "неизвестен" in status("UNCERTAIN")
     assert "Продавец" in status("SENT", "order")
-    assert len([b for row in main_menu().inline_keyboard for b in row]) == 5
+    assert len([b for row in main_menu().inline_keyboard for b in row]) == 6
     assert not navigation("gft:confirmretry:old")
     assert not navigation("commit:old")
 

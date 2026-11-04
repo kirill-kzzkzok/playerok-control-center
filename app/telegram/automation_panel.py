@@ -39,7 +39,7 @@ class AutomationPanel:
                 else "Глобальные разрешения выключены — отправки не запускаются."
             )
             + "\nВыберите товар. Проверка без отправки доступна в его настройках.",
-            keyboard(buttons, back=("⬅️ Ещё", "more")),
+            keyboard(buttons, back=("⬅️ Обслуживание выдачи", "tools:delivery")),
         )
 
     async def show(self, data, state):

@@ -169,7 +169,7 @@ class LogicalProductsPanel:
         text += "\n" + STATES[readiness["state"]]
         if readiness["problems"]:
             text += "\n" + "\n".join("• " + escaped(p["text"], 180) for p in readiness["problems"][:6])
-        rows.append([("🔄 Обновить", "lp:item:" + item_id)])
+        rows.append([("Подробности готовности", "rd:check:" + item_id)])
         return text, keyboard(rows, back=("⬅️ К товару", "item:" + item_id))
 
     async def view(self, owner, state, nonce):

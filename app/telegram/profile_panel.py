@@ -113,7 +113,7 @@ class ProfilePanel:
                     [("💳 Способ получения денег", "providers")],
                     [("✖️ Закрыть", "nav:close")],
                 ],
-                back=("⬅️ Ещё", "more"),
+                back=("⬅️ Настройки", "settings"),
             )
             if refresh:
                 try:

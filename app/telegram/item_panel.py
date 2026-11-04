@@ -142,6 +142,10 @@ class ItemPanel:
 
         if section == "history":
             return self.history(ident, owner)
+        if section == "delivery":
+            from app.telegram.logical_products_panel import LogicalProductsPanel
+
+            return await LogicalProductsPanel(self.store, self.api).card(owner, ident, state)
         item, details, photos = await self.card(ident, state)
         if isinstance(item.get("name"), str):
             self.store.set_setting("ui:item:" + ident + ":name", item["name"][:200])
@@ -162,7 +166,7 @@ class ItemPanel:
         title = "📦 <b>" + escaped(item.get("name") or "Товар", 200) + "</b>"
         if section == "card":
             from app.services.product_readiness import ProductReadiness
-            from app.telegram.product_presentation import summary
+            from app.telegram.product_presentation import brief
 
             readiness = ProductReadiness(self.store, self.api).snapshot(ident, item=item)
             text = (
@@ -170,26 +174,29 @@ class ItemPanel:
                 + f"\nЦена: {escaped(item.get('price'), 40)} ₽\nСтатус: "
                 + status(item.get("status"), "item")
             )
-            if product:
-                text += "\n🔐 Код товара: " + (
-                    escaped(product["code"], 3) if len(product["code"]) == 3 else "требуется перенос"
-                )
-            text += "\n" + summary(readiness, compact=True)
-            text += "\n💬 " + escaped(readiness["message"], 180)
-            if len(readiness["problems"]) > 1:
-                text += "\nОстальные причины — в «Проверить готовность»."
+            text += "\n" + brief(readiness)
+            if product and readiness["mode"] == "telegram_gifts":
+                import json
+
+                from app.telegram.logical_products_panel import gift_summary
+
+                config = json.loads(product["config"])
+                text += "\n🎁 " + escaped(gift_summary(config.get("bundle", [])), 200)
+                if readiness["required"] is not None:
+                    text += f" · {readiness['required']} ⭐"
+                if type(readiness["balance"].get("stars")) is int:
+                    text += f"\nБаланс: {readiness['balance']['stars']} ⭐"
+            if readiness["stock"]:
+                text += f"\nОстаток: {readiness['stock']['AVAILABLE']} · в резерве: {readiness['stock']['RESERVED']}"
+            if readiness["mode"] == "fixed_text":
+                text += "\nПокупателю отправляется сохранённый текст"
             rows = [
-                [("🔍 Проверить готовность", "rd:check:" + ident)],
-                [("⚙️ Настроить выдачу", "iv:delivery:" + ident)],
-                [("💰 Сколько получу чистыми", "finance:" + ident)],
-                [("✏️ Редактировать", "iv:edit:" + ident), ("⭐ Продвижение", "payp:item:" + ident)],
-                [("📋 История и операции", "iv:history:" + ident)],
-                [("⋯ Другие действия", "iv:other:" + ident)],
+                [("📦 Выдача", "iv:delivery:" + ident), ("✏️ Изменить", "iv:edit:" + ident)],
+                [("🚀 Продвижение", "payp:item:" + ident), ("💰 Прибыль", "finance:" + ident)],
             ]
-            if readiness["problems"]:
-                label, route = readiness["problems"][0]["action"]
-                if route not in {callback for row in rows for _, callback in row}:
-                    rows.insert(0, [("🔎 " + label, route)])
+            terminal = next((p for p in readiness["problems"] if p["terminal"]), None)
+            if terminal:
+                rows.insert(0, [(terminal["action"][0], terminal["action"][1])])
             if item.get("status") == "DRAFT":
                 rows.insert(0, [("🚀 Запустить продажи", "launch:item:" + ident)])
             elif item.get("status") == "SOLD":
@@ -214,6 +221,7 @@ class ItemPanel:
                 [("Описание", "editdesc:" + ident)],
                 [("Фотографии", "editphoto:" + ident)],
                 [("Характеристики и данные", "editfields:" + ident)],
+                [("📋 История", "iv:history:" + ident), ("Другие действия", "iv:other:" + ident)],
             ] + photos
         elif section in {"delivery", "messages", "completion"}:
             from app.services.product_readiness import ProductReadiness

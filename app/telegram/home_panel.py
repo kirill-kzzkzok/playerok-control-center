@@ -182,15 +182,9 @@ class HomePanel:
                 else "В сохранённых данных проблем нет."
             ), keyboard(rows, back=("⬅️ Мой магазин", "home"))
         if action == "more":
-            return "⚙️ <b>Ещё</b>", keyboard(
-                [
-                    [("📊 Статистика", "stats:7"), ("⚡ Автовыдача", "automation")],
-                    [("🚀 Автопродвижение", "promotions")],
-                    [("👤 Профиль", "profile"), ("⚙️ Настройки", "settings")],
-                    [("🛠 Инструменты", "tools")],
-                ],
-                back=("⬅️ Мой магазин", "home"),
-            )
+            from app.telegram.settings_panel import SettingsPanel
+
+            return SettingsPanel(self.store, self.api).handle("settings", owner)
         groups = {
             "tools": (
                 "🛠 Инструменты",
@@ -241,5 +235,5 @@ class HomePanel:
         }
         title, rows = groups[action]
         return title, keyboard(
-            rows, back=("⬅️ Ещё", "more") if action == "tools" else ("⬅️ Инструменты", "tools")
+            rows, back=("⬅️ Настройки", "settings") if action == "tools" else ("⬅️ Инструменты", "tools")
         )

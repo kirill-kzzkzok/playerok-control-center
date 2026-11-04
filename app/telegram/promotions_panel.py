@@ -134,7 +134,7 @@ class PromotionsPanel:
                 ]
                 rows.append([("⬅️ К параметрам", f"pp:{nonce}:group:general")])
             rows += [[("💾 Сохранить", f"pp:{nonce}:save")], [("⬅️ Основной экран", f"pp:{nonce}:basic")]]
-        return text, keyboard(rows, back=("⬅️ Ещё", "more"))
+        return text, keyboard(rows, back=("⬅️ Мой магазин", "home"))
 
     def item_view(self, view):
         nonce, ident = view["nonce"], view["id"]
