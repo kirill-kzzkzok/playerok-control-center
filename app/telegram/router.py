@@ -386,13 +386,8 @@ def create_router(store, api, products, synchronizer):
                 restoring = message.navigation_restoring
                 if not restoring:
                     await state.clear()
-                    filters = (
-                        store.setting(f"ui:{owner}:item_filters", {})
-                        if store.setting(f"ui:{owner}:item_filters_pinned", False)
-                        else {"status": "APPROVED"}
-                    )
                     if action == "items":
-                        await state.update_data(item_filters=filters)
+                        await state.update_data(item_filters={"status": "APPROVED"})
                 text, markup = await listings_panel.show(action, state, restore=restoring)
             elif action == "itemfilters":
                 await state.set_state(None)
@@ -427,9 +422,10 @@ def create_router(store, api, products, synchronizer):
                 value = action.split(":", 1)[1]
                 if value not in {"ALL", "ARCHIVE"} and value not in ItemStatuses.__members__:
                     raise ValidationError("Неизвестный статус товара")
-                filters = (await state.get_data()).get("item_filters", {})
-                filters["status"] = None if value in {"ALL", "ARCHIVE"} else value
-                filters["archive"] = value == "ARCHIVE"
+                filters = {
+                    "status": None if value in {"ALL", "ARCHIVE"} else value,
+                    "archive": value == "ARCHIVE",
+                }
                 await state.set_data(
                     {
                         "item_filters": filters,

@@ -6,20 +6,20 @@
 |---|---|---|
 | ID | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
 | AUDIT | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
-| HOME | FAIL | A02: прежние Подарки/Ещё, нет шести целевых входов |
-| ITEM | FAIL | A03: более пяти действий и ручные диагностические кнопки |
+| HOME | NOT VERIFIED | 582d2d0: шесть целевых входов, Orders → Attention; краткие актуальные метрики ещё не завершены |
+| ITEM | NOT VERIFIED | 582d2d0: четыре основных действия; настроенный склад/подарок, прямая выдача, terminal-сверка. Профиль93passed; финальная регрессия впереди |
 | UI | FAIL | A03/A08: дублирование входов и разделов черновиков |
-| STATE | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
-| CREATE | FAIL | A04: manual, auto_complete=False и inherit=False defaults |
+| STATE | NOT VERIFIED | d56040f: local STOP соблюдается Gift-worker, SPENDING отделён от UNKNOWN, остановленный оплаченный долг виден; профиль60passed. Остальные пути в финальной регрессии |
+| CREATE | NOT VERIFIED | 16ce184: supported completion/inheritance defaults и подтверждённая выдача до SENT;127passed. Полный новый путь и упрощение Wizard ещё не приняты |
 | GIFTS | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
 | STOCK | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
 | TEXT | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
 | PLATFORM | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
-| COMPLETE | FAIL | A04: новый запуск по умолчанию не запрашивает поддерживаемое завершение |
+| COMPLETE | NOT VERIFIED | 16ce184: Gift/Playerok и stock/text завершение только при подтверждении/без отчёта; old reminder не даёт новых прав. Профиль127passed, финальный CI впереди |
 | SCOPE | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
-| RENAME | FAIL | A01: ce4b749 требует title_apply |
-| RECOVER | FAIL | A01/A05/A07: ручной title repair и ограниченное обслуживание фоновых проверок |
-| CALLBACK | FAIL | Новый p50/p95 benchmark ещё не выполнен |
+| RENAME | PASS | 262df19: реальные Gift/stock/text workers, scanner, гонки и STOP;24focused+76adjacent, CI41840599484 SUCCESS |
+| RECOVER | NOT VERIFIED | a440e8d: доказанно неначатый Gift preflight восстанавливается автоматически, неизвестный платёж не повторяется;152+31passed. Non-Gift retry caps/partial packages ещё открыты |
+| CALLBACK | NOT VERIFIED | e9539a4:76passed; offline40actions ACKp95.001957s/local.013611s/card.026105s,1read/card; stalled A не задерживает B. Native/live измерения не выполнены |
 | NAV | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
 | VPN | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |
 | SETTINGS | NOT VERIFIED | Карта исходных сервисов/тестов: SELLER_AUTONOMY_AUDIT.md; требуется финальная проверка нового контракта |

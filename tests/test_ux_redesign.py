@@ -108,7 +108,7 @@ async def test_gift_picker_server_drafts_keep_selection_context_after_restart(ux
     r.api.value["status"] = "APPROVED"
     await r.ui.click("items")
     assert "item:lot" in buttons(r.session.calls[-1])
-    assert "drafts" in buttons(r.session.calls[-1])
+    assert "itemfilter:DRAFT" in buttons(r.session.calls[-1])
     assert not r.store.rows("SELECT * FROM outbox")
 
 
@@ -218,7 +218,9 @@ async def test_more_and_all_tools_have_real_routes_without_external_calls(ux):
 async def test_item_compact_sections_all_old_actions_and_safe_delete(ux):
     r = ux
     await r.ui.click("items")
-    assert {"create", "il:search", "itemfilters", "drafts"} <= buttons(r.session.calls[-1]).keys()
+    assert {"create", "itemfilter:APPROVED", "itemfilter:ARCHIVE", "itemfilter:DRAFT"} <= buttons(
+        r.session.calls[-1]
+    ).keys()
     await r.ui.click("item:lot")
     card = r.session.calls[-1]
     assert "&lt;Item&gt;" in card.text and "Опубликован" in card.text

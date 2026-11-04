@@ -50,13 +50,8 @@ class DraftsPanel:
             navigation.append(("Далее →", f"dl:page:{result['page'] + 1}:{selected}"))
         if navigation:
             rows.append(navigation)
-        rows.extend(
-            [
-                [("🔎 Поиск", "dl:search"), ("Статусы", "dl:filters")],
-                [("Сбросить поиск и фильтр", "drafts"), ("➕ Новый черновик", "create")],
-            ]
-        )
-        return text, keyboard(rows)
+        rows.append([("➕ Создать товар", "create")])
+        return text, keyboard(rows, back=("⬅️ Черновики", "itemfilter:DRAFT"))
 
     async def callback(self, action, owner, state):
         self.owner(owner)

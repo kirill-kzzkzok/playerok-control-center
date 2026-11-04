@@ -112,7 +112,10 @@ async def test_dispatcher_filters_compose_persist_restart_validate_and_reset(tmp
         assert item_buttons() == {"item:match", "item:draft-match"}
         assert len(calls) == reads
         await ui.click("itemfilter:DRAFT")
-        assert len(calls) == reads
+        # Explicit seller tabs discard hidden search restrictions and read the
+        # requested server status; legacy filter composition above stays cached.
+        assert len(calls) == reads + 1
+        assert [s.name for s in calls[-1][1]["statuses"]] == ["DRAFT"]
         assert item_buttons() == {"item:draft-match"}
         await dp.storage.close()
         dp = dispatcher(store, api)

@@ -184,6 +184,8 @@ class ListingsPanel:
                 if self.store is not None and isinstance(value.get("name"), str):
                     self.store.set_setting("ui:item:" + value["id"] + ":name", value["name"][:200])
                 label = f"{label} · {value.get('price', '?')} ₽"
+                if filters.get("status") == "DRAFT" and not gift_picker and not promotion_picker:
+                    label = "☁️ Playerok · " + label
             elif value.get("unread_messages_counter"):
                 label = f"🔵 {value['unread_messages_counter']} · {label}"
             if kind == "chats":
@@ -214,19 +216,34 @@ class ListingsPanel:
                 raise ValidationError("Идентификатор записи не помещается в кнопку Telegram")
             rows.append([(str(label)[:60], callback)])
         next_nonce = secrets.token_hex(6) if next_cursor else None
+        has_local = False
         if next_cursor:
             rows.append([("Далее →", f"listnext:{kind}:{next_nonce}")])
         if kind == "items":
+            if filters.get("status") == "DRAFT" and not gift_picker and not promotion_picker and self.store:
+                owner = state.key.user_id
+                local = self.store.rows(
+                    "SELECT id,json_extract(payload,'$.name') AS name FROM drafts "
+                    "WHERE owner_id=? AND state IN ('DRAFT','QUEUED') "
+                    "AND json_extract(payload,'$.launch_target') IS NULL "
+                    "AND json_extract(payload,'$.edit_target') IS NULL "
+                    "AND NOT EXISTS(SELECT 1 FROM bindings b WHERE b.draft_id=drafts.id) "
+                    "ORDER BY created_at DESC,id DESC LIMIT 6",
+                    (owner,),
+                )
+                local_rows = [
+                    [("💾 Локально · " + str(d["name"] or "Новый товар")[:40], "draft:" + d["id"])]
+                    for d in local[:5]
+                ]
+                has_local = bool(local_rows)
+                if len(local) > 5:
+                    local_rows.append([("Все локальные черновики", "drafts")])
+                rows[1:1] = local_rows
+                title = "💾 Черновики · локально и на Playerok"
             rows.extend(
                 [
                     [("Активные", "itemfilter:APPROVED"), ("Архив и прочие", "itemfilter:ARCHIVE")],
-                    [("🔎 Поиск", "il:search"), ("Фильтры", "itemfilters")],
-                    [("💾 Черновики на Playerok", "itemfilter:DRAFT")]
-                    if gift_picker
-                    else [
-                        ("💾 Локальные черновики", "drafts"),
-                        ("Черновики на Playerok", "itemfilter:DRAFT"),
-                    ],
+                    [("💾 Черновики", "itemfilter:DRAFT")],
                 ]
             )
         # Save only after the whole response/buttons validate; errors leave retryable cursor.
@@ -256,7 +273,9 @@ class ListingsPanel:
             note += f"\nСовпало: {len(values)}. Фильтрация постраничная."
             if not values:
                 note += " По ещё не загруженным страницам поиск не выполнен."
-        return f"<b>{title}</b> · страница {number}\n" + ("" if values else empty) + note, keyboard(
+        return f"<b>{title}</b> · страница {number}\n" + (
+            "" if values or has_local else empty
+        ) + note, keyboard(
             rows,
             back=("⬅️ Товары с подарками", "gft:bindings")
             if gift_picker
