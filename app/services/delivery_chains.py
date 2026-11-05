@@ -337,7 +337,7 @@ class DeliveryChains:
         if not current or (not platform and current[0]["status"] != "PAID"):
             raise ValidationError("Сохранённая история запрещает автоматическую отправку")
         if not platform:
-            deliverable(json.loads(current[0]["payload"]), ident, self.api.account.id)
+            deliverable(json.loads(current[0]["payload"]), ident, self.api.account.id, wait_for_details=True)
         return step
 
     async def verify_step(self, action):

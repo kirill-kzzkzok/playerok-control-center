@@ -20,9 +20,17 @@ class GiftWorker:
         service = self.service
         recovered = await service.recover_resource_preflights()
         if service.runtime():
-            for row in self.store.rows(
-                "SELECT o.id,o.item_id FROM orders o JOIN gift_listings l ON l.item_id=o.item_id WHERE o.status='PAID' AND l.enabled=1 AND json_extract(o.payload,'$.chat.id') IS NULL AND NOT EXISTS(SELECT 1 FROM gift_jobs g WHERE g.order_id=o.id) ORDER BY o.created_at DESC LIMIT 10"
-            ):
+            cursor_key = "gifts:details_cursor:" + self.api.account.id
+            cursor = self.store.setting(cursor_key, "")
+            query = (
+                "SELECT o.id,o.item_id FROM orders o JOIN gift_listings l ON l.item_id=o.item_id WHERE o.status='PAID' AND l.enabled=1 "
+                "AND (json_extract(o.payload,'$.chat.id') IS NULL OR json_extract(o.payload,'$.has_problem') IS NULL OR json_extract(o.payload,'$.is_automated') IS NULL) "
+                "AND NOT EXISTS(SELECT 1 FROM gift_jobs g WHERE g.order_id=o.id) AND o.id>? ORDER BY o.id LIMIT 10"
+            )
+            rows = self.store.rows(query, (cursor,))
+            if not rows and cursor:
+                rows = self.store.rows(query, ("",))
+            for row in rows:
                 try:
                     order = await deal_details(self.api, row["id"])
                     deliverable(order, row["id"], self.api.account.id)
@@ -33,6 +41,9 @@ class GiftWorker:
                     self.store.audit(
                         None, "GIFT_DEAL_DETAILS", row["id"], getattr(error, "code", "DETAILS_NOT_CONFIRMED")
                     )
+            # Persist progress across restarts; an incomplete batch must not
+            # monopolize every cycle. Repeating after a crash performs reads only.
+            self.store.set_setting(cursor_key, rows[-1]["id"] if rows else "")
         created = service.discover() + recovered
         for j in self.store.rows(
             "SELECT g.* FROM gift_jobs g WHERE "

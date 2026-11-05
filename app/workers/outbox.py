@@ -150,7 +150,12 @@ class Executor:
             orders = self.store.rows("SELECT payload,status FROM orders WHERE id=?", (action["target"],))
             if not orders or orders[0]["status"] != "PAID":
                 raise ValidationError("Сохранённое состояние продажи запрещает выполнение")
-            deliverable(json.loads(orders[0]["payload"]), action["target"], self.api.account.id)
+            deliverable(
+                json.loads(orders[0]["payload"]),
+                action["target"],
+                self.api.account.id,
+                wait_for_details=bool(action["payload"].get("chain_id")),
+            )
             if self.store.rows(
                 "SELECT 1 FROM order_annotations WHERE order_id=? AND problem=1", (action["target"],)
             ):
@@ -242,6 +247,15 @@ class Executor:
             with self.store.transaction() as db:
                 if not unstarted_delivery(db, action):
                     raise APIError("DELIVERY_PREFLIGHT_EVIDENCE_CONFLICT", uncertain=True)
+        if kind in AUTOMATIC_DELIVERY_KINDS | {"gift_send"}:
+            local = self.store.rows("SELECT payload FROM orders WHERE id=?", (target,))
+            if local:
+                saved = json.loads(local[0]["payload"])
+                if saved.get("has_problem") is None or saved.get("is_automated") is None:
+                    from app.services.order_management import deal_details
+
+                    observed = await deal_details(self.api, target, need_chat=kind != "fulfill")
+                    Orders(self.store).ingest(observed)
         if kind in {"publish", "premium_publish"} and not payload.get("native_relist"):
             from app.services.listing_launch import ListingLaunch
 
@@ -1042,6 +1056,7 @@ class OutboxWorker:
                         "DELIVERY_CHAT_NOT_YET_AVAILABLE",
                         "DELIVERY_SELLER_NOT_YET_AVAILABLE",
                         "DELIVERY_FLAGS_NOT_YET_AVAILABLE",
+                        "PLATFORM_DETAILS_NOT_YET_AVAILABLE",
                     }
                     or gift_retry
                     and error.code
@@ -1058,6 +1073,7 @@ class OutboxWorker:
                         "CATALOG_UNAVAILABLE",
                         "BALANCE_OBSERVATION_STALE",
                         "DAILY_BUDGET_EXHAUSTED",
+                        "DELIVERY_FLAGS_NOT_YET_AVAILABLE",
                     }
                     or visibility_retry
                     and error.code

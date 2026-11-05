@@ -4,6 +4,7 @@ import json
 from dataclasses import asdict, replace
 
 from app.database.store import Conflict, encode, now, server_time
+from app.playerok.adapter import APIError
 from app.services.automation import Automation, DeliveryPolicy, future_order, message_text
 from app.services.logical_products import LogicalProducts
 from app.services.order_management import deal_details, sale
@@ -21,8 +22,19 @@ REASONS = {
 }
 
 
-def platform_sale(order, ident, account, *, item=None):
+def platform_sale(order, ident, account, *, item=None, wait_for_details=False):
     sale(order, ident, account)
+    if (
+        wait_for_details
+        and account
+        and (order.get("item") or {}).get("id") == item
+        and ((order.get("item") or {}).get("user") or {}).get("id") == account
+        and order.get("status") in PAID_STATUSES
+        and (order.get("has_problem") is None or order.get("has_problem") is False)
+        and (order.get("is_automated") is None or order.get("is_automated") is True)
+        and (order.get("has_problem") is None or order.get("is_automated") is None)
+    ):
+        raise APIError("PLATFORM_DETAILS_NOT_YET_AVAILABLE")
     if (
         not account
         or ((order.get("item") or {}).get("user") or {}).get("id") != account
@@ -183,7 +195,7 @@ class PlatformOrders:
         item = local[0]["item_id"]
         policy = self.authority(item, revision)
         order = await deal_details(self.api, ident, need_chat=policy.paid_reply, need_created=True)
-        platform_sale(order, ident, policy.account_id, item=item)
+        platform_sale(order, ident, policy.account_id, item=item, wait_for_details=True)
         self.policies.orders.orders.ingest(order)
         product = self.logical.listing(item)
         if product and product["source_order_id"] and product["source_order_id"] != ident:
@@ -247,14 +259,20 @@ class PlatformOrders:
         if not local:
             raise Conflict("Заказ не найден")
         platform_sale(
-            json.loads(local[0]["payload"]), action["target"], policy.account_id, item=chain["item_id"]
+            json.loads(local[0]["payload"]),
+            action["target"],
+            policy.account_id,
+            item=chain["item_id"],
+            wait_for_details=True,
         )
         return chain, policy
 
     async def verify(self, action):
         chain, policy = self.guard(action)
         order = await deal_details(self.api, action["target"], need_chat=action["kind"] == "chain_message")
-        platform_sale(order, action["target"], policy.account_id, item=chain["item_id"])
+        platform_sale(
+            order, action["target"], policy.account_id, item=chain["item_id"], wait_for_details=True
+        )
         self.policies.orders.orders.ingest(order)
         self.guard(action)
         return order

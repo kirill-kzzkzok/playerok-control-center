@@ -128,6 +128,10 @@ async def test_reserved_stock_waits_for_omitted_chat_permission_before_send(shop
         return result
 
     r.api.call = incomplete
+    if missing != "permission":
+        partial = copy.deepcopy(r.api.orders["paid-before-chat-omission"])
+        partial.pop(missing)
+        Orders(r.store).ingest(partial)
     await r.worker.once(operation_id=operation)
     assert r.store.rows("SELECT status,started_at FROM outbox WHERE id=?", (operation,)) == [
         {"status": "RETRYABLE_FAILED", "started_at": None}
@@ -183,6 +187,69 @@ async def test_gift_missing_short_username_reads_full_and_never_uses_retained_us
     assert len(r.api.remote.payments) == int(actual_username)
     if actual_username:
         assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "SUCCEEDED"}]
+
+
+@pytest.mark.parametrize("mode", ["telegram_gifts", "playerok"])
+@pytest.mark.parametrize("field", ["has_problem", "is_automated"])
+async def test_other_modes_hydrate_missing_paid_flags_after_restart(shop, mode, field):
+    r = await shop(gift=mode == "telegram_gifts")
+    if mode == "telegram_gifts":
+        await setup_ui(r, mode, "gift: heart")
+    else:
+        await configure(r, reply=True, fulfill=False)
+    full = r.api.order("eventual-flags")
+    full["is_automated"] = mode == "playerok"
+    confirmed = full.pop(field)
+    short = copy.deepcopy(full)
+    boundaries(r, short, full)
+    Orders(r.store).ingest(short)
+    await EnrollmentWorker(r.store, r.api).once()
+    await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+    assert not r.api.messages and not r.api.remote.payments
+    if mode == "playerok":
+        assert r.store.rows("SELECT status FROM auto_enrollment") == [{"status": "PENDING"}]
+    else:
+        assert any(method == "get_delivery_deal" for method, _ in r.api.calls)
+    reopen(r)
+    full[field] = confirmed
+    r.store.execute("UPDATE auto_enrollment SET due_at=0")
+    for _ in range(8):
+        await EnrollmentWorker(r.store, r.api).once()
+        await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+        ChainWorker(r.store, r.api).once()
+        await r.worker.once()
+    assert len(r.api.remote.payments) == int(mode == "telegram_gifts")
+    assert len(r.api.messages) >= 1
+
+
+async def test_ten_incomplete_gift_deals_do_not_starve_an_older_complete_sale(shop):
+    r = await shop(gift=True)
+    await setup_ui(r, "telegram_gifts", "gift: heart")
+    short = {}
+    for index in reversed(range(12)):
+        full = r.api.order(f"queued-{index:02}")
+        partial = copy.deepcopy(full)
+        partial.pop("has_problem")
+        short[full["id"]] = partial
+        Orders(r.store).ingest(partial)
+    original = r.api.call
+
+    async def read(method, **kwargs):
+        if method == "get_deal":
+            return copy.deepcopy(short[kwargs["deal_id"]])
+        if method == "get_delivery_deal" and kwargs["deal_id"] != "queued-11":
+            return copy.deepcopy(short[kwargs["deal_id"]])
+        return await original(method, **kwargs)
+
+    r.api.call = read
+    worker = GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender)
+    await worker.once()
+    assert r.store.setting("gifts:details_cursor:" + r.api.account.id) == "queued-09"
+    reopen(r)
+    for _ in range(2):
+        await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+    assert r.store.rows("SELECT order_id FROM gift_jobs") == [{"order_id": "queued-11"}]
+    assert not r.api.remote.payments
 
 
 async def test_partial_storage_retains_observations_and_records_absent_vs_null(shop):

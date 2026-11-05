@@ -570,7 +570,9 @@ class GiftService:
             "SELECT 1 FROM order_annotations WHERE order_id=? AND problem=1", (j["order_id"],)
         ):
             raise GiftFailure("ORDER_BLOCKED")
-        deliverable(json.loads(local["payload"]), j["order_id"], self.api.account.id)
+        deliverable(
+            json.loads(local["payload"]), j["order_id"], self.api.account.id, wait_for_details=not spending
+        )
         step = self.step(action)
         if step["state"] not in ({"SPENDING"} if spending else {"PENDING", "CHECKING"}):
             raise GiftFailure("GIFT_STEP_BLOCKED")
@@ -595,7 +597,7 @@ class GiftService:
                 obtaining_field_id=self.listing(job["item_id"])["username_field_id"],
             )
         )
-        deliverable(order, job["order_id"], self.api.account.id)
+        deliverable(order, job["order_id"], self.api.account.id, wait_for_details=True)
         if order["item"]["id"] != job["item_id"]:
             raise GiftFailure("ORDER_ITEM_CHANGED")
         Orders(self.store).ingest(order)
