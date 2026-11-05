@@ -19,6 +19,40 @@ async def configured(shop):
     return r
 
 
+@pytest.mark.parametrize("stage", ["item", "telegram"])
+async def test_readiness_timeout_records_stage_and_recovers_automatically(shop, caplog, stage):
+    caplog.set_level("INFO", logger="pcc.shop")
+    r = await configured(shop)
+    readiness = ProductReadiness(r.store, r.api)
+    original = r.api.call
+    balance = r.api.gift_sender.balance
+    product = readiness.logical.listing("lot")
+
+    async def failed(method, **kwargs):
+        if method == "get_item":
+            raise TimeoutError()
+        return await original(method, **kwargs)
+
+    async def timeout_balance():
+        raise TimeoutError()
+
+    if stage == "item":
+        r.api.call = failed
+    else:
+        r.api.gift_sender.balance = timeout_balance
+    r.store.set_setting("readiness:lot", {})
+    result = await readiness.check(7, "lot")
+    assert "автоматически" in r.store.setting("readiness:lot")["error"]
+    assert any(f"Readiness stage={stage}" in record.message for record in caplog.records)
+    assert not result["ready"]
+    r.api.call, r.api.gift_sender.balance = original, balance
+    r.store.set_setting("readiness:lot", {})
+    await readiness.check(7, "lot", automatic=True)
+    assert r.store.setting("readiness:lot")["error"] is None
+    assert readiness.logical.listing("lot")["enabled"] == product["enabled"]
+    assert not r.api.remote.payments
+
+
 async def test_automatic_diagnostic_reuses_fresh_stars_but_payment_reads_again(shop):
     from telethon import functions
 

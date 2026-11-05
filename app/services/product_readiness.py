@@ -17,7 +17,7 @@ from app.services.automation import Automation, DeliveryPolicy
 from app.services.edit_confirmation import is_ordinary_edit
 from app.services.inventory import Inventory
 from app.services.logical_products import LogicalProducts
-from app.services.playerok_connection import REASONS
+from app.services.playerok_connection import REASONS, TEMPORARY_READ_FAILURES
 from app.services.products import ValidationError
 from app.services.sync_health import orders_sync_failed
 
@@ -614,6 +614,7 @@ class ProductReadiness:
             return {**self.snapshot(ident), "busy": True}
         async with lock:
             item, error = None, None
+            stage = "item"
             self.store.set_setting("readiness:" + ident, {**old, "attempt": now(), "edit_version": version})
             try:
                 async with asyncio.timeout(30):
@@ -621,6 +622,7 @@ class ProductReadiness:
                     self.remember_item(item, version=version)
                     product = self.logical.listing(ident)
                     if product and product["error_code"] == "RELIST_CONFIRMATION_REQUIRED":
+                        stage = "binding_scan"
                         from app.workers.logical_products import LogicalProductWorker
 
                         # Clear an old scan blocker only through a complete
@@ -632,6 +634,7 @@ class ProductReadiness:
                     if (
                         gift or product and product["handler"] == "telegram_gifts"
                     ) and policy.mode != "playerok":
+                        stage = "telegram"
                         gift_lock = getattr(self.api, "readiness_gift_lock", None)
                         if gift_lock is None:
                             self.api.readiness_gift_lock = gift_lock = asyncio.Lock()
@@ -643,6 +646,7 @@ class ProductReadiness:
                             ):
                                 await self.gifts.refresh()
                         if item.get("status") == "APPROVED":
+                            stage = "gift_binding"
                             code = gift["gift_code"] if gift else json.loads(product["config"])["code"]
                             await self.gifts.inspect_item(owner, ident, preview_code=code, observed_item=item)
             except (
@@ -654,9 +658,11 @@ class ProductReadiness:
                 ValidationError,
                 GiftValidationError,
             ) as exc:
-                code = getattr(exc, "code", "CHECK_FAILED")
+                code = (
+                    "CHECK_TIMEOUT" if isinstance(exc, TimeoutError) else getattr(exc, "code", "CHECK_FAILED")
+                )
                 safe_code = code if code in REASONS else "CHECK_FAILED"
-                event("WARNING", f"Readiness stage=check type={type(exc).__name__} code={safe_code}")
+                event("WARNING", f"Readiness stage={stage} type={type(exc).__name__} code={safe_code}")
                 error = "Проверка не завершена: " + (
                     {
                         "SESSION_UNAUTHORIZED": "Личный Telegram не авторизован. Выполните локальную авторизацию аккаунта.",
@@ -672,6 +678,12 @@ class ProductReadiness:
                         "сервер или подключение не подтвердили данные. Сохранённые замеры не считаются свежим подтверждением.",
                     )
                 )
+                if code in TEMPORARY_READ_FAILURES or code in {
+                    "PROXY_UNAVAILABLE",
+                    "MTPROTO_TIMEOUT",
+                    "PROXY_ROUTE_CHANGED",
+                }:
+                    error = "Проверка не завершена: соединение временно недоступно. Бот повторит её автоматически."
             except Exception as exc:
                 self.store.set_setting(
                     "readiness:" + ident,
@@ -682,7 +694,9 @@ class ProductReadiness:
                     },
                 )
                 event(
-                    "ERROR", f"Readiness stage=check type={type(exc).__name__} code=INTERNAL_ERROR", level=40
+                    "ERROR",
+                    f"Readiness stage={stage} type={type(exc).__name__} code=INTERNAL_ERROR",
+                    level=40,
                 )
                 raise
             record = self.store.setting("readiness:" + ident, {})
