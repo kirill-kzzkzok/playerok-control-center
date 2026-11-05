@@ -76,6 +76,11 @@ class PollingFilter(logging.Filter):
         return True
 
 
+class OwnerConsoleFilter(logging.Filter):
+    def filter(self, record):
+        return getattr(record, "event_type", None) != "CHECK"
+
+
 class ConsoleFormatter(logging.Formatter):
     COLORS: ClassVar = {
         logging.DEBUG: "90",
@@ -85,9 +90,10 @@ class ConsoleFormatter(logging.Formatter):
         logging.CRITICAL: "1;31",
     }
 
-    def __init__(self, color=False):
+    def __init__(self, color=False, *, technical=True):
         super().__init__(datefmt="%H:%M:%S")
         self.color = color
+        self.technical = technical
 
     def formatTime(self, record, datefmt=None):
         return datetime.fromtimestamp(record.created, ZoneInfo("Europe/Moscow")).strftime(
@@ -102,8 +108,10 @@ class ConsoleFormatter(logging.Formatter):
             if getattr(record, key, None) is not None
         )
         text = f"[{self.formatTime(record, self.datefmt)}] [{category:<8}] {record.getMessage()}"
-        if context:
+        if context and self.technical:
             text += " · " + context
+        elif getattr(record, "order_id", None):
+            text += " · заказ #" + str(record.order_id)
         color = {"SUCCESS": "32", "GIFT": "35", "CHECK": "34", "ORDER": "36"}.get(
             category, self.COLORS.get(record.levelno, "0")
         )
@@ -166,6 +174,7 @@ def configure_logging(secrets=(), *, debug=False):
     console = logging.StreamHandler(sys.stdout)
     selected = level if level in {"INFO", "WARNING", "ERROR", "CRITICAL"} else "INFO"
     console.setLevel(selected)
+    console.addFilter(OwnerConsoleFilter())
     handlers = [console]
     file_error = False
     try:
@@ -173,18 +182,21 @@ def configure_logging(secrets=(), *, debug=False):
         file = ResilientFileHandler(
             "logs/control_center.log", maxBytes=2_000_000, backupCount=5, encoding="utf-8"
         )
-        file.setLevel(logging.DEBUG if debug else selected)
+        file.setLevel(logging.DEBUG)
         handlers.append(file)
     except OSError:
         file_error = True
     for index, handler in enumerate(handlers):
         handler.addFilter(SecretFilter(secrets))
-        handler.setFormatter(ConsoleFormatter(color=index == 0 and ansi_supported(sys.stdout)))
-    logging.basicConfig(level=logging.DEBUG if debug else logging.INFO, handlers=handlers, force=True)
+        handler.setFormatter(
+            ConsoleFormatter(color=index == 0 and ansi_supported(sys.stdout), technical=index != 0)
+        )
+    logging.basicConfig(level=logging.DEBUG, handlers=handlers, force=True)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("aiogram.event").setLevel(logging.WARNING)
+    logging.getLogger("telethon").setLevel(logging.WARNING)
     dispatcher = logging.getLogger("aiogram.dispatcher")
     dispatcher.filters.clear()
     dispatcher.addFilter(PollingFilter())

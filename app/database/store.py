@@ -444,6 +444,7 @@ class Store:
         # This CAS and finish/recover share BEGIN IMMEDIATE: a late thread
         # cannot POST after a preflight-only retry/stop has won the race.
         with self.transaction() as db:
+            first = db.execute("SELECT started_at FROM outbox WHERE id=?", (action["id"],)).fetchone()
             changed = db.execute(
                 "UPDATE outbox SET started_at=COALESCE(started_at,?) WHERE id=? AND status='PROCESSING' AND lease_token=? AND lease_until>? "
                 "AND (kind NOT IN ('delivery','delivery_text','chain_message','fulfill') OR "
@@ -452,6 +453,10 @@ class Store:
             ).rowcount
             if changed != 1:
                 raise Conflict("Операция остановлена до отправки")
+        if first and first[0] is None and action.get("kind") in {"delivery", "delivery_text", "gift_send"}:
+            from app.security.logging import event
+
+            event("ORDER", "⏳ Начал выдачу заказа", order=action["target"], operation=action["id"])
 
     def finish(self, ident, token, status, result=None, error=None, retry_after=None):
         if status not in {"SUCCEEDED", "RETRYABLE_FAILED", "UNCERTAIN", "PERMANENT_FAILED"}:

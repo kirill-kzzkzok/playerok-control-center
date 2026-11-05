@@ -978,7 +978,13 @@ class OutboxWorker:
         )
         if not action:
             return False
-        event("INFO", "Начало операции: " + action["kind"], order=action["target"], operation=action["id"])
+        event(
+            "CHECK",
+            "Начало операции: " + action["kind"],
+            order=action["target"],
+            operation=action["id"],
+            level=10,
+        )
         try:
             result = await self.executor(action)
         except (ValidationError, Conflict):
@@ -1087,40 +1093,80 @@ class OutboxWorker:
             step = service.step(action)
             event(
                 "SUCCESS",
-                f"{step['code']} {step['position'] + 1}/{len(service.steps(action['target']))} — доставка подтверждена",
+                f"⭐ Telegram Stars — подтверждено списание {step['stars']} ⭐ · подарок {step['position'] + 1}/{len(service.steps(action['target']))}",
                 order=action["target"],
                 operation=action["id"],
                 position=step["position"] + 1,
             )
             if service.job(action["target"])["state"] == "SUCCEEDED":
-                event("ORDER", "Все подарки доставлены", order=action["target"])
+                event("ORDER", "✅ Товар успешно выдан", order=action["target"])
         if outcome["status"] != "SUCCEEDED":
             from app.gifts.core import gift_reason
 
-            event(
-                "WARNING",
-                (
-                    gift_reason(outcome["error_code"]) + " · "
+            repeated_wait = outcome["status"] == "RETRYABLE_FAILED" and outcome["error_code"] == action.get(
+                "error_code"
+            )
+            message = (
+                "⛔ Результат операции неизвестен. Повтор запрещён до сверки."
+                if outcome["status"] == "UNCERTAIN"
+                else (
+                    gift_reason(outcome["error_code"]) + " Проверка продолжится автоматически."
                     if action["kind"].startswith("gift_")
-                    else "Операция остановлена: "
+                    else "⏳ Заказ ожидает подтверждённых данных; безопасная проверка продолжится автоматически."
                 )
-                + str(outcome["error_code"] or outcome["status"]),
+                if outcome["status"] == "RETRYABLE_FAILED"
+                else gift_reason(outcome["error_code"])
+                if action["kind"].startswith("gift_")
+                else "⛔ Действие не выполнено. Причина сохранена в истории операции."
+            )
+            event(
+                "CHECK",
+                "Outbox outcome " + str(outcome),
                 order=action["target"],
                 operation=action["id"],
-                level=30,
+                level=10,
+            )
+            event(
+                "WARNING",
+                message,
+                order=action["target"],
+                operation=action["id"],
+                level=10 if repeated_wait else 30,
             )
         elif action["kind"] == "fulfill":
             event(
                 "SUCCESS",
-                "Выполнение заказа подтверждено Playerok",
+                "🏁 Выполнение заказа подтверждено Playerok",
                 order=action["target"],
                 operation=action["id"],
             )
         elif action["kind"] in {"delivery", "delivery_text", "chain_message", "reply"}:
             event(
                 "SUCCESS",
-                "Сервер подтвердил отправку сообщения/товара",
+                "✅ Товар успешно выдан"
+                if action["kind"] in {"delivery", "delivery_text"}
+                else "💬 Сообщение покупателю отправлено",
                 order=action["target"],
+                operation=action["id"],
+            )
+        elif action["kind"] in {"stock_pause", "stock_resume"} and (
+            result.get("bot_paused") or action["kind"] == "stock_resume" and not result.get("already_active")
+        ):
+            event(
+                "SUCCESS",
+                "🔄 Лот автоматически снят с продажи"
+                if action["kind"] == "stock_pause"
+                else "🔄 Лот возвращён в продажу",
+                operation=action["id"],
+            )
+        elif (
+            action["kind"] == "premium_bump"
+            and result.get("payment_id")
+            and result.get("paid_rub") is not None
+        ):
+            event(
+                "SUCCESS",
+                f"🚀 Поднял лот — {str(result.get('name') or 'Товар')[:110]} — списано {result['paid_rub']} ₽",
                 operation=action["id"],
             )
         return True

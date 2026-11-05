@@ -5,7 +5,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from app.security.logging import ConsoleFormatter, SecretFilter, ansi_supported
+from tests.test_unified_delivery_controls import shop as shop_fixture
+
+shop = shop_fixture
 
 
 def test_live_console_file_rotation_no_duplicate_or_private_data(tmp_path):
@@ -40,7 +45,8 @@ logging.shutdown()
     output = result.stdout
     assert output.count("Пакет 🧸 ×2, 🌹 ×1") == 1
     assert "[ORDER" in output and "[SUCCESS" in output and "[DEBUG" not in output
-    assert "order_id=sale-1" in output and "gift_position=1" in output
+    assert "заказ #sale-1" in output
+    assert "operation_id=" not in output and "gift_position=" not in output
     assert "polling-noise" not in output and "\x1b" not in output
     logs = list((tmp_path / "logs").glob("control_center.log*"))
     assert len(logs) == 3
@@ -140,3 +146,75 @@ def test_raw_telegram_exception_is_classified_before_any_log_sink():
     SecretFilter().filter(record)
     assert "private buyer text" not in record.getMessage()
     assert "ENTITY_PARSE_ERROR" in record.getMessage()
+
+
+def test_periodic_checks_stay_in_existing_debug_file_only(tmp_path):
+    script = """
+import logging
+from app.security.logging import configure_logging,event
+configure_logging()
+event('CHECK','Баланс личного Telegram: 135 Stars; каталог обновлён')
+event('ORDER','Новый оплаченный заказ',order='sale-1')
+event('WARNING','Результат отправки неизвестен',order='sale-1',level=30)
+logging.getLogger('pcc.shop').debug('Playerok method=get_chat_messages code=HTTP_500')
+logging.shutdown()
+"""
+    result = subprocess.run(
+        [sys.executable, "-u", "-c", script],
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": str(Path.cwd()), "PCC_LOG_LEVEL": "INFO"},
+        capture_output=True,
+        encoding="utf-8",
+        timeout=20,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "каталог обновлён" not in result.stdout
+    assert "Новый оплаченный заказ" in result.stdout and "Результат отправки неизвестен" in result.stdout
+    debug = (tmp_path / "logs/control_center.log").read_text(encoding="utf-8")
+    assert "каталог обновлён" in debug and "HTTP_500" in debug
+
+
+@pytest.mark.parametrize(
+    "mode,value",
+    [
+        ("unique_stock", None),
+        ("fixed_text", "private-delivery-secret"),
+        ("telegram_gifts", "gift: heart"),
+    ],
+)
+async def test_business_logs_follow_durable_delivery_once_after_restart(shop, caplog, mode, value):
+    from app.gifts.worker import GiftWorker
+    from app.services.orders import Orders
+    from app.workers.delivery_chains import ChainWorker
+    from app.workers.enrollment import EnrollmentWorker
+    from tests.test_logical_faults import reopen
+    from tests.test_universal_delivery_e2e import setup_ui
+
+    r = await shop(gift=mode == "telegram_gifts")
+    await setup_ui(r, mode, value)
+    caplog.set_level(logging.INFO)
+    order = r.api.order("logged-sale")
+    Orders(r.store).ingest(order)
+    Orders(r.store).ingest(order)
+    for _ in range(8):
+        await EnrollmentWorker(r.store, r.api).once()
+        await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+        ChainWorker(r.store, r.api).once()
+        await r.worker.once()
+    reopen(r)
+    Orders(r.store).ingest(order)
+    for _ in range(3):
+        await EnrollmentWorker(r.store, r.api).once()
+        await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+        ChainWorker(r.store, r.api).once()
+        await r.worker.once()
+    messages = [
+        record.getMessage() for record in caplog.records if getattr(record, "order_id", None) == "logged-sale"
+    ]
+    for needle in ("Новый оплаченный заказ", "Начал выдачу заказа", "Товар успешно выдан"):
+        assert sum(needle in message for message in messages) == 1
+    assert not any(
+        "private-delivery-secret" in message or "isolated-unit-" in message for message in messages
+    )
+    assert not any("Выполнение заказа подтверждено" in message for message in messages)

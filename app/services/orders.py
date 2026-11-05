@@ -154,32 +154,25 @@ class Orders:
                         ),
                     )
             if added and status == "PAID":
-                gift = db.execute(
-                    "SELECT enabled FROM gift_listings WHERE item_id=?", (item["id"],)
-                ).fetchone()
-                policy = db.execute(
-                    "SELECT payload FROM delivery_policies WHERE item_id=?", (item["id"],)
-                ).fetchone()
-                mode = (
-                    ("Telegram-подарки" if gift[0] else "Telegram-подарки — выдача выключена")
-                    if gift
-                    else (
-                        {
-                            "manual": "Ручная выдача",
-                            "stock": "Уникальные данные со склада",
-                            "text": "Постоянный текст",
-                            "playerok": "Выдаёт Playerok (бот только отвечает и отмечает выполнение)",
-                        }.get(json.loads(policy[0]).get("mode"), "Способ выдачи не подтверждён")
-                        if policy
-                        else "Привязка не найдена — ожидается сверка"
-                    )
-                )
+                name = str(item.get("name") or "Товар")
+                from app.services.logical_products import marker
+
+                try:
+                    code = marker(name)
+                except ValueError:
+                    code = None
+                shown = name if len(name) <= 100 else name[:90] + "…" + (f" [{code}]" if code else "")
                 event(
                     "ORDER",
-                    "Обнаружен оплаченный заказ · товар: " + str(item.get("name") or item["id"])[:120],
+                    f"🛒 Новый оплаченный заказ — {shown} — {item.get('price', 'нет данных')} ₽",
                     order=ident,
                 )
-                event("ORDER", "Режим выдачи: " + mode, order=ident)
+            if added and status in {"ROLLED_BACK", "FAILED"}:
+                event(
+                    "ORDER",
+                    "↩️ Возврат подтверждён" if status == "ROLLED_BACK" else "↩️ Заказ отменён",
+                    order=ident,
+                )
             return bool(added)
 
     def annotate(self, order_id, actor, revision, problem, note):
@@ -368,4 +361,16 @@ class Orders:
                 (message["id"], chat_id, message.get("created_at"), encode(message)),
             )
             db.execute("UPDATE inbox SET processed_at=? WHERE key=?", (now(), key))
+            if added and (message.get("user") or {}).get("id") not in (
+                None,
+                self.store.setting("playerok:account_id"),
+            ):
+                order = db.execute(
+                    "SELECT id FROM orders WHERE chat_id=? ORDER BY created_at DESC LIMIT 2", (chat_id,)
+                ).fetchall()
+                event(
+                    "ORDER",
+                    "📩 Новое сообщение от покупателя",
+                    order=order[0]["id"] if len(order) == 1 else None,
+                )
             return bool(added)

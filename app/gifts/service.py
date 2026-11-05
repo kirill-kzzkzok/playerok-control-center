@@ -138,6 +138,7 @@ class GiftService:
         }
 
     async def refresh(self):
+        previous_balance = self.store.setting("gifts:balance", {})
         gifts = await self.sender.catalog()
         balance = await self.sender.balance()
         with self.store.transaction() as db:
@@ -182,6 +183,16 @@ class GiftService:
                 (encode({"status": "OK", "at": now()}),),
             )
         event("CHECK", f"Баланс личного Telegram: {balance} Stars; каталог обновлён")
+        if type(previous_balance.get("stars")) is int and previous_balance["stars"] != balance:
+            known_spend = self.store.rows(
+                "SELECT COALESCE(SUM(stars),0) n FROM gift_steps WHERE state='SUCCEEDED' AND spent_at>?",
+                (previous_balance.get("at", ""),),
+            )[0]["n"]
+            if previous_balance["stars"] - balance != known_spend:
+                event(
+                    "ORDER",
+                    f"⭐ Telegram Stars — баланс изменился: {previous_balance['stars']} → {balance} ⭐",
+                )
         return balance
 
     async def bind(

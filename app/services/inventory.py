@@ -113,6 +113,16 @@ class Inventory:
                 "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'IMPORT_STOCK',?,?,?)",
                 (owner, ident, str(count), now()),
             )
+        if count:
+            from app.security.logging import event
+            from app.services.logical_products import LogicalProducts
+
+            product = LogicalProducts(self.store, self.automation.api).listing(ident)
+            label = f"[{product['code']}]" if product else "Товар"
+            event(
+                "ORDER",
+                f"📦 {label} — склад пополнен: +{count} шт., доступно {self.counts(ident)['AVAILABLE']} шт.",
+            )
         return count
 
     def prepared(self, owner, ident):
