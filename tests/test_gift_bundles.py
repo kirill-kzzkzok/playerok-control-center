@@ -457,8 +457,9 @@ async def test_live_console_records_only_committed_receipt_and_masked_recipient(
         SecretFilter().filter(record)
         rendered.append(ConsoleFormatter().format(record))
     output = "\n".join(rendered)
-    assert "bear 1/2 — отправка" in output and "rose 2/2 — доставка подтверждена" in output
-    assert output.count("Все подарки доставлены") == 1
+    assert "bear 1/2 — отправка" in output
+    assert output.count("Telegram Stars — подтверждено списание") == 2
+    assert output.count("Товар успешно выдан") == 1
     assert "Realbuyer" not in output
     # A decimal access_hash must not leak; random operation UUIDs may contain
     # these three digits without representing the sensitive numeric value.
