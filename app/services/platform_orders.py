@@ -66,6 +66,17 @@ class PlatformOrders:
             product
             and json.loads(product["config"]).get("platform_only")
             and old_policy.mode == "playerok"
+            and old_policy.mark_sent != policy.mark_sent
+            and {k: v for k, v in asdict(old_policy).items() if k not in {"mark_sent", "enabled"}}
+            == {k: v for k, v in asdict(policy).items() if k not in {"mark_sent", "enabled"}}
+        ):
+            self.logical.verify_listing(product, item)
+            self.logical.update_after(owner, item_id, product, policy.mark_sent, field="completion")
+            return {"saved": True}
+        if (
+            product
+            and json.loads(product["config"]).get("platform_only")
+            and old_policy.mode == "playerok"
             and {k: v for k, v in asdict(old_policy).items() if k != "greeting"}
             == {k: v for k, v in asdict(policy).items() if k != "greeting"}
         ):
@@ -183,8 +194,11 @@ class PlatformOrders:
             ).fetchone()
             self.logical.pin_order(db, ident, item, "playerok")
             if had_scope:
+                saved = json.loads(had_scope["config"])
                 policy = replace(
-                    policy, greeting=json.loads(had_scope["config"]).get("greeting", policy.greeting)
+                    policy,
+                    greeting=saved.get("greeting", policy.greeting),
+                    mark_sent=saved.get("mark_sent", policy.mark_sent),
                 )
             if (
                 db.execute("SELECT 1 FROM gift_jobs WHERE order_id=?", (ident,)).fetchone()
@@ -312,7 +326,7 @@ def commit_platform_settings(
     cutoff = server_time(prepublication_cutoff) if prepublication_cutoff is not None else now()
     if not cutoff:
         raise Conflict("Не подтверждено начало приёма будущих заказов")
-    config = {**json.loads(product["config"]), "platform_only": True}
+    config = {**json.loads(product["config"]), "platform_only": True, "mark_sent": policy.mark_sent}
     db.execute(
         "UPDATE logical_products SET config=?,revision=revision+1,control_revision=control_revision+1,enabled=?,inherit_enabled=?,armed_at=?,updated_at=? WHERE id=?",
         (

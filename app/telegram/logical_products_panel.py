@@ -271,12 +271,12 @@ class LogicalProductsPanel:
             if parts[1] == "messages":
                 return await self.callback(prefix + "editafter", owner, state)
             if product["enabled"]:
-                return (
-                    "Для изменения автоматической отметки выполнения остановите новые выдачи. Уже начатые операции не повторяются. Затем откройте этот пункт снова.",
-                    keyboard(
-                        [[("⛔ Остановить выдачу", prefix + "stop")]], back=("⬅️ К товару", "item:" + parts[2])
-                    ),
+                config = json.loads(product["config"])
+                key = "auto_fulfill" if product["handler"] == "telegram_gifts" else "automatic_completion"
+                self.service.update_after(
+                    owner, parts[2], product, not config.get(key, False), field="completion"
                 )
+                return await self.card(owner, parts[2], state)
             await state.update_data(
                 logical_setup={"handler": product["handler"], "config": json.loads(product["config"])}
             )
@@ -417,6 +417,11 @@ class LogicalProductsPanel:
                 raise Conflict("Неизвестный способ выдачи")
             config = json.loads(product["config"]) if product and product["handler"] == value else {}
             config.pop("platform_only", None)
+            if not product or product["handler"] != value:
+                if value == "telegram_gifts":
+                    config["auto_fulfill"] = True
+                elif value in {"unique_stock", "fixed_text"}:
+                    config.update(mark_sent=True, automatic_completion=True)
             if value == "telegram_gifts":
                 config.setdefault("after", config.get("options", {}).get("after", ""))
             await state.update_data(logical_setup={"handler": value, "config": config})
@@ -519,6 +524,8 @@ class LogicalProductsPanel:
             config = setup["config"]
             key = "auto_fulfill" if setup["handler"] == "telegram_gifts" else "mark_sent"
             config[key] = not config.get(key, False)
+            if setup["handler"] != "telegram_gifts":
+                config["automatic_completion"] = config[key]
             await state.update_data(logical_setup=setup)
             return await self.setup_screen(state)
         if command == "refund":

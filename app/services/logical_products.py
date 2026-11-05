@@ -64,10 +64,13 @@ def configuration(handler, config, *, max_count=5):
     return result
 
 
-def without_messages(config):
-    """Only these two top-level texts may vary without new delivery authority."""
+def without_messages(config, *, completion=False):
+    """Future messages/completion may vary; delivery content and STOP cannot."""
     value = json.loads(config) if isinstance(config, str) else config
-    return {key: selected for key, selected in value.items() if key not in {"greeting", "after"}}
+    ignored = {"greeting", "after"}
+    if completion:
+        ignored |= {"auto_fulfill", "mark_sent", "automatic_completion"}
+    return {key: selected for key, selected in value.items() if key not in ignored}
 
 
 class LogicalProducts:
@@ -78,8 +81,9 @@ class LogicalProducts:
         """Local future-message edit; never arm, send, or rewrite an order snapshot."""
         from app.services.delivery_chains import DeliveryChains
 
-        text = message_text(text)
-        if field not in {"greeting", "after"}:
+        completion = field == "completion"
+        text = text if completion and type(text) is bool else message_text(text)
+        if field not in {"greeting", "after", "completion"}:
             raise Conflict("Поле сообщения недоступно")
         with self.store.transaction() as db:
             product = self.listing(item_id)
@@ -98,10 +102,10 @@ class LogicalProducts:
                 or product["handler"] == "manual"
                 and not platform
                 or platform
-                and field != "greeting"
+                and field not in {"greeting", "completion"}
                 or not platform
                 and product["handler"] == "telegram_gifts"
-                and field != "after"
+                and field not in {"after", "completion"}
             ):
                 raise Conflict("Сообщение доступно после подтверждения автоматического способа выдачи")
             aliases = db.execute(
@@ -129,34 +133,65 @@ class LogicalProducts:
                             )
                             if platform:
                                 db.execute(
-                                    "UPDATE logical_order_scopes SET config=json_set(config,'$.greeting',?) WHERE order_id=?",
-                                    (policy.greeting, order["id"]),
+                                    "UPDATE logical_order_scopes SET config=json_set(config,'$.greeting',?,'$.mark_sent',json(?)) WHERE order_id=?",
+                                    (policy.greeting, encode(policy.mark_sent), order["id"]),
                                 )
                 if policy.mode in {"text", "stock", "playerok"}:
                     DeliveryChains(self.store, self.api).freeze_stock_resume(db, target, revision, policy)
                     updated = asdict(policy)
-                    updated[field] = text
+                    if completion:
+                        updated["mark_sent"] = text
+                        if policy.mode != "playerok":
+                            updated["automatic_completion"] = text
+                    else:
+                        updated[field] = text
                     db.execute(
                         "UPDATE delivery_policies SET payload=?,revision=revision+? WHERE item_id=? AND revision=?",
                         (encode(updated), int(policy.mode != "playerok"), target, revision),
                     )
                 if product["handler"] == "telegram_gifts":
-                    self.store.set_setting(
-                        "gifts:listing_options:" + target,
-                        {
-                            **self.store.setting("gifts:listing_options:" + target, {}),
-                            "after": text,
-                        },
-                    )
-            config[field] = text
+                    if completion:
+                        db.execute(
+                            "UPDATE gift_listings SET auto_fulfill=? WHERE item_id=?", (int(text), target)
+                        )
+                    else:
+                        self.store.set_setting(
+                            "gifts:listing_options:" + target,
+                            {**self.store.setting("gifts:listing_options:" + target, {}), "after": text},
+                        )
+            if completion:
+                if product["handler"] == "telegram_gifts":
+                    config["auto_fulfill"] = text
+                else:
+                    config["mark_sent"] = text
+                    config["automatic_completion"] = text
+            else:
+                config[field] = text
             db.execute(
                 "UPDATE logical_products SET config=?,updated_at=? WHERE id=?",
                 (encode(config), now(), product["id"]),
             )
             db.execute(
-                "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'UPDATE_FUTURE_MESSAGE',?,?,?)",
-                (owner, product["id"], digest(text), now()),
+                "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,?,?,?,?)",
+                (
+                    owner,
+                    "UPDATE_FUTURE_COMPLETION" if completion else "UPDATE_FUTURE_MESSAGE",
+                    product["id"],
+                    digest(encode(without_messages(config))) if completion else digest(str(text)),
+                    now(),
+                ),
             )
+
+    def same_delivery_config(self, before, binding):
+        if without_messages(before) == without_messages(binding["config"]):
+            return True
+        return bool(
+            without_messages(before, completion=True) == without_messages(binding["config"], completion=True)
+            and self.store.rows(
+                "SELECT 1 FROM audit_log WHERE actor=? AND action='UPDATE_FUTURE_COMPLETION' AND target=? AND outcome=? LIMIT 1",
+                (binding["owner_id"], binding["id"], digest(encode(without_messages(binding["config"])))),
+            )
+        )
 
     def authority(self, owner, account=None, *, writes=False):
         if not self.store.rows("SELECT 1 FROM administrators WHERE user_id=?", (owner,)):
@@ -1540,7 +1575,7 @@ class LogicalProducts:
                 scope["product_id"] != binding["id"]
                 or scope["config_revision"] != binding["revision"]
                 or scope["item_id"] != item_id
-                or without_messages(scope["config"]) != without_messages(binding["config"])
+                or not self.same_delivery_config(scope["config"], binding)
                 for scope in scopes
             ):
                 raise Conflict("Конфигурация заказа не совпадает с подтверждённой привязкой")

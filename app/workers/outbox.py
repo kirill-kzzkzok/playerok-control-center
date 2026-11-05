@@ -141,7 +141,7 @@ class Executor:
                 or not j["receipt"]
                 or j["refund_state"] != "NONE"
                 or not l["enabled"]
-                or not l["auto_fulfill"]
+                or not self.gifts().completion_allowed(j, l)
                 or not self.gifts().runtime()
                 or j["listing_revision"] != l["revision"]
             ):
@@ -1031,7 +1031,12 @@ class OutboxWorker:
                         "MARKETING_EDIT_READBACK_PENDING",
                     }
                     or delivery_retry
-                    and error.code in {"DELIVERY_CHAT_NOT_YET_AVAILABLE", "DELIVERY_SELLER_NOT_YET_AVAILABLE"}
+                    and error.code
+                    in {
+                        "DELIVERY_CHAT_NOT_YET_AVAILABLE",
+                        "DELIVERY_SELLER_NOT_YET_AVAILABLE",
+                        "DELIVERY_FLAGS_NOT_YET_AVAILABLE",
+                    }
                     or gift_retry
                     and error.code
                     in {

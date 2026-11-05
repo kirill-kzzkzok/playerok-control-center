@@ -58,7 +58,7 @@ class GiftWorker:
             listing = service.listing(j["item_id"])
             if j["state"] != "SUCCEEDED" or j["completion_state"] != "WAITING":
                 continue
-            if not listing["auto_fulfill"]:
+            if not service.completion_allowed(j, listing):
                 self.store.execute(
                     "UPDATE gift_jobs SET completion_state='MANUAL' WHERE order_id=?", (j["order_id"],)
                 )

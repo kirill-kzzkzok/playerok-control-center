@@ -45,6 +45,16 @@ class GiftService:
             raise GiftFailure("GIFT_ORDER_NOT_FOUND")
         return rows[0]
 
+    def completion_allowed(self, job, listing):
+        scopes = self.store.rows(
+            "SELECT config FROM logical_order_scopes WHERE order_id=?", (job["order_id"],)
+        )
+        return (
+            json.loads(scopes[0]["config"]).get("auto_fulfill", False)
+            if scopes
+            else bool(listing["auto_fulfill"])
+        )
+
     async def inspect_item(
         self, owner, item_id, *, preview_code=None, order_id=None, paid_order=None, observed_item=None
     ):

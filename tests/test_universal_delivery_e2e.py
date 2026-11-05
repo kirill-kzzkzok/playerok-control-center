@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 from aiogram import Bot
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.base import StorageKey
 
 from app.database.store import Store, now
 from app.gifts.mtproto import PersonalGiftSender
@@ -149,7 +151,14 @@ async def setup_ui(r, handler, value=None, *, completion=False):
         await click(r, suffix=":stock_commit")
     await click(r, suffix=":input:after")
     await r.ui.message("Спасибо за покупку!")
-    if completion:
+    context = FSMContext(r.ui.dp.storage, StorageKey(bot_id=r.bot.id, chat_id=7, user_id=7))
+    config = (await context.get_data())["logical_setup"]["config"]
+    selected = (
+        config.get("auto_fulfill", False)
+        if handler == "telegram_gifts"
+        else config.get("automatic_completion", False)
+    )
+    if bool(selected) != completion:
         await click(r, suffix=":completion")
     await click(r, suffix=":preview")
     assert not r.store.rows("SELECT * FROM outbox")

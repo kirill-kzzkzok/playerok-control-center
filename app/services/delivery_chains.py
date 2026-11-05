@@ -47,7 +47,11 @@ class DeliveryChains:
             if scope:
                 messages = json.loads(scope["config"])
                 policy = replace(
-                    policy, greeting=messages.get("greeting", ""), after=messages.get("after", "")
+                    policy,
+                    greeting=messages.get("greeting", ""),
+                    after=messages.get("after", ""),
+                    mark_sent=messages.get("mark_sent", False),
+                    automatic_completion=messages.get("automatic_completion", False),
                 )
             inventory_item = stock_scope(self.store, item_id, ident)
             if (
@@ -169,7 +173,14 @@ class DeliveryChains:
         from app.services.logical_products import without_messages
 
         return revision == chain["policy_revision"] or bool(
-            authority and without_messages(asdict(policy)) == without_messages(saved)
+            authority
+            and LogicalProducts(self.store, self.api).same_delivery_config(
+                self.store.rows(
+                    "SELECT config FROM logical_order_scopes WHERE order_id=?", (chain["order_id"],)
+                )[0]["config"],
+                binding,
+            )
+            and without_messages(asdict(policy), completion=True) == without_messages(saved, completion=True)
         )
 
     def freeze_stock_resume(self, db, item_id, revision, policy):
