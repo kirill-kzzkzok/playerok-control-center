@@ -230,3 +230,63 @@ async def test_resource_recovery_cannot_approve_a_higher_gift_price(shop):
         {"status": "PERMANENT_FAILED", "error_code": "PRICE_CHANGED"}
     ]
     assert r.store.rows("SELECT enabled FROM gift_listings WHERE item_id=?", ("lot",)) == [{"enabled": 0}]
+
+
+@pytest.mark.parametrize(
+    "block", [None, "stop", "closed", "uncertain", "late", "closed-during-read", "competing"]
+)
+async def test_old_proven_unstarted_resource_failure_recovers_without_manual_retry(shop, block):
+    from app.gifts.worker import GiftWorker
+    from tests.test_universal_delivery_e2e import click
+
+    r = await prepared(shop)
+    ident = r.store.rows("SELECT operation_id FROM gift_jobs")[0]["operation_id"]
+    r.api.remote.stars = 0
+    await r.worker.once(operation_id=ident)
+    assert not r.api.remote.payments
+    # Actual UI/worker-created journal, serialized as the previous release left it.
+    r.store.execute(
+        "UPDATE outbox SET status='PERMANENT_FAILED',error_code='BALANCE_TOO_LOW' WHERE id=?", (ident,)
+    )
+    r.store.execute("UPDATE gift_jobs SET state='BLOCKED' WHERE operation_id=?", (ident,))
+    r.store.execute("UPDATE gift_steps SET state='BLOCKED' WHERE operation_id=?", (ident,))
+    reference = r.store.rows("SELECT reference FROM gift_steps")[0]["reference"]
+    if block == "stop":
+        await r.ui.click("lp:item:lot")
+        await click(r, suffix=":stop")
+    elif block == "closed":
+        r.api.orders["waiting-new-order"]["status"] = "SENT"
+    elif block == "uncertain":
+        r.store.execute("UPDATE outbox SET status='UNCERTAIN' WHERE id=?", (ident,))
+    elif block == "late":
+        r.store.record_late_result(ident, "old-token", "UNCERTAIN", error="LOST_CHECK")
+    elif block == "competing":
+        # Persisted contradictory legacy ledger: do not send a second delivery.
+        Orders(r.store).add_stock("lot", ["legacy-reserved-unit"])
+        inventory_id = r.store.rows("SELECT id FROM inventory")[0]["id"]
+        r.store.execute("UPDATE inventory SET status='RESERVED' WHERE id=?", (inventory_id,))
+        r.store.execute("INSERT INTO reservations VALUES(?,?)", ("waiting-new-order", inventory_id))
+    r.api.remote.stars = 200
+    r.store.execute("UPDATE outbox SET retry_at=0 WHERE id=?", (ident,))
+    reopen(r)
+    if block == "closed-during-read":
+        original = r.api.call
+
+        async def closed_while_reading(method, **kwargs):
+            if method in {"get_deal", "get_delivery_deal"}:
+                r.store.execute(
+                    "UPDATE outbox SET error_code='MANUALLY_STOPPED_UNCERTAIN' WHERE id=?", (ident,)
+                )
+            return await original(method, **kwargs)
+
+        r.api.call = closed_while_reading
+    processed = await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+    assert processed == (0 if block else 1)
+    await r.worker.once(operation_id=ident)
+    assert len(r.api.remote.payments) == (0 if block else 1)
+    assert r.store.rows("SELECT operation_id,reference FROM gift_steps") == [
+        {"operation_id": ident, "reference": reference}
+    ]
+    assert len(r.store.rows("SELECT id FROM outbox WHERE kind='gift_send'")) == 1
+    if not block:
+        assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "SUCCEEDED"}]

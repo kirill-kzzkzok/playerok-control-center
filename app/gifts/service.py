@@ -890,6 +890,121 @@ class GiftService:
         event("SUCCESS", "Доставка подтверждена сверкой", order=order_id, position=step["position"] + 1)
         return receipt
 
+    async def recover_resource_preflights(self):
+        """Previous releases' proven free failures; same operation, never unknowns."""
+        if not self.runtime():
+            return 0
+        from app.gifts.outcomes import unstarted_preflight
+        from app.playerok.adapter import APIError
+        from app.services.automation import future_order
+        from app.services.logical_products import LogicalProducts
+
+        recovered = 0
+        candidates = self.store.rows(
+            "SELECT o.id,o.target FROM outbox o JOIN gift_jobs j ON j.operation_id=o.id "
+            "JOIN gift_listings l ON l.item_id=j.item_id WHERE o.kind='gift_send' "
+            "AND o.status='PERMANENT_FAILED' AND o.retry_at<=? AND j.state='BLOCKED' "
+            "AND l.enabled=1 AND l.revision=j.listing_revision AND l.bundle=j.bundle "
+            "AND j.refund_state='NONE' AND o.error_code IN "
+            "('BALANCE_TOO_LOW','GIFT_UNAVAILABLE','GIFT_QUANTITY_UNAVAILABLE','CATALOG_UNAVAILABLE','BALANCE_UNAVAILABLE') "
+            "ORDER BY o.retry_at,o.created_at LIMIT 10",
+            (time.time(),),
+        )
+        for candidate in candidates:
+            with self.store.transaction() as db:
+                if not unstarted_preflight(db, candidate, blocked=True):
+                    continue
+                self.store.execute(
+                    "UPDATE outbox SET retry_at=? WHERE id=? AND status='PERMANENT_FAILED'",
+                    (time.time() + 30, candidate["id"]),
+                )
+                operation = self.store.rows("SELECT * FROM outbox WHERE id=?", (candidate["id"],))
+                job = self.job(candidate["target"])
+                listing = self.listing(job["item_id"])
+                local = self.store.rows(
+                    "SELECT status,item_id,payload FROM orders WHERE id=?", (job["order_id"],)
+                )
+            try:
+                logical = LogicalProducts(self.store, self.api)
+                product = logical.require_delivery(job["item_id"], "telegram_gifts", job["order_id"])
+                if (
+                    not product
+                    or not local
+                    or local[0]["status"] != "PAID"
+                    or local[0]["item_id"] != job["item_id"]
+                ):
+                    continue
+                order = await deal_details(
+                    self.api, job["order_id"], full_item=True, obtaining_field_id=listing["username_field_id"]
+                )
+                deliverable(order, job["order_id"], self.api.account.id)
+                if (
+                    (order.get("item") or {}).get("id") != job["item_id"]
+                    or server_time(order.get("created_at"))
+                    != server_time(json.loads(local[0]["payload"]).get("created_at"))
+                    or not future_order(order.get("created_at"), product["armed_at"])
+                    or not future_order(order.get("created_at"), listing["armed_at"])
+                ):
+                    continue
+                username = buyer_recipient(order, field_id=listing["username_field_id"])
+                if job["recipient_username"] and username.casefold() != job["recipient_username"].casefold():
+                    continue
+                item = (
+                    (order.get("item") or {})
+                    if product["source_order_id"]
+                    else await self.api.call("get_item", id=job["item_id"])
+                )
+                logical.verify_listing(product, item)
+            except (APIError, ValueError):
+                continue
+            with self.store.transaction() as db:
+                if (
+                    not self.runtime()
+                    or self.store.rows("SELECT * FROM outbox WHERE id=?", (candidate["id"],)) != operation
+                    or self.job(job["order_id"]) != job
+                    or self.listing(job["item_id"]) != listing
+                    or self.store.rows(
+                        "SELECT status,item_id,payload FROM orders WHERE id=?", (job["order_id"],)
+                    )
+                    != local
+                    or not unstarted_preflight(db, candidate, blocked=True)
+                ):
+                    continue
+                try:
+                    logical.require_delivery(job["item_id"], "telegram_gifts", job["order_id"])
+                except Conflict:
+                    continue
+                if db.execute(
+                    "SELECT 1 FROM reservations WHERE order_id=? UNION ALL "
+                    "SELECT 1 FROM delivery_chains WHERE order_id=? UNION ALL "
+                    "SELECT 1 FROM outbox WHERE target=? AND kind IN ('delivery','delivery_text','chain_message','fulfill') LIMIT 1",
+                    (job["order_id"], job["order_id"], job["order_id"]),
+                ).fetchone():
+                    continue
+                if self.store.rows(
+                    "SELECT 1 FROM order_annotations WHERE order_id=? AND problem=1", (job["order_id"],)
+                ):
+                    continue
+                changed = db.execute(
+                    "UPDATE outbox SET status='PENDING',error_code=NULL,lease_token=NULL,lease_until=NULL,retry_at=0 WHERE id=? AND status='PERMANENT_FAILED'",
+                    (candidate["id"],),
+                ).rowcount
+                if not changed:
+                    continue
+                db.execute(
+                    "UPDATE gift_steps SET state='PENDING',error_code=NULL WHERE operation_id=? AND state='BLOCKED'",
+                    (candidate["id"],),
+                )
+                db.execute(
+                    "UPDATE gift_jobs SET state='PENDING',error_code=NULL,updated_at=? WHERE operation_id=? AND state='BLOCKED'",
+                    (now(), candidate["id"]),
+                )
+                self.store.audit(
+                    listing["owner_id"], "GIFT_FREE_PREFLIGHT_RECOVERED", job["order_id"], candidate["id"]
+                )
+                recovered += 1
+        return recovered
+
     def retry_preflight(self, owner, order_id):
         self.owner(owner)
         with self.store.transaction() as db:

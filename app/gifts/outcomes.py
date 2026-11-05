@@ -45,19 +45,26 @@ def track_preflight_wait(db):
     )
 
 
-def unstarted_preflight(db, action):
+def unstarted_preflight(db, action, *, blocked=False):
     """Positive journal proof, never absence of a response after payment."""
     return bool(
         db.execute(
             "SELECT 1 FROM outbox o JOIN gift_jobs j ON j.operation_id=o.id "
             "JOIN gift_steps s ON s.operation_id=o.id WHERE o.id=? "
-            "AND o.started_at IS NULL AND j.state IN ('PENDING','CHECKING') "
-            "AND s.state IN ('PENDING','CHECKING') AND j.spent_at IS NULL "
+            "AND o.started_at IS NULL AND (o.result IS NULL OR o.result='null') "
+            "AND ((?=0 AND j.state IN ('PENDING','CHECKING') AND s.state IN ('PENDING','CHECKING')) "
+            "OR (?=1 AND j.state='BLOCKED' AND s.state='BLOCKED')) AND j.spent_at IS NULL "
+            "AND j.form_id IS NULL AND j.receipt IS NULL AND j.message_id IS NULL "
+            "AND j.reserved_stars=0 "
             "AND s.spent_at IS NULL AND s.form_id IS NULL AND s.receipt IS NULL "
             "AND s.message_id IS NULL AND s.ack_message_id IS NULL "
+            "AND NOT EXISTS(SELECT 1 FROM outbox_late_results r WHERE r.operation_id=o.id) "
+            "AND NOT EXISTS(SELECT 1 FROM outbox prior WHERE prior.kind='gift_send' AND prior.target=j.order_id "
+            "AND (prior.started_at IS NOT NULL OR (prior.result IS NOT NULL AND prior.result!='null') "
+            "OR EXISTS(SELECT 1 FROM outbox_late_results lr WHERE lr.operation_id=prior.id))) "
             "AND NOT EXISTS(SELECT 1 FROM gift_steps p WHERE p.order_id=j.order_id "
             "AND (p.spent_at IS NOT NULL OR p.state IN ('SPENDING','UNCERTAIN','SUCCEEDED')))",
-            (action["id"],),
+            (action["id"], int(blocked), int(blocked)),
         ).fetchone()
     )
 
