@@ -1079,6 +1079,7 @@ class OutboxWorker:
                     and error.code
                     in {
                         "PROXY_UNAVAILABLE",
+                        "PROXY_ROUTE_CHANGED",
                         "MTPROTO_TIMEOUT",
                         "GIFT_TEMPORARY_PAUSE",
                         "GIFT_SYNC_PENDING",

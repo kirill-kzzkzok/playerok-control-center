@@ -44,6 +44,21 @@ class PreparedGift:
     form_id: int
     invoice: object = field(repr=False)
     route_generation: int | None = None
+    connection: object | None = field(default=None, repr=False)
+
+
+async def drain_cleanup(coro):
+    """A caller timeout must not release the session while Telethon still closes it."""
+    task = asyncio.create_task(coro)
+    interrupted = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            interrupted = True
+    task.result()
+    if interrupted:
+        raise asyncio.CancelledError
 
 
 class PersonalGiftSender:
@@ -53,6 +68,10 @@ class PersonalGiftSender:
         self.me = None
         self.session_lock = None
         self.closed = False
+        self.owns_client = client is None
+        self.needs_disconnect = False
+        self.route_generation = None
+        self.connection = None
 
     @staticmethod
     def read_proxy():
@@ -61,22 +80,51 @@ class PersonalGiftSender:
         except ProxyUnavailable:
             raise GiftFailure("PROXY_UNAVAILABLE") from None
 
+    def current_route(self):
+        return (
+            self.read_proxy().state["generation"] if self.settings.telegram_transport == "localvpn" else None
+        )
+
+    async def _disconnect(self):
+        self.me = None
+        self.connection = None
+        self.route_generation = None
+        if self.client is not None and self.needs_disconnect:
+            await self.client.disconnect()
+            self.needs_disconnect = False
+            if self.owns_client:
+                self.client = None
+
     async def connect(self):
         async with self.lock:
-            if self.settings.telegram_transport == "localvpn":
-                self.read_proxy()
             if self.closed:
                 raise GiftFailure("SESSION_CLOSED")
-            if self.me is not None and getattr(self.client, "is_connected", lambda: True)():
+            try:
+                generation = self.current_route()
+            except GiftFailure:
+                if self.needs_disconnect:
+                    await drain_cleanup(self._disconnect())
+                raise
+            if (
+                self.me is not None
+                and self.route_generation == generation
+                and getattr(self.client, "is_connected", lambda: True)()
+            ):
                 return
+            if self.needs_disconnect:
+                await drain_cleanup(self._disconnect())
+                generation = self.current_route()
             if self.client is None:
                 if not self.settings.api_id or not self.settings.api_hash:
                     raise GiftFailure("SESSION_NOT_CONFIGURED")
-                self.session_lock = InstanceLock(self.settings.session_path + ".lock")
-                self.session_lock.__enter__()
+                if self.session_lock is None:
+                    lock = InstanceLock(self.settings.session_path + ".lock")
+                    lock.__enter__()
+                    self.session_lock = lock
                 # No RPC body/recipient/session data from Telethon reaches application logs.
                 logger = logging.getLogger("pcc.private_mtproto")
-                logger.addHandler(logging.NullHandler())
+                if not logger.handlers:
+                    logger.addHandler(logging.NullHandler())
                 logger.propagate = False
                 self.client = TelegramClient(
                     self.settings.session_path,
@@ -90,35 +138,42 @@ class PersonalGiftSender:
                     base_logger=logger,
                     proxy=mtproto_proxy(self.settings.telegram_transport),
                 )
-            await self.client.connect()
-            if not await self.client.is_user_authorized():
-                await self.client.disconnect()
-                raise GiftFailure("SESSION_UNAUTHORIZED")
-            me = await self.client.get_me()
-            if not isinstance(me, types.User) or me.bot or me.deleted:
-                await self.client.disconnect()
-                raise GiftFailure("PERSONAL_ACCOUNT_REQUIRED")
+            self.needs_disconnect = True  # Even a partial connect can own send/receive tasks.
+            try:
+                await self.client.connect()
+                if not await self.client.is_user_authorized():
+                    raise GiftFailure("SESSION_UNAUTHORIZED")
+                me = await self.client.get_me()
+                if not isinstance(me, types.User) or me.bot or me.deleted:
+                    raise GiftFailure("PERSONAL_ACCOUNT_REQUIRED")
+                if self.current_route() != generation:
+                    raise GiftFailure("PROXY_ROUTE_CHANGED")
+            except (Exception, asyncio.CancelledError):
+                await drain_cleanup(self._disconnect())
+                raise
             self.me = me
+            self.connection = object()
+            self.route_generation = generation
             event("INFO", "Личный Telegram подключён")
 
     async def close(self):
         self.closed = True
+        await drain_cleanup(self._close())
+
+    async def _close(self):
         async with self.lock:
             connected = self.me is not None
-            try:
-                if self.client:
-                    await self.client.disconnect()
-            finally:
-                self.me = None
-                if self.session_lock:
-                    self.session_lock.__exit__(None, None, None)
-                    self.session_lock = None
-                if connected:
-                    event("INFO", "Личный Telegram отключён")
+            await self._disconnect()
+            if self.session_lock:
+                self.session_lock.__exit__(None, None, None)
+                self.session_lock = None
+            if connected:
+                event("INFO", "Личный Telegram отключён")
 
     async def resolve(self, username):
         normalized = telegram_username(username)
         await self.connect()
+        own_id = self.me.id
         try:
             # Bypass get_entity's entity cache; the username must still refer to this user now.
             resolved = await self.client(functions.contacts.ResolveUsernameRequest(normalized[1:]))
@@ -139,7 +194,7 @@ class PersonalGiftSender:
             user.bot
             or user.min
             or user.deleted
-            or user.id == self.me.id
+            or user.id == own_id
             or not user.access_hash
             or normalized[1:].casefold() not in {n.casefold() for n in names}
         ):
@@ -163,6 +218,7 @@ class PersonalGiftSender:
 
     async def prepare(self, gift_id, approved_stars, recipient, reference):
         catalog = await self.catalog()
+        connection, generation = self.connection, self.route_generation
         gift = next((g for g in catalog if isinstance(g, types.StarGift) and g.id == gift_id), None)
         if (
             gift is None
@@ -212,10 +268,9 @@ class PersonalGiftSender:
             or sum(p.amount for p in form.invoice.prices) != approved_stars
         ):
             raise GiftFailure("PAYMENT_FORM_MISMATCH")
-        generation = (
-            self.read_proxy().state["generation"] if self.settings.telegram_transport == "localvpn" else None
-        )
-        return PreparedGift(recipient, gift_id, gift.stars, form.form_id, invoice, generation)
+        if self.connection is not connection or self.current_route() != generation:
+            raise GiftFailure("PROXY_ROUTE_CHANGED")
+        return PreparedGift(recipient, gift_id, gift.stars, form.form_id, invoice, generation, connection)
 
     async def check_quantities(self, gifts):
         from collections import Counter
@@ -235,20 +290,25 @@ class PersonalGiftSender:
                 raise GiftFailure("GIFT_QUANTITY_UNAVAILABLE")
 
     async def pay(self, prepared):
-        if not self.settings.payment_enabled:
-            raise GiftFailure("GIFT_PAYMENTS_DISABLED")
-        if self.closed or self.me is None:
-            raise GiftFailure("SESSION_CLOSED")
-        if self.settings.telegram_transport == "localvpn":
-            proxy = require_proxy()
-            if await proxy.confirm() != prepared.route_generation:
+        async with self.lock:
+            if not self.settings.payment_enabled:
+                raise GiftFailure("GIFT_PAYMENTS_DISABLED")
+            if self.closed or self.me is None:
+                raise GiftFailure("SESSION_CLOSED")
+            if prepared.connection is not None and prepared.connection is not self.connection:
                 raise GiftFailure("PROXY_ROUTE_CHANGED")
-        result = await self.client(
-            functions.payments.SendStarsFormRequest(
-                form_id=prepared.form_id,
-                invoice=prepared.invoice,
+            if self.settings.telegram_transport == "localvpn":
+                proxy = require_proxy()
+                if await proxy.confirm() != prepared.route_generation:
+                    raise GiftFailure("PROXY_ROUTE_CHANGED")
+            if self.closed:
+                raise GiftFailure("SESSION_CLOSED")
+            result = await self.client(
+                functions.payments.SendStarsFormRequest(
+                    form_id=prepared.form_id,
+                    invoice=prepared.invoice,
+                )
             )
-        )
         if not isinstance(result, types.payments.PaymentResult):
             raise GiftFailure("PAYMENT_NOT_CONFIRMED")
         return result
