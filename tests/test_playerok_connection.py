@@ -168,6 +168,8 @@ async def test_startup_keeps_local_panel_when_playerok_unavailable(rig, monkeypa
         entered.append(True)
         assert api.connection.state["status"] == "DISCONNECTED"
         assert not api.account.writes_enabled and not api.account.automation_enabled
+        args[0]._stop_signal = asyncio.Event()
+        args[0]._stop_signal.set()
 
     monkeypatch.setattr("app.__main__.Dispatcher.start_polling", polling)
     config = Config(

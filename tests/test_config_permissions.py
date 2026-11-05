@@ -97,6 +97,8 @@ async def test_real_startup_worker_selection_for_every_flag_combination(tmp_path
         assert api.account.auto_accept_agreements is agreements
         assert api.gift_settings.payment_enabled is payment
         assert api.gift_settings.refund_enabled is refund
+        args[0]._stop_signal = asyncio.Event()
+        args[0]._stop_signal.set()
 
     monkeypatch.setattr("app.__main__.Dispatcher.start_polling", polling)
     try:

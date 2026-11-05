@@ -4,6 +4,7 @@ import asyncio
 import json
 from types import SimpleNamespace
 
+import pytest
 from aiogram import Bot
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.types import Chat, Message
@@ -144,8 +145,9 @@ async def test_known_proxy_preflight_failure_keeps_owner_notice_pending_until_ro
         store.close()
 
 
+@pytest.mark.parametrize("poll_failure", [None, "network", "returned"])
 async def test_real_bootstrap_processes_new_paid_stock_before_cold_telegram_connection_recovers(
-    shop, tmp_path, monkeypatch
+    shop, tmp_path, monkeypatch, poll_failure
 ):
     from aiogram.client.session.aiohttp import AiohttpSession
     from aiogram.types import User, WebhookInfo
@@ -154,6 +156,19 @@ async def test_real_bootstrap_processes_new_paid_stock_before_cold_telegram_conn
     from app.security.instance import InstanceLock
 
     r = await shop()
+    original_polling = application.Dispatcher.start_polling
+    attempts = 0
+
+    async def polling(dispatcher, *args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1 and poll_failure:
+            if poll_failure == "network":
+                raise OSError("injected transport failure")
+            return
+        return await original_polling(dispatcher, *args, **kwargs)
+
+    monkeypatch.setattr(application.Dispatcher, "start_polling", polling)
     await setup_ui(r, "unique_stock")
     settings, native_ready, _commands, process = native_control(tmp_path, monkeypatch)
     monkeypatch.setattr(application.NetworkSettings, "load", lambda *args, **kwargs: settings)

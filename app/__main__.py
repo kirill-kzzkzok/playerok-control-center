@@ -281,12 +281,19 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
         )
         # Webhook is checked before polling; no deletion or dropping updates.
         if await wait_for_telegram(bot, stop, verified=telegram_verified, retry_at=telegram_retry_at):
-            await dispatcher.start_polling(
-                bot,
-                allowed_updates=["message", "callback_query"],
-                close_bot_session=False,
-                polling_timeout=20,
-            )
+
+            async def polling():
+                await dispatcher.start_polling(
+                    bot,
+                    allowed_updates=["message", "callback_query"],
+                    close_bot_session=False,
+                    polling_timeout=20,
+                )
+                requested = getattr(dispatcher, "_stop_signal", None)
+                if requested is not None and requested.is_set():
+                    stop.set()
+
+            await supervisor.run("telegram-polling", polling, stop)
     finally:
         event("INFO", "Остановка приложения: новые операции запрещены, ожидание текущих запросов")
         stop.set()

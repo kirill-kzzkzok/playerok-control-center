@@ -128,7 +128,13 @@ async def test_startup_unverified_account_retains_local_panel_without_write_perm
     monkeypatch.setattr("app.__main__.Bot", lambda *a, **k: bot)
     monkeypatch.setattr("app.__main__.Supervisor.start", lambda *a: asyncio.create_task(asyncio.sleep(3600)))
     polling = AsyncMock()
-    monkeypatch.setattr("app.__main__.Dispatcher.start_polling", polling)
+
+    async def requested_shutdown(dispatcher, *args, **kwargs):
+        await polling(*args, **kwargs)
+        dispatcher._stop_signal = asyncio.Event()
+        dispatcher._stop_signal.set()
+
+    monkeypatch.setattr("app.__main__.Dispatcher.start_polling", requested_shutdown)
     config = SimpleNamespace(
         database_path=store.path,
         playerok_header="test",

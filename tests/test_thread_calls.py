@@ -204,8 +204,10 @@ async def test_actual_shutdown_drains_call_before_closing_resources(tmp_path, mo
         with pytest.raises(asyncio.CancelledError):
             await task
         shutdown_started.set()
+        dispatcher._stop_signal.set()
 
     dispatcher = SimpleNamespace(
+        _stop_signal=asyncio.Event(),
         fsm=Mock(),
         update=SimpleNamespace(outer_middleware=Mock()),
         message=SimpleNamespace(outer_middleware=Mock()),
