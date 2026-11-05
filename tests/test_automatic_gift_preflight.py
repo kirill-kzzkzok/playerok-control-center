@@ -290,3 +290,106 @@ async def test_old_proven_unstarted_resource_failure_recovers_without_manual_ret
     assert len(r.store.rows("SELECT id FROM outbox WHERE kind='gift_send'")) == 1
     if not block:
         assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "SUCCEEDED"}]
+
+
+@pytest.mark.parametrize("fault", ["network", "balance", "catalog"])
+async def test_confirmed_first_gift_does_not_force_manual_recovery_of_next_free_check(shop, fault):
+    r = await shop(gift=True)
+    await setup_ui(r, "telegram_gifts", "gift: heart, heart")
+    Orders(r.store).ingest(r.api.order("two-confirmed-gifts"))
+    service = GiftService(r.store, r.api, r.api.gift_settings, r.api.gift_sender)
+    assert service.discover() == 1
+    await r.worker.once()
+    assert len(r.api.remote.payments) == 1
+    first = r.store.rows("SELECT * FROM gift_steps WHERE position=0")[0]
+    second = r.store.rows("SELECT * FROM gift_steps WHERE position=1")[0]
+    gift = r.api.remote.catalog["heart"]
+    if fault == "network":
+        r.api.remote.resolve_error = TimeoutError()
+    elif fault == "balance":
+        r.api.remote.stars = 0
+    else:
+        del r.api.remote.catalog["heart"]
+    await r.worker.once(operation_id=second["operation_id"])
+    assert r.store.rows("SELECT status,started_at FROM outbox WHERE id=?", (second["operation_id"],)) == [
+        {"status": "RETRYABLE_FAILED", "started_at": None}
+    ]
+    assert len(r.api.remote.payments) == 1
+    assert r.store.rows("SELECT * FROM gift_steps WHERE position=0") == [first]
+    r.api.remote.resolve_error = None
+    r.api.remote.stars = 200
+    r.api.remote.catalog["heart"] = gift
+    reopen(r)
+    r.store.execute("UPDATE outbox SET retry_at=0 WHERE id=?", (second["operation_id"],))
+    await r.worker.once(operation_id=second["operation_id"])
+    assert len(r.api.remote.payments) == 2
+    assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "SUCCEEDED"}]
+    assert r.store.rows("SELECT * FROM gift_steps WHERE position=0") == [first]
+
+
+@pytest.mark.parametrize("fault", ["receipt", "late", "unknown-current"])
+async def test_package_free_retry_requires_positive_previous_receipt_and_never_repeats_unknown_payment(
+    shop, fault
+):
+    r = await shop(gift=True)
+    await setup_ui(r, "telegram_gifts", "gift: heart, heart")
+    Orders(r.store).ingest(r.api.order("package-proof"))
+    service = GiftService(r.store, r.api, r.api.gift_settings, r.api.gift_sender)
+    service.discover()
+    await r.worker.once()
+    first = r.store.rows("SELECT * FROM gift_steps WHERE position=0")[0]
+    second = r.store.rows("SELECT * FROM gift_steps WHERE position=1")[0]
+    if fault == "receipt":
+        r.store.execute("UPDATE gift_steps SET receipt='{}' WHERE position=0")
+    elif fault == "late":
+        r.store.record_late_result(
+            first["operation_id"], "other-token", "UNCERTAIN", error="CONFLICTING_LATE_RPC"
+        )
+    if fault == "unknown-current":
+        r.api.remote.pay_error = TimeoutError()
+    else:
+        r.api.remote.resolve_error = TimeoutError()
+    await r.worker.once(operation_id=second["operation_id"])
+    expected = "UNCERTAIN" if fault == "unknown-current" else "PERMANENT_FAILED"
+    assert r.store.rows("SELECT status FROM outbox WHERE id=?", (second["operation_id"],)) == [
+        {"status": expected}
+    ]
+    count = len(r.api.remote.payments)
+    assert count == (2 if fault == "unknown-current" else 1)
+    r.api.remote.resolve_error = None
+    r.api.remote.pay_error = None
+    reopen(r)
+    for _ in range(3):
+        await r.worker.once(operation_id=second["operation_id"])
+    assert len(r.api.remote.payments) == count
+
+
+async def test_old_partial_resource_failure_resumes_only_next_unstarted_gift(shop):
+    from app.gifts.worker import GiftWorker
+
+    r = await shop(gift=True)
+    await setup_ui(r, "telegram_gifts", "gift: heart, heart")
+    Orders(r.store).ingest(r.api.order("old-partial-package"))
+    GiftService(r.store, r.api, r.api.gift_settings, r.api.gift_sender).discover()
+    await r.worker.once()
+    first = r.store.rows("SELECT * FROM gift_steps WHERE position=0")[0]
+    second = r.store.rows("SELECT * FROM gift_steps WHERE position=1")[0]
+    r.api.remote.stars = 0
+    await r.worker.once(operation_id=second["operation_id"])
+    assert len(r.api.remote.payments) == 1
+    r.store.execute(
+        "UPDATE outbox SET status='PERMANENT_FAILED',error_code='BALANCE_TOO_LOW',retry_at=0 WHERE id=?",
+        (second["operation_id"],),
+    )
+    r.store.execute("UPDATE gift_jobs SET state='BLOCKED' WHERE operation_id=?", (second["operation_id"],))
+    r.store.execute("UPDATE gift_steps SET state='BLOCKED' WHERE operation_id=?", (second["operation_id"],))
+    r.api.remote.stars = 200
+    reopen(r)
+    await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+    await r.worker.once(operation_id=second["operation_id"])
+    assert len(r.api.remote.payments) == 2
+    assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "SUCCEEDED"}]
+    assert r.store.rows("SELECT * FROM gift_steps WHERE position=0") == [first]
+    assert r.store.rows("SELECT operation_id,reference FROM gift_steps WHERE position=1") == [
+        {"operation_id": second["operation_id"], "reference": second["reference"]}
+    ]

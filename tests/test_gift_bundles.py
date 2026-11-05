@@ -144,9 +144,13 @@ async def test_partial_delivery_blocks_later_steps_no_full_refund_or_sent(rig, f
     assert len(t.payments) == 1 and not r.api.refunds
     steps = r.service.steps("order")
     assert (
-        steps[0]["state"] == "SUCCEEDED" and steps[1]["state"] == "BLOCKED" and steps[2]["state"] == "PENDING"
+        steps[0]["state"] == "SUCCEEDED"
+        and steps[1]["state"] == ("PENDING" if fault in {"balance", "unavailable"} else "BLOCKED")
+        and steps[2]["state"] == "PENDING"
     )
-    assert r.service.job("order")["state"] == "BLOCKED"
+    assert r.service.job("order")["state"] == (
+        "PENDING" if fault in {"balance", "unavailable"} else "BLOCKED"
+    )
     await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
     assert not r.store.rows("SELECT 1 FROM outbox WHERE kind IN ('fulfill','gift_refund','gift_notice')")
 
@@ -174,7 +178,7 @@ async def test_lost_ack_without_message_id_blocks_remaining_and_never_guesses(ri
     assert not r.api.refunds
 
 
-async def test_restart_between_steps_and_after_partial_block(rig):
+async def test_restart_between_steps_and_after_partial_resource_wait(rig):
     r = rig
     t = await setup(r, "bear, rose")
     await r.worker.once()
@@ -186,13 +190,14 @@ async def test_restart_between_steps_and_after_partial_block(rig):
         assert r.store.recover() == 0
         t.stars = 0
         await r.worker.once()
-        assert r.service.job("order")["state"] == "BLOCKED"
+        assert r.service.job("order")["state"] == "PENDING"
         r.store.close()
         r.store = Store(r.store.path)
         r.service = GiftService(r.store, r.api, r.api.gift_settings, r.api.gift_sender)
         r.worker = OutboxWorker(r.store, Executor(r.store, r.api, Products(r.store, r.api)))
         t.stars = 100
-        r.service.retry_preflight(7, "order")
+        # Advance the existing retry deadline; no new owner permission is needed.
+        r.store.execute("UPDATE outbox SET retry_at=0 WHERE id=?", (r.service.job("order")["operation_id"],))
         await r.worker.once()
         assert r.service.job("order")["state"] == "SUCCEEDED" and len(t.payments) == 2
     finally:
@@ -247,6 +252,11 @@ async def test_bundle_dispatcher_preview_restart_progress_and_partial_retry(rig)
         await r.worker.once()
         t.stars = 0
         await r.worker.once()
+        # Keep the real legacy callback contract for persisted pre-upgrade partial failures.
+        operation = r.service.job("order")["operation_id"]
+        r.store.execute("UPDATE outbox SET status='PERMANENT_FAILED' WHERE id=?", (operation,))
+        r.store.execute("UPDATE gift_jobs SET state='BLOCKED' WHERE operation_id=?", (operation,))
+        r.store.execute("UPDATE gift_steps SET state='BLOCKED' WHERE operation_id=?", (operation,))
         await ui.click("gft:job:order")
         assert "1/3" in session.calls[-1].text and "Частичная выдача" in session.calls[-1].text
         assert "Realbuyer" not in session.calls[-1].text
