@@ -506,7 +506,10 @@ async def test_duplicate_sync_and_parallel_orders_cannot_exceed_fifteen_star_aut
     await asyncio.gather(h.worker.once(), h.worker.once())
     assert len(h.remote.payments) == 1 and h.remote.stars == 185
     states = {r["state"] for r in h.store.rows("SELECT state FROM gift_jobs")}
-    assert states == {"SUCCEEDED", "BLOCKED"}
+    assert states == {"SUCCEEDED", "PENDING"}
+    assert h.store.rows(
+        "SELECT started_at FROM outbox WHERE kind='gift_send' AND error_code='DAILY_BUDGET_EXHAUSTED'"
+    ) == [{"started_at": None}]
     assert (
         h.store.rows("SELECT SUM(stars) AS stars FROM gift_steps WHERE spent_at IS NOT NULL")[0]["stars"]
         == 15
