@@ -82,7 +82,7 @@ async def test_closed_edit_cannot_authorize_changed_delivery_identity(shop):
         "STOP_UNCERTAIN",
         "Закрываю запись без подтверждения изменения",
     )
-    r.api.item["description"] = "Changed outside the confirmed delivery contract"
+    r.api.item["attributes"] = {"delivery-critical": "Changed outside the confirmed delivery contract"}
     await r.ui.click("rd:check:lot")
     result = ProductReadiness(r.store, r.api).snapshot("lot", item=r.api.item)
     assert not result["ready"]
