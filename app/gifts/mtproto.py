@@ -182,13 +182,33 @@ class PersonalGiftSender:
             if connected:
                 event("INFO", "Личный Telegram отключён")
 
+    async def _retire(self, connection):
+        async with self.lock:
+            if self.connection is connection:
+                await self._disconnect()
+
+    async def _read(self, call):
+        connection, client = self.connection, self.client
+        if connection is None or client is None:
+            raise ConnectionError("MTProto connection changed before read")
+        try:
+            return await call(client)
+        except (OSError, TimeoutError, asyncio.CancelledError):
+            # A cancelled RPC does not necessarily clear Telethon.is_connected.
+            # Retire exactly this connection, never a newer replacement.
+            await drain_cleanup(self._retire(connection))
+            raise
+
+    async def _read_rpc(self, request):
+        return await self._read(lambda client: client(request))
+
     async def resolve(self, username):
         normalized = telegram_username(username)
         await self.connect()
         own_id = self.me.id
         try:
             # Bypass get_entity's entity cache; the username must still refer to this user now.
-            resolved = await self.client(functions.contacts.ResolveUsernameRequest(normalized[1:]))
+            resolved = await self._read_rpc(functions.contacts.ResolveUsernameRequest(normalized[1:]))
         except (errors.UsernameInvalidError, errors.UsernameNotOccupiedError) as exc:
             raise InvalidRecipient(
                 "USERNAME_INVALID"
@@ -215,14 +235,14 @@ class PersonalGiftSender:
 
     async def catalog(self):
         await self.connect()
-        value = await self.client(functions.payments.GetStarGiftsRequest(hash=0))
+        value = await self._read_rpc(functions.payments.GetStarGiftsRequest(hash=0))
         if not isinstance(value, types.payments.StarGifts):
             raise GiftFailure("CATALOG_UNAVAILABLE")
         return value.gifts
 
     async def balance(self):
         await self.connect()
-        value = await self.client(functions.payments.GetStarsStatusRequest(peer=types.InputPeerSelf()))
+        value = await self._read_rpc(functions.payments.GetStarsStatusRequest(peer=types.InputPeerSelf()))
         balance = value.balance
         if not isinstance(balance, types.StarsAmount) or balance.amount < 0 or balance.nanos < 0:
             raise GiftFailure("BALANCE_UNAVAILABLE")
@@ -243,7 +263,7 @@ class PersonalGiftSender:
             raise GiftFailure("PREMIUM_REQUIRED")
         if gift.stars != approved_stars:
             raise GiftFailure("PRICE_CHANGED")
-        full = await self.client(
+        full = await self._read_rpc(
             functions.users.GetFullUserRequest(
                 id=types.InputUser(recipient.user_id, recipient.access_hash),
             )
@@ -259,7 +279,7 @@ class PersonalGiftSender:
             )
         ):
             raise GiftFailure("RECIPIENT_GIFTS_FORBIDDEN")
-        permission = await self.client(functions.payments.CheckCanSendGiftRequest(gift_id=gift_id))
+        permission = await self._read_rpc(functions.payments.CheckCanSendGiftRequest(gift_id=gift_id))
         if not isinstance(permission, types.payments.CheckCanSendGiftResultOk):
             raise GiftFailure("GIFT_RESTRICTED")
         if await self.balance() < gift.stars:
@@ -270,7 +290,7 @@ class PersonalGiftSender:
             hide_name=False,
             include_upgrade=False,
         )
-        form = await self.client(functions.payments.GetPaymentFormRequest(invoice=invoice))
+        form = await self._read_rpc(functions.payments.GetPaymentFormRequest(invoice=invoice))
         if (
             not isinstance(form, types.payments.PaymentFormStarGift)
             or not form.form_id
@@ -317,12 +337,18 @@ class PersonalGiftSender:
                 raise GiftFailure("PROXY_ROUTE_CHANGED")
             if self.closed:
                 raise GiftFailure("SESSION_CLOSED")
-            result = await self.client(
-                functions.payments.SendStarsFormRequest(
-                    form_id=prepared.form_id,
-                    invoice=prepared.invoice,
+            try:
+                result = await self.client(
+                    functions.payments.SendStarsFormRequest(
+                        form_id=prepared.form_id,
+                        invoice=prepared.invoice,
+                    )
                 )
-            )
+            except (OSError, TimeoutError, asyncio.CancelledError):
+                # Transport cleanup is NOT payment recovery. The durable caller
+                # retains UNKNOWN and must never resend this paid request.
+                await drain_cleanup(self._disconnect())
+                raise
         if not isinstance(result, types.payments.PaymentResult):
             raise GiftFailure("PAYMENT_NOT_CONFIRMED")
         return result
@@ -396,10 +422,8 @@ class PersonalGiftSender:
         ids = [job["ack_message_id"]] if job.get("ack_message_id") else []
         if job.get("receipt_mode") == "MESSAGE_ID" and not ids:
             raise GiftFailure("DELIVERY_CORRELATION_UNKNOWN")
-        messages = (
-            await self.client.get_messages(peer, ids=ids)
-            if ids
-            else await self.client.get_messages(peer, limit=100)
+        messages = await self._read(
+            lambda client: client.get_messages(peer, ids=ids) if ids else client.get_messages(peer, limit=100)
         )
         matches = [r for msg in messages if (r := self.matching_receipt(msg, job))]
         if len(matches) != 1:
