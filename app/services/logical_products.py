@@ -138,6 +138,32 @@ class LogicalProducts:
                                 )
                 if policy.mode in {"text", "stock", "playerok"}:
                     DeliveryChains(self.store, self.api).freeze_stock_resume(db, target, revision, policy)
+                if completion:
+                    for scope in db.execute(
+                        "SELECT s.order_id,s.config,c.policy FROM logical_order_scopes s "
+                        "JOIN orders o ON o.id=s.order_id LEFT JOIN delivery_chains c ON c.order_id=s.order_id "
+                        "WHERE s.product_id=? AND s.item_id=? AND o.status IN ('PAID','SENT')",
+                        (product["id"], target),
+                    ).fetchall():
+                        saved = json.loads(scope["config"])
+                        prior = dict(saved)
+                        if product["handler"] == "telegram_gifts":
+                            listing = db.execute(
+                                "SELECT auto_fulfill FROM gift_listings WHERE item_id=?", (target,)
+                            ).fetchone()
+                            saved.setdefault("auto_fulfill", bool(listing and listing[0]))
+                        else:
+                            original = json.loads(scope["policy"]) if scope["policy"] else asdict(policy)
+                            saved.setdefault("mark_sent", original.get("mark_sent", False))
+                            saved.setdefault(
+                                "automatic_completion", original.get("automatic_completion", False)
+                            )
+                        if saved != prior:
+                            db.execute(
+                                "UPDATE logical_order_scopes SET config=? WHERE order_id=?",
+                                (encode(saved), scope["order_id"]),
+                            )
+                if policy.mode in {"text", "stock", "playerok"}:
                     updated = asdict(policy)
                     if completion:
                         updated["mark_sent"] = text

@@ -80,3 +80,21 @@ async def test_platform_completion_change_keeps_old_paid_conditions(shop, initia
     assert r.api.orders["old-platform"]["status"] == ("SENT" if initial else "PAID")
     assert r.api.orders["new-platform"]["status"] == ("PAID" if initial else "SENT")
     assert not r.api.remote.payments and not r.store.rows("SELECT * FROM reservations")
+
+
+async def test_old_scope_without_completion_keys_keeps_reminder_after_future_opt_in(shop):
+    r = await shop()
+    await setup_ui(r, "unique_stock", legacy_reminder=True)
+    Orders(r.store).ingest(r.api.order("legacy-paid"))
+    await r.ui.click("lp:completion:lot")
+    reopen(r)
+    Orders(r.store).ingest(r.api.order("new-automatic"))
+    for _ in range(16):
+        await EnrollmentWorker(r.store, r.api).once()
+        ChainWorker(r.store, r.api).once()
+        await r.worker.once()
+    assert r.store.rows("SELECT status FROM delivery_chains WHERE order_id='legacy-paid'") == [
+        {"status": "NEEDS_FULFILLMENT"}
+    ]
+    assert r.api.orders["legacy-paid"]["status"] == "PAID"
+    assert r.api.orders["new-automatic"]["status"] == "SENT"

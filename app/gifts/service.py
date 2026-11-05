@@ -50,7 +50,7 @@ class GiftService:
             "SELECT config FROM logical_order_scopes WHERE order_id=?", (job["order_id"],)
         )
         return (
-            json.loads(scopes[0]["config"]).get("auto_fulfill", False)
+            json.loads(scopes[0]["config"]).get("auto_fulfill", bool(listing["auto_fulfill"]))
             if scopes
             else bool(listing["auto_fulfill"])
         )

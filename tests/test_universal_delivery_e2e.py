@@ -137,7 +137,7 @@ async def click(r, *, action=None, suffix=None):
     return key
 
 
-async def setup_ui(r, handler, value=None, *, completion=False):
+async def setup_ui(r, handler, value=None, *, completion=False, legacy_reminder=False):
     await click(r, action="items")
     await click(r, action="item:lot")
     await click(r, action="iv:delivery:lot")
@@ -177,6 +177,15 @@ async def setup_ui(r, handler, value=None, *, completion=False):
     await click(r, suffix=":enable:inherit")
     assert r.store.rows("SELECT enabled FROM logical_products")[0]["enabled"] == 1
     assert not r.api.messages and not r.api.remote.payments
+    if legacy_reminder:
+        # Persist the pre-upgrade reminder-only contract after genuine UI setup.
+        # A new completion choice now grants actual automatic completion.
+        r.store.execute(
+            "UPDATE delivery_policies SET payload=json_remove(json_set(payload,'$.mark_sent',json('true')),'$.automatic_completion')"
+        )
+        r.store.execute(
+            "UPDATE logical_products SET config=json_remove(json_set(config,'$.mark_sent',json('true')),'$.automatic_completion')"
+        )
 
 
 @pytest.mark.parametrize(

@@ -115,7 +115,7 @@ async def test_closed_order_with_stale_blocked_enrollment_is_not_counted_as_unpa
 
 async def test_needs_fulfillment_order_is_actionable_after_confirmed_delivery(shop):
     r = await shop()
-    await setup_ui(r, "unique_stock", completion=True)
+    await setup_ui(r, "unique_stock", legacy_reminder=True)
     Orders(r.store).ingest(r.api.order("needs-owner"))
     await EnrollmentWorker(r.store, r.api).once()
     for _ in range(5):

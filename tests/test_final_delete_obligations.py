@@ -92,7 +92,7 @@ async def test_order_arriving_during_owned_item_read_still_blocks_delete_dispatc
 async def test_safe_deletion_preserves_confirmed_history_and_inventory(shop, completed_sale):
     r = await shop()
     if completed_sale != "draft":
-        await setup_ui(r, "unique_stock", completion=completed_sale == "reminder")
+        await setup_ui(r, "unique_stock", legacy_reminder=completed_sale == "reminder")
         Orders(r.store).ingest(r.api.order("done"))
         await EnrollmentWorker(r.store, r.api).once()
         for _ in range(5):

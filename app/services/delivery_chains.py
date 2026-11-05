@@ -50,8 +50,8 @@ class DeliveryChains:
                     policy,
                     greeting=messages.get("greeting", ""),
                     after=messages.get("after", ""),
-                    mark_sent=messages.get("mark_sent", False),
-                    automatic_completion=messages.get("automatic_completion", False),
+                    mark_sent=messages.get("mark_sent", policy.mark_sent),
+                    automatic_completion=messages.get("automatic_completion", policy.automatic_completion),
                 )
             inventory_item = stock_scope(self.store, item_id, ident)
             if (
