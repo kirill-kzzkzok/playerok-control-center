@@ -3,6 +3,7 @@ import json
 from decimal import Decimal, InvalidOperation
 
 from app.database.store import Conflict, encode, server_time
+from app.playerok.adapter import APIError
 from app.services.orders import Orders
 from app.services.products import ValidationError
 
@@ -22,7 +23,7 @@ def sale(order, ident, account_id):
     return order
 
 
-def deliverable(order, ident, account_id):
+def deliverable(order, ident, account_id, *, wait_for_chat=False):
     sale(order, ident, account_id)
     if not account_id or ((order.get("item") or {}).get("user") or {}).get("id") != account_id:
         raise ValidationError("Владелец товара не подтверждён")
@@ -33,6 +34,8 @@ def deliverable(order, ident, account_id):
     ):
         raise ValidationError("Нужна оплаченная продажа без проблемы и серверной автоматической выдачи")
     if not (order.get("chat") or {}).get("id"):
+        if wait_for_chat:
+            raise APIError("DELIVERY_CHAT_NOT_YET_AVAILABLE")
         raise ValidationError("Чат покупателя не подтверждён")
     return order
 
@@ -160,12 +163,14 @@ class OrderManagement:
         self.orders.ingest(order)
         return order
 
-    async def prepare_delivery(self, actor, ident):
+    async def prepare_delivery(self, actor, ident, *, automatic=False):
         self.owner(actor)
         order = await deal_details(self.api, ident)
         self.orders.ingest(order)
-        deliverable(order, ident, self.api.account.id)
         local = self.store.rows("SELECT status FROM orders WHERE id=?", (ident,))[0]
+        deliverable(
+            order, ident, self.api.account.id, wait_for_chat=automatic and local["status"] == order["status"]
+        )
         if local["status"] != order["status"]:
             raise Conflict("API и сохранённая история расходятся; выдача заблокирована")
         chat = await self.api.call("get_chat", chat_id=order["chat"]["id"])

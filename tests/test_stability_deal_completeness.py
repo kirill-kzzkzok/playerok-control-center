@@ -2,13 +2,16 @@
 
 import copy
 import json
+from types import SimpleNamespace
 
 import pytest
 
 from app.gifts.worker import GiftWorker
 from app.services.orders import Orders
+from app.workers import enrollment
 from app.workers.delivery_chains import ChainWorker
 from app.workers.enrollment import EnrollmentWorker
+from tests.test_logical_faults import reopen
 from tests.test_playerok_delivery import configure, drain
 from tests.test_universal_delivery_e2e import setup_ui
 from tests.test_universal_delivery_e2e import simulation as simulation_fixture
@@ -31,6 +34,35 @@ def boundaries(r, short, full):
         return await original(method, **kwargs)
 
     r.api.call = call
+
+
+@pytest.mark.parametrize("mode,value", [("unique_stock", None), ("fixed_text", "one-private-unit")])
+async def test_delayed_chat_details_resume_after_restart(shop, monkeypatch, mode, value):
+    r = await shop()
+    await setup_ui(r, mode, value)
+    full = r.api.order("delayed-details")
+    chat = full["chat"]
+    full["chat"] = None
+    short = copy.deepcopy(full)
+    boundaries(r, short, full)
+    Orders(r.store).ingest(short)
+    await EnrollmentWorker(r.store, r.api).once()
+    assert not r.api.messages
+    assert not r.store.rows("SELECT * FROM delivery_chains")
+    assert not r.store.rows("SELECT * FROM reservations")
+    waiting = r.store.rows("SELECT status,error_code,due_at FROM auto_enrollment")[0]
+    assert (waiting["status"], waiting["error_code"]) == ("PENDING", "DELIVERY_CHAT_NOT_YET_AVAILABLE")
+
+    reopen(r)
+    full["chat"] = chat
+    assert await EnrollmentWorker(r.store, r.api).once() == 0
+    monkeypatch.setattr(enrollment, "time", SimpleNamespace(time=lambda: waiting["due_at"] + 1))
+    for _ in range(8):
+        await EnrollmentWorker(r.store, r.api).once()
+        ChainWorker(r.store, r.api).once()
+        await r.worker.once()
+    assert r.store.rows("SELECT status FROM delivery_chains") == [{"status": "SUCCEEDED"}]
+    assert len(r.api.messages) == 2
 
 
 @pytest.mark.parametrize("mode,value", [("unique_stock", None), ("fixed_text", "one-private-unit")])

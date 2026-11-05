@@ -27,7 +27,7 @@ class DeliveryChains:
             if not automatic or expected_revision != revision:
                 raise Conflict("Нужно действующее разрешение будущих покупок")
             return await PlatformOrders(self.store, self.api).create(actor, ident, revision)
-        order = await self.policies.orders.prepare_delivery(actor, ident)
+        order = await self.policies.orders.prepare_delivery(actor, ident, automatic=automatic)
         revision, policy = self.policies.get(order["item"]["id"])
         if expected_revision is not None and revision != expected_revision:
             raise Conflict("Политика изменилась после подтверждения")
