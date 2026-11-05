@@ -16,17 +16,20 @@ from aiohttp_socks import ProxyConnectionError, ProxyError, ProxyTimeoutError
 from app.localvpn import ProxyUnavailable, require_proxy
 from app.security.logging import event
 from app.telegram.errors import telegram_error
+from app.telegram.system_tunnel import HappRoute
 from app.telemetry import record
 
 request_evidence = ContextVar("telegram_request_evidence", default=None)
 
 
 class TelegramNetworkSession(AiohttpSession):
-    def __init__(self, *, diagnostics=False, localvpn=False, **kwargs):
+    def __init__(self, *, diagnostics=False, localvpn=False, system_tunnel=False, **kwargs):
         super().__init__(**kwargs)
         origin = urlsplit(self.api.base)
         self.origin = (origin.scheme, origin.hostname, origin.port)
         self.route = "Direct" if origin.hostname == "api.telegram.org" else "Worker"
+        self.happ_guard = HappRoute() if system_tunnel else None
+        self.happ_generation = None
         self.localvpn = localvpn
         if localvpn:
             if kwargs.get("proxy") != "socks5://127.0.0.1:1080" or origin.hostname != "api.telegram.org":
@@ -52,14 +55,19 @@ class TelegramNetworkSession(AiohttpSession):
             trace.on_connection_reuseconn.append(self._reuse)
             trace.on_connection_create_start.append(self._connecting)
             trace.on_connection_create_end.append(self._connected)
+            connector_args = dict(self._connector_init)
+            if self.happ_guard:
+                connector_args["socket_factory"] = self.happ_guard.socket
             self._session = ClientSession(
-                connector=self._connector_type(**self._connector_init),
+                connector=self._connector_type(**connector_args),
                 trace_configs=[trace],
             )
             self._should_reset_connector = False
         return self._session
 
     async def _request_start(self, session, context, params):
+        if self.happ_guard:
+            self.happ_guard.check()
         if self.localvpn:
             try:
                 require_proxy()
@@ -201,6 +209,19 @@ class TelegramNetworkSession(AiohttpSession):
         state, token, started = self._begin(method.__api_method__)
         outcome = "CANCELLED"
         try:
+            if self.happ_guard:
+                try:
+                    generation = self.happ_guard.check()
+                except OSError:
+                    from app.telegram.errors import TelegramRequestNotStarted
+
+                    await self.close()
+                    raise TelegramRequestNotStarted(
+                        method=method, message="Happ tunnel unavailable"
+                    ) from None
+                if self.happ_generation != generation:
+                    await self.close()
+                    self.happ_generation = generation
             if self.localvpn:
                 try:
                     require_proxy()

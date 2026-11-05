@@ -22,7 +22,7 @@ from tests.test_universal_delivery_e2e import setup_ui
 shop = shop_fixture
 
 
-@pytest.mark.parametrize("minutes", [10, 30, 120])
+@pytest.mark.parametrize("minutes", [1 / 6, 1, 5, 10, 30, 120])
 async def test_verified_paid_order_after_original_arm_recovers_once_after_downtime(
     shop, monkeypatch, minutes
 ):

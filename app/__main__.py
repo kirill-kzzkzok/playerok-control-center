@@ -124,6 +124,10 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
     session_args = {"api": TelegramAPIServer.from_base(config.telegram_proxy)} if worker else {}
     if mode == "localvpn":
         session_args.update(proxy=SOCKS_URL, localvpn=True)
+    from app.telegram.system_tunnel import happ_required
+
+    if happ_required(mode):
+        session_args["system_tunnel"] = True
     session = AiohttpSession(timeout=35, diagnostics=network_diagnostics, **session_args)
     event(
         "CHECK",

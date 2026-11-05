@@ -12,6 +12,8 @@ from app.security.instance import InstanceLock
 async def main():
     from telethon import TelegramClient
 
+    from app.telegram.system_tunnel import HappConnectionTcpFull, happ_required
+
     s = GiftSettings.load()
     if not s.api_id or not s.api_hash:
         raise SystemExit("Set TG_USER_API_ID and TG_USER_API_HASH in private .env first")
@@ -30,6 +32,7 @@ async def main():
                 auto_reconnect=False,
                 flood_sleep_threshold=0,
                 proxy=mtproto_proxy(s.telegram_transport),
+                **({"connection": HappConnectionTcpFull} if happ_required(s.telegram_transport) else {}),
             )
             async with client:
                 me = await client.get_me()

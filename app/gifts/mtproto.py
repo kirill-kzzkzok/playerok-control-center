@@ -11,6 +11,7 @@ from app.gifts.core import telegram_username
 from app.localvpn import ProxyUnavailable, mtproto_proxy, require_proxy
 from app.security.instance import InstanceLock
 from app.security.logging import event
+from app.telegram.system_tunnel import HappConnectionTcpFull, HappRoute, happ_required
 
 
 class GiftFailure(ValueError):
@@ -69,6 +70,9 @@ class PersonalGiftSender:
         self.session_lock = None
         self.closed = False
         self.owns_client = client is None
+        self.happ_guard = (
+            HappRoute() if client is None and happ_required(settings.telegram_transport) else None
+        )
         self.needs_disconnect = False
         self.route_generation = None
         self.connection = None
@@ -81,6 +85,11 @@ class PersonalGiftSender:
             raise GiftFailure("PROXY_UNAVAILABLE") from None
 
     def current_route(self):
+        if self.happ_guard:
+            try:
+                return self.happ_guard.check()
+            except OSError:
+                raise GiftFailure("PROXY_UNAVAILABLE") from None
         return (
             self.read_proxy().state["generation"] if self.settings.telegram_transport == "localvpn" else None
         )
@@ -137,6 +146,7 @@ class PersonalGiftSender:
                     raise_last_call_error=True,
                     base_logger=logger,
                     proxy=mtproto_proxy(self.settings.telegram_transport),
+                    **({"connection": HappConnectionTcpFull} if self.happ_guard else {}),
                 )
             self.needs_disconnect = True  # Even a partial connect can own send/receive tasks.
             try:
@@ -301,6 +311,8 @@ class PersonalGiftSender:
                 proxy = require_proxy()
                 if await proxy.confirm() != prepared.route_generation:
                     raise GiftFailure("PROXY_ROUTE_CHANGED")
+            if self.happ_guard and self.current_route() != prepared.route_generation:
+                raise GiftFailure("PROXY_ROUTE_CHANGED")
             if self.closed:
                 raise GiftFailure("SESSION_CLOSED")
             result = await self.client(
