@@ -323,7 +323,10 @@ class ListingLaunch:
                 )
             if not (
                 0 < value["order_limit"] <= s.settings.max_order_stars
-                and value["order_limit"] <= value["day_limit"] <= s.settings.max_daily_stars
+                and (
+                    value["day_limit"] is None
+                    or value["order_limit"] <= value["day_limit"] <= s.settings.max_daily_stars
+                )
             ):
                 raise ValidationError(
                     "Лимиты Stars должны быть положительными и не превышать ограничения подключения"
@@ -342,8 +345,9 @@ class ListingLaunch:
             )
             if balance is None or balance < reserved + total:
                 raise ValidationError("Недостаточно Stars с учётом зарезервированных подарков")
-            if total > min(s.limits()[0], value["order_limit"]) or total > min(
-                s.limits()[1], value["day_limit"]
+            global_order, global_day = s.limits()
+            if total > min(global_order, value["order_limit"]) or (
+                global_day is not None and total > min(global_day, value["day_limit"] or global_day)
             ):
                 raise ValidationError("Стоимость пакета превышает разрешённые лимиты Stars")
             if self.store.rows("SELECT 1 FROM gift_steps WHERE state IN ('SPENDING','UNCERTAIN') LIMIT 1"):

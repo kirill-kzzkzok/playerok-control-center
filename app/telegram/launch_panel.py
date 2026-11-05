@@ -128,7 +128,10 @@ class LaunchPanel:
                 else "выключено"
             )
         if value["mode"] == "gifts":
-            text += f"\nЛимиты Stars: {value['order_limit']} за заказ / {value['day_limit']} в сутки"
+            day = value["day_limit"]
+            text += f"\nЛимиты Stars: {value['order_limit']} за заказ"
+            if day is not None:
+                text += f" / {day} в сутки при включённом суточном потолке"
             text += "\nВозврат: " + (
                 "по подтверждённым правилам, до первой оплаты" if value["refund"] else "ручное решение"
             )

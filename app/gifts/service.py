@@ -248,24 +248,29 @@ class GiftService:
     def limits(self, item_id=None):
         v = self.store.setting("gifts:limits", {})
         local = self.store.setting("gifts:listing_options:" + item_id, {}) if item_id else {}
+        daily = v.get("day", self.settings.max_daily_stars)
+        local_daily = local.get("day")
         return (
             min(
                 int(v.get("order", self.settings.max_order_stars)),
                 self.settings.max_order_stars,
                 int(local.get("order", self.settings.max_order_stars)),
             ),
-            min(
-                int(v.get("day", self.settings.max_daily_stars)),
+            None
+            if daily is None
+            else min(
+                int(daily),
                 self.settings.max_daily_stars,
-                int(local.get("day", self.settings.max_daily_stars)),
+                int(local_daily) if local_daily is not None else self.settings.max_daily_stars,
             ),
         )
 
     def set_limits(self, owner, per_order, daily):
         self.owner(owner)
         if not (
-            0 < per_order <= self.settings.max_order_stars
-            and per_order <= daily <= self.settings.max_daily_stars
+            type(per_order) is int
+            and 0 < per_order <= self.settings.max_order_stars
+            and (daily is None or type(daily) is int and per_order <= daily <= self.settings.max_daily_stars)
         ):
             raise GiftValidationError("Лимиты должны быть положительными и не выше защитных лимитов .env")
         self.store.set_setting("gifts:limits", {"order": per_order, "day": daily})
@@ -713,7 +718,7 @@ class GiftService:
             reserved_other = reservations - current["reserved_stars"]
             if total > per_order:
                 raise GiftFailure("BUDGET_EXCEEDED")
-            if actual + reserved_other + remaining > daily:
+            if daily is not None and actual + reserved_other + remaining > daily:
                 raise GiftFailure("DAILY_BUDGET_EXHAUSTED")
             if balance < reserved_other + remaining:
                 raise GiftFailure("BALANCE_TOO_LOW")

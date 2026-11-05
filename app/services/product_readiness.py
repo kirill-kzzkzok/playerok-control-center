@@ -491,16 +491,23 @@ class ProductReadiness:
                 "SELECT COALESCE(SUM(stars),0) AS n FROM gift_steps WHERE spent_at>=?",
                 (datetime.now(UTC).date().isoformat(),),
             )[0]["n"]
-            if required > order_limit or spent + reserved + required > day_limit:
+            daily_exhausted = day_limit is not None and spent + reserved + required > day_limit
+            if required > order_limit or daily_exhausted:
                 global_order, global_day = self.gifts.limits()
                 local_limit = (
                     required > order_limit
                     and order_limit < global_order
-                    or (spent + reserved + required > day_limit and day_limit < global_day)
+                    or (daily_exhausted and day_limit < global_day)
                 )
+                detail = f"Лимит Stars: {order_limit} на заказ. Пакет: {required}."
+                if daily_exhausted:
+                    detail += (
+                        f" Потолок суток: {day_limit}, расходы и резервы: {spent + reserved}. "
+                        "Выдача продолжится после сброса лимита в 00:00 UTC при достаточном балансе."
+                    )
                 add(
                     "STARS_LIMIT",
-                    f"Лимит Stars: {order_limit} на заказ, {day_limit} в сутки. Пакет: {required}; расходы и резервы суток: {spent + reserved}. Для суточного ограничения можно дождаться новых суток UTC.",
+                    detail,
                     "Лимиты этого товара" if local_limit else "Общие лимиты подарков",
                     "lp:limits:" + ident if local_limit and product else "gft:limits",
                 )

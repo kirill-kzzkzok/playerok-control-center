@@ -788,8 +788,10 @@ class LogicalProductsPanel:
             text += f"\nПроверенная стоимость: {sum(g['stars'] for g in config['bundle'])} ⭐"
             per_order, daily = self.service.gift_service().limits(view["item"])
             per_order = config.get("options", {}).get("order", per_order)
-            daily = config.get("options", {}).get("day", daily)
-            text += f"\nЛимиты: {per_order} ⭐ на заказ · {daily} ⭐ в сутки"
+            local_day = config.get("options", {}).get("day")
+            text += f"\nЛимиты: {per_order} ⭐ на заказ"
+            if daily is not None:
+                text += f" · {min(daily, local_day) if local_day is not None else daily} ⭐ в сутки"
             text += "\nВозврат при неверном username: " + (
                 "разрешён при глобальном разрешении"
                 if config.get("options", {}).get("refund", False)

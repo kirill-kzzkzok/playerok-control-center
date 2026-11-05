@@ -253,8 +253,12 @@ async def acceptance(tmp_path, monkeypatch):
         await harness.close()
 
 
-async def test_complete_heart_sale_from_dispatcher_through_receipt_and_restart(acceptance):
+@pytest.mark.parametrize("without_daily_cap", [False, True])
+async def test_complete_heart_sale_from_dispatcher_through_receipt_and_restart(acceptance, without_daily_cap):
     h = acceptance
+    if without_daily_cap:
+        await h.ui.message("/start")
+        h.service.set_limits(7, 15, None)
     await h.create_and_prepare()
     h.restart()  # Restores the durable final preview, not a hand-built perfect DB.
     await h.ui.click("launch:open:" + h.launch_id)

@@ -174,8 +174,7 @@ class GiftsPanel:
                 "⚙️ <b>Настройки подарков</b>\nЛимит заказа: "
                 + str(order)
                 + " ⭐\nЛимит суток: "
-                + str(day)
-                + " ⭐"
+                + (f"{day} ⭐ (UTC)" if day is not None else "отключён")
                 + "\nПлатёжный допуск: "
                 + ("включён" if s.settings.payment_enabled else "выключен")
                 + "\nАвтовозврат: "
@@ -315,7 +314,9 @@ class GiftsPanel:
             await state.clear()
             await state.set_state("gifts:" + command)
             return (
-                "Введите лимиты Stars: за заказ и за сутки через пробел. Повышение выше защитных лимитов .env запрещено."
+                "Введите лимиты Stars за заказ и за сутки через пробел, например «15 300». "
+                "Чтобы отключить все суточные потолки подарков, введите «15 без суточного лимита» "
+                "(15 — ваш лимит на заказ)."
                 if command == "limits"
                 else "Пришлите описание: проверю единственную последнюю строку gift: code. Само описание не будет повторено в ответе."
             ), keyboard([[("Отмена", "gft:home")]])
@@ -625,14 +626,19 @@ class GiftsPanel:
                 f"Метка корректна: <code>gift: {escape(code)}</code>. Привязка лота и отправки не изменены.",
                 keyboard([[("К подаркам", "gft:home")]]),
             )
-        values = text.split()
-        if len(values) != 2 or any(not v.isascii() or not v.isdecimal() or len(v) > 8 for v in values):
-            raise GiftValidationError("Введите два целых положительных числа через пробел")
+        values = text.casefold().split()
+        unlimited = values[1:] == ["без", "суточного", "лимита"]
+        numbers = values[:1] if unlimited else values
+        if len(numbers) != (1 if unlimited else 2) or any(
+            not v.isascii() or not v.isdecimal() or len(v) > 8 for v in numbers
+        ):
+            raise GiftValidationError("Введите «15 300» или «15 без суточного лимита», указав свои значения")
+        order = int(numbers[0])
+        day = None if unlimited else int(numbers[1])
         nonce = secrets.token_hex(5)
         await state.set_state(None)
-        await state.set_data(
-            {"gift_limits": {"order": int(values[0]), "day": int(values[1]), "nonce": nonce}}
-        )
-        return f"Сохранить лимиты {int(values[0])} ⭐ за заказ / {int(values[1])} ⭐ за сутки UTC?", keyboard(
+        await state.set_data({"gift_limits": {"order": order, "day": day, "nonce": nonce}})
+        daily_label = f"{day} ⭐ за сутки UTC" if day is not None else "отключить суточные потолки всех лотов"
+        return f"Сохранить {order} ⭐ за заказ / {daily_label}?", keyboard(
             [[("Сохранить", "gft:save_limits:" + nonce)], [("Отмена", "gft:home")]]
         )

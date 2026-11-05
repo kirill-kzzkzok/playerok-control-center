@@ -91,13 +91,17 @@ async def test_proxy_outage_does_not_require_manual_reenable_or_override_stop(sh
         active_proxy.reset(token)
 
 
-async def test_unknown_payment_never_becomes_an_automatic_preflight_retry(shop):
+@pytest.mark.parametrize("daily", [100, None])
+async def test_unknown_payment_never_becomes_an_automatic_preflight_retry(shop, daily):
     r = await prepared(shop)
+    GiftService(r.store, r.api, r.api.gift_settings, r.api.gift_sender).set_limits(7, 15, daily)
     r.api.remote.pay_error = TimeoutError()
     await r.worker.once()
     assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "UNCERTAIN"}]
     assert len(r.api.remote.payments) == 1
     reopen(r)
+    Orders(r.store).ingest(r.api.order("independent-after-unknown"))
+    assert GiftService(r.store, r.api, r.api.gift_settings, r.api.gift_sender).discover() == 0
     for _ in range(5):
         assert not await r.worker.once()
     assert len(r.api.remote.payments) == 1
@@ -453,3 +457,74 @@ async def test_daily_exhaustion_waits_for_next_day_without_new_spending_permissi
         {"error_code": "DAILY_BUDGET_EXHAUSTED", "started_at": None}
     ]
     assert service.limits("lot") == (15, 15)
+
+
+async def test_owner_can_remove_daily_cap_in_existing_form_and_process_sequential_sales(shop):
+    from tests.test_universal_delivery_e2e import click
+    from tests.test_ux_redesign import buttons
+
+    r = await prepared(shop)
+    service = GiftService(r.store, r.api, r.api.gift_settings, r.api.gift_sender)
+    service.set_limits(7, 15, 15)
+    r.api.remote.stars = 360
+    listing_limits = r.store.setting("gifts:listing_options:lot")
+
+    await r.ui.click("gft:settings")
+    await click(r, action="gft:limits")
+    await r.ui.message("15 без суточного лимита")
+    assert service.limits("lot") == (15, 15)
+    await click(
+        r,
+        action=next(
+            button for button in buttons(r.session.last_panel) if button.startswith("gft:save_limits:")
+        ),
+    )
+    assert service.limits("lot") == (15, None)
+    assert r.store.setting("gifts:listing_options:lot") == listing_limits
+
+    for index in range(24):
+        if index == 12:
+            reopen(r)
+            service = GiftService(r.store, r.api, r.api.gift_settings, r.api.gift_sender)
+        order_id = "waiting-new-order" if index == 0 else f"sequential-{index}"
+        if index:
+            Orders(r.store).ingest(r.api.order(order_id))
+            assert service.discover() + service.discover() == 1
+        operation_id = service.job(order_id)["operation_id"]
+        await r.worker.once(operation_id=operation_id)
+        await r.worker.once(operation_id=operation_id)
+        assert service.job(order_id)["state"] == "SUCCEEDED"
+        assert len(r.api.remote.payments) == index + 1
+    assert r.api.remote.stars == 0
+    Orders(r.store).ingest(r.api.order("empty-balance"))
+    assert service.discover() + service.discover() == 1
+    await r.worker.once(operation_id=service.job("empty-balance")["operation_id"])
+    assert len(r.api.remote.payments) == 24
+    assert service.job("empty-balance")["error_code"] == "BALANCE_TOO_LOW"
+
+    await r.ui.click("gft:settings")
+    await click(r, action="gft:limits")
+    await r.ui.message("15 15")
+    await click(
+        r,
+        action=next(
+            button for button in buttons(r.session.last_panel) if button.startswith("gft:save_limits:")
+        ),
+    )
+    assert service.limits("lot") == (15, 15)
+    r.api.remote.stars = 100
+    Orders(r.store).ingest(r.api.order("restored-daily-cap"))
+    assert service.discover() + service.discover() == 1
+    await r.worker.once(operation_id=service.job("restored-daily-cap")["operation_id"])
+    assert len(r.api.remote.payments) == 24
+    assert service.job("restored-daily-cap")["error_code"] == "DAILY_BUDGET_EXHAUSTED"
+
+    service.set_limits(7, 14, None)
+    Orders(r.store).ingest(r.api.order("over-per-order-cap"))
+    assert service.discover() + service.discover() == 1
+    await r.worker.once(operation_id=service.job("over-per-order-cap")["operation_id"])
+    assert service.job("over-per-order-cap")["error_code"] == "BUDGET_EXCEEDED"
+    service.stop(7)
+    Orders(r.store).ingest(r.api.order("after-explicit-stop"))
+    assert service.discover() == 0
+    assert len(r.api.remote.payments) == 24

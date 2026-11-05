@@ -467,14 +467,19 @@ class LogicalProducts:
             order_limit, day_limit = options.get("order", global_order), options.get("day", global_day)
             if (
                 type(order_limit) is not int
-                or type(day_limit) is not int
                 or not 0 < order_limit <= global_order
-                or not order_limit <= day_limit <= global_day
+                or (
+                    day_limit is not None
+                    and (
+                        type(day_limit) is not int
+                        or not order_limit <= day_limit <= (global_day or gifts.settings.max_daily_stars)
+                    )
+                )
             ):
                 raise Conflict(
                     "Лимиты товара должны быть положительными и не превышать общие лимиты магазина"
                 )
-            if total > order_limit or total > day_limit:
+            if total > order_limit or (global_day is not None and total > (day_limit or global_day)):
                 raise Conflict("Стоимость пакета превышает выбранный лимит Stars")
             refund = options.get("refund", False)
             if type(refund) is not bool:
