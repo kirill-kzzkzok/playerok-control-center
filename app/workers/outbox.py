@@ -84,6 +84,8 @@ class Executor:
         if action["kind"] == "agreements" and action["payload"].get("automatic"):
             AutoAgreements(self.store, self.api).authority(action["payload"].get("account_id"))
         elif not getattr(self.api.account, "writes_enabled", False):
+            if getattr(getattr(self.api, "connection", None), "awaiting_verification", False):
+                raise APIError("CONNECTION_NOT_VERIFIED")
             raise ValidationError("Записи Playerok выключены")
         rows = self.store.rows(
             "SELECT status,lease_token,lease_until FROM outbox WHERE id=?", (action["id"],)

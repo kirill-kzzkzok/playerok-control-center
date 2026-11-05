@@ -71,6 +71,15 @@ class PlayerokConnection:
             and self.store.setting("playerok:bound_account_id") == self.read_account_id
         )
 
+    @property
+    def awaiting_verification(self):
+        return bool(
+            self.reads_allowed
+            and self.desired_writes
+            and self.desired_automation
+            and self.state.get("reason") in TEMPORARY_READ_FAILURES | {"CHECK_IN_PROGRESS"}
+        )
+
     def invalidate(self, code, diagnostics=None):
         self.disable()
         if code not in TEMPORARY_READ_FAILURES:

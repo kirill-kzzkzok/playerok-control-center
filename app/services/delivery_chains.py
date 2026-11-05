@@ -281,6 +281,10 @@ class DeliveryChains:
 
     def dispatchable(self, action):
         if not getattr(self.api.account, "automation_enabled", False):
+            if getattr(getattr(self.api, "connection", None), "awaiting_verification", False):
+                from app.playerok.adapter import APIError
+
+                raise APIError("CONNECTION_NOT_VERIFIED")
             raise ValidationError("Исполнение цепочек выключено")
         ident, payload = action["target"], action["payload"]
         rows = self.store.rows(
