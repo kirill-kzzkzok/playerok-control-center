@@ -272,6 +272,18 @@ class OrdersPanel:
             or enrollment
             and enrollment[0]["status"] == "BLOCKED"
         ):
+            from app.services.product_readiness import ProductReadiness
+
+            problems = ProductReadiness(self.store, self.service.api).snapshot(item, item=order["item"])[
+                "problems"
+            ]
+            reasons = [
+                problem["text"]
+                for problem in problems
+                if problem["blocking"] and problem["code"] != "CHAIN_BLOCKED"
+            ]
+            if reasons:
+                return "⛔ Этот заказ требует проверки. " + " ".join(reasons[:2])
             return "⛔ Этот заказ требует проверки. Причина сохранена в действиях и истории заказа."
         delivered = self.store.rows(
             "SELECT 1 FROM delivery_chain_steps s JOIN outbox o ON o.id=s.operation_id WHERE s.order_id=? AND s.kind IN ('delivery','delivery_text') AND o.status='SUCCEEDED' UNION ALL "
@@ -283,10 +295,34 @@ class OrdersPanel:
         if policy.mode == "playerok":
             return "📦 Товар выдаёт Playerok. Бот выполняет разрешённые сопровождающие действия."
         if order["status"] == "PAID" and (product and product["enabled"] or policy.enabled):
+            if not self.service.api.account.writes_enabled or not getattr(
+                self.service.api.account, "automation_enabled", False
+            ):
+                return "⏸ Автоматическая обработка запрещена настройками подключения."
+            if not self.store.setting("orders:last_complete_sync"):
+                return "Бот загружает подтверждённые данные Playerok. Ручное действие пока не требуется."
+            if policy.mode == "stock":
+                from app.services.inventory import Inventory
+
+                if not Inventory(self.store, self.service.api).counts(item)[
+                    "AVAILABLE"
+                ] and not self.store.rows("SELECT 1 FROM reservations WHERE order_id=?", (ident,)):
+                    return "📦 Склад пуст. Заказ ожидает пополнения; отсутствующий товар не отправляется."
             if product and product["error_code"]:
                 return "⛔ Привязка товара содержит конфликт. Выдача ожидает решения."
             return "Способ выдачи настроен. Бот проверяет данные Playerok и подготовит выдачу автоматически. Ручное действие пока не требуется."
         if not product and not revision:
+            from app.services.logical_products import marker
+
+            try:
+                code = marker(order["item"].get("name"))
+            except ValueError:
+                code = None
+            if code and self.store.rows(
+                "SELECT 1 FROM logical_products WHERE code=? AND account_id=? AND enabled=1",
+                (code, self.service.api.account.id),
+            ):
+                return "Сохранённый способ выдачи найден. Бот ожидает серверной сверки привязки купленного товара."
             return "Автовыдача для этого товара не настроена. Требуется настройка способа выдачи."
         return "Способ выдачи настроен. Ожидается подтверждение данных Playerok."
 

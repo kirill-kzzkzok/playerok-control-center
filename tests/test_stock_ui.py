@@ -197,10 +197,23 @@ async def test_item_order_and_policy_share_actual_readiness(rig, condition, expe
             if condition == "guard"
             else "ожидает устранения проблемы"
         )
-        assert (compact if action.startswith("item:") else expected).lower() in text.lower()
+        if action.startswith("order:"):
+            # Order cards now describe the actual wait/STOP, rather than
+            # repeating the product-wide diagnostic vocabulary.
+            order_expected = {
+                "ready": "Способ выдачи настроен",
+                "runtime": "запрещена настройками подключения",
+                "baseline": "Бот загружает подтверждённые данные",
+                "empty": "Склад пуст",
+                "guard": "остановлена владельцем",
+                "disabled": "остановлена владельцем",
+            }[condition]
+            assert order_expected.lower() in text.lower()
+        else:
+            assert (compact if action.startswith("item:") else expected).lower() in text.lower()
         assert "Автодействия: выключены" not in text
         if action.startswith("order:"):
-            assert ("Перед включением:" if condition == "disabled" else "Требует внимания:") in text
+            assert "Требует внимания:" not in text
         if action.startswith("auto:"):
             assert "со склада" in text.lower()
         # Full reasons and stock remain available from the nested delivery screen.
