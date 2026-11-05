@@ -98,12 +98,12 @@ class PromotionSettings:
         if len(matches) != 1 or matches[0].get("price") is None:
             raise ValidationError("Стоимость выбранного размещения не подтверждена")
         quote = {"price": str(money(matches[0]["price"])), "checked_at": checked}
-        position = item.get("priority_position")
+        position = item.get("sequence")
         if type(position) is not int or position < 1:
             position = None
         self.store.execute(
             "INSERT INTO promotion_observations(item_id,policy_revision,position,checked_at,source) VALUES(?,?,?,?,?)",
-            (ident, revision, position, checked, "Playerok item.priority_position (priority scope)"),
+            (ident, revision, position, checked, "Playerok item.sequence (listing category position)"),
         )
         at = datetime.now(UTC)
         result = dry_run(self.store, ident, quote, policy, at)
@@ -129,8 +129,8 @@ class PromotionSettings:
         )
         last = datetime.fromisoformat(rows[0]["created_at"]) if rows else None
         observations = self.store.rows(
-            "SELECT position,checked_at FROM promotion_observations WHERE item_id=? AND policy_revision=? ORDER BY id DESC LIMIT 2",
-            (ident, revision),
+            "SELECT position,checked_at FROM promotion_observations WHERE item_id=? AND policy_revision=? AND source=? ORDER BY id DESC LIMIT 2",
+            (ident, revision, "Playerok item.sequence (listing category position)"),
         )
         positions = [
             (row["position"], datetime.fromisoformat(row["checked_at"])) for row in reversed(observations)
@@ -143,7 +143,9 @@ class PromotionSettings:
             )
             threshold = policy.night_threshold if night else policy.threshold
             if policy.mode == "position" and type(position) is int and position <= threshold:
-                reasons.append(f"Позиция в PREMIUM: {position}. Поднимем, когда станет ниже {threshold}-й")
+                reasons.append(f"Позиция в категории: {position}. Поднимем, когда станет ниже {threshold}-й")
+            elif policy.mode == "position" and position is None:
+                reasons.append("Позиция в категории не получена от Playerok; покупка по позиции недоступна")
             elif policy.mode == "position":
                 reasons.append("Ожидаем две свежие проверки позиции и окончание паузы между покупками")
             else:
@@ -154,7 +156,7 @@ class PromotionSettings:
             quote_id=quote_id,
             source=observations[0]["checked_at"],
             position=position,
-            position_scope="priority_position; не доказательство общего места в поиске",
+            position_scope="sequence; позиция в категории из карточки Playerok",
             paid_execution_available=True,
             item_name=item.get("name"),
         )

@@ -23,6 +23,7 @@ def setup(tmp_path):
         "status": "APPROVED",
         "raw_price": 100,
         "priority_position": 20,
+        "sequence": 20,
         "user": {"id": "seller"},
     }
 

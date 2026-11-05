@@ -38,7 +38,7 @@ def buying_conditions(policy):
         text = f"Поднимает товар через {interval(max(policy.interval_seconds, policy.cooldown_seconds))} после предыдущей покупки."
     else:
         text = (
-            f"Поднимает товар, если его позиция в PREMIUM ниже {policy.threshold}-й при двух проверках подряд."
+            f"Поднимает товар, если его позиция в категории ниже {policy.threshold}-й при двух проверках подряд."
             f" Проверяет каждые {interval(policy.check_seconds)}."
             f" Покупает не чаще раза в {interval(policy.cooldown_seconds)}."
         )

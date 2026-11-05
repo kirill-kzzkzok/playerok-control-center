@@ -129,6 +129,7 @@ async def test_promotion_screen_explains_each_waiting_item_instead_of_false_read
     await approve_two(r)
     for ident in ("item", "other"):
         r.api.items[ident]["priority_position"] = 10
+        r.api.items[ident]["sequence"] = 10
         r.api.items[ident]["name"] = "Product " + ident
     await PromotionWorker(r.store, r.api).once()
     session = TelegramSession()
@@ -137,7 +138,9 @@ async def test_promotion_screen_explains_each_waiting_item_instead_of_false_read
         await Interaction(bot, dispatcher(r.store, r.api)).click("promotions")
         assert "Выбрано товаров: 2" in session.last_panel.text
         assert "Product item" in session.last_panel.text and "Product other" in session.last_panel.text
-        assert "Позиция в PREMIUM: 10" in session.last_panel.text
+        assert "Позиция в категории: 10" in session.last_panel.text
+        assert "позиция в категории ниже 35-й" in session.last_panel.text
+        assert "позиция в PREMIUM" not in session.last_panel.text
         assert "Включено для подтверждённых товаров" not in session.last_panel.text
         assert not r.api.charges
     finally:
