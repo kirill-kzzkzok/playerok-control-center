@@ -2,6 +2,8 @@
 
 import asyncio
 
+from telethon.errors import RPCError
+
 from app.database.store import Conflict
 from app.gifts.service import GiftService
 from app.playerok.adapter import APIError
@@ -16,8 +18,41 @@ class GiftWorker:
         self.service = GiftService(store, api, settings, sender)
         self.store, self.api = store, api
 
+    async def reconcile_due(self):
+        """Read one durably ACK-correlated receipt; never retry a paid RPC."""
+        import time
+
+        rows = self.store.rows(
+            "SELECT o.id,g.order_id,l.owner_id FROM outbox o "
+            "JOIN gift_steps s ON s.operation_id=o.id JOIN gift_jobs g ON g.order_id=s.order_id "
+            "JOIN gift_listings l ON l.item_id=g.item_id "
+            "WHERE o.kind='gift_send' AND o.status='UNCERTAIN' AND o.started_at IS NOT NULL "
+            "AND o.retry_at<=? AND g.state='UNCERTAIN' AND g.refund_state='NONE' "
+            "AND s.state='UNCERTAIN' AND s.receipt_mode='MESSAGE_ID' AND s.ack_message_id IS NOT NULL "
+            "AND NOT EXISTS(SELECT 1 FROM outbox_late_results r WHERE r.operation_id=o.id) "
+            "ORDER BY o.retry_at,o.created_at LIMIT 1",
+            (time.time(),),
+        )
+        if not rows:
+            return 0
+        row = rows[0]
+        # Existing retry_at paces READS only. Status never returns to a send queue.
+        changed = self.store.execute(
+            "UPDATE outbox SET retry_at=? WHERE id=? AND status='UNCERTAIN' AND retry_at<=?",
+            (time.time() + 60, row["id"], time.time()),
+        ).rowcount
+        if not changed:
+            return 0
+        try:
+            async with asyncio.timeout(15):
+                await self.service.reconcile(row["owner_id"], row["order_id"])
+        except (ValueError, Conflict, APIError, OSError, TimeoutError, RPCError):
+            return 0  # No evidence is never permission to retry payment.
+        return 1
+
     async def once(self):
         service = self.service
+        verified = await self.reconcile_due()
         recovered = await service.recover_resource_preflights()
         if service.runtime():
             cursor_key = "gifts:details_cursor:" + self.api.account.id
@@ -44,7 +79,7 @@ class GiftWorker:
             # Persist progress across restarts; an incomplete batch must not
             # monopolize every cycle. Repeating after a crash performs reads only.
             self.store.set_setting(cursor_key, rows[-1]["id"] if rows else "")
-        created = service.discover() + recovered
+        created = service.discover() + recovered + verified
         for j in self.store.rows(
             "SELECT g.* FROM gift_jobs g WHERE "
             "(state='SUCCEEDED' AND (completion_state='WAITING' OR NOT EXISTS "

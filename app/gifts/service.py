@@ -906,6 +906,39 @@ class GiftService:
         step = unknown[0]
         receipt = await self.sender.receipt({**job, **step})
         with self.store.transaction() as db:
+            self.owner(owner)
+            current = self.steps(order_id)
+            operation = db.execute(
+                "SELECT * FROM outbox WHERE id=? AND kind='gift_send' AND target=? "
+                "AND status='UNCERTAIN' AND started_at IS NOT NULL",
+                (step["operation_id"], order_id),
+            ).fetchone()
+            if (
+                not operation
+                or self.job(order_id)["state"] != "UNCERTAIN"
+                or self.job(order_id)["refund_state"] != "NONE"
+                or [s for s in current if s["state"] == "UNCERTAIN"] != [step]
+            ):
+                raise Conflict("Состояние отправки изменилось во время сверки")
+            if db.execute(
+                "SELECT 1 FROM outbox_late_results WHERE operation_id=? LIMIT 1",
+                (step["operation_id"],),
+            ).fetchone():
+                raise Conflict("Поздний результат требует отдельной сверки")
+            db.execute(
+                "UPDATE outbox SET status='SUCCEEDED',result=?,error_code=NULL,lease_token=NULL,lease_until=NULL "
+                "WHERE id=? AND status='UNCERTAIN'",
+                (
+                    encode(
+                        {
+                            "gift_receipt": receipt,
+                            "resolution_source": "TELEGRAM_RECEIPT_READ",
+                            "previous_error": operation["error_code"],
+                        }
+                    ),
+                    step["operation_id"],
+                ),
+            )
             if (
                 db.execute(
                     "UPDATE gift_steps SET state='SUCCEEDED',receipt=?,message_id=? WHERE order_id=? AND position=? AND state='UNCERTAIN'",
