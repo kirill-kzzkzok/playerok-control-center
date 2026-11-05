@@ -3469,3 +3469,5 @@ Owner-console relist contract before code: log the permanent code and preserved 
 Use the existing catalog-worker integration for the console assertion. The stock-chain fixture starts with its alias already linked.
 
 Relist console RED2failed1.72s and GREEN30passed32.39s (exit0), including native catalog adoption, repeated scans, inherited stock chains and the existing redaction/log pipeline. Emit the line only after the committed new public listing link. Corrected suite will run on the final production commit.
+
+Final full acceptance on production code 9596216d82521721b4323158c5cc3a5aa1bc36ad: 2351 unique passed, 0 failed, 0 skipped. Three disjoint manifests and JUnit verified at exact SHA (784/784/783, exit0 each, 551.80/609.06/585.06s). Four JUnit record_property warnings. Ruff check, format, compileall, pip check, temp selfcheck with zero external calls all exit0. GitHub Actions run42035167950 blocked before all steps by account billing/spending. PRELAUNCH report updated with final offline timings and limitations. No working DB or live changes.
