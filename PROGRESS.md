@@ -3464,3 +3464,8 @@ Owner-console final refinements preserve all ledger decisions: one initial Gift 
 Final-suite RED on test_platform_projection_recovery_opens_platform_settings: treating no companion actions as displayed OFF accidentally hid a corrupt/disabled policy projection, since comparison used the derived display status. Keep owner intent separate from effective display state and compare the original intent to projection. Existing real Dispatcher diagnostic route must continue exposing the mismatch; the paid completion-only test must remain OFF without invalidating old work. No worker permission changes.
 
 Projection/display separation GREEN39passed41.18s (exit0). The preceding complete run on3412a08 covered2351 tests, 2350 passed and one diagnostic failure. Final full rerun starts on the corrected production commit.
+
+Owner-console relist contract before code: log the permanent code and preserved delivery once after a new public APPROVED listing is durably linked by native adoption. Existing aliases and private deal snapshots emit no relist success. The existing listing uniqueness fence deduplicates resync/restart. No new ledger, worker or business action. Add the assertion to the real three-sale inherited-stock integration.
+Use the existing catalog-worker integration for the console assertion. The stock-chain fixture starts with its alias already linked.
+
+Relist console RED2failed1.72s and GREEN30passed32.39s (exit0), including native catalog adoption, repeated scans, inherited stock chains and the existing redaction/log pipeline. Emit the line only after the committed new public listing link. Corrected suite will run on the final production commit.

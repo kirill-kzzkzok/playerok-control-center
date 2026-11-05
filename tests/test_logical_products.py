@@ -230,9 +230,12 @@ async def test_relist_cannot_adopt_changed_name_without_matching_fresh_server_it
 
 
 @pytest.mark.parametrize("views_change", [False, True])
-async def test_catalog_worker_discovers_new_id_without_changing_delivery_engine(logical, views_change):
+async def test_catalog_worker_discovers_new_id_without_changing_delivery_engine(
+    logical, views_change, caplog
+):
     from app.workers.logical_products import LogicalProductWorker
 
+    caplog.set_level("INFO", logger="pcc.shop")
     store, api, service = logical
     result = service.commit(7, await service.prepare(7, "lot", "fixed_text", {"text": "Delivery"}))
     await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
@@ -253,6 +256,9 @@ async def test_catalog_worker_discovers_new_id_without_changing_delivery_engine(
     api.call = catalog
     assert await LogicalProductWorker(store, api).once() == 1
     assert service.listing("relisted")["id"] == product["id"]
+    await LogicalProductWorker(store, api).once()
+    relist = [record.getMessage() for record in caplog.records if "лот перевыставлен" in record.getMessage()]
+    assert relist == [f"🔄 [{product['code']}] — лот перевыставлен, выдача сохранена"]
     assert len(api.mutations) == 1
 
 

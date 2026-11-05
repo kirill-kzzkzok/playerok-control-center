@@ -10,6 +10,7 @@ from dataclasses import asdict
 from app.database.store import Conflict, encode, now
 from app.gifts.core import gift_code_from_description
 from app.playerok.adapter import APIError
+from app.security.logging import event
 from app.services.automation import Automation, DeliveryPolicy, future_order, message_text
 from app.services.product_codes import choose_code, reserve_code, title_code, titled
 from app.services.products import field_baseline, listing_text
@@ -1520,6 +1521,8 @@ class LogicalProducts:
                 "UPDATE logical_products SET error_code=NULL WHERE id=? AND revision=?",
                 (product_id, product["revision"]),
             )
+        if not source_order_id and item["status"] == "APPROVED":
+            event("SUCCESS", f"🔄 [{product['code']}] — лот перевыставлен, выдача сохранена")
         return item["id"]
 
     def stop(self, owner, product_id):
