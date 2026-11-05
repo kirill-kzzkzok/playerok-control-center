@@ -7,12 +7,14 @@ import pytest
 
 from app.database.store import Store
 from app.gifts.worker import GiftWorker
+from app.playerok.adapter import APIError
 from app.services.logical_products import LogicalProducts
 from app.services.orders import Orders
 from app.services.products import Products
 from app.workers.delivery_chains import ChainWorker
 from app.workers.enrollment import EnrollmentWorker
 from app.workers.outbox import Executor, OutboxWorker
+from tests.test_logical_faults import reopen
 from tests.test_playerok_delivery import configure
 from tests.test_product_readiness import shop as shop_fixture
 from tests.test_universal_delivery_e2e import setup_ui
@@ -29,8 +31,24 @@ async def test_verified_paid_order_after_original_arm_recovers_once_after_downti
     order = r.api.order("during-downtime")
     original = LogicalProducts(r.store, r.api).listing("lot")
     at = time.time()
-    monkeypatch.setattr("app.workers.enrollment.time.time", lambda: at + minutes * 60)
     Orders(r.store).ingest(order)
+    if minutes == 120:
+        read = r.api.call
+
+        async def unavailable(method, **kwargs):
+            if method == "get_deal":
+                raise APIError("HTTP_503")
+            return await read(method, **kwargs)
+
+        r.api.call = unavailable
+        await EnrollmentWorker(r.store, r.api).once()
+        assert r.store.rows("SELECT status,error_code FROM auto_enrollment") == [
+            {"status": "PENDING", "error_code": "HTTP_503"}
+        ]
+        assert not r.api.messages and not r.store.rows("SELECT * FROM reservations")
+        reopen(r)
+        r.api.call = read
+    monkeypatch.setattr("app.workers.enrollment.time.time", lambda: at + minutes * 60)
     await EnrollmentWorker(r.store, r.api).once()
     for _ in range(5):
         ChainWorker(r.store, r.api).once()

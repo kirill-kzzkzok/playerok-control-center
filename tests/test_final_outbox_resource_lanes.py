@@ -15,6 +15,7 @@ from app.services.orders import Orders
 from app.workers.delivery_chains import ChainWorker
 from app.workers.enrollment import EnrollmentWorker
 from tests.test_gift_bundles import BundleTransport
+from tests.test_logical_faults import reopen
 from tests.test_product_readiness import shop as shop_fixture
 from tests.test_universal_delivery_e2e import click, setup_ui
 
@@ -53,6 +54,40 @@ async def configure_other_item(r, ident, handler, *, content=None):
     await r.ui.click("lp:item:" + ident)
     await click(r, suffix=":arm")
     await click(r, suffix=":enable:this")
+
+
+async def test_unknown_stars_after_restart_does_not_stop_new_stock_or_text_sales(shop):
+    r = await shop(gift=True)
+
+    def update(id, **changes):
+        r.api.mutations.append(deepcopy(changes))
+        r.api.items[id].update(changes)
+        return deepcopy(r.api.items[id])
+
+    r.api.account.update_item = update
+    await setup_ui(r, "telegram_gifts", "gift: heart")
+    await configure_other_item(r, "stock", "unique_stock")
+    await configure_other_item(r, "text", "fixed_text")
+    Orders(r.store).ingest(r.api.order("gift-unknown"))
+    await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+    r.api.remote.pay_error = TimeoutError()
+    await r.worker.once()
+    assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "UNCERTAIN"}]
+    assert len(r.api.remote.payments) == 1
+
+    reopen(r)
+    for ident in ("stock", "text"):
+        Orders(r.store).ingest(r.api.order(ident + "-after-restart", ident))
+    Orders(r.store).ingest(r.api.order("new-gift-after-restart"))
+    for _ in range(8):
+        await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+        await EnrollmentWorker(r.store, r.api).once()
+        ChainWorker(r.store, r.api).once()
+        await r.worker.once()
+    assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "UNCERTAIN"}]
+    assert len(r.api.remote.payments) == 1
+    for content in ("isolated-stock-secret", "isolated-fixed-text"):
+        assert sum(m["text"] == content for m in r.api.messages) == 1
 
 
 @pytest.mark.parametrize("expire", [False, True])

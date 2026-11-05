@@ -79,6 +79,7 @@ async def test_proxy_outage_does_not_require_manual_reenable_or_override_stop(sh
         assert not r.api.remote.payments
         if stop:
             GiftService(r.store, r.api, r.api.gift_settings, r.api.gift_sender).stop(7)
+        reopen(r)
         proxy.ready = True
         r.store.execute("UPDATE outbox SET retry_at=0 WHERE id=?", (ident,))
         await r.worker.once()
