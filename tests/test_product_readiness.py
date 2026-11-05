@@ -34,6 +34,39 @@ async def test_gift_shortage_and_stale_balance_have_actions_and_no_writes(shop):
     assert not r.api.remote.payments
 
 
+async def test_one_blocked_order_does_not_stop_an_independent_sale(shop):
+    from app.services.orders import Orders
+    from app.workers.delivery_chains import ChainWorker
+    from app.workers.enrollment import EnrollmentWorker
+
+    r = await shop()
+    await setup_ui(r, "fixed_text", "confirmed-delivery")
+    for ident in ("bad", "good"):
+        Orders(r.store).ingest(r.api.order(ident))
+    await EnrollmentWorker(r.store, r.api).once()
+    original = r.api.call
+
+    async def call(method, **kwargs):
+        if method == "get_chat" and kwargs["chat_id"] == "chat-bad":
+            return {"id": "chat-bad", "is_texting_allowed": False}
+        return await original(method, **kwargs)
+
+    r.api.call = call
+    for _ in range(8):
+        ChainWorker(r.store, r.api).once()
+        await r.worker.once()
+    assert r.store.rows("SELECT status FROM delivery_chains WHERE order_id='bad'") == [{"status": "BLOCKED"}]
+    assert r.store.rows("SELECT status FROM delivery_chains WHERE order_id='good'") == [
+        {"status": "SUCCEEDED"}
+    ]
+    result = ProductReadiness(r.store, r.api).snapshot("lot", item=r.api.item)
+    problem = next(p for p in result["problems"] if p["code"] == "CHAIN_BLOCKED")
+    assert not problem["blocking"]
+    assert result["state"] != "STOPPED"
+    await r.ui.click("item:lot")
+    assert "Остановлено — требуется решение" not in r.session.last_panel.text
+
+
 @pytest.mark.parametrize("reply,fulfill", [(True, False), (False, True), (True, True), (False, False)])
 async def test_platform_optional_actions_do_not_create_false_problems(shop, reply, fulfill):
     r = await shop()

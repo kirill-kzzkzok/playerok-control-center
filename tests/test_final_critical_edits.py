@@ -66,6 +66,9 @@ async def test_active_gift_can_edit_marketing_description_without_rearming(shop)
         assert after[key] == before[key]
     assert after["verified_at"]
     assert r.store.rows("SELECT enabled FROM gift_listings") == [{"enabled": 1}]
+    edit = r.store.rows("SELECT id FROM outbox WHERE kind='edit' ORDER BY rowid")[-1]["id"]
+    await r.ui.click("result:show:" + edit)
+    assert "Выдача остаётся остановленной" not in r.session.last_panel.text
 
     Orders(r.store).ingest(r.api.order("paid-after-description"))
     await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()

@@ -224,6 +224,7 @@ class OperationResults:
                 and "description" in payload
                 and not payload.get("logical_binding")
                 and not payload.get("code_migration")
+                and not payload.get("marketing_description")
             )
             and self.store.rows("SELECT 1 FROM logical_listings WHERE item_id=?", (row["target"],))
         ):

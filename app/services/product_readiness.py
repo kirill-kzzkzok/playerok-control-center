@@ -359,10 +359,10 @@ class ProductReadiness:
         ):
             add(
                 "CHAIN_BLOCKED",
-                "Есть остановленная выдача. Сначала разрешите проблемный заказ.",
+                "Одна из сделок требует проверки. Остальные заказы обрабатываются независимо.",
                 "Проблемы выдачи",
                 "aq:list:chains:0",
-                terminal=True,
+                blocking=False,
             )
         balance = self.store.setting("gifts:balance", {})
         required = reserved = shortage = None
