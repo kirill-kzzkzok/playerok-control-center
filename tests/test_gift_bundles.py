@@ -112,7 +112,10 @@ async def test_whole_package_preflight_before_first_payment(rig, fault):
         del t.catalog["rose"]
     await r.worker.once()
     assert not t.payments and not r.api.refunds
-    assert r.service.job("order")["state"] == "BLOCKED"
+    # Resource shortages retry free preflight; price and budget authority remain blocked.
+    assert r.service.job("order")["state"] == (
+        "PENDING" if fault in {"total-balance", "second-unavailable"} else "BLOCKED"
+    )
 
 
 @pytest.mark.parametrize(

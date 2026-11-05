@@ -178,3 +178,55 @@ async def test_prolonged_outage_groups_orders_into_one_owner_notice(shop):
     ]
     assert len(notices) == 1 and "2" in notices[0].text
     assert not r.api.remote.payments
+
+
+@pytest.mark.parametrize("fault", ["catalog", "sold-out", "balance"])
+@pytest.mark.parametrize("stop", [False, True])
+async def test_resource_shortage_recovers_without_rearm_but_never_overrides_stop(shop, fault, stop):
+    r = await prepared(shop)
+    service = GiftService(r.store, r.api, r.api.gift_settings, r.api.gift_sender)
+    before = service.listing("lot")
+    gift = r.api.remote.catalog["heart"]
+    if fault == "catalog":
+        del r.api.remote.catalog["heart"]
+    elif fault == "sold-out":
+        gift.sold_out = True
+    else:
+        r.api.remote.stars = 0
+    ident = r.store.rows("SELECT operation_id FROM gift_jobs")[0]["operation_id"]
+    await r.worker.once(operation_id=ident)
+    assert r.store.rows("SELECT status,started_at FROM outbox WHERE id=?", (ident,)) == [
+        {"status": "RETRYABLE_FAILED", "started_at": None}
+    ]
+    assert not r.api.remote.payments
+    after = service.listing("lot")
+    assert after["enabled"] == before["enabled"] and after["revision"] == before["revision"]
+    r.api.remote.catalog["heart"] = gift
+    gift.sold_out = False
+    r.api.remote.stars = 200
+    if stop:
+        service.stop(7)
+    reopen(r)
+    r.store.execute("UPDATE outbox SET retry_at=0 WHERE id=?", (ident,))
+    await r.worker.once(operation_id=ident)
+    assert len(r.api.remote.payments) == (0 if stop else 1)
+    if not stop:
+        assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "SUCCEEDED"}]
+        assert len(r.store.rows("SELECT id FROM outbox WHERE kind='gift_send'")) == 1
+
+
+async def test_resource_recovery_cannot_approve_a_higher_gift_price(shop):
+    r = await prepared(shop)
+    ident = r.store.rows("SELECT operation_id FROM gift_jobs")[0]["operation_id"]
+    r.api.remote.stars = 0
+    await r.worker.once(operation_id=ident)
+    assert not r.api.remote.payments
+    r.api.remote.stars = 200
+    r.api.remote.catalog["heart"].stars = 16
+    r.store.execute("UPDATE outbox SET retry_at=0 WHERE id=?", (ident,))
+    await r.worker.once(operation_id=ident)
+    assert not r.api.remote.payments
+    assert r.store.rows("SELECT status,error_code FROM outbox WHERE id=?", (ident,)) == [
+        {"status": "PERMANENT_FAILED", "error_code": "PRICE_CHANGED"}
+    ]
+    assert r.store.rows("SELECT enabled FROM gift_listings WHERE item_id=?", ("lot",)) == [{"enabled": 0}]

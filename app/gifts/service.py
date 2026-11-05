@@ -661,7 +661,7 @@ class GiftService:
                 if index == step["position"]:
                     prepared = candidate
         except GiftFailure as exc:
-            if exc.code in {"PRICE_CHANGED", "GIFT_UNAVAILABLE"}:
+            if exc.code == "PRICE_CHANGED":
                 self.disarm(l["owner_id"], j["item_id"])
             raise
         measured["payment_form"] = time.perf_counter() - stage_start

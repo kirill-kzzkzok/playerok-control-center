@@ -1008,6 +1008,12 @@ class OutboxWorker:
                         "GIFT_TEMPORARY_PAUSE",
                         "GIFT_SYNC_PENDING",
                         "PAYMENT_LOCKED",
+                        "GIFT_UNAVAILABLE",
+                        "GIFT_QUANTITY_UNAVAILABLE",
+                        "BALANCE_TOO_LOW",
+                        "BALANCE_UNAVAILABLE",
+                        "CATALOG_UNAVAILABLE",
+                        "BALANCE_OBSERVATION_STALE",
                     }
                     or visibility_retry
                     and error.code

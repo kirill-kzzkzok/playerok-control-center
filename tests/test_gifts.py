@@ -313,9 +313,9 @@ async def test_preflight_failures_never_spend_or_refund(rig, fault, expected):
         r.api.gift_sender.client = ChannelClient()
     await r.worker.once()
     j = r.service.job("order")
-    assert j["state"] == ("PENDING" if fault == "temporary" else "BLOCKED")
+    assert j["state"] == ("PENDING" if fault in {"temporary", "balance", "catalog"} else "BLOCKED")
     assert j["error_code"] == expected
-    if fault == "temporary":
+    if fault in {"temporary", "balance", "catalog"}:
         assert r.store.rows("SELECT status FROM outbox WHERE kind='gift_send'") == [
             {"status": "RETRYABLE_FAILED"}
         ]
