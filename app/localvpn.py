@@ -10,7 +10,7 @@ import os
 import subprocess
 import time
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -31,6 +31,8 @@ class ProxyUnavailable(RuntimeError):
 class NetworkSettings:
     mode: str = "localvpn"
     executable: Path = DEFAULT_EXE
+    subscription: str = field(default="", repr=False)
+    engine: Path | None = None
 
     @classmethod
     def load(cls, path=".env"):
@@ -41,7 +43,27 @@ class NetworkSettings:
         exe = Path(env.get("LOCALVPN_PLAYEROK_EXE") or DEFAULT_EXE)
         if not exe.is_absolute() or exe.name.lower() != "localvpn-playerok.exe":
             raise ValueError("LOCALVPN_PLAYEROK_EXE must be an absolute service executable path")
-        return cls(mode, exe)
+        subscription = env.get("PCC_PROXY_SUBSCRIPTION") or ""
+        engine = Path(env.get("PCC_SING_BOX_EXE") or "") if subscription else None
+        if subscription and (
+            mode != "localvpn" or not engine.is_absolute() or engine.name.lower() != "sing-box.exe"
+        ):
+            raise ValueError("Telegram subscription requires localvpn and an absolute PCC_SING_BOX_EXE")
+        return cls(mode, exe, subscription, engine)
+
+
+def open_proxy(settings, native, *, recover_on_start=False):
+    if settings.subscription:
+        from app.subscription_proxy import SubscriptionProxy
+
+        return SubscriptionProxy(settings, recover_on_start=recover_on_start)
+    if recover_on_start:
+        return native(settings, recover_on_start=True)
+    return native(settings)
+
+
+def direct_playerok():
+    return bool(getattr(getattr(active_proxy.get(), "settings", None), "subscription", ""))
 
 
 def mtproto_proxy(mode):

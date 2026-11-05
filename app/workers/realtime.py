@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 import aiohttp
 
 from app.database.store import now
+from app.localvpn import direct_playerok
 from app.playerok.adapter import APIError
 
 WS_URL = "wss://ws.playerok.com/graphql"
@@ -49,7 +50,7 @@ class Realtime:
                 timeout=aiohttp.ClientTimeout(total=20),
                 cookie_jar=aiohttp.DummyCookieJar(),
                 middlewares=(origin_guard,),
-                trust_env=True,
+                trust_env=not direct_playerok(),
             ) as session,
             session.ws_connect(
                 WS_URL,

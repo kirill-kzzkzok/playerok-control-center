@@ -15,7 +15,7 @@ from app.config import Config, ConfigurationError
 from app.database.store import Store
 from app.gifts.settings import GiftSettings
 from app.gifts.worker import GiftWorker
-from app.localvpn import SOCKS_URL, NetworkSettings, PlayerokProxy, ProxyUnavailable
+from app.localvpn import SOCKS_URL, NetworkSettings, PlayerokProxy, ProxyUnavailable, open_proxy
 from app.playerok.adapter import Playerok, SafeAccount
 from app.playerok.thread_calls import begin_close_calls, close_calls
 from app.security.access import OwnerMiddleware
@@ -77,7 +77,7 @@ async def outbox_lane(worker, stop, *, kinds=None, excluded_kinds=()):
 
 async def run(config, *, network_diagnostics=False, instance_lock=None):
     if getattr(config, "telegram_transport", "legacy") == "localvpn":
-        async with PlayerokProxy(NetworkSettings.load(), recover_on_start=True):
+        async with open_proxy(NetworkSettings.load(), PlayerokProxy, recover_on_start=True):
             return await run_connected(
                 config, network_diagnostics=network_diagnostics, instance_lock=instance_lock
             )

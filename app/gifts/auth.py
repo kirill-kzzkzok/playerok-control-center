@@ -5,7 +5,7 @@ from contextlib import AsyncExitStack
 from pathlib import Path
 
 from app.gifts.settings import GiftSettings
-from app.localvpn import NetworkSettings, PlayerokProxy, mtproto_proxy
+from app.localvpn import NetworkSettings, PlayerokProxy, mtproto_proxy, open_proxy
 from app.security.instance import InstanceLock
 
 
@@ -19,7 +19,7 @@ async def main():
     p.parent.mkdir(parents=True, exist_ok=True)
     async with AsyncExitStack() as stack:
         if s.telegram_transport == "localvpn":
-            await stack.enter_async_context(PlayerokProxy(NetworkSettings.load()))
+            await stack.enter_async_context(open_proxy(NetworkSettings.load(), PlayerokProxy))
         with InstanceLock(str(p) + ".lock"):
             client = TelegramClient(
                 str(p),

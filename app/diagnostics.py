@@ -15,7 +15,7 @@ async def diagnose(config):
     from aiogram import Bot
     from aiogram.client.telegram import TelegramAPIServer
 
-    from app.localvpn import SOCKS_URL, NetworkSettings, PlayerokProxy
+    from app.localvpn import SOCKS_URL, NetworkSettings, PlayerokProxy, open_proxy
     from app.telegram.transport import TelegramNetworkSession
 
     mode = getattr(config, "telegram_transport", "legacy")
@@ -25,7 +25,7 @@ async def diagnose(config):
         kwargs.update(proxy=SOCKS_URL, localvpn=True)
     async with AsyncExitStack() as stack:
         if mode == "localvpn":
-            await stack.enter_async_context(PlayerokProxy(NetworkSettings.load()))
+            await stack.enter_async_context(open_proxy(NetworkSettings.load(), PlayerokProxy))
         session = TelegramNetworkSession(timeout=15, **kwargs)
         bot = Bot(config.telegram_token, session=session)
         try:
