@@ -3,7 +3,7 @@ from dataclasses import asdict, replace
 
 from app.database.store import Conflict, encode, now
 from app.services.automation import Automation, future_order
-from app.services.order_management import deal_details, deliverable
+from app.services.order_management import deal_details, deliverable, delivery_chat_allowed
 from app.services.orders import Orders
 from app.services.products import ValidationError
 
@@ -354,11 +354,11 @@ class DeliveryChains:
         await LogicalProducts(self.store, self.api).fresh_delivery_item(step["item_id"], action["target"])
         ident = action["target"]
         order = await deal_details(self.api, ident)
-        deliverable(order, ident, self.api.account.id)
+        deliverable(order, ident, self.api.account.id, wait_for_details=True)
         if order["item"]["id"] != step["item_id"]:
             raise ValidationError("Предмет сделки изменился")
         chat = await self.api.call("get_chat", chat_id=order["chat"]["id"])
-        if chat.get("id") != order["chat"]["id"] or chat.get("is_texting_allowed") is not True:
+        if not delivery_chat_allowed(chat, order["chat"]["id"], wait_for_details=True):
             raise ValidationError("Чат закрыт для отправки")
         if self.store.rows("SELECT 1 FROM order_annotations WHERE order_id=? AND problem=1", (ident,)):
             raise ValidationError("Локальная проблема блокирует автоматическую отправку")

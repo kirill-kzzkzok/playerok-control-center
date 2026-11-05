@@ -921,14 +921,14 @@ class Executor:
                     local_item[0]["item_id"], target
                 )
 
-            from app.services.order_management import deal_details
+            from app.services.order_management import deal_details, delivery_chat_allowed
 
             order = await deal_details(self.api, target)
-            deliverable(order, target, self.api.account.id)
+            deliverable(order, target, self.api.account.id, wait_for_details=bool(payload.get("chain_id")))
             Orders(self.store).ingest(order)
             chat = (order.get("chat") or {}).get("id")
             current_chat = await self.api.call("get_chat", chat_id=chat)
-            if current_chat.get("id") != chat or current_chat.get("is_texting_allowed") is not True:
+            if not delivery_chat_allowed(current_chat, chat, wait_for_details=bool(payload.get("chain_id"))):
                 raise ValidationError("Чат недоступен для выдачи")
             stock = self.store.rows(
                 "SELECT i.secret,i.status,i.item_id FROM inventory i JOIN reservations r ON r.inventory_id=i.id WHERE r.order_id=?",
@@ -1030,6 +1030,8 @@ class OutboxWorker:
                         "GIFT_PREFLIGHT_NETWORK",
                         "MARKETING_EDIT_READBACK_PENDING",
                     }
+                    or delivery_retry
+                    and error.code in {"DELIVERY_CHAT_NOT_YET_AVAILABLE", "DELIVERY_SELLER_NOT_YET_AVAILABLE"}
                     or gift_retry
                     and error.code
                     in {

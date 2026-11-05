@@ -101,6 +101,37 @@ async def test_non_gift_chain_hydrates_missing_chat_and_item_owner(shop, mode, v
     assert any(method == "get_delivery_deal" for method, _ in r.api.calls)
 
 
+async def test_reserved_stock_waits_for_omitted_chat_permission_before_send(shop):
+    r = await shop()
+    await setup_ui(r, "unique_stock")
+    Orders(r.store).ingest(r.api.order("paid-before-chat-omission"))
+    await EnrollmentWorker(r.store, r.api).once()
+    ChainWorker(r.store, r.api).once()
+    operation = r.store.rows("SELECT id FROM outbox WHERE kind='delivery'")[0]["id"]
+    original = r.api.call
+
+    async def incomplete(method, **kwargs):
+        if method == "get_chat":
+            return {"id": kwargs["chat_id"]}
+        return await original(method, **kwargs)
+
+    r.api.call = incomplete
+    await r.worker.once(operation_id=operation)
+    assert r.store.rows("SELECT status,started_at FROM outbox WHERE id=?", (operation,)) == [
+        {"status": "RETRYABLE_FAILED", "started_at": None}
+    ]
+    assert len(r.store.rows("SELECT 1 FROM inventory WHERE status='RESERVED'")) == 1
+    assert not r.api.messages
+    reopen(r)
+    r.api.call = original
+    r.store.execute("UPDATE outbox SET retry_at=0 WHERE id=?", (operation,))
+    for _ in range(6):
+        ChainWorker(r.store, r.api).once()
+        await r.worker.once()
+    assert r.store.rows("SELECT status FROM delivery_chains") == [{"status": "SUCCEEDED"}]
+    assert sum(m["text"].startswith("isolated-unit-") for m in r.api.messages) == 1
+
+
 @pytest.mark.parametrize("actual_username", [True, False])
 async def test_gift_missing_short_username_reads_full_and_never_uses_retained_username(shop, actual_username):
     r = await shop(gift=True)

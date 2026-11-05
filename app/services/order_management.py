@@ -151,6 +151,15 @@ def order_snapshot(order):
     return hashlib.sha256(encode(value).encode()).hexdigest()
 
 
+def delivery_chat_allowed(chat, chat_id, *, wait_for_details=False):
+    if not chat_id or chat.get("id") != chat_id:
+        return False
+    permission = chat.get("is_texting_allowed")
+    if wait_for_details and permission is None:
+        raise APIError("DELIVERY_CHAT_NOT_YET_AVAILABLE")
+    return permission is True
+
+
 class OrderManagement:
     def __init__(self, store, api):
         self.store, self.api, self.orders = store, api, Orders(store)
@@ -180,9 +189,7 @@ class OrderManagement:
         if local["status"] != order["status"]:
             raise Conflict("API и сохранённая история расходятся; выдача заблокирована")
         chat = await self.api.call("get_chat", chat_id=order["chat"]["id"])
-        if automatic and chat.get("id") == order["chat"]["id"] and chat.get("is_texting_allowed") is None:
-            raise APIError("DELIVERY_CHAT_NOT_YET_AVAILABLE")
-        if chat.get("id") != order["chat"]["id"] or chat.get("is_texting_allowed") is not True:
+        if not delivery_chat_allowed(chat, order["chat"]["id"], wait_for_details=automatic):
             raise ValidationError("Возможность отправки в чат не подтверждена")
         return order
 
