@@ -23,18 +23,21 @@ def sale(order, ident, account_id):
     return order
 
 
-def deliverable(order, ident, account_id, *, wait_for_chat=False):
+def deliverable(order, ident, account_id, *, wait_for_details=False):
     sale(order, ident, account_id)
-    if not account_id or ((order.get("item") or {}).get("user") or {}).get("id") != account_id:
-        raise ValidationError("Владелец товара не подтверждён")
+    seller = (order["item"].get("user") or {}).get("id")
     if (
         order.get("status") != "PAID"
         or order.get("has_problem") is not False
         or order.get("is_automated") is not False
     ):
         raise ValidationError("Нужна оплаченная продажа без проблемы и серверной автоматической выдачи")
+    if wait_for_details and account_id and seller is None:
+        raise APIError("DELIVERY_SELLER_NOT_YET_AVAILABLE")
+    if not account_id or seller != account_id:
+        raise ValidationError("Владелец товара не подтверждён")
     if not (order.get("chat") or {}).get("id"):
-        if wait_for_chat:
+        if wait_for_details:
             raise APIError("DELIVERY_CHAT_NOT_YET_AVAILABLE")
         raise ValidationError("Чат покупателя не подтверждён")
     return order
@@ -169,7 +172,10 @@ class OrderManagement:
         self.orders.ingest(order)
         local = self.store.rows("SELECT status FROM orders WHERE id=?", (ident,))[0]
         deliverable(
-            order, ident, self.api.account.id, wait_for_chat=automatic and local["status"] == order["status"]
+            order,
+            ident,
+            self.api.account.id,
+            wait_for_details=automatic and local["status"] == order["status"],
         )
         if local["status"] != order["status"]:
             raise Conflict("API и сохранённая история расходятся; выдача заблокирована")

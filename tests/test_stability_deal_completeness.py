@@ -37,14 +37,17 @@ def boundaries(r, short, full):
 
 
 @pytest.mark.parametrize("mode,value", [("unique_stock", None), ("fixed_text", "one-private-unit")])
-@pytest.mark.parametrize("missing", ["chat", "permission"])
-async def test_delayed_chat_details_resume_after_restart(shop, monkeypatch, mode, value, missing):
+@pytest.mark.parametrize("missing", ["chat", "permission", "seller"])
+async def test_delayed_sale_details_resume_after_restart(shop, monkeypatch, mode, value, missing):
     r = await shop()
     await setup_ui(r, mode, value)
     full = r.api.order("delayed-details")
     chat = full["chat"]
+    seller = full["item"]["user"]
     if missing == "chat":
         full["chat"] = None
+    if missing == "seller":
+        full["item"]["user"] = None
     short = copy.deepcopy(full)
     boundaries(r, short, full)
     original = r.api.call
@@ -62,10 +65,12 @@ async def test_delayed_chat_details_resume_after_restart(shop, monkeypatch, mode
     assert not r.store.rows("SELECT * FROM delivery_chains")
     assert not r.store.rows("SELECT * FROM reservations")
     waiting = r.store.rows("SELECT status,error_code,due_at FROM auto_enrollment")[0]
-    assert (waiting["status"], waiting["error_code"]) == ("PENDING", "DELIVERY_CHAT_NOT_YET_AVAILABLE")
+    expected = "SELLER" if missing == "seller" else "CHAT"
+    assert (waiting["status"], waiting["error_code"]) == ("PENDING", f"DELIVERY_{expected}_NOT_YET_AVAILABLE")
 
     reopen(r)
     full["chat"] = chat
+    full["item"]["user"] = seller
     permission = True
     assert await EnrollmentWorker(r.store, r.api).once() == 0
     monkeypatch.setattr(enrollment, "time", SimpleNamespace(time=lambda: waiting["due_at"] + 1))
