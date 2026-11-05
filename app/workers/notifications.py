@@ -221,9 +221,9 @@ class Notifications:
                 markup = keyboard([[("Проверить автопродвижение", "promotions")]])
             elif event["kind"] == "promotion_guard":
                 text = (
-                    "⛔ <b>Политика продвижения выключена по лимиту</b>\n"
+                    "⏳ <b>Поднятие товара ожидает доступного лимита</b>\n"
                     + escaped("; ".join(payload["reasons"]), 800)
-                    + "\nПроверка была dry-run; списаний не было."
+                    + "\nПри этой проверке списаний не было. Остальные товары проверяются независимо."
                 )
                 if payload.get("paid_schedule_block"):
                     text = (

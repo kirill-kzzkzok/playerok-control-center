@@ -113,10 +113,13 @@ class PromotionWorker:
                             "get_item_priority_statuses", item_id=ident, item_price=priority_price_basis(item)
                         )
                         # Evaluate the current placement class, never silently select a paid upgrade.
+                        approval = self.store.setting("promotions:approved:" + ident, {})
                         choices = [
                             quote
                             for quote in quotes
-                            if quote.get("type") == item.get("priority") and quote.get("price") is not None
+                            if quote.get("type") == item.get("priority")
+                            and quote.get("price") is not None
+                            and (not approval or quote.get("id") == approval.get("quote_id"))
                         ]
                         if len(choices) != 1:
                             raise ValidationError("Однозначная стоимость текущего типа размещения недоступна")
@@ -124,7 +127,6 @@ class PromotionWorker:
                         from app.services.paid_promotions import PaidPromotions
 
                         paid = PaidPromotions(self.store, self.api)
-                        approval = self.store.setting("promotions:approved:" + ident, {})
                         if result["would_allow"] and paid.has_authority(ident, revision) and approval:
                             paid_attempt = True
                             preview = await paid.preview(actor, ident, approval["quote_id"])

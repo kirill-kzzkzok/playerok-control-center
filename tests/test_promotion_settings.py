@@ -119,7 +119,7 @@ async def test_limits_include_unknown_and_reserved_charges_with_moscow_day_bound
     store.execute("INSERT INTO promotion_expenses VALUES('reserved','other','95','RESERVED',?)", (now(),))
     result = await service.evaluate(1, "item", "premium")
     assert not result["would_allow"] and "дневной лимит" in result["reasons"]
-    assert result["policy_auto_disabled"] and not service.get()[1].enabled
+    assert not result["policy_auto_disabled"] and service.get()[1].enabled
     assert len(store.rows("SELECT * FROM promotion_expenses")) == 1
 
 

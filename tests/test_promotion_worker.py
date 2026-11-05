@@ -140,7 +140,7 @@ async def test_budget_guard_notification_is_durable_and_not_baselined(setup):
 
     api.call.side_effect = call
     await worker.once()
-    assert not settings.get()[1].enabled
+    assert settings.get()[1].enabled
     bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=7)))
     await Notifications(store, bot).once()
     await Notifications(store, bot).once()

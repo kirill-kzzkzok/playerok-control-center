@@ -1,3 +1,4 @@
+import json
 import secrets
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -130,6 +131,53 @@ class PromotionsPanel:
                 + "\nСледующая проверка: "
                 + next_check
             )
+            from app.services.premium_review import blocking_expenses
+
+            pending_money = blocking_expenses(self.service.store)
+            if pending_money:
+                expense = pending_money[0]
+                saved = json.loads(expense["payload"] or "{}")
+                text += (
+                    "\n⛔ Новые покупки ожидают сверки прежнего расхода: "
+                    + escaped(saved.get("name") or "Товар", 90)
+                    + f" · {expense['amount']} ₽ · {local_time(expense['created_at'])}"
+                )
+            evaluated = 0
+            for target in targets[:10]:
+                ident = target["item_id"]
+                latest = self.service.store.rows(
+                    "SELECT result FROM promotion_evaluations WHERE item_id=? AND policy_revision=? ORDER BY id DESC LIMIT 1",
+                    (ident, data["revision"]),
+                )
+                approval = self.service.store.setting("promotions:approved:" + ident, {})
+                observation = json.loads(latest[0]["result"]) if latest else {}
+                name = observation.get("item_name") or approval.get("name") or ident
+                scheduled = self.service.store.rows(
+                    "SELECT error_code FROM promotion_schedule WHERE item_id=?", (ident,)
+                )
+                if pending_money:
+                    reason = "ожидает сверки расхода"
+                elif not paid.has_authority(ident, data["revision"]) or not approval:
+                    reason = "нужно разрешить тариф и повторные расходы"
+                elif scheduled and scheduled[0]["error_code"]:
+                    reason = "не удалось проверить Playerok, бот повторит автоматически"
+                elif observation:
+                    reason = "; ".join(observation.get("reasons", [])) or "условия покупки выполнены"
+                    evaluated += 1
+                else:
+                    reason = "проверяем условия"
+                text += "\n• " + escaped(name, 70) + " — " + escaped(reason, 220)
+            if values["enabled"] and (scoped or global_authority):
+                description = (
+                    "Проверяем условия товаров"
+                    if not evaluated
+                    else "Работает автоматически по условиям ниже"
+                )
+                if pending_money:
+                    description = "Новые покупки приостановлены до сверки расхода"
+                text = text.replace("Включено для подтверждённых товаров", description)
+            if len(targets) > 10:
+                text += f"\nОстальные товары: {len(targets) - 10}."
             health = self.service.store.setting("promotions:health", {})
             if (
                 values["enabled"]

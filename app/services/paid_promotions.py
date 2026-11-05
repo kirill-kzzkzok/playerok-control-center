@@ -66,7 +66,7 @@ class PaidPromotions:
             raise ValidationError("Автоматизация Playerok выключена")
 
     def check_reviewed_manual_budget(self, value, policy, *, already_reserved=False):
-        if not release_ids(self.store):
+        if not self.store.rows("SELECT 1 FROM settings WHERE key LIKE 'promotions:review:%' LIMIT 1"):
             return
         # Zero automatic limits mean there is no standing authorization. A new
         # exact-price manual approval still supplies its own per-purchase cap.
