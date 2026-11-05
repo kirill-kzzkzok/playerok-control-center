@@ -37,13 +37,15 @@ def boundaries(r, short, full):
 
 
 @pytest.mark.parametrize("mode,value", [("unique_stock", None), ("fixed_text", "one-private-unit")])
-@pytest.mark.parametrize("missing", ["chat", "permission", "seller"])
+@pytest.mark.parametrize("missing", ["chat", "permission", "seller", "has_problem", "is_automated"])
 async def test_delayed_sale_details_resume_after_restart(shop, monkeypatch, mode, value, missing):
     r = await shop()
     await setup_ui(r, mode, value)
     full = r.api.order("delayed-details")
     chat = full["chat"]
     seller = full["item"]["user"]
+    if missing in {"has_problem", "is_automated"}:
+        full.pop(missing)
     if missing == "chat":
         full["chat"] = None
     if missing == "seller":
@@ -65,12 +67,15 @@ async def test_delayed_sale_details_resume_after_restart(shop, monkeypatch, mode
     assert not r.store.rows("SELECT * FROM delivery_chains")
     assert not r.store.rows("SELECT * FROM reservations")
     waiting = r.store.rows("SELECT status,error_code,due_at FROM auto_enrollment")[0]
-    expected = "SELLER" if missing == "seller" else "CHAT"
+    expected = (
+        "FLAGS" if missing in {"has_problem", "is_automated"} else "SELLER" if missing == "seller" else "CHAT"
+    )
     assert (waiting["status"], waiting["error_code"]) == ("PENDING", f"DELIVERY_{expected}_NOT_YET_AVAILABLE")
 
     reopen(r)
     full["chat"] = chat
     full["item"]["user"] = seller
+    full.update(has_problem=False, is_automated=False)
     permission = True
     assert await EnrollmentWorker(r.store, r.api).once() == 0
     monkeypatch.setattr(enrollment, "time", SimpleNamespace(time=lambda: waiting["due_at"] + 1))
@@ -101,7 +106,8 @@ async def test_non_gift_chain_hydrates_missing_chat_and_item_owner(shop, mode, v
     assert any(method == "get_delivery_deal" for method, _ in r.api.calls)
 
 
-async def test_reserved_stock_waits_for_omitted_chat_permission_before_send(shop):
+@pytest.mark.parametrize("missing", ["permission", "has_problem", "is_automated"])
+async def test_reserved_stock_waits_for_omitted_chat_permission_before_send(shop, missing):
     r = await shop()
     await setup_ui(r, "unique_stock")
     Orders(r.store).ingest(r.api.order("paid-before-chat-omission"))
@@ -111,9 +117,12 @@ async def test_reserved_stock_waits_for_omitted_chat_permission_before_send(shop
     original = r.api.call
 
     async def incomplete(method, **kwargs):
-        if method == "get_chat":
+        if missing == "permission" and method == "get_chat":
             return {"id": kwargs["chat_id"]}
-        return await original(method, **kwargs)
+        result = await original(method, **kwargs)
+        if missing != "permission" and method in {"get_deal", "get_delivery_deal"}:
+            result.pop(missing, None)
+        return result
 
     r.api.call = incomplete
     await r.worker.once(operation_id=operation)
@@ -130,6 +139,27 @@ async def test_reserved_stock_waits_for_omitted_chat_permission_before_send(shop
         await r.worker.once()
     assert r.store.rows("SELECT status FROM delivery_chains") == [{"status": "SUCCEEDED"}]
     assert sum(m["text"].startswith("isolated-unit-") for m in r.api.messages) == 1
+
+
+@pytest.mark.parametrize("forbidden", ["has_problem", "is_automated", "seller", "chat"])
+async def test_missing_flag_never_overrides_confirmed_conflict(shop, forbidden):
+    r = await shop()
+    await setup_ui(r, "unique_stock")
+    full = r.api.order("conflict-with-missing")
+    full.pop("is_automated" if forbidden == "has_problem" else "has_problem")
+    short = copy.deepcopy(full)
+    if forbidden in {"has_problem", "is_automated"}:
+        short[forbidden] = full[forbidden] = True
+    elif forbidden == "seller":
+        full["item"]["user"]["id"] = "other-seller"
+    else:
+        full["chat"]["id"] = "other-chat"
+    boundaries(r, short, full)
+    Orders(r.store).ingest(short)
+    await EnrollmentWorker(r.store, r.api).once()
+    assert r.store.rows("SELECT status FROM auto_enrollment") == [{"status": "BLOCKED"}]
+    assert not r.store.rows("SELECT * FROM reservations")
+    assert not r.api.messages
 
 
 @pytest.mark.parametrize("actual_username", [True, False])

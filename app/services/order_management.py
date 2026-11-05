@@ -27,6 +27,14 @@ def deliverable(order, ident, account_id, *, wait_for_details=False):
     sale(order, ident, account_id)
     seller = (order["item"].get("user") or {}).get("id")
     if (
+        wait_for_details
+        and order.get("status") == "PAID"
+        and order.get("has_problem") in (None, False)
+        and order.get("is_automated") in (None, False)
+        and (order.get("has_problem") is None or order.get("is_automated") is None)
+    ):
+        raise APIError("DELIVERY_FLAGS_NOT_YET_AVAILABLE")
+    if (
         order.get("status") != "PAID"
         or order.get("has_problem") is not False
         or order.get("is_automated") is not False
