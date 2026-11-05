@@ -511,7 +511,18 @@ def create_router(store, api, products, synchronizer):
                 item = await api.call("get_item", id=ident)
                 if not api.account.id or (item.get("user") or {}).get("id") != api.account.id:
                     raise ValidationError("Владение товаром не подтверждено")
-                if kind == "editdesc" and (problem := products.critical_edit_problem(ident)):
+                marketing_description = None
+                if kind == "editdesc":
+                    logical = LogicalProducts(store, api)
+                    product = logical.listing(ident)
+                    if product and product["enabled"] and product["state"] == "VERIFIED":
+                        logical.verify_marketing_description(product, item)
+                        marketing_description = product["id"]
+                if (
+                    kind == "editdesc"
+                    and not marketing_description
+                    and (problem := products.critical_edit_problem(ident))
+                ):
                     await state.clear()
                     path = (
                         "order:" + problem["order_id"]
@@ -538,12 +549,13 @@ def create_router(store, api, products, synchronizer):
                         }[kind],
                         "attachment_ids": [a.get("id") for a in item.get("attachments") or []],
                         "expected_description": item.get("description"),
+                        "marketing_description": marketing_description,
                         "expected_name": item.get("name"),
                     }
                 )
                 shown_description = item.get("description") or ""
                 if kind == "editname":
-                    from app.services.logical_products import LogicalProducts, marker
+                    from app.services.logical_products import marker
 
                     product = LogicalProducts(store, api).listing(ident)
                     if product:
@@ -895,6 +907,8 @@ def create_router(store, api, products, synchronizer):
                     pending["payload"]["expected_name"] = data.get("expected_name")
                 if data["field"] == "description":
                     pending["payload"]["expected_description"] = data["expected_description"]
+                    if data.get("marketing_description"):
+                        pending["payload"]["marketing_description"] = data["marketing_description"]
                 nonce = secrets.token_hex(8)
                 await state.set_state(None)
                 await state.set_data({"pending": pending, "confirm_token": nonce})
@@ -904,6 +918,7 @@ def create_router(store, api, products, synchronizer):
                     + (
                         "\n\nПосле изменения описания выдача останется остановленной. Подтвердите привязку заново перед включением."
                         if data["field"] == "description"
+                        and not data.get("marketing_description")
                         and LogicalProducts(store, api).listing(data["item_id"])
                         else ""
                     ),

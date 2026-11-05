@@ -1,7 +1,10 @@
 """Critical edits cannot silently disable delivery or invalidate paid obligations."""
 
+import asyncio
+
 import pytest
 
+from app.gifts.worker import GiftWorker
 from app.playerok.adapter import APIError
 from app.services.logical_products import LogicalProducts
 from app.services.orders import Orders
@@ -15,12 +18,11 @@ from tests.test_ux_redesign import buttons
 shop = shop_fixture
 
 
-@pytest.mark.parametrize("entry", ["editdesc:lot", "editfields:lot"])
-async def test_active_delivery_requires_explicit_stop_before_critical_input(shop, entry):
+async def test_active_delivery_requires_explicit_stop_before_critical_input(shop):
     r = await shop()
     await setup_ui(r, "unique_stock")
     before = r.store.rows("SELECT * FROM logical_products")
-    await r.ui.click(entry)
+    await r.ui.click("editfields:lot")
     assert "Сначала остановите" in r.session.last_panel.text
     assert "lp:item:lot" in buttons(r.session.last_panel)
     assert r.store.rows("SELECT * FROM logical_products") == before
@@ -49,6 +51,95 @@ async def queue_description(r):
     await r.ui.message("Новое подтверждаемое описание товара")
     data = await state(r).get_data()
     await r.ui.click("commit:" + data["confirm_token"])
+
+
+async def test_active_gift_can_edit_marketing_description_without_rearming(shop):
+    r = await shop(gift=True)
+    await setup_ui(r, "telegram_gifts", "gift: heart")
+    logical = LogicalProducts(r.store, r.api)
+    before = logical.listing("lot")
+    await queue_description(r)
+    await r.worker.once()
+    assert r.api.item["description"] == "Новое подтверждаемое описание товара"
+    after = logical.listing("lot")
+    for key in ("id", "code", "revision", "control_revision", "armed_at", "enabled", "config"):
+        assert after[key] == before[key]
+    assert after["verified_at"]
+    assert r.store.rows("SELECT enabled FROM gift_listings") == [{"enabled": 1}]
+
+    Orders(r.store).ingest(r.api.order("paid-after-description"))
+    await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+    await r.worker.once()
+    assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "SUCCEEDED"}]
+    assert len(r.api.remote.payments) == 1
+
+
+async def test_gift_waits_for_in_progress_description_readback(shop):
+    r = await shop(gift=True)
+    await setup_ui(r, "telegram_gifts", "gift: heart")
+    await queue_description(r)
+    edit = r.store.rows("SELECT id FROM outbox WHERE kind='edit' ORDER BY rowid")[-1]["id"]
+    reading, resume = asyncio.Event(), asyncio.Event()
+    original = r.api.call
+
+    async def call(method, **kwargs):
+        if (
+            asyncio.current_task().get_name() == "edit-readback"
+            and method == "get_item"
+            and r.api.item["description"] == "Новое подтверждаемое описание товара"
+        ):
+            reading.set()
+            await resume.wait()
+        return await original(method, **kwargs)
+
+    r.api.call = call
+    worker = asyncio.create_task(r.worker.once(operation_id=edit), name="edit-readback")
+    try:
+        await asyncio.wait_for(reading.wait(), 5)
+        Orders(r.store).ingest(r.api.order("paid-during-edit"))
+        assert await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once() == 1
+        gift = r.store.rows("SELECT id FROM outbox WHERE kind='gift_send'")[0]["id"]
+        await r.worker.once(operation_id=gift)
+        assert r.store.rows("SELECT status,started_at FROM outbox WHERE id=?", (gift,)) == [
+            {"status": "RETRYABLE_FAILED", "started_at": None}
+        ]
+        assert not r.api.remote.payments
+    finally:
+        resume.set()
+        await worker
+    r.store.execute("UPDATE outbox SET retry_at=0 WHERE id=?", (gift,))
+    await r.worker.once(operation_id=gift)
+    assert len(r.api.remote.payments) == 1
+
+
+@pytest.mark.parametrize("fault", ["external_description", "external_fields", "lost_reply"])
+async def test_active_description_edit_keeps_preflight_and_unknown_fences(shop, fault):
+    r = await shop(gift=True)
+    await setup_ui(r, "telegram_gifts", "gift: heart")
+    logical = LogicalProducts(r.store, r.api)
+    prior = logical.listing("lot")
+    await queue_description(r)
+    if fault == "external_description":
+        r.api.item["description"] = "Другой текст с сайта"
+    elif fault == "external_fields":
+        r.api.item["attributes"] = {"recipient": "changed"}
+    else:
+        update = r.api.account.update_item
+
+        def lost(**kwargs):
+            update(**kwargs)
+            raise APIError("NETWORK_ERROR", uncertain=True)
+
+        r.api.account.update_item = lost
+    before = len(r.api.mutations)
+    await r.worker.once()
+    result = r.store.rows("SELECT status,started_at FROM outbox WHERE kind='edit' ORDER BY rowid")[-1]
+    assert result["status"] == ("UNCERTAIN" if fault == "lost_reply" else "PERMANENT_FAILED")
+    assert bool(result["started_at"]) == (fault == "lost_reply")
+    assert not await r.worker.once()
+    assert len(r.api.mutations) == before + (fault == "lost_reply")
+    assert logical.listing("lot") == prior
+    assert not r.api.remote.payments
 
 
 async def test_payment_after_edit_queue_prevents_mutation_without_destroying_reserve(shop):

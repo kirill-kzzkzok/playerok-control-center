@@ -112,6 +112,7 @@ class Executor:
             and "description" in action["payload"]
             and not action["payload"].get("logical_binding")
             and not action["payload"].get("code_migration")
+            and not action["payload"].get("marketing_description")
         ):
             Products(self.store, self.api).require_critical_edit(action["target"], action["id"])
         if action["payload"].get("chain_id"):
@@ -630,6 +631,7 @@ class Executor:
                 "expected_name",
                 "platform_settings",
                 "code_migration",
+                "marketing_description",
             }:
                 raise ValidationError("Изменение содержит неподдерживаемые поля")
             if payload.get("platform_settings") and not (payload.get("logical_binding") or {}).get(
@@ -644,6 +646,19 @@ class Executor:
                     if not payload.get("code_migration"):
                         changes[field] = validated
             protected_description = False
+            if marketing := payload.get("marketing_description"):
+                from app.services.logical_products import LogicalProducts
+
+                logical = LogicalProducts(self.store, self.api)
+                product = logical.listing(target)
+                if (
+                    not product
+                    or product["id"] != marketing
+                    or set(payload) != {"description", "expected_description", "marketing_description"}
+                    or current.get("description") != payload["expected_description"]
+                ):
+                    raise ValidationError("Описание или привязка изменились после просмотра")
+                logical.verify_marketing_description(product, current, operation_id=action["id"])
             if {"name", "description"} & changes.keys() and not (
                 payload.get("logical_binding") or payload.get("code_migration")
             ):
@@ -795,6 +810,20 @@ class Executor:
                 confirmation.record(action, proof, observed, receipt)
                 return receipt
             receipt = self.item_result(result)
+            if marketing:
+                from app.services.logical_products import critical, digest
+
+                try:
+                    if critical(observed) != critical(current):
+                        raise ValueError
+                except (ValueError, TypeError, AttributeError):
+                    raise APIError("EDIT_READBACK_UNKNOWN", uncertain=True) from None
+                receipt["marketing_description"] = {
+                    "prior": product["description_sha256"],
+                    "current": digest(observed["description"]),
+                    "revision": product["revision"],
+                    "gift": product["handler"] == "telegram_gifts",
+                }
             confirmation.record(action, proof, observed if observed is not None else result, receipt)
             return receipt
         if kind == "mark_read":
@@ -999,6 +1028,7 @@ class OutboxWorker:
                         "SESSION_EXPIRED",
                         "UNAUTHORIZED_OR_CHALLENGE",
                         "GIFT_PREFLIGHT_NETWORK",
+                        "MARKETING_EDIT_READBACK_PENDING",
                     }
                     or gift_retry
                     and error.code

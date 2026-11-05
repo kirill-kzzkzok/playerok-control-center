@@ -294,7 +294,25 @@ class EditConfirmation:
 def finish_edit(db, action, result):
     """Shared atomic effects after verified success, including owner recovery."""
     payload = action["payload"]
-    if "description" in payload and not (payload.get("logical_binding") or payload.get("code_migration")):
+    if payload.get("marketing_description"):
+        if description := (result or {}).get("marketing_description"):
+            changed = db.execute(
+                "UPDATE logical_listings SET description_sha256=? WHERE item_id=? AND product_id=? "
+                "AND config_revision=? AND description_sha256=? AND verified_at IS NOT NULL",
+                (
+                    description["current"],
+                    action["target"],
+                    payload["marketing_description"],
+                    description["revision"],
+                    description["prior"],
+                ),
+            ).rowcount
+            if changed and description["gift"]:
+                db.execute(
+                    "UPDATE gift_listings SET description_sha256=? WHERE item_id=? AND description_sha256=?",
+                    (description["current"], action["target"], description["prior"]),
+                )
+    elif "description" in payload and not (payload.get("logical_binding") or payload.get("code_migration")):
         db.execute("UPDATE logical_listings SET verified_at=NULL WHERE item_id=?", (action["target"],))
     if result and result.get("identity_title"):
         title = result["identity_title"]

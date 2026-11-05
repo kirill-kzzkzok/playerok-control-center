@@ -273,6 +273,7 @@ class Store:
                 and "description" in payload
                 and not payload.get("logical_binding")
                 and not payload.get("code_migration")
+                and not payload.get("marketing_description")
             ):
                 from app.services.products import Products
 
@@ -281,7 +282,9 @@ class Store:
                 "INSERT OR IGNORE INTO outbox(id,operation_key,kind,target,payload,created_at) VALUES(?,?,?,?,?,?)",
                 (ident, key, kind, target, encode(payload), now()),
             )
-            if kind in {"delete", "edit_fields"} or (kind == "edit" and "description" in payload):
+            if kind in {"delete", "edit_fields"} or (
+                kind == "edit" and "description" in payload and not payload.get("marketing_description")
+            ):
                 connection.execute(
                     "UPDATE gift_listings SET enabled=0,revision=revision+1 WHERE item_id=? AND enabled=1",
                     (target,),

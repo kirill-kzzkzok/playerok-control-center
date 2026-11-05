@@ -9,6 +9,7 @@ from dataclasses import asdict
 
 from app.database.store import Conflict, encode, now
 from app.gifts.core import gift_code_from_description
+from app.playerok.adapter import APIError
 from app.services.automation import Automation, DeliveryPolicy, future_order, message_text
 from app.services.product_codes import choose_code, reserve_code, title_code, titled
 from app.services.products import field_baseline, listing_text
@@ -759,14 +760,29 @@ class LogicalProducts:
     def verify_listing(self, product, item):
         return self._verify_listing(product, item, check_description=True)
 
-    def _verify_listing(self, product, item, *, check_description):
+    def verify_marketing_description(self, product, item, *, operation_id=None):
+        if (
+            not product
+            or product["source_order_id"]
+            or product["error_code"]
+            or item.get("status") != "APPROVED"
+            or item.get("is_editable") is False
+            or item.get("deleted_at")
+            or not isinstance(item.get("description"), str)
+        ):
+            raise Conflict("Безопасное редактирование описания этого объявления не подтверждено")
+        self.authority(product["owner_id"], product["account_id"], writes=True)
+        self._verify_listing(product, item, check_description=True, operation_id=operation_id)
+
+    def _verify_listing(self, product, item, *, check_description, operation_id=None):
         if self.store.rows(
-            "SELECT 1 FROM outbox WHERE target=? "
+            "SELECT 1 FROM outbox WHERE target=? AND id!=COALESCE(?, '') "
             "AND status IN ('PENDING','PROCESSING','RETRYABLE_FAILED','UNCERTAIN') "
             "AND (kind='edit_fields' OR kind='edit' AND (?=0 OR json_type(payload,'$.description') IS NOT NULL "
             "AND json_extract(payload,'$.logical_binding') IS NULL "
-            "AND json_extract(payload,'$.code_migration') IS NULL)) LIMIT 1",
-            (item.get("id"), int(check_description)),
+            "AND json_extract(payload,'$.code_migration') IS NULL "
+            "AND (json_extract(payload,'$.marketing_description') IS NULL OR status='UNCERTAIN'))) LIMIT 1",
+            (item.get("id"), operation_id, int(check_description)),
         ):
             raise Conflict(
                 "Редактирование товара не завершено. Сначала сверьте операцию, затем подтвердите привязку"
@@ -882,6 +898,12 @@ class LogicalProducts:
     async def _refresh_description(self, product, item):
         # Description is marketing text, not delivery content. Never infer a
         # new Gift, stock unit or recipient from it; preserve the approved config.
+        if self.store.rows(
+            "SELECT 1 FROM outbox WHERE target=? AND kind='edit' AND status='PROCESSING' "
+            "AND started_at IS NOT NULL AND json_extract(payload,'$.marketing_description') IS NOT NULL",
+            (item["id"],),
+        ):
+            raise APIError("MARKETING_EDIT_READBACK_PENDING")
         if (
             product["state"] != "VERIFIED"
             or not product["verified_at"]
