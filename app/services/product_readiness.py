@@ -629,7 +629,16 @@ class ProductReadiness:
                     if (
                         gift or product and product["handler"] == "telegram_gifts"
                     ) and policy.mode != "playerok":
-                        await self.gifts.refresh()
+                        gift_lock = getattr(self.api, "readiness_gift_lock", None)
+                        if gift_lock is None:
+                            self.api.readiness_gift_lock = gift_lock = asyncio.Lock()
+                        async with gift_lock:
+                            if (
+                                not automatic
+                                or not fresh(self.store.setting("gifts:balance", {}).get("at"), 60)
+                                or not fresh(self.store.setting("gifts:connection", {}).get("at"), 60)
+                            ):
+                                await self.gifts.refresh()
                         if item.get("status") == "APPROVED":
                             code = gift["gift_code"] if gift else json.loads(product["config"])["code"]
                             await self.gifts.inspect_item(owner, ident, preview_code=code, observed_item=item)
@@ -681,7 +690,7 @@ class ProductReadiness:
             return self.snapshot(ident, item=item, for_arm=for_arm)
 
     async def refresh_due(self):
-        """One due enabled listing, no auto-enable, reconciliation or external write."""
+        """Bounded read-only batch, oldest attempt first; no execution authority."""
         account = self.api.account
         if (
             not account.id
@@ -699,18 +708,25 @@ class ProductReadiness:
         candidates.sort(
             key=lambda row: self.store.setting("readiness:" + row["item_id"], {}).get("attempt", "")
         )
-        for row in candidates:
-            record = self.store.setting("readiness:" + row["item_id"], {})
-            if not fresh(record.get("attempt"), 120):
+        due = [
+            row
+            for row in candidates
+            if not fresh(self.store.setting("readiness:" + row["item_id"], {}).get("attempt"), 120)
+        ][:4]
+        slots = asyncio.Semaphore(2)
+
+        async def check(row):
+            async with slots:
                 await self.check(row["owner_id"], row["item_id"], automatic=True)
-                return 1
-        return 0
+
+        await asyncio.gather(*(check(row) for row in due))
+        return len(due)
 
     async def run(self, stop):
         from app.workers.supervisor import worker_cycle
 
         while not stop.is_set():
-            with worker_cycle(self.store, "readiness", 30, max_seconds=45) as cycle:
+            with worker_cycle(self.store, "readiness", 30, max_seconds=75) as cycle:
                 cycle["processed"] = await self.refresh_due()
             try:
                 await asyncio.wait_for(stop.wait(), 15)

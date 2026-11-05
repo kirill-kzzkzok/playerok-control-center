@@ -19,6 +19,24 @@ async def configured(shop):
     return r
 
 
+async def test_automatic_diagnostic_reuses_fresh_stars_but_payment_reads_again(shop):
+    from telethon import functions
+
+    from app.gifts.worker import GiftWorker
+    from app.services.orders import Orders
+
+    r = await configured(shop)
+    r.store.set_setting("readiness:lot", {})
+    r.api.remote.calls.clear()
+    await ProductReadiness(r.store, r.api).check(7, "lot", automatic=True)
+    assert not any(isinstance(call, functions.payments.GetStarsStatusRequest) for call in r.api.remote.calls)
+    Orders(r.store).ingest(r.api.order("fresh-payment"))
+    await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+    await r.worker.once()
+    assert any(isinstance(call, functions.payments.GetStarsStatusRequest) for call in r.api.remote.calls)
+    assert len(r.api.remote.payments) == 1
+
+
 async def test_status_reuses_recent_verified_details_without_extra_item_reads(shop):
     r = await configured(shop)
     await r.ui.click("rd:check:lot")
