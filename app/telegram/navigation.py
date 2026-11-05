@@ -8,7 +8,7 @@ import time
 from copy import deepcopy
 
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
-from aiogram.types import InputMediaPhoto
+from aiogram.types import InlineKeyboardMarkup, InputMediaPhoto
 
 from app.database.store import Conflict
 from app.security.logging import event
@@ -356,7 +356,13 @@ class Navigation:
                 return message  # Explicit Telegram flood limit; no blind resend/re-execution.
             view = deepcopy(proposal or {name: panel.get(name) for name in ("route", "history", "context")})
             view["context"] = {k: v for k, v in (await state.get_data()).items() if k in CONTEXT}
-            markup = reply_markup.model_copy(deep=True) if reply_markup else keyboard([], home=False)
+            # Incoming Telegram models carry a private mounted Bot. Copying
+            # that object traverses its live session/middleware (including locks).
+            markup = (
+                InlineKeyboardMarkup.model_validate(reply_markup.model_dump(exclude_none=True))
+                if reply_markup
+                else keyboard([], home=False)
+            )
             unchanged_route = (
                 view.get("route") == panel.get("route")
                 and view.get("history") == panel.get("history")
