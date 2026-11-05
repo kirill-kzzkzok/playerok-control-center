@@ -299,6 +299,11 @@ class Reconciliation:
                 or signature(dict(current)) != expected
             ):
                 raise Conflict("Операция уже разрешена другим действием")
+            if decision == "STOP_UNCERTAIN" and action["kind"] == "premium_bump":
+                from app.services.premium_review import release_ids
+
+                if ident in release_ids(self.store):
+                    raise Conflict("Расход уже учтён. Результат старой покупки остаётся неизвестным")
             if action["kind"] == "create" and status == "SUCCEEDED":
                 from app.services.logical_products import LogicalProducts
 

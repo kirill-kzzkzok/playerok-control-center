@@ -3,6 +3,7 @@ import secrets
 
 from app.database.store import Conflict
 from app.services.edit_confirmation import is_ordinary_edit
+from app.services.premium_review import PREFIX, reviewed, terminal_bump, uncertain_expenses
 from app.services.reconciliation import Reconciliation, signature
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
@@ -164,16 +165,24 @@ class OperationsPanel:
                     "premium_bump",
                 }:
                     rows.append([("🔍 Проверить результат на Playerok", "ops:confirm:" + ident)])
-                rows.append(
-                    [
-                        (
-                            "🗃 Закрыть запись правки"
-                            if is_ordinary_edit(row)
-                            else "⛔ Закрыть без повторной отправки",
-                            "ops:stop:" + ident,
-                        )
-                    ]
-                )
+                if row["kind"] != "premium_bump":
+                    rows.append(
+                        [
+                            (
+                                "🗃 Закрыть запись правки"
+                                if is_ordinary_edit(row)
+                                else "⛔ Закрыть без повторной отправки",
+                                "ops:stop:" + ident,
+                            )
+                        ]
+                    )
+                if row["kind"] == "premium_bump":
+                    expense = next((r for r in uncertain_expenses(self.store) if r["id"] == ident), None)
+                    if expense and reviewed(self.store, expense):
+                        decision = self.store.setting(PREFIX + ident)
+                        text += f"\n\nВладелец учёл {decision['amount']} ₽ в расходах. Исход прежней покупки остаётся неизвестным."
+                    elif expense and terminal_bump(expense) and not expense["late"]:
+                        rows.append([("Рассмотреть расход вручную", "payp:review:" + ident)])
             elif (
                 row["error_code"] == "MANUALLY_STOPPED_UNCERTAIN"
                 and row["kind"] in {"edit", "premium_publish", "premium_bump"}

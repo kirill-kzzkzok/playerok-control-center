@@ -88,9 +88,15 @@ class PromotionSettings:
             reasons.append("лот не выбран или исключён")
         if item.get("status") != "APPROVED":
             reasons.append("лот не активен")
-        if self.store.rows(
-            "SELECT 1 FROM outbox WHERE target=? AND status IN ('PENDING','PROCESSING','UNCERTAIN','RETRYABLE_FAILED')",
-            (ident,),
+        from app.services.premium_review import release_ids
+
+        released = release_ids(self.store)
+        if any(
+            row["id"] not in released
+            for row in self.store.rows(
+                "SELECT id FROM outbox WHERE target=? AND status IN ('PENDING','PROCESSING','UNCERTAIN','RETRYABLE_FAILED')",
+                (ident,),
+            )
         ):
             reasons.append("у лота есть незавершённая операция")
         rows = self.store.rows(

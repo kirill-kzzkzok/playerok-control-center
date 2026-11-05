@@ -259,12 +259,17 @@ class Store:
                 "premium_publish",
                 "premium_bump",
             }:
-                blocked = connection.execute(
+                blockers = connection.execute(
                     "SELECT id FROM outbox WHERE target=? AND kind IN ('create','publish','edit','edit_fields','discount','delete','agreements','premium_publish','premium_bump') "
-                    "AND status IN ('PENDING','PROCESSING','RETRYABLE_FAILED','UNCERTAIN') LIMIT 1",
+                    "AND status IN ('PENDING','PROCESSING','RETRYABLE_FAILED','UNCERTAIN')",
                     (target,),
-                ).fetchone()
-                if blocked:
+                ).fetchall()
+                released = set()
+                if blockers and kind in {"premium_publish", "premium_bump"}:
+                    from app.services.premium_review import release_ids
+
+                    released = release_ids(self)
+                if any(row[0] not in released for row in blockers):
                     raise Conflict(
                         "Для этого товара уже есть незавершённая операция. Сначала проверьте её результат."
                     )

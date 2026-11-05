@@ -7,6 +7,7 @@ from app.services.finance import money
 from app.services.paid_promotions import PaidPromotions
 from app.services.products import ValidationError, priority_price_basis
 from app.services.promotion_settings import PromotionSettings
+from app.services.promotions import PromotionPolicy
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 from app.telegram.presentation import item_label, local_time, status
@@ -15,7 +16,7 @@ EDIT = {
     "interval_seconds": "Интервал, секунд (от 600)",
     "check_seconds": "Проверка позиции, секунд (от 120)",
     "threshold": "Дневной порог позиции (от 1)",
-    "cooldown_seconds": "Cooldown, секунд (от 600)",
+    "cooldown_seconds": "Пауза между покупками, секунд (от 600)",
     "night_interval_seconds": "Ночной интервал, секунд (от 600)",
     "night_threshold": "Ночной порог (от 1)",
     "night_start_hour": "Начало ночи, час МСК (0–23)",
@@ -25,6 +26,40 @@ EDIT = {
     "monthly": "Месячный лимит, ₽",
     "max_operations_per_item": "Максимум операций на лот (0 запрещает)",
 }
+
+
+def buying_conditions(policy):
+    def interval(seconds):
+        minutes, rest = divmod(seconds, 60)
+        return f"{minutes} мин" + (f" {rest} с" if rest else "")
+
+    if policy.mode == "time":
+        text = f"Поднимает товар через {interval(max(policy.interval_seconds, policy.cooldown_seconds))} после предыдущей покупки."
+    else:
+        text = (
+            f"Поднимает товар, если его позиция в PREMIUM ниже {policy.threshold}-й при двух проверках подряд."
+            f" Проверяет каждые {interval(policy.check_seconds)}."
+            f" Покупает не чаще раза в {interval(policy.cooldown_seconds)}."
+        )
+    if policy.night_enabled:
+        night = (
+            f"интервал {interval(max(policy.night_interval_seconds, policy.cooldown_seconds))}"
+            if policy.mode == "time"
+            else f"поднимает ниже {policy.night_threshold}-й позиции"
+        )
+        text += f"\nС {policy.night_start_hour:02}:00 до {policy.night_end_hour:02}:00 МСК: {night}."
+    return (
+        text + f"\nДо {policy.per_operation} ₽ за покупку, {policy.daily} ₽ в сутки, "
+        f"{policy.monthly} ₽ в месяц. Максимум покупок на товар: {policy.max_operations_per_item}."
+        + (
+            " Нулевой лимит запрещает автопокупки."
+            if not all(
+                money(v)
+                for v in (policy.per_operation, policy.daily, policy.monthly, policy.max_operations_per_item)
+            )
+            else ""
+        )
+    )
 
 
 class PromotionsPanel:
@@ -90,7 +125,8 @@ class PromotionsPanel:
                 + escaped(status, 200)
                 + f"\nВыбрано товаров: {len(targets)}"
                 + ("; действует общее правило магазина" if data["selection"] == "all" else "")
-                + f"\nЛимиты: {values['per_operation']} ₽ / операция · {values['daily']} ₽ / сутки · {values['monthly']} ₽ / месяц"
+                + "\n"
+                + buying_conditions(PromotionPolicy(**values))
                 + "\nСледующая проверка: "
                 + next_check
             )
@@ -127,7 +163,7 @@ class PromotionsPanel:
             if group == "general":
                 rows = rows[:2] + [
                     [("Интервалы и позиция", f"pp:{nonce}:group:time")],
-                    [("Ночное расписание", f"pp:{nonce}:group:night")],
+                    [("Ночные условия", f"pp:{nonce}:group:night")],
                     [("Бюджет и ограничения", f"pp:{nonce}:group:budget")],
                 ]
             else:
@@ -145,18 +181,18 @@ class PromotionsPanel:
         rows = [
             [
                 (
-                    "Не участвовать" if selected else "Участвовать в расписании",
+                    "Не участвовать" if selected else "Добавить в автоподнятие",
                     f"pi:{nonce}:target:" + ("exclude" if selected else "include"),
                 )
             ],
-            [("🗓 Расписание и лимиты", "promo:settings")],
+            [("🗓 Условия и лимиты", "promo:settings")],
             [("Дополнительные параметры", f"pi:{nonce}:more:open")],
         ]
         text = (
             "🚀 <b>Автоподнятие товара</b>\n"
             + escaped(view.get("name") or "Товар", 100)
-            + ("\nУчастие в расписании: да" if selected else "\nУчастие в расписании: нет")
-            + "\nВыбор товара не разрешает расходы. Для запуска нужны подтверждённый тариф и разрешение расписания."
+            + ("\nАвтоподнятие: товар выбран" if selected else "\nАвтоподнятие: товар не выбран")
+            + "\nВыбор товара не разрешает расходы. Для запуска нужны подтверждённый тариф и разрешение повторных покупок."
         )
         if view.get("advanced"):
             text = "⚙️ <b>Дополнительные параметры</b>\nПроверка тарифов ничего не покупает. Наследование отменяет только индивидуальный выбор товара."
@@ -171,7 +207,7 @@ class PromotionsPanel:
             ]
             rows += [
                 [("Наследовать настройки магазина", f"pi:{nonce}:target:default")],
-                [("К расписанию товара", f"pi:{nonce}:more:close")],
+                [("К автоподнятию товара", f"pi:{nonce}:more:close")],
             ]
         return text, keyboard(rows, back=("К продвижению товара", "payp:item:" + ident))
 

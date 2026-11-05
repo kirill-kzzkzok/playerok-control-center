@@ -51,6 +51,7 @@ class PaidAPI:
         self.balance = 100
         self.calls = []
         self.charges = []
+        self.wallet = []
         self.timeout = False
         self.read_failure = False
         self.bad_receipt = False
@@ -92,6 +93,8 @@ class PaidAPI:
             return deepcopy(self.items[kwargs["id"]])
         if method == "get_item_priority_statuses":
             return deepcopy(self.quotes)
+        if method == "get_transactions":
+            return {"transactions": deepcopy(self.wallet), "page_info": {"has_next_page": False}}
         if method == "get_game_category":
             return {"id": "category", "options": []}
         raise AssertionError(method)
@@ -333,6 +336,123 @@ async def test_dispatcher_preview_confirmation_restart_double_click_and_access(r
         assert "Подтверждено списание: 10.00 ₽" in session.calls[-1].text
     finally:
         await bot.session.close()
+
+
+async def test_unknown_bump_shows_specific_block_on_promotion_screen(rig):
+    r = rig
+    r.api.items["item"]["status"] = "APPROVED"
+    r.api.timeout = True
+    op = await enqueue(r)
+    await r.worker.once()
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    try:
+        await Interaction(bot, dispatcher(r.store, r.api)).click("payp:item:item")
+        panel = session.calls[-1]
+        assert "10.00 ₽" in panel.text and "неизвестен" in panel.text
+        assert any(
+            button.callback_data == "ops:show:" + op
+            for row in panel.reply_markup.inline_keyboard
+            for button in row
+        )
+        assert len(r.api.charges) == 1
+    finally:
+        await bot.session.close()
+
+
+async def test_financial_review_counts_debit_without_confirming_or_replaying_old_bump(rig):
+    from app.services.premium_review import blocking_expenses
+
+    r = rig
+    r.store.set_setting("playerok:account_id", "seller")
+    r.api.items["item"]["status"] = "APPROVED"
+    r.api.timeout = True
+    op = await enqueue(r)
+    await r.worker.once()
+    old = Reconciliation(r.store, r.api).action(7, op)
+    r.api.wallet.append(
+        {**r.api.items["item"]["status_payment"], "created_at": old["started_at"], "user": {"id": "seller"}}
+    )
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    ui = Interaction(bot, dispatcher(r.store, r.api))
+    state = FSMContext(SQLiteStorage(r.store), StorageKey(bot_id=123, chat_id=7, user_id=7))
+    try:
+        await ui.click("payp:item:item")
+        assert "подтверждено списание 10.00 ₽" in session.calls[-1].text
+        await ui.click("ops:show:" + op)
+        assert "payp:review:" + op in [
+            b.callback_data for row in session.calls[-1].reply_markup.inline_keyboard for b in row
+        ]
+        await ui.click("payp:review:" + op)
+        view = (await state.get_data())["paid_review"]
+        ui.dp = dispatcher(r.store, r.api)
+        await ui.click("payp:applyreview:" + view["nonce"], owner=8)
+        assert blocking_expenses(r.store)
+        await ui.click("payp:applyreview:" + view["nonce"])
+        await ui.click("payp:applyreview:" + view["nonce"])
+        assert not blocking_expenses(r.store)
+        assert Reconciliation(r.store, r.api).action(7, op) == old
+        assert r.store.rows("SELECT status,amount FROM promotion_expenses") == [
+            {"status": "UNCERTAIN", "amount": "10.00"}
+        ]
+        assert not r.settings.get()[1].enabled
+        assert not r.service.has_authority("item", r.settings.get()[0])
+        assert not await r.worker.once()
+        assert len(r.api.charges) == 1
+        r.api.timeout = False
+        revision, policy, selection = r.settings.get()
+        r.settings.save(7, revision, {**asdict(policy), "daily": "19"}, selection)
+        with pytest.raises(ValidationError, match="дневной лимит"):
+            await r.service.queue(7, await r.service.preview(7, "item", "premium"), "too-high", manual=True)
+        revision, policy, selection = r.settings.get()
+        r.settings.save(7, revision, {**asdict(policy), "daily": "20"}, selection)
+        await ui.click("payp:item:item")
+        choices = (await state.get_data())["paid_choices"]
+        await ui.click(f"payp:pick:{choices['nonce']}:0")
+        await ui.click("payp:commit:" + (await state.get_data())["paid_pending"]["nonce"])
+        assert len(r.store.rows("SELECT id FROM outbox")) == 2
+        await r.worker.once()
+        assert len(r.api.charges) == 2
+        assert r.store.rows("SELECT status FROM outbox ORDER BY created_at") == [
+            {"status": "UNCERTAIN"},
+            {"status": "SUCCEEDED"},
+        ]
+    finally:
+        await bot.session.close()
+
+
+async def test_financial_review_rechecks_wallet_and_rejects_ambiguous_debits(rig):
+    from app.services.premium_review import PremiumReview, blocking_expenses
+
+    r = rig
+    r.store.set_setting("playerok:account_id", "seller")
+    r.api.items["item"]["status"] = "APPROVED"
+    r.api.timeout = True
+    op = await enqueue(r)
+    await r.worker.once()
+    row = blocking_expenses(r.store)[0]
+    service = PremiumReview(r.store, r.api)
+    with pytest.raises(Conflict):
+        await service.observe(row)
+    debit = {
+        **r.api.items["item"]["status_payment"],
+        "created_at": row["started_at"],
+        "user": {"id": "seller"},
+    }
+    r.api.wallet.append(debit)
+    evidence = await service.observe(row)
+    r.api.wallet.append({**debit, "id": "other-debit"})
+    with pytest.raises(Conflict):
+        await service.approve(7, op, signature(row), evidence, r.settings.get()[0])
+    assert blocking_expenses(r.store) and r.settings.get()[1].enabled
+    r.api.wallet.pop()
+    await service.approve(7, op, signature(row), evidence, r.settings.get()[0])
+    r.store.record_late_result(op, row["lease_token"], "UNCERTAIN", error="LATE_TRANSPORT_RESULT")
+    assert blocking_expenses(r.store)
+    with pytest.raises(Conflict):
+        await r.service.queue(7, await r.service.preview(7, "item", "premium"), "blocked-again", manual=True)
+    assert len(r.api.charges) == 1
 
 
 @pytest.mark.parametrize("item_status", ["DRAFT", "APPROVED"])

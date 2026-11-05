@@ -82,6 +82,10 @@ async def test_simple_enable_uses_existing_quote_approval_worker_and_payment_qua
         await ui.click("promotions")
         await ui.click("promo:catalog")
         await ui.click("payp:item:item")
+        visible = buttons(session.last_panel)
+        assert "Автоподнятие" in visible.values()
+        assert any(text.startswith("Поднять за 10 ₽") for text in visible.values())
+        await ui.click("payp:auto:item")
         await ui.click(next(key for key in buttons(session.last_panel) if key.startswith("payp:pick:")))
         assert "10.00 ₽" in session.last_panel.text
         await ui.click(next(key for key in buttons(session.last_panel) if key.startswith("payp:approve:")))

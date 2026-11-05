@@ -24,6 +24,7 @@ from app.services.finance import money
 from app.services.inventory import Inventory, stock_values
 from app.services.logical_products import LogicalProducts, configuration
 from app.services.paid_promotions import PaidPromotions, placement_funds
+from app.services.premium_review import blocking_expenses
 from app.services.products import Products, ValidationError, priority_price_basis, validate_field
 from app.services.promotion_settings import PromotionSettings
 from app.services.promotions import PromotionPolicy, dry_run
@@ -401,7 +402,7 @@ class ListingLaunch:
             result["balance"] = str(capacity)
             if viewer.get("id") != value["account_id"]:
                 raise ValidationError("Баланс Playerok или его владелец не подтверждены для PREMIUM")
-            if self.store.rows("SELECT 1 FROM promotion_expenses WHERE status='UNCERTAIN' LIMIT 1"):
+            if blocking_expenses(self.store):
                 raise Conflict("Предыдущий расход Playerok требует сверки без повторной оплаты")
             reserved = sum(
                 (
@@ -740,7 +741,7 @@ class ListingLaunch:
         current, policy, selection = settings.get()
         if current != fresh["policy_revision"] or current != preview["policy_revision"]:
             raise Conflict("Настройки расходов изменились перед фиксацией")
-        if self.store.rows("SELECT 1 FROM promotion_expenses WHERE status='UNCERTAIN' LIMIT 1"):
+        if blocking_expenses(self.store):
             raise Conflict("Предыдущий расход Playerok требует сверки")
         checked = dry_run(
             self.store,

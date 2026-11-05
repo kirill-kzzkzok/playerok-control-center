@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from app.database.store import Conflict, now
 from app.playerok.adapter import APIError, validate_page
 from app.services.finance import money, quote_fresh
+from app.services.premium_review import blocking_expenses, debit_reviewed_elsewhere, release_ids
 from app.services.products import ValidationError, priority_price_basis
 from app.services.promotion_settings import PromotionSettings
 from app.services.promotions import dry_run
@@ -63,6 +64,30 @@ class PaidPromotions:
             raise ValidationError("Аккаунт Playerok не подтверждён")
         if automatic and not getattr(a, "automation_enabled", False):
             raise ValidationError("Автоматизация Playerok выключена")
+
+    def check_reviewed_manual_budget(self, value, policy, *, already_reserved=False):
+        if not release_ids(self.store):
+            return
+        # Zero automatic limits mean there is no standing authorization. A new
+        # exact-price manual approval still supplies its own per-purchase cap.
+        active_caps = {
+            name
+            for name, limit in (
+                ("лимит на одну операцию", policy.per_operation),
+                ("дневной лимит", policy.daily),
+                ("месячный лимит", policy.monthly),
+                ("лимит операций на лот", policy.max_operations_per_item),
+            )
+            if money(limit) > 0
+        }
+        quote = {"price": "0" if already_reserved else value["amount"], "checked_at": now()}
+        if already_reserved:
+            policy = replace(policy, max_operations_per_item=policy.max_operations_per_item + 1)
+        reasons = set(dry_run(self.store, value["item"]["id"], quote, policy, datetime.now(UTC))["reasons"])
+        if money(policy.per_operation) and money(value["amount"]) > money(policy.per_operation):
+            reasons.add("лимит на одну операцию")
+        if active_caps & reasons:
+            raise ValidationError("Расход не разрешён: " + ", ".join(sorted(active_caps & reasons)))
 
     @staticmethod
     def snapshot(item):
@@ -219,8 +244,10 @@ class PaidPromotions:
                 )
                 if checked["reasons"]:
                     raise ValidationError("Расход не разрешён: " + "; ".join(checked["reasons"]))
-            if self.store.rows("SELECT 1 FROM promotion_expenses WHERE status='UNCERTAIN' LIMIT 1"):
+            if blocking_expenses(self.store):
                 raise Conflict("Предыдущий расход Playerok неизвестен. Сначала выполните сверку")
+            if manual:
+                self.check_reviewed_manual_budget(fresh, policy)
             reserved = sum(
                 (
                     money(r["amount"])
@@ -308,10 +335,13 @@ class PaidPromotions:
             or value["item"]["id"] != action["target"]
         ):
             raise ValidationError("Резерв платного размещения не соответствует операции")
-        if self.store.rows("SELECT 1 FROM promotion_expenses WHERE status='UNCERTAIN'"):
+        if blocking_expenses(self.store):
             raise ValidationError("Есть расход с неизвестным результатом")
+        released = {intent_key(ident) for ident in release_ids(self.store)}
         for row in self.store.rows("SELECT key,value FROM settings WHERE key LIKE 'promotions:intent:%'"):
-            if row["key"] != intent_key(action["id"]) and json.loads(row["value"]).get("pending"):
+            if row["key"] not in released | {intent_key(action["id"])} and json.loads(row["value"]).get(
+                "pending"
+            ):
                 raise ValidationError("Другой платёж Playerok выполняется или требует проверки")
         intent = self.store.setting(intent_key(action["id"]), {})
         if intent.get("checked_at") and not quote_fresh(intent["checked_at"], max_age=30):
@@ -335,6 +365,8 @@ class PaidPromotions:
             or money(payment["value"]) != money(value["amount"])
         ):
             raise APIError("PREMIUM_PAYMENT_NOT_CONFIRMED", uncertain=True)
+        if debit_reviewed_elsewhere(self.store, expected_payment, value.get("operation_id")):
+            raise APIError("PREMIUM_RECEIPT_ALREADY_USED", uncertain=True)
         for row in self.store.rows("SELECT key,value FROM settings WHERE key LIKE 'promotions:intent:%'"):
             prior = json.loads(row["value"])
             if prior.get("receipt_id") == expected_payment and prior.get("operation_id") != value.get(
@@ -418,6 +450,8 @@ class PaidPromotions:
                 (now(), action["operation_key"]),
             )
             _, policy, _ = self.settings.get()
+            if "manual_authority" in value:
+                self.check_reviewed_manual_budget(value, policy, already_reserved=True)
             local = datetime.now(ZoneInfo("Europe/Moscow"))
             day = local.replace(hour=0, minute=0, second=0, microsecond=0)
             month = day.replace(day=1)
@@ -524,6 +558,8 @@ class PaidPromotions:
                     valid = False
                 if not valid:
                     raise APIError("PREMIUM_HISTORICAL_RECEIPT_NOT_CONFIRMED", uncertain=True)
+                if debit_reviewed_elsewhere(self.store, candidate, action["id"]):
+                    raise Conflict("Списание уже учтено в другой операции")
                 if self.store.rows(
                     "SELECT 1 FROM outbox WHERE id<>? AND json_extract(result,'$.payment_id')=? LIMIT 1",
                     (action["id"], candidate),
