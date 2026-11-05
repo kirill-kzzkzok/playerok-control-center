@@ -171,6 +171,23 @@ class HomePanel:
         )[0]["n"]
         text = "\n\n📦 Активные товары: " + (str(active) if active is not None else "обновляем данные")
         text += f"\n🛒 Оплаченные заказы: {paid}"
+        funds = self.store.setting("playerok:balance:" + str(account), {})
+        from app.services.finance import money
+
+        def amount(key):
+            try:
+                return f"{money(funds.get(key)):,.2f}".replace(",", " ").removesuffix(".00") + " ₽"
+            except (ValueError, TypeError):
+                return "нет данных"
+
+        text += f"\n💰 Баланс Playerok: {amount('value')}"
+        text += f"\nДоступно: {amount('available')}\n🔒 Заморожено: {amount('frozen')}"
+        if funds.get("at"):
+            text += (
+                "\nДанные "
+                + ("обновлены " if fresh(funds["at"], 300) else "устарели · ")
+                + local_time(funds["at"])
+            )
         if paid_problems:
             text += f" · требуют действия: {paid_problems}"
         enabled = self.store.rows(

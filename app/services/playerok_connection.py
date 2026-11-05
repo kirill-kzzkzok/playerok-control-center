@@ -111,6 +111,12 @@ class PlayerokConnection:
                 self.state.update(status="UNKNOWN", reason="CHECK_FAILED")
             else:
                 self.viewer = viewer
+                balance = (viewer.get("profile") or {}).get("balance")
+                if isinstance(balance, dict):
+                    self.store.set_setting(
+                        "playerok:balance:" + ident,
+                        {**{key: balance.get(key) for key in ("value", "available", "frozen")}, "at": now()},
+                    )
                 username = (viewer.get("profile") or {}).get("username") or viewer.get("username") or ""
                 self.state.update(
                     status="CONNECTED", reason=None, last_success=now(), username=str(username)[:80]
@@ -144,4 +150,6 @@ class PlayerokConnection:
                     await self.check()
                     delay = 30 if self.state["status"] == "CONNECTED" else min(delay * 2, 300)
                 else:
+                    if self.last_started is None or time.monotonic() - self.last_started >= 300:
+                        await self.check()
                     delay = 30
