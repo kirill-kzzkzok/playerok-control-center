@@ -199,6 +199,8 @@ async def test_real_bootstrap_processes_new_paid_stock_before_cold_telegram_conn
         await self._request_start(None, None, SimpleNamespace(url=URL("https://api.telegram.org")))
         http_calls.append(method.__api_method__)
         if method.__api_method__ == "getMe":
+            if http_calls.count("getMe") > 1:
+                raise TelegramNetworkError(method=method, message="connection lost after identity check")
             return User(id=123, is_bot=True, first_name="Shop")
         if method.__api_method__ == "getWebhookInfo":
             return WebhookInfo(url="", has_custom_certificate=False, pending_update_count=0)
@@ -236,8 +238,16 @@ async def test_real_bootstrap_processes_new_paid_stock_before_cold_telegram_conn
             assert delivered in done, "Playerok stock worker never started during Telegram outage"
             assert not http_calls and not r.api.remote.payments
             native_ready.set()
-            await asyncio.wait_for(polling_started.wait(), 12)
-            assert "getMe" in http_calls and "getWebhookInfo" in http_calls
+            polling = asyncio.create_task(polling_started.wait())
+            try:
+                done, _ = await asyncio.wait({task, polling}, timeout=12, return_when=asyncio.FIRST_COMPLETED)
+                if task in done:
+                    await task
+                assert polling in done
+                assert http_calls.count("getMe") == 1 and "getWebhookInfo" in http_calls
+            finally:
+                polling.cancel()
+                await asyncio.gather(polling, return_exceptions=True)
         finally:
             delivered.cancel()
             task.cancel()

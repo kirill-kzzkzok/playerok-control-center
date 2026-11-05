@@ -97,7 +97,7 @@ async def wait_for_telegram(bot, stop, *, verified=False, retry_at=0):
                 pass
         try:
             if not verified:
-                await bot.get_me()
+                await bot.me()
                 verified = True
             webhook = await bot.get_webhook_info()
         except TelegramRetryAfter as error:
@@ -159,7 +159,7 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
         telegram_verified, telegram_retry_at = False, 0
         try:
             async with asyncio.timeout(2):
-                await bot.get_me()
+                await bot.me()
             telegram_verified = True
             event("SUCCESS", "Telegram Bot подключён")
         except TelegramRetryAfter as error:
