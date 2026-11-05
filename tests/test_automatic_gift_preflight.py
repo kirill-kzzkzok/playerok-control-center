@@ -393,3 +393,63 @@ async def test_old_partial_resource_failure_resumes_only_next_unstarted_gift(sho
     assert r.store.rows("SELECT operation_id,reference FROM gift_steps WHERE position=1") == [
         {"operation_id": second["operation_id"], "reference": second["reference"]}
     ]
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_daily_exhaustion_waits_for_next_day_without_new_spending_permission(shop, monkeypatch, legacy):
+    from datetime import datetime as RealDateTime
+    from datetime import timedelta
+
+    import app.database.store as store_module
+    import app.gifts.mtproto as sender_module
+    import app.gifts.service as gift_module
+    import app.services.automation as authorization_module
+    from tests import test_gifts as transport_module
+
+    class Clock(RealDateTime):
+        offset = timedelta()
+
+        @classmethod
+        def now(cls, tz=None):
+            value = RealDateTime.now(tz) + cls.offset
+            return cls.fromtimestamp(value.timestamp(), tz)
+
+    for module in (store_module, gift_module, sender_module, authorization_module, transport_module):
+        monkeypatch.setattr(module, "datetime", Clock)
+    r = await prepared(shop)
+    service = GiftService(r.store, r.api, r.api.gift_settings, r.api.gift_sender)
+    service.set_limits(7, 15, 15)
+    Orders(r.store).ingest(r.api.order("daily-waiter"))
+    assert service.discover() + service.discover() == 1
+    first = service.job("waiting-new-order")["operation_id"]
+    second = service.job("daily-waiter")["operation_id"]
+    await r.worker.once(operation_id=first)
+    await r.worker.once(operation_id=second)
+    assert len(r.api.remote.payments) == 1
+    assert r.store.rows("SELECT status,error_code,started_at FROM outbox WHERE id=?", (second,)) == [
+        {"status": "RETRYABLE_FAILED", "error_code": "DAILY_BUDGET_EXHAUSTED", "started_at": None}
+    ]
+    if legacy:
+        # Prior-release daily exhaustion had a shared permanent budget code.
+        r.store.execute(
+            "UPDATE outbox SET status='PERMANENT_FAILED',error_code='BUDGET_EXCEEDED' WHERE id=?", (second,)
+        )
+        r.store.execute("UPDATE gift_jobs SET state='BLOCKED' WHERE operation_id=?", (second,))
+        r.store.execute("UPDATE gift_steps SET state='BLOCKED' WHERE operation_id=?", (second,))
+    Clock.offset = timedelta(days=1)
+    r.store.execute("UPDATE outbox SET retry_at=0 WHERE id=?", (second,))
+    if legacy:
+        from app.gifts.worker import GiftWorker
+
+        await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+    await r.worker.once(operation_id=second)
+    assert len(r.api.remote.payments) == 2 and service.job("daily-waiter")["state"] == "SUCCEEDED"
+    Orders(r.store).ingest(r.api.order("third-same-day"))
+    service.discover()
+    third = service.job("third-same-day")["operation_id"]
+    await r.worker.once(operation_id=third)
+    assert len(r.api.remote.payments) == 2
+    assert r.store.rows("SELECT error_code,started_at FROM outbox WHERE id=?", (third,)) == [
+        {"error_code": "DAILY_BUDGET_EXHAUSTED", "started_at": None}
+    ]
+    assert service.limits("lot") == (15, 15)

@@ -711,8 +711,10 @@ class GiftService:
                 (j["order_id"],),
             ).fetchone()[0]
             reserved_other = reservations - current["reserved_stars"]
-            if total > per_order or actual + reserved_other + remaining > daily:
+            if total > per_order:
                 raise GiftFailure("BUDGET_EXCEEDED")
+            if actual + reserved_other + remaining > daily:
+                raise GiftFailure("DAILY_BUDGET_EXHAUSTED")
             if balance < reserved_other + remaining:
                 raise GiftFailure("BALANCE_TOO_LOW")
             if db.execute("SELECT 1 FROM gift_steps WHERE form_id=?", (str(prepared.form_id),)).fetchone():
@@ -906,7 +908,7 @@ class GiftService:
             "AND o.status='PERMANENT_FAILED' AND o.retry_at<=? AND j.state='BLOCKED' "
             "AND l.enabled=1 AND l.revision=j.listing_revision AND l.bundle=j.bundle "
             "AND j.refund_state='NONE' AND o.error_code IN "
-            "('BALANCE_TOO_LOW','GIFT_UNAVAILABLE','GIFT_QUANTITY_UNAVAILABLE','CATALOG_UNAVAILABLE','BALANCE_UNAVAILABLE') "
+            "('BALANCE_TOO_LOW','GIFT_UNAVAILABLE','GIFT_QUANTITY_UNAVAILABLE','CATALOG_UNAVAILABLE','BALANCE_UNAVAILABLE','BUDGET_EXCEEDED') "
             "ORDER BY o.retry_at,o.created_at LIMIT 10",
             (time.time(),),
         )
@@ -932,6 +934,11 @@ class GiftService:
                     or not local
                     or local[0]["status"] != "PAID"
                     or local[0]["item_id"] != job["item_id"]
+                ):
+                    continue
+                if (
+                    operation[0]["error_code"] == "BUDGET_EXCEEDED"
+                    and sum(g["stars"] for g in json.loads(job["bundle"])) > self.limits(job["item_id"])[0]
                 ):
                     continue
                 order = await deal_details(

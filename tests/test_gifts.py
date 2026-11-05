@@ -401,7 +401,10 @@ async def test_two_orders_and_daily_limit_persist(rig):
     await r.worker.once()
     await r.worker.once()
     assert len(r.remote.payments) == 1
-    assert {r.service.job(i)["state"] for i in ["order", "order2"]} == {"SUCCEEDED", "BLOCKED"}
+    assert {r.service.job(i)["state"] for i in ["order", "order2"]} == {"SUCCEEDED", "PENDING"}
+    assert r.store.rows("SELECT error_code,started_at FROM outbox WHERE status='RETRYABLE_FAILED'") == [
+        {"error_code": "DAILY_BUDGET_EXHAUSTED", "started_at": None}
+    ]
     assert r.store.setting("gifts:limits") == {"order": 15, "day": 15}
 
 

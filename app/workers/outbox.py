@@ -1014,6 +1014,7 @@ class OutboxWorker:
                         "BALANCE_UNAVAILABLE",
                         "CATALOG_UNAVAILABLE",
                         "BALANCE_OBSERVATION_STALE",
+                        "DAILY_BUDGET_EXHAUSTED",
                     }
                     or visibility_retry
                     and error.code
