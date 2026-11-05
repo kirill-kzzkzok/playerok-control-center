@@ -129,7 +129,8 @@ class ProductReadiness:
         projection_enabled = (
             bool(gift["enabled"]) if mode == "telegram_gifts" and gift else bool(policy.enabled)
         )
-        enabled = bool(product["enabled"]) if product else projection_enabled
+        owner_enabled = bool(product["enabled"]) if product else projection_enabled
+        enabled = owner_enabled
         if mode == "playerok":
             enabled = enabled and (policy.paid_reply or policy.mark_sent)
         problems = []
@@ -274,7 +275,7 @@ class ProductReadiness:
                         "Подтвердить новое название" if title_only else "Проверить объявление",
                         ("lp:title:" if title_only else "lp:item:") + ident,
                     )
-            if not for_arm and enabled != projection_enabled:
+            if not for_arm and owner_enabled != projection_enabled:
                 add(
                     "PROJECTION_MISMATCH",
                     "Разрешения товара и способа выдачи расходятся. Подтвердите включение заново либо остановите товар.",
