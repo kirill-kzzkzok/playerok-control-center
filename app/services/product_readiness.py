@@ -130,6 +130,8 @@ class ProductReadiness:
             bool(gift["enabled"]) if mode == "telegram_gifts" and gift else bool(policy.enabled)
         )
         enabled = bool(product["enabled"]) if product else projection_enabled
+        if mode == "playerok":
+            enabled = enabled and (policy.paid_reply or policy.mark_sent)
         problems = []
 
         def add(code, text, label, route, *, unknown=False, terminal=False, blocking=True):

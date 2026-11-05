@@ -65,10 +65,16 @@ class PlatformOrders:
         if (
             product
             and json.loads(product["config"]).get("platform_only")
+            and product["enabled"]
+            and old_policy.enabled
             and old_policy.mode == "playerok"
             and old_policy.mark_sent != policy.mark_sent
-            and {k: v for k, v in asdict(old_policy).items() if k not in {"mark_sent", "enabled"}}
-            == {k: v for k, v in asdict(policy).items() if k not in {"mark_sent", "enabled"}}
+            and {
+                k: v
+                for k, v in asdict(old_policy).items()
+                if k not in {"mark_sent", "enabled", "auto_enroll"}
+            }
+            == {k: v for k, v in asdict(policy).items() if k not in {"mark_sent", "enabled", "auto_enroll"}}
         ):
             self.logical.verify_listing(product, item)
             self.logical.update_after(owner, item_id, product, policy.mark_sent, field="completion")

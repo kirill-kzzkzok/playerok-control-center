@@ -98,3 +98,23 @@ async def test_old_scope_without_completion_keys_keeps_reminder_after_future_opt
     ]
     assert r.api.orders["legacy-paid"]["status"] == "PAID"
     assert r.api.orders["new-automatic"]["status"] == "SENT"
+
+
+async def test_platform_completion_off_keeps_paid_order_and_shows_future_actions_off(shop):
+    from app.services.product_readiness import ProductReadiness
+
+    r = await shop()
+    await configure(r, reply=False, fulfill=True)
+    order = r.api.order("already-authorized")
+    order["is_automated"] = True
+    Orders(r.store).ingest(order)
+    await EnrollmentWorker(r.store, r.api).once()
+    await r.ui.click("platform:item:lot")
+    await click(r, suffix=":fulfill")
+    await click(r, suffix=":save")
+    result = ProductReadiness(r.store, r.api).snapshot("lot", item=r.api.item)
+    assert result["state"] == "OFF" and not result["enabled"]
+    for _ in range(4):
+        ChainWorker(r.store, r.api).once()
+        await r.worker.once()
+    assert r.api.orders["already-authorized"]["status"] == "SENT"
