@@ -37,14 +37,25 @@ def boundaries(r, short, full):
 
 
 @pytest.mark.parametrize("mode,value", [("unique_stock", None), ("fixed_text", "one-private-unit")])
-async def test_delayed_chat_details_resume_after_restart(shop, monkeypatch, mode, value):
+@pytest.mark.parametrize("missing", ["chat", "permission"])
+async def test_delayed_chat_details_resume_after_restart(shop, monkeypatch, mode, value, missing):
     r = await shop()
     await setup_ui(r, mode, value)
     full = r.api.order("delayed-details")
     chat = full["chat"]
-    full["chat"] = None
+    if missing == "chat":
+        full["chat"] = None
     short = copy.deepcopy(full)
     boundaries(r, short, full)
+    original = r.api.call
+    permission = None
+
+    async def call(method, **kwargs):
+        if missing == "permission" and method == "get_chat":
+            return {"id": kwargs["chat_id"], "is_texting_allowed": permission}
+        return await original(method, **kwargs)
+
+    r.api.call = call
     Orders(r.store).ingest(short)
     await EnrollmentWorker(r.store, r.api).once()
     assert not r.api.messages
@@ -55,6 +66,7 @@ async def test_delayed_chat_details_resume_after_restart(shop, monkeypatch, mode
 
     reopen(r)
     full["chat"] = chat
+    permission = True
     assert await EnrollmentWorker(r.store, r.api).once() == 0
     monkeypatch.setattr(enrollment, "time", SimpleNamespace(time=lambda: waiting["due_at"] + 1))
     for _ in range(8):

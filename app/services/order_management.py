@@ -174,6 +174,8 @@ class OrderManagement:
         if local["status"] != order["status"]:
             raise Conflict("API и сохранённая история расходятся; выдача заблокирована")
         chat = await self.api.call("get_chat", chat_id=order["chat"]["id"])
+        if automatic and chat.get("id") == order["chat"]["id"] and chat.get("is_texting_allowed") is None:
+            raise APIError("DELIVERY_CHAT_NOT_YET_AVAILABLE")
         if chat.get("id") != order["chat"]["id"] or chat.get("is_texting_allowed") is not True:
             raise ValidationError("Возможность отправки в чат не подтверждена")
         return order
