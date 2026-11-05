@@ -13,7 +13,7 @@ from app.services.order_management import OrderManagement, deliverable, order_sn
 from app.services.products import ValidationError
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
-from app.telegram.presentation import automation_summary, history_event, local_time, status
+from app.telegram.presentation import history_event, local_time, status
 
 
 class OrdersPanel:
@@ -96,6 +96,7 @@ class OrdersPanel:
                 raise
             order, cached = json.loads(rows[0]["payload"]), True
         item, user = order.get("item") or {}, order.get("user") or {}
+        delivery_summary = self.delivery_summary(order)
         annotation = self.service.local(ident)
         counts = self.store.rows(
             "SELECT status,COUNT(*) AS n FROM inventory WHERE item_id=? GROUP BY status", (item["id"],)
@@ -118,7 +119,7 @@ class OrdersPanel:
             f"Статус Playerok: {status(order['status'], 'order')}\nСоздан: {local_time(order.get('created_at'))}\n"
             f"Проблема Playerok: {'да' if order.get('has_problem') else 'нет' if order.get('has_problem') is False else 'не подтверждено'}\n"
             f"Локальная отметка: {'проблема' if annotation['problem'] else 'нет'}\n"
-            f"{automation_summary(self.store, self.service.api, item['id'], item=item, compact=True)}\n"
+            f"{delivery_summary}\n"
             f"Запас: {stock.get('AVAILABLE', 0)} доступно · {stock.get('RESERVED', 0)} в резерве · {stock.get('QUARANTINED', 0)} в карантине\n"
             f"Локальных событий: {history_count} · Событий Playerok: {len(order.get('logs') or [])}"
         )
@@ -174,25 +175,7 @@ class OrdersPanel:
                 + "\nСтатус: "
                 + status(order["status"], "order")
             )
-            if operation:
-                text += "\nВыдача: " + status(operation[0]["status"])
-            elif gifts:
-                text += "\nПодарки: " + status(gifts[0]["state"])
-            else:
-                revision, policy = Automation(self.store, self.service.api).get(item["id"])
-                text += "\nВыдача: " + (
-                    "подарок ожидает обработки"
-                    if gift_listing
-                    else "📦 Playerok"
-                    if policy.mode == "playerok"
-                    else "вручную"
-                    if revision and policy.mode == "manual"
-                    else "способ ещё не подтверждён — ожидается сверка"
-                )
-            if not gifts and not gift_listing:
-                text += "\n" + automation_summary(
-                    self.store, self.service.api, item["id"], item=item, compact=True
-                )
+            text += "\n" + delivery_summary
             if cached:
                 text += "\n⚠️ Сохранённые данные. Связь с Playerok не подтверждена."
             followup = self.store.rows(
@@ -253,6 +236,59 @@ class OrdersPanel:
             ],
         )
         return text, markup
+
+    def delivery_summary(self, order):
+        from app.services.logical_products import LogicalProducts
+
+        ident, item = order["id"], order["item"]["id"]
+        if order.get("has_problem") is True:
+            return (
+                "⛔ Playerok подтвердил проблему в сделке. Автоматическая выдача этого заказа заблокирована."
+            )
+        if self.store.rows(
+            "SELECT 1 FROM outbox WHERE target=? AND (status='UNCERTAIN' OR error_code='MANUALLY_STOPPED_UNCERTAIN') LIMIT 1",
+            (ident,),
+        ):
+            return "⛔ Результат отправки неизвестен. Повтор запрещён до сверки."
+        product = LogicalProducts(self.store, self.service.api).listing(item)
+        revision, policy = Automation(self.store, self.service.api).get(item)
+        if (
+            self.store.setting("delivery:" + item + ":enabled") is False
+            or product
+            and product["handler"] == "telegram_gifts"
+            and self.store.setting("gifts:stopped", True)
+        ):
+            return "⛔ Автовыдача остановлена владельцем."
+        if product and not product["enabled"] or not product and revision and not policy.enabled:
+            return "⛔ Автовыдача остановлена владельцем."
+        chain = self.store.rows("SELECT status FROM delivery_chains WHERE order_id=?", (ident,))
+        enrollment = self.store.rows(
+            "SELECT status,error_code FROM auto_enrollment WHERE order_id=? ORDER BY policy_revision DESC LIMIT 1",
+            (ident,),
+        )
+        if (
+            chain
+            and chain[0]["status"] in {"BLOCKED", "CANCELLED", "NEEDS_FULFILLMENT"}
+            or enrollment
+            and enrollment[0]["status"] == "BLOCKED"
+        ):
+            return "⛔ Этот заказ требует проверки. Причина сохранена в действиях и истории заказа."
+        delivered = self.store.rows(
+            "SELECT 1 FROM delivery_chain_steps s JOIN outbox o ON o.id=s.operation_id WHERE s.order_id=? AND s.kind IN ('delivery','delivery_text') AND o.status='SUCCEEDED' UNION ALL "
+            "SELECT 1 FROM gift_jobs WHERE order_id=? AND state='SUCCEEDED' AND receipt IS NOT NULL",
+            (ident, ident),
+        )
+        if delivered:
+            return "✅ Доставка товара подтверждена."
+        if policy.mode == "playerok":
+            return "📦 Товар выдаёт Playerok. Бот выполняет разрешённые сопровождающие действия."
+        if order["status"] == "PAID" and (product and product["enabled"] or policy.enabled):
+            if product and product["error_code"]:
+                return "⛔ Привязка товара содержит конфликт. Выдача ожидает решения."
+            return "Способ выдачи настроен. Бот проверяет данные Playerok и подготовит выдачу автоматически. Ручное действие пока не требуется."
+        if not product and not revision:
+            return "Автовыдача для этого товара не настроена. Требуется настройка способа выдачи."
+        return "Способ выдачи настроен. Ожидается подтверждение данных Playerok."
 
     def history(self, owner, ident, page):
         self.service.owner(owner)

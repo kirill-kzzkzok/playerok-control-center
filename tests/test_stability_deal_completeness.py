@@ -71,6 +71,9 @@ async def test_delayed_sale_details_resume_after_restart(shop, monkeypatch, mode
         "FLAGS" if missing in {"has_problem", "is_automated"} else "SELLER" if missing == "seller" else "CHAT"
     )
     assert (waiting["status"], waiting["error_code"]) == ("PENDING", f"DELIVERY_{expected}_NOT_YET_AVAILABLE")
+    await r.ui.click("order:delayed-details")
+    assert "Ручное действие пока не требуется" in r.session.last_panel.text
+    assert "не настроена" not in r.session.last_panel.text
 
     reopen(r)
     full["chat"] = chat
