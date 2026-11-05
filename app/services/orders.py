@@ -216,7 +216,7 @@ class Orders:
     @staticmethod
     def stock_level(db, item_id, order_id=None):
         product = db.execute(
-            "SELECT p.stock_item_id FROM logical_products p JOIN logical_listings l ON l.product_id=p.id "
+            "SELECT p.stock_item_id,p.code FROM logical_products p JOIN logical_listings l ON l.product_id=p.id "
             "WHERE l.item_id=? AND p.handler='unique_stock' AND p.state='VERIFIED' AND l.verified_at IS NOT NULL",
             (item_id,),
         ).fetchone()
@@ -228,7 +228,7 @@ class Orders:
             Orders.empty_stock(db, item_id, order_id)
         elif available == 1:
             generation = db.execute("SELECT MAX(id) FROM inventory WHERE item_id=?", (scope,)).fetchone()[0]
-            db.execute(
+            added = db.execute(
                 "INSERT OR IGNORE INTO inbox(key,kind,payload,received_at,processed_at) VALUES(?,'stock_low',?,?,?)",
                 (
                     f"stock_low:{scope}:{generation}",
@@ -236,7 +236,12 @@ class Orders:
                     now(),
                     now(),
                 ),
-            )
+            ).rowcount
+            if added:
+                event(
+                    "ORDER",
+                    f"📦 [{product['code']}] — осталось 1 шт." if product else "📦 На складе осталась 1 шт.",
+                )
 
     @staticmethod
     def empty_stock(db, item_id, order_id):

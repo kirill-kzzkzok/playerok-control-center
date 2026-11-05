@@ -70,6 +70,7 @@ class PlayerokConnection:
         ):
             return {**self.state, "busy": True}
         async with self.lock:
+            previous = (self.state["status"], self.state.get("reason"))
             self.last_started = time.monotonic()
             self.disable()
             self.viewer = None
@@ -135,7 +136,11 @@ class PlayerokConnection:
                 "Playerok подключён · " + self.state.get("username", "") + "; ID аккаунта подтверждён"
                 if self.state["status"] == "CONNECTED"
                 else REASONS.get(self.state["reason"], REASONS["CHECK_FAILED"]),
-                level=20 if self.state["status"] == "CONNECTED" else 30,
+                level=10
+                if previous == (self.state["status"], self.state.get("reason"))
+                else 20
+                if self.state["status"] == "CONNECTED"
+                else 30,
             )
             return dict(self.state)
 

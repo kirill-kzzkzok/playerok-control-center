@@ -992,6 +992,23 @@ class OutboxWorker:
         )
         if not action:
             return False
+        order_target = (
+            action["target"]
+            if action["kind"]
+            in {
+                "delivery",
+                "delivery_text",
+                "chain_message",
+                "fulfill",
+                "gift_send",
+                "gift_notice",
+                "gift_refund",
+            }
+            else None
+        )
+        if action["kind"] == "reply":
+            matches = self.store.rows("SELECT id FROM orders WHERE chat_id=? LIMIT 2", (action["target"],))
+            order_target = matches[0]["id"] if len(matches) == 1 else None
         event(
             "CHECK",
             "Начало операции: " + action["kind"],
@@ -1122,19 +1139,20 @@ class OutboxWorker:
             repeated_wait = outcome["status"] == "RETRYABLE_FAILED" and outcome["error_code"] == action.get(
                 "error_code"
             )
-            message = (
-                "⛔ Результат операции неизвестен. Повтор запрещён до сверки."
-                if outcome["status"] == "UNCERTAIN"
-                else (
-                    gift_reason(outcome["error_code"]) + " Проверка продолжится автоматически."
-                    if action["kind"].startswith("gift_")
-                    else "⏳ Заказ ожидает подтверждённых данных; безопасная проверка продолжится автоматически."
+            if outcome["status"] == "UNCERTAIN":
+                message = "⛔ Результат операции неизвестен. Повтор запрещён до сверки."
+            elif action["kind"] == "stock_pause" and outcome["error_code"] == "VISIBILITY_NOT_AVAILABLE":
+                message = "📦 Пустой склад: Playerok не разрешил снять лот с продажи. Проверка продолжится автоматически."
+            elif action["kind"].startswith("gift_"):
+                message = gift_reason(outcome["error_code"])
+                if outcome["status"] == "RETRYABLE_FAILED":
+                    message += " Проверка продолжится автоматически."
+            elif outcome["status"] == "RETRYABLE_FAILED":
+                message = (
+                    "⏳ Заказ ожидает подтверждённых данных; безопасная проверка продолжится автоматически."
                 )
-                if outcome["status"] == "RETRYABLE_FAILED"
-                else gift_reason(outcome["error_code"])
-                if action["kind"].startswith("gift_")
-                else "⛔ Действие не выполнено. Причина сохранена в истории операции."
-            )
+            else:
+                message = "⛔ Действие не выполнено. Причина сохранена в истории операции."
             event(
                 "CHECK",
                 "Outbox outcome " + str(outcome),
@@ -1145,7 +1163,7 @@ class OutboxWorker:
             event(
                 "WARNING",
                 message,
-                order=action["target"],
+                order=order_target,
                 operation=action["id"],
                 level=10 if repeated_wait else 30,
             )
@@ -1153,7 +1171,7 @@ class OutboxWorker:
             event(
                 "SUCCESS",
                 "🏁 Выполнение заказа подтверждено Playerok",
-                order=action["target"],
+                order=order_target,
                 operation=action["id"],
             )
         elif action["kind"] in {"delivery", "delivery_text", "chain_message", "reply"}:
@@ -1162,7 +1180,7 @@ class OutboxWorker:
                 "✅ Товар успешно выдан"
                 if action["kind"] in {"delivery", "delivery_text"}
                 else "💬 Сообщение покупателю отправлено",
-                order=action["target"],
+                order=order_target,
                 operation=action["id"],
             )
         elif action["kind"] in {"stock_pause", "stock_resume"} and (
