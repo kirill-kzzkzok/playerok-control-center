@@ -148,6 +148,16 @@ def error_text(error):
         }
         return escaped(reasons.get(error.code, gift_reason(error.code)), 800)
     if isinstance(error, APIError):
+        if getattr(error, "read_only", False) and error.code in {
+            "NETWORK_ERROR",
+            "HTTP_500",
+            "HTTP_502",
+            "HTTP_503",
+            "HTTP_504",
+            "RATE_LIMITED",
+            "HTTP_429",
+        }:
+            return "Playerok временно не вернул данные этого раздела. Автоматические проверки продолжаются; сохранённые настройки действуют."
         if error.code == "CHAT_ACCESS_FORBIDDEN":
             return "Playerok запретил доступ к этой переписке. Аккаунт проверен; остальные продажи продолжаются. Откройте диалог на Playerok и проверьте доступ."
         if error.code == "WRITES_DISABLED":

@@ -17,6 +17,7 @@ class ThreadCalls:
 
     def __init__(self, lock):
         self.lock = lock
+        self.read_slots = asyncio.Semaphore(3)
         self.pending = set()
         self.signals = set()
         self.closing = False
@@ -26,7 +27,7 @@ class ThreadCalls:
         for signal in self.signals:
             signal.set()
 
-    async def call(self, function, on_abandoned=None):
+    async def call(self, function, on_abandoned=None, *, independent_read=False):
         if self.closing:
             raise CallsClosedError
         cancelled = threading.Event()
@@ -36,7 +37,7 @@ class ThreadCalls:
 
         async def execute():
             waiting = time.perf_counter()
-            async with self.lock:
+            async with self.read_slots if independent_read else self.lock:
                 record("playerok_lock", time.perf_counter() - waiting)
                 if self.closing:
                     raise CallsClosedError

@@ -536,7 +536,6 @@ def create_router(store, api, products, synchronizer):
                         not preserve,
                     )
                     return
-                await products.prepare_item_agreements(item)
                 await state.set_state("editphoto" if kind == "editphoto" else "edit")
                 await state.set_data(
                     {
@@ -758,7 +757,15 @@ def create_router(store, api, products, synchronizer):
                 raise ValidationError("Кнопка устарела. Откройте главное меню.")
             await display(message, text, markup, not preserve)
         except (APIError, ValidationError, Conflict, ValueError) as error:
-            await message.answer("❗ " + error_text(error), reply_markup=keyboard([]))
+            if isinstance(error, APIError) and getattr(error, "read_only", False):
+                await display(
+                    message,
+                    "❗ " + error_text(error) + "\n\n" + (message.html_text or "")[:2800],
+                    message.reply_markup,
+                    not preserve,
+                )
+            else:
+                await message.answer("❗ " + error_text(error), reply_markup=keyboard([]))
         except sqlite3.Error:
             await message.answer(
                 "❗ Не удалось сохранить локальные данные. Изменения транзакции отменены. Проверьте свободное место и откройте раздел заново.",

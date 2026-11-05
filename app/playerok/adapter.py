@@ -156,6 +156,7 @@ class SafeAccount(Account):
             if not read and (self._permitted != operation or self._permit_thread != threading.get_ident()):
                 raise APIError("WRITE_NOT_AUTHORIZED")
             time.sleep(max(0, 0.3 - (time.monotonic() - self._last_request)))
+            self._last_request = time.monotonic()
             if not read and self._dispatch_guard:
                 self._dispatch_guard()
             if not read and (
@@ -166,22 +167,23 @@ class SafeAccount(Account):
                 raise APIError("CONNECTION_NOT_VERIFIED")
             if not read and self._dispatch_start:
                 self._dispatch_start()
-            try:
-                if method == "get":
-                    response = self.client.get(url, params=payload, headers=request_headers)
-                elif files:
-                    response = self.client.post(url, data=payload, files=files, headers=request_headers)
-                elif payload and "operations" in payload:
-                    response = self.client.post(url, json=operation_payload, headers=request_headers)
-                else:
-                    response = self.client.post(url, json=payload, headers=request_headers)
-            except httpx.HTTPError:
-                raise APIError("NETWORK_ERROR", uncertain=not read) from None
-            finally:
-                self._last_request = time.monotonic()
-                for attachment in (files or {}).values():
-                    if hasattr(attachment[1], "close"):
-                        attachment[1].close()
+        # Read requests use the same thread-safe HTTP client. Only admission is
+        # paced under the account lock. A write still holds permit()'s outer RLock.
+        try:
+            if method == "get":
+                response = self.client.get(url, params=payload, headers=request_headers)
+            elif files:
+                response = self.client.post(url, data=payload, files=files, headers=request_headers)
+            elif payload and "operations" in payload:
+                response = self.client.post(url, json=operation_payload, headers=request_headers)
+            else:
+                response = self.client.post(url, json=payload, headers=request_headers)
+        except httpx.HTTPError:
+            raise APIError("NETWORK_ERROR", uncertain=not read) from None
+        finally:
+            for attachment in (files or {}).values():
+                if hasattr(attachment[1], "close"):
+                    attachment[1].close()
         diagnostics = response_facts(response, operation, list(self.cookies.values()), include_messages=read)
         self.response_diagnostics.append(diagnostics)
         if response.status_code in (401, 403):
@@ -534,7 +536,38 @@ class Playerok:
                 raise APIError("UPSTREAM_SCHEMA_ERROR") from None
 
         try:
-            result = await calls_for(self).call(run)
+            for attempt in range(2):
+                try:
+                    result = await calls_for(self).call(
+                        run, independent_read=isinstance(self.account, SafeAccount) and method != "get"
+                    )
+                    break
+                except APIError as failure:
+                    if (
+                        attempt
+                        or method == "get"
+                        or failure.uncertain
+                        or failure.code
+                        not in {
+                            "NETWORK_ERROR",
+                            "HTTP_500",
+                            "HTTP_502",
+                            "HTTP_503",
+                            "HTTP_504",
+                            "RATE_LIMITED",
+                            "HTTP_429",
+                        }
+                    ):
+                        raise
+                    delay = 0.2
+                    if failure.retry_after is not None:
+                        try:
+                            delay = max(delay, float(failure.retry_after))
+                        except (ValueError, TypeError):
+                            raise failure from None
+                        if not 0 <= delay <= 2:
+                            raise
+                    await asyncio.sleep(delay)
             if (
                 method != "get"
                 and getattr(self, "connection", None)
@@ -543,6 +576,8 @@ class Playerok:
                 raise APIError("CONNECTION_NOT_VERIFIED")
             return result
         except APIError as error:
+            error.read_only = True
+            error.method = method
             chat_error = None
             connection = getattr(self, "connection", None)
             if connection and (
@@ -571,7 +606,7 @@ class Playerok:
             previous = getattr(self, "_last_logged_error", None)
             code = (chat_error or error).code
             if not previous or previous[0] != code or time.monotonic() - previous[1] >= 60:
-                event("WARNING", f"Playerok: ошибка чтения {method} · {code}", level=30)
+                event("CHECK", f"Playerok: ошибка чтения {method} · {code}", level=10)
                 self._last_logged_error = (code, time.monotonic())
             if chat_error:
                 raise chat_error from None
