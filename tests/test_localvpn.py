@@ -133,7 +133,7 @@ async def test_startup_proxy_failure_does_not_start_app_or_create_bot(monkeypatc
     from app.__main__ import run
 
     class FailedProxy:
-        def __init__(self, *a):
+        def __init__(self, *a, **kwargs):
             pass
 
         async def __aenter__(self):

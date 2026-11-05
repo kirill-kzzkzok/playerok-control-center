@@ -1,11 +1,13 @@
 import asyncio
 import logging
 import sys
+import time
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.telegram import TelegramAPIServer
+from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
 from aiogram.fsm.storage.memory import SimpleEventIsolation
 from aiogram.fsm.strategy import FSMStrategy
 
@@ -75,11 +77,39 @@ async def outbox_lane(worker, stop, *, kinds=None, excluded_kinds=()):
 
 async def run(config, *, network_diagnostics=False, instance_lock=None):
     if getattr(config, "telegram_transport", "legacy") == "localvpn":
-        async with PlayerokProxy(NetworkSettings.load()):
+        async with PlayerokProxy(NetworkSettings.load(), recover_on_start=True):
             return await run_connected(
                 config, network_diagnostics=network_diagnostics, instance_lock=instance_lock
             )
     return await run_connected(config, network_diagnostics=network_diagnostics, instance_lock=instance_lock)
+
+
+async def wait_for_telegram(bot, stop, *, verified=False, retry_at=0):
+    """Retry safe startup reads without holding independent Playerok workers."""
+    failures = 0
+    while not stop.is_set():
+        delay = max(0, retry_at - time.monotonic())
+        if delay:
+            try:
+                await asyncio.wait_for(stop.wait(), delay)
+                return False
+            except TimeoutError:
+                pass
+        try:
+            if not verified:
+                await bot.get_me()
+                verified = True
+            webhook = await bot.get_webhook_info()
+        except TelegramRetryAfter as error:
+            retry_at = time.monotonic() + max(1, error.retry_after)
+        except (TelegramNetworkError, TimeoutError, OSError):
+            failures += 1
+            retry_at = time.monotonic() + min(30, 2 ** min(failures, 5))
+        else:
+            if webhook.url:
+                raise ConfigurationError("У бота активен webhook. Отключите его явно перед polling.")
+            return True
+    return False
 
 
 async def run_connected(config, *, network_diagnostics=False, instance_lock=None):
@@ -126,8 +156,22 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
         if recovered:
             logger.warning("Recovered %s operations as UNCERTAIN", recovered)
         event("CHECK", "Проверка Telegram Bot...")
-        await bot.get_me()
-        event("SUCCESS", "Telegram Bot подключён")
+        telegram_verified, telegram_retry_at = False, 0
+        try:
+            async with asyncio.timeout(2):
+                await bot.get_me()
+            telegram_verified = True
+            event("SUCCESS", "Telegram Bot подключён")
+        except TelegramRetryAfter as error:
+            telegram_retry_at = time.monotonic() + max(1, error.retry_after)
+        except (TelegramNetworkError, TimeoutError, OSError):
+            telegram_retry_at = time.monotonic() + 1
+        if not telegram_verified:
+            event(
+                "WARNING",
+                "Telegram восстанавливает соединение; разрешённые операции Playerok продолжаются",
+                level=30,
+            )
         connection = PlayerokConnection(store, api)
         await connection.check(cooldown=0)
         tasks.append(supervisor.start("playerok-connection-recovery", lambda: connection.run(stop), stop))
@@ -235,13 +279,14 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
             if connection.state["status"] == "CONNECTED"
             else "Telegram-панель доступна для диагностики; операции записи и автовыдача заблокированы",
         )
-        # Never delete webhook or drop pending updates silently.
-        webhook = await bot.get_webhook_info()
-        if webhook.url:
-            raise ConfigurationError("У бота активен webhook. Отключите его явно перед polling.")
-        await dispatcher.start_polling(
-            bot, allowed_updates=["message", "callback_query"], close_bot_session=False, polling_timeout=20
-        )
+        # Webhook is checked before polling; no deletion or dropping updates.
+        if await wait_for_telegram(bot, stop, verified=telegram_verified, retry_at=telegram_retry_at):
+            await dispatcher.start_polling(
+                bot,
+                allowed_updates=["message", "callback_query"],
+                close_bot_session=False,
+                polling_timeout=20,
+            )
     finally:
         event("INFO", "Остановка приложения: новые операции запрещены, ожидание текущих запросов")
         stop.set()

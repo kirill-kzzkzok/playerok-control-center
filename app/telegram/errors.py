@@ -13,8 +13,14 @@ REJECTED_CONTENT = frozenset(
 TERMINAL_EDIT = REJECTED_CONTENT | {"MESSAGE_NOT_FOUND", "MESSAGE_NOT_EDITABLE"}
 
 
+class TelegramRequestNotStarted(TelegramNetworkError):
+    """Raised only by local admission before handing a request to HTTP transport."""
+
+
 def send_failure(error):
-    """Only a returned Telegram rejection proves that a send did not happen."""
+    """A local no-dispatch proof or returned rejection may permit another attempt."""
+    if isinstance(error, TelegramRequestNotStarted):
+        return "PENDING", "PROXY_UNAVAILABLE", 5
     if isinstance(error, TelegramRetryAfter):
         return "PENDING", "RATE_LIMITED", max(1, error.retry_after)
     if isinstance(error, TelegramForbiddenError):
@@ -25,6 +31,8 @@ def send_failure(error):
 
 
 def telegram_error(error):
+    if isinstance(error, TelegramRequestNotStarted):
+        return "PROXY_UNAVAILABLE"
     if isinstance(error, TelegramRetryAfter):
         return "RATE_LIMITED"
     if isinstance(error, TimeoutError):

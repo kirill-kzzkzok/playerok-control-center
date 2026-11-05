@@ -201,6 +201,15 @@ class TelegramNetworkSession(AiohttpSession):
         state, token, started = self._begin(method.__api_method__)
         outcome = "CANCELLED"
         try:
+            if self.localvpn:
+                try:
+                    require_proxy()
+                except ProxyUnavailable:
+                    from app.telegram.errors import TelegramRequestNotStarted
+
+                    raise TelegramRequestNotStarted(
+                        method=method, message="Local SOCKS admission unavailable"
+                    ) from None
             result = await super().make_request(bot, method, timeout)
             outcome = "OK"
             return result

@@ -58,8 +58,9 @@ def require_proxy():
 
 
 class PlayerokProxy:
-    def __init__(self, settings=None):
+    def __init__(self, settings=None, *, recover_on_start=False):
         self.settings = settings or NetworkSettings.load()
+        self.recover_on_start = recover_on_start
         self.process = None
         self.lock = asyncio.Lock()
         self.state = {"state": "STOPPED"}
@@ -161,10 +162,21 @@ class PlayerokProxy:
             await self.command("start")
             if not self.ready:
                 event("WARNING", "Playerok Proxy: " + str(self.state.get("error", "not_ready")), level=30)
-                raise ProxyUnavailable()
+                if not self.recover_on_start or self.state.get("state") not in {
+                    "STARTING",
+                    "DEGRADED",
+                    "RECOVERING",
+                }:
+                    raise ProxyUnavailable()
             self.token = active_proxy.set(self)
             self.monitor = asyncio.create_task(self._watch())
-            event("SUCCESS", "SOCKS5 127.0.0.1:1080 готов; HTTPS/TLS и Telegram endpoint подтверждены")
+            if self.ready:
+                event("SUCCESS", "SOCKS5 127.0.0.1:1080 готов; HTTPS/TLS и Telegram endpoint подтверждены")
+            else:
+                event(
+                    "INFO",
+                    "Telegram-прокси восстанавливается; запросы Telegram ожидают подтверждённого маршрута",
+                )
             event("CHECK", "Telegram Bot identity / polling / callback: NOT TESTED")
             return self
         except BaseException:
