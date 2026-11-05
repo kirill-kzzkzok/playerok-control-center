@@ -100,6 +100,12 @@ class EnrollmentWorker:
         # Match the bounded discovery page: four admissions per10s left a
         # healthy burst of50 paid orders waiting over two minutes.
         for _ in range(20):
+            if not self.api.account.writes_enabled or not getattr(
+                self.api.account, "automation_enabled", False
+            ):
+                # A profile probe may close runtime gates during the previous
+                # admission's reads. Leave subsequent orders unclaimed to retry.
+                break
             row = self.claim()
             if not row:
                 break

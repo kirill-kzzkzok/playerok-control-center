@@ -63,8 +63,11 @@ async def test_periodic_profile_wait_allows_verified_reads_but_never_mutations(t
         store.close()
 
 
+@pytest.mark.parametrize("safe_account", [False, True])
 @pytest.mark.parametrize("mode", ["unique_stock", "fixed_text"])
-async def test_profile_recheck_between_reservation_and_dispatch_waits_without_losing_order(shop, mode):
+async def test_profile_recheck_between_reservation_and_dispatch_waits_without_losing_order(
+    shop, mode, safe_account
+):
     from app.services.orders import Orders
     from app.services.playerok_connection import PlayerokConnection
     from app.workers.delivery_chains import ChainWorker
@@ -76,6 +79,11 @@ async def test_profile_recheck_between_reservation_and_dispatch_waits_without_lo
     Orders(r.store).ingest(r.api.order("paid"))
     await EnrollmentWorker(r.store, r.api).once()
     ChainWorker(r.store, r.api).once()
+    if safe_account:
+        account = SafeAccount("token=fake", writes_enabled=True)
+        account.id = "seller"
+        account.automation_enabled = True
+        r.api.account = account
     connection = PlayerokConnection(r.store, r.api)
     r.store.set_setting("playerok:bound_account_id", "seller")
     connection.read_account_id = "seller"
@@ -99,6 +107,9 @@ async def test_profile_recheck_between_reservation_and_dispatch_waits_without_lo
         assert r.store.rows(
             "SELECT i.status FROM inventory i JOIN reservations r ON r.inventory_id=i.id WHERE r.order_id='paid'"
         ) == [{"status": "RESERVED"}]
+    if safe_account:
+        account.close()
+        return  # Exercise the real permit refusal; recovery+one-send is checked above without paid transport.
     r.api.call = original
     # The simulated boundary returns the next successful viewer verification.
     r.api.account.writes_enabled = r.api.account.automation_enabled = True
@@ -114,3 +125,39 @@ async def test_profile_recheck_between_reservation_and_dispatch_waits_without_lo
         )
         == 1
     )
+
+
+async def test_profile_probe_mid_admission_does_not_block_the_next_paid_order(shop):
+    from app.services.orders import Orders
+    from app.workers.delivery_chains import ChainWorker
+    from app.workers.enrollment import EnrollmentWorker
+    from tests.test_universal_delivery_e2e import setup_ui
+
+    r = await shop()
+    await setup_ui(r, "fixed_text", "admitted-text")
+    for ident in ("paid-a", "paid-b"):
+        Orders(r.store).ingest(r.api.order(ident))
+    connection = PlayerokConnection(r.store, r.api)
+    r.store.set_setting("playerok:bound_account_id", "seller")
+    connection.read_account_id = "seller"
+    r.api.account.writes_enabled = r.api.account.automation_enabled = True
+    original = r.api.call
+
+    async def call(method, **kwargs):
+        result = await original(method, **kwargs)
+        if method == "get_deal":
+            connection.invalidate("NETWORK_ERROR")
+        return result
+
+    r.api.call = call
+    await EnrollmentWorker(r.store, r.api).once()
+    assert not r.store.rows("SELECT * FROM auto_enrollment WHERE status='BLOCKED'")
+    assert not r.api.messages
+    r.api.call = original
+    r.api.account.writes_enabled = r.api.account.automation_enabled = True
+    connection.state.update(status="CONNECTED", reason=None)
+    await EnrollmentWorker(r.store, r.api).once()
+    for _ in range(6):
+        ChainWorker(r.store, r.api).once()
+        await r.worker.once()
+    assert sum(m["text"] == "admitted-text" for m in r.api.messages) == 2

@@ -1029,6 +1029,18 @@ class OutboxWorker:
 
             with self.store.transaction() as db:
                 delivery_retry = unstarted_delivery(db, action)
+            if (
+                error.code == "WRITES_DISABLED"
+                and delivery_retry
+                and getattr(
+                    getattr(getattr(self.executor, "api", None), "connection", None),
+                    "awaiting_verification",
+                    False,
+                )
+            ):
+                # SafeAccount.permit can lose the race to the profile probe
+                # before dispatch_guard runs. Positive journal proof is required.
+                error = APIError("CONNECTION_NOT_VERIFIED")
             gift_retry = False
             visibility_retry = False
             if action["kind"] in {"stock_pause", "stock_resume"}:
