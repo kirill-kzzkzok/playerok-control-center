@@ -139,7 +139,7 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
 
     async def when_connected(factory):
         while not stop.is_set():
-            if getattr(api, "connection", None) and api.connection.state["status"] == "CONNECTED":
+            if getattr(api, "connection", None) and api.connection.reads_allowed:
                 return await factory()
             try:
                 await asyncio.wait_for(stop.wait(), timeout=2)

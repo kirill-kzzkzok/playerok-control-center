@@ -28,6 +28,16 @@ REASONS = {
     "GRAPHQL_ERROR_OR_INCOMPLETE": "Playerok не подтвердил полные данные аккаунта",
 }
 
+TEMPORARY_READ_FAILURES = {
+    "NETWORK_ERROR",
+    "CHECK_TIMEOUT",
+    "RATE_LIMITED",
+    "HTTP_500",
+    "HTTP_502",
+    "HTTP_503",
+    "HTTP_504",
+}
+
 
 class PlayerokConnection:
     def __init__(self, store, api):
@@ -35,6 +45,7 @@ class PlayerokConnection:
         self.lock = asyncio.Lock()
         self.last_started = None
         self.viewer = None
+        self.read_account_id = None
         self.desired_writes = bool(getattr(api.account, "writes_enabled", False))
         self.desired_automation = bool(getattr(api.account, "automation_enabled", False))
         self.state = {
@@ -52,8 +63,18 @@ class PlayerokConnection:
         self.api.account.writes_enabled = False
         self.api.account.automation_enabled = False
 
+    @property
+    def reads_allowed(self):
+        return bool(
+            self.read_account_id
+            and self.api.account.id == self.read_account_id
+            and self.store.setting("playerok:bound_account_id") == self.read_account_id
+        )
+
     def invalidate(self, code, diagnostics=None):
         self.disable()
+        if code not in TEMPORARY_READ_FAILURES:
+            self.read_account_id = None
         if code == "UNAUTHORIZED_OR_CHALLENGE" and (diagnostics or {}).get("http_status") == 401:
             code = "AUTH_REJECTED"
         self.state.update(
@@ -87,8 +108,11 @@ class PlayerokConnection:
                     raise APIError("ACCOUNT_UNAVAILABLE")
                 bind_account(self.store, ident)
             except AccountBindingError:
+                self.read_account_id = None
                 self.state.update(status="DISCONNECTED", reason="ACCOUNT_MISMATCH")
             except APIError as error:
+                if error.code not in TEMPORARY_READ_FAILURES:
+                    self.read_account_id = None
                 code = error.code if error.code in REASONS else "CHECK_FAILED"
                 if (
                     error.code == "UNAUTHORIZED_OR_CHALLENGE"
@@ -109,6 +133,7 @@ class PlayerokConnection:
                 self.store.set_setting("playerok:verification", self.state)
                 raise
             except Exception:  # noqa: BLE001 -- never expose raw account/request errors
+                self.read_account_id = None
                 self.state.update(status="UNKNOWN", reason="CHECK_FAILED")
             else:
                 self.viewer = viewer
@@ -123,6 +148,7 @@ class PlayerokConnection:
                     status="CONNECTED", reason=None, last_success=now(), username=str(username)[:80]
                 )
                 self.api.account.connection_verified = True
+                self.read_account_id = ident
                 self.api.account.verified_account_id = ident
                 self.api.account.writes_enabled = self.desired_writes
                 self.api.account.automation_enabled = self.desired_automation

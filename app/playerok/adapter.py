@@ -461,7 +461,7 @@ class Playerok:
         if (
             method != "get"
             and getattr(self, "connection", None)
-            and self.connection.state["status"] != "CONNECTED"
+            and not getattr(self.connection, "reads_allowed", self.connection.state["status"] == "CONNECTED")
         ):
             raise APIError("CONNECTION_NOT_VERIFIED")
         if method not in {
@@ -574,7 +574,9 @@ class Playerok:
             if (
                 method != "get"
                 and getattr(self, "connection", None)
-                and self.connection.state["status"] != "CONNECTED"
+                and not getattr(
+                    self.connection, "reads_allowed", self.connection.state["status"] == "CONNECTED"
+                )
             ):
                 raise APIError("CONNECTION_NOT_VERIFIED")
             return result
