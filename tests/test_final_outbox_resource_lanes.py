@@ -34,7 +34,7 @@ class DelayedPayment(BundleTransport):
         return await super().__call__(request)
 
 
-async def configure_other_item(r, ident, handler, *, content=None):
+async def configure_other_item(r, ident, handler, *, content=None, completion=False):
     r.api.items[ident] = {
         **deepcopy(r.api.item),
         "id": ident,
@@ -48,6 +48,11 @@ async def configure_other_item(r, ident, handler, *, content=None):
         await click(r, suffix=":stockinput")
         await r.ui.message(content or "isolated-stock-secret")
         await click(r, suffix=":stock_commit")
+    from tests.test_unified_delivery_controls import state
+
+    config = (await state(r).get_data())["logical_setup"]["config"]
+    if config.get("automatic_completion", False) != completion:
+        await click(r, suffix=":completion")
     await click(r, suffix=":preview")
     await click(r, suffix=":commit")
     await r.worker.once()
