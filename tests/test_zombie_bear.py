@@ -100,10 +100,14 @@ async def test_new_bundles_prepare_and_send_exact_ids_once(rig, codes, total):
 
 
 @pytest.mark.parametrize(
-    "change,reason",
-    [("price", "PRICE_CHANGED"), ("missing", "GIFT_UNAVAILABLE"), ("sold_out", "GIFT_UNAVAILABLE")],
+    "change,reason,state",
+    [
+        ("price", "PRICE_CHANGED", "BLOCKED"),
+        ("missing", "GIFT_UNAVAILABLE", "PENDING"),
+        ("sold_out", "GIFT_UNAVAILABLE", "PENDING"),
+    ],
 )
-async def test_changed_or_unavailable_new_gift_blocks_before_payment(rig, change, reason):
+async def test_changed_or_unavailable_new_gift_blocks_before_payment(rig, change, reason, state):
     r = rig
     t = await setup(r, "zombie_bear")
     if change == "price":
@@ -114,8 +118,9 @@ async def test_changed_or_unavailable_new_gift_blocks_before_payment(rig, change
         t.catalog["zombie_bear"].sold_out = True
     await r.worker.once()
     assert not t.payments
-    assert r.service.job("order")["state"] == "BLOCKED"
+    assert r.service.job("order")["state"] == state
     assert r.service.job("order")["error_code"] == reason
+    assert r.store.rows("SELECT started_at FROM outbox WHERE kind='gift_send'") == [{"started_at": None}]
     assert r.service.steps("order")[0]["stars"] == 50
 
 
