@@ -214,7 +214,7 @@ async def test_visible_routes_execute_real_dispatcher_and_context_back(ux, tmp_p
         (["promotions"], "Автопродвижение"),
         (["promotions", "promo:catalog"], "продвижения"),
         (["promotions", "promo:catalog", "payp:item:lot"], "Продвижение товара"),
-        (["promotions", "promo:catalog", "payp:item:lot", "promo:item:lot"], "Автоподнятие товара"),
+        (["promotions", "promo:catalog", "payp:item:lot", "payp:auto:lot"], "Автоподнятие"),
     ]
     executed, seen, reports = set(), set(), []
     for path, expected in paths:
