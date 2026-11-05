@@ -763,6 +763,7 @@ class LogicalProducts:
     def verify_marketing_description(self, product, item, *, operation_id=None):
         if (
             not product
+            or item.get("id") != product["item_id"]
             or product["source_order_id"]
             or product["error_code"]
             or item.get("status") != "APPROVED"

@@ -112,7 +112,9 @@ async def test_gift_waits_for_in_progress_description_readback(shop):
     assert len(r.api.remote.payments) == 1
 
 
-@pytest.mark.parametrize("fault", ["external_description", "external_fields", "lost_reply"])
+@pytest.mark.parametrize(
+    "fault", ["external_description", "external_fields", "sibling_response", "lost_reply"]
+)
 async def test_active_description_edit_keeps_preflight_and_unknown_fences(shop, fault):
     r = await shop(gift=True)
     await setup_ui(r, "telegram_gifts", "gift: heart")
@@ -123,6 +125,21 @@ async def test_active_description_edit_keeps_preflight_and_unknown_fences(shop, 
         r.api.item["description"] = "Другой текст с сайта"
     elif fault == "external_fields":
         r.api.item["attributes"] = {"recipient": "changed"}
+    elif fault == "sibling_response":
+        # An old verified sibling is legitimate history, but the API response
+        # must not substitute it for the item named by this queued edit.
+        r.store.execute(
+            "INSERT INTO logical_listings(item_id,product_id,config_revision,description_sha256,"
+            "server_status,verified_at,title_snapshot) SELECT 'sibling',product_id,config_revision,"
+            "description_sha256,server_status,verified_at,title_snapshot FROM logical_listings WHERE item_id='lot'"
+        )
+        original = r.api.call
+
+        async def call(method, **kwargs):
+            result = await original(method, **kwargs)
+            return {**result, "id": "sibling"} if method == "get_item" else result
+
+        r.api.call = call
     else:
         update = r.api.account.update_item
 

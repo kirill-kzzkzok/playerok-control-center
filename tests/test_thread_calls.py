@@ -194,7 +194,7 @@ async def test_actual_shutdown_drains_call_before_closing_resources(tmp_path, mo
     api = Playerok(account)
     session = SimpleNamespace(middleware=Mock(), close=AsyncMock())
     bot = SimpleNamespace(
-        get_me=AsyncMock(), get_webhook_info=AsyncMock(return_value=SimpleNamespace(url="")), session=session
+        me=AsyncMock(), get_webhook_info=AsyncMock(return_value=SimpleNamespace(url="")), session=session
     )
 
     async def polling(*args, **kwargs):

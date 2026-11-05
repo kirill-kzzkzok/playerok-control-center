@@ -78,7 +78,7 @@ async def test_real_startup_worker_selection_for_every_flag_combination(tmp_path
     monkeypatch.setattr("app.__main__.Playerok", lambda _: api)
     session = SimpleNamespace(middleware=Mock(), close=AsyncMock())
     bot = SimpleNamespace(
-        get_me=AsyncMock(), session=session, get_webhook_info=AsyncMock(return_value=SimpleNamespace(url=""))
+        me=AsyncMock(), session=session, get_webhook_info=AsyncMock(return_value=SimpleNamespace(url=""))
     )
     monkeypatch.setattr("app.__main__.Bot", lambda *a, **k: bot)
     monkeypatch.setattr("app.__main__.AiohttpSession", lambda **k: session)

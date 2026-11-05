@@ -116,7 +116,7 @@ async def test_startup_unverified_account_retains_local_panel_without_write_perm
         api.call.side_effect = APIError("UNAUTHORIZED_OR_CHALLENGE")
     session = SimpleNamespace(middleware=Mock(), close=AsyncMock())
     bot = SimpleNamespace(
-        get_me=AsyncMock(), session=session, get_webhook_info=AsyncMock(return_value=SimpleNamespace(url=""))
+        me=AsyncMock(), session=session, get_webhook_info=AsyncMock(return_value=SimpleNamespace(url=""))
     )
     backup = Mock()
     monkeypatch.setattr(store, "backup", backup)

@@ -157,7 +157,7 @@ async def test_startup_keeps_local_panel_when_playerok_unavailable(rig, monkeypa
     monkeypatch.setattr("app.__main__.Playerok", lambda _: api)
     session = SimpleNamespace(middleware=Mock(), close=AsyncMock())
     bot = SimpleNamespace(
-        get_me=AsyncMock(), session=session, get_webhook_info=AsyncMock(return_value=SimpleNamespace(url=""))
+        me=AsyncMock(), session=session, get_webhook_info=AsyncMock(return_value=SimpleNamespace(url=""))
     )
     monkeypatch.setattr("app.__main__.Bot", lambda *a, **k: bot)
     monkeypatch.setattr("app.__main__.AiohttpSession", lambda **k: session)
