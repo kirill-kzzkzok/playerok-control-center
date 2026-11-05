@@ -76,6 +76,7 @@ ORDER = {
 }
 ITEM = {
     "APPROVED": "Опубликован",
+    "DISCONTINUED": "Снят с продажи",
     "DRAFT": "Черновик",
     "SOLD": "Продан",
     "EXPIRED": "Срок истёк",
@@ -237,6 +238,8 @@ OPERATIONS = {
     "publish": "Публикация",
     "premium_publish": "Премиум-публикация",
     "premium_bump": "Платное поднятие",
+    "stock_pause": "Снятие с продажи: склад пуст",
+    "stock_resume": "Возврат в продажу после пополнения",
     "gift_send": "Отправка подарка",
     "gift_refund": "Возврат заказа",
     "gift_notice": "Уведомление о подарке",

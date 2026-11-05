@@ -77,6 +77,26 @@ class Reconciliation:
         action = self.action(actor, ident, uncertain=True)
         kind, target = action["kind"], action["target"]
         payload = json.loads(action["payload"])
+        if kind in {"stock_pause", "stock_resume"}:
+            from app.services.logical_products import LogicalProducts
+
+            logical = LogicalProducts(self.store, self.api)
+            logical.authority(actor, payload["account_id"])
+            observed = await self.api.call("get_item_visibility", id=target)
+            if (
+                observed.get("id") != target
+                or (observed.get("user") or {}).get("id") != payload["account_id"]
+            ):
+                raise Conflict("Текущее состояние объявления не подтверждено его владельцем")
+            labels = {"APPROVED": "в продаже", "DISCONTINUED": "снят с продажи", "SOLD": "продан"}
+            return {
+                "decision": "CURRENT_STATE_ONLY",
+                "remote_id": target,
+                "checked_at": now(),
+                "reason": "Сейчас товар: "
+                + labels.get(observed.get("status"), "статус не подтверждён")
+                + ". Это чтение не доказывает результат прежнего запроса. Повтор запроса и автоматическое восстановление по этой операции запрещены; запись остаётся на проверке.",
+            }
         if kind == "edit":
             from app.services.edit_confirmation import EditConfirmation
             from app.services.logical_products import LogicalProducts

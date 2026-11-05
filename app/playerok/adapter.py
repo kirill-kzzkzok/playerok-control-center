@@ -336,6 +336,40 @@ class SafeAccount(Account):
             raise APIError("DELETE_RESULT_UNKNOWN", uncertain=True) from None
         return True
 
+    def get_item_visibility(self, id):
+        query = "query item($id: UUID!) { item(id: $id) { ... on MyItem { id status pauseAvailable republishAvailable mayBePublished statusExpirationDate user { id } } } }"
+        raw = (
+            self.request(
+                "post",
+                self.base_url + "/graphql",
+                {},
+                {"operationName": "item", "query": query, "variables": {"id": id}},
+            )
+            .json()["data"]
+            .get("item")
+        )
+        if not isinstance(raw, dict) or raw.get("id") != id:
+            raise APIError("VISIBILITY_DETAILS_INCOMPLETE")
+        return {
+            "id": raw.get("id"),
+            "status": raw.get("status"),
+            "user": raw.get("user"),
+            "pause_available": raw.get("pauseAvailable"),
+            "republish_available": raw.get("republishAvailable"),
+            "may_be_published": raw.get("mayBePublished"),
+            "status_expiration_date": raw.get("statusExpirationDate"),
+        }
+
+    def discontinue_item(self, id):
+        from app.playerok.item_visibility_transport import visibility_request
+
+        return visibility_request(self, id, "discontinueItem")
+
+    def republish_item(self, id):
+        from app.playerok.item_visibility_transport import visibility_request
+
+        return visibility_request(self, id, "republishItem")
+
     def get_fulfillment_requirement(self, deal_id):
         from app.playerok.fulfillment_transport import fulfillment_request
 
@@ -435,6 +469,7 @@ class Playerok:
             "get_game_category_data_fields",
             "get_game_category_agreements",
             "get_item",
+            "get_item_visibility",
             "get_my_items",
             "get_items",
             "get_item_priority_statuses",

@@ -59,6 +59,12 @@ class Executor:
         }
 
     def dispatch_guard(self, action):
+        if action["kind"] in {"stock_pause", "stock_resume"}:
+            from app.services.stock_visibility import guard
+
+            guard(self.store, self.api, action)
+            if self.store.rows("SELECT 1 FROM outbox_late_results WHERE operation_id=?", (action["id"],)):
+                raise APIError("VISIBILITY_EVIDENCE_CONFLICT", uncertain=True)
         if action["kind"] == "publish" and action["payload"].get("native_relist"):
             self.products.native_relist_guard(action["payload"])
         if action["payload"].get("logical_binding"):
@@ -225,6 +231,10 @@ class Executor:
 
     async def __call__(self, action):
         kind, target, payload = action["kind"], action["target"], action["payload"]
+        if kind in {"stock_pause", "stock_resume"}:
+            from app.services.stock_visibility import execute
+
+            return await execute(self, action)
         from app.services.operation_outcomes import AUTOMATIC_DELIVERY_KINDS, unstarted_delivery
 
         if kind in AUTOMATIC_DELIVERY_KINDS:
@@ -952,6 +962,12 @@ class OutboxWorker:
             with self.store.transaction() as db:
                 delivery_retry = unstarted_delivery(db, action)
             gift_retry = False
+            visibility_retry = False
+            if action["kind"] in {"stock_pause", "stock_resume"}:
+                from app.services.stock_visibility import unstarted
+
+                with self.store.transaction() as db:
+                    visibility_retry = unstarted(db, action)
             if action["kind"] == "gift_send":
                 from app.gifts.outcomes import unstarted_preflight
 
@@ -966,6 +982,7 @@ class OutboxWorker:
                     and action["attempts"] < 4
                     or gift_retry
                     or delivery_retry
+                    or visibility_retry
                 )
                 and not error.uncertain
                 and (
@@ -991,6 +1008,14 @@ class OutboxWorker:
                         "GIFT_TEMPORARY_PAUSE",
                         "GIFT_SYNC_PENDING",
                         "PAYMENT_LOCKED",
+                    }
+                    or visibility_retry
+                    and error.code
+                    in {
+                        "VISIBILITY_PREPARE_CHANGED",
+                        "VISIBILITY_DETAILS_INCOMPLETE",
+                        "VISIBILITY_NOT_AVAILABLE",
+                        "VISIBILITY_BINDING_PENDING",
                     }
                 )
                 else "UNCERTAIN"

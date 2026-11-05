@@ -231,6 +231,8 @@ class ChatMessageButtonTypes(Enum):
 class ItemStatuses(Enum):
     """Статусы предметов."""
 
+    DISCONTINUED = "DISCONTINUED"
+
     PENDING_APPROVAL = 0
     """Ожидает принятия (на проверке модерацией)."""
     PENDING_MODERATION = 1

@@ -68,6 +68,11 @@ class EnrollmentWorker:
                 "AND (EXISTS(SELECT 1 FROM inventory i WHERE i.item_id=lp.stock_item_id AND i.status='AVAILABLE') "
                 "OR EXISTS(SELECT 1 FROM delivery_chains c WHERE c.order_id=o.id))))) "
                 "AND e.due_at<=? AND (e.lease_until IS NULL OR e.lease_until<?) "
+                "AND NOT EXISTS(SELECT 1 FROM outbox b JOIN orders o ON o.item_id=b.target "
+                "WHERE o.id=e.order_id AND b.kind='stock_pause' AND b.status='SUCCEEDED' "
+                "AND json_extract(b.result,'$.bot_paused')=1 AND NOT EXISTS("
+                "SELECT 1 FROM outbox r WHERE r.kind='stock_resume' AND r.status='SUCCEEDED' "
+                "AND json_extract(r.payload,'$.pause_id')=b.id)) "
                 "ORDER BY e.due_at,e.updated_at,e.order_id LIMIT 1",
                 (time.time(), time.time()),
             ).fetchone()
@@ -87,6 +92,9 @@ class EnrollmentWorker:
         if not self.store.setting("orders:last_complete_sync"):
             self.store.set_setting("enrollment:health", {"status": "WAITING_ORDER_BASELINE", "at": now()})
             return 0
+        from app.services.stock_visibility import queue_due
+
+        queue_due(self.store, self.api)
         self.discover()
         processed = 0
         # Match the bounded discovery page: four admissions per10s left a
@@ -170,6 +178,7 @@ class EnrollmentWorker:
                     )
             processed += 1
         self.store.set_setting("enrollment:health", {"status": "ACTIVE", "processed": processed, "at": now()})
+        queue_due(self.store, self.api)
         return processed
 
     async def run(self, stop):

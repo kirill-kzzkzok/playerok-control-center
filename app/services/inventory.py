@@ -39,6 +39,7 @@ class Inventory:
         if item.get("deleted_at") or item.get("status") not in {
             "DRAFT",
             "APPROVED",
+            "DISCONTINUED",
             "PENDING_APPROVAL",
             "PENDING_MODERATION",
         }:

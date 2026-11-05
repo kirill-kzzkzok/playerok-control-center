@@ -495,6 +495,15 @@ class Store:
 
                 if unstarted_preflight(db, {"id": ident}):
                     status = "RETRYABLE_FAILED"
+            if (
+                status == "UNCERTAIN"
+                and error == "PROCESS_CANCELLED"
+                and evidence["kind"] in {"stock_pause", "stock_resume"}
+            ):
+                from app.services.stock_visibility import unstarted
+
+                if unstarted(db, {"id": ident}):
+                    status = "RETRYABLE_FAILED"
             if status == "RETRYABLE_FAILED" and evidence["kind"] == "gift_send":
                 from app.gifts.outcomes import unstarted_preflight
 
@@ -617,6 +626,16 @@ class Store:
             for row in affected:
                 from app.services.operation_outcomes import unstarted_delivery
 
+                if row["kind"] in {"stock_pause", "stock_resume"}:
+                    from app.services.stock_visibility import unstarted
+
+                    if unstarted(db, row):
+                        db.execute(
+                            "UPDATE outbox SET status='RETRYABLE_FAILED',error_code='PREFLIGHT_INTERRUPTED',"
+                            "retry_at=?,lease_token=NULL,lease_until=NULL WHERE id=?",
+                            (time.time() + 30, row["id"]),
+                        )
+                        continue
                 if unstarted_delivery(db, row):
                     db.execute(
                         "UPDATE outbox SET status='RETRYABLE_FAILED',error_code='PREFLIGHT_INTERRUPTED',"
