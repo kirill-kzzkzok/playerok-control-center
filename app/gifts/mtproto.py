@@ -71,7 +71,9 @@ class PersonalGiftSender:
         self.closed = False
         self.owns_client = client is None
         self.happ_guard = (
-            HappRoute() if client is None and happ_required(settings.telegram_transport) else None
+            HappRoute()
+            if client is None and happ_required(getattr(settings, "telegram_transport", "legacy"))
+            else None
         )
         self.needs_disconnect = False
         self.route_generation = None
