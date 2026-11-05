@@ -184,3 +184,31 @@ Ruff check, Ruff format --check, compileall, pip check и selfcheck прошли
   заданий с запуском `.venv\Scripts\python.exe -m app` из каталога проекта
   и повтором при сбое. Выбрать правило запуска только одного экземпляра.
   Интерактивный `start.bat` ожидает нажатия клавиши после завершения.
+
+
+## Deep runtime acceptance — 05.11.2026
+
+Итоговый проверенный production-код: `aaa70454ac5e030044ae26ea08766e2dbb03fd4a`.
+Полная регрессия: **2419 passed / 0 failed / 0 skipped**, три непересекающиеся части 807/806/806, все exit 0. Проверены манифесты и XML. Ruff check, format --check, compileall, pip check, offline selfcheck — exit 0. Схемы 1–33, backup reopened, внешних запросов selfcheck 0. Полный отчёт и ограничения: DEEP_RUNTIME_AUDIT.md.
+
+| Проверка | Итог | Доказательство / ограничение |
+|---|---|---|
+| Callback с mounted Bot/RLock | PASS IN TESTS | Реальные Dispatcher маршруты item/promotion/order/home/back; сериализуется только клавиатура |
+| Медленная периодическая проверка профиля | PASS IN TESTS | Уже проверенные чтения продолжаются; writes fail-closed, AUTH_REJECTED закрывает чтения |
+| Проба профиля между резервом и отправкой / между двумя допусками | PASS IN TESTS | Нет вечного BLOCKED; тот же reserve/action; подтверждённый NOT_DISPATCHED, после восстановления один send |
+| Автоподнятие двух лотов, индивидуальный лимит и несколько PREMIUM-тарифов | PASS IN TESTS | Один лот не выключает остальных; exact approved quote, бюджет/STOP/UNKNOWN сохраняются |
+| Источник позиции из карточки Playerok | PASS CODE + API | Сайт использует sequence/countItems, не priority_position. Два текущих лота прочитаны безопасно; визуальная авторизованная сверка NOT VERIFIED |
+| Интервал продвижения при неизменном бюджете | PASS IN TESTS | Не требует нового денежного разрешения, но старая очередь fenced; STOP/financial scope не наследуются |
+| Поздняя точная сверка старого расхода | PASS IN TESTS | Исторические manual caps не исчезают после UNKNOWN→SUCCEEDED |
+| Happ fail-closed Telegram sockets | PASS WINDOWS READ + TESTS | native socket index=52, read-only getMe OK; физическое отключение/пакетный DNS/egress NOT VERIFIED |
+| 10s / 60s / 300s outage + повторный обрыв | PASS IN TESTS | Production bootstrap/backoff с виртуальным временем, no dispatch до восстановления; не живой сетевой эксперимент |
+| Half-open Telethon RPC после cancel/network failure | PASS IN TESTS | Drain перед новым клиентом, поздняя ошибка старого не закрывает новый; paid RPC не повторяется |
+| Gift ACK сохранён, receipt read оборвался | PASS IN TESTS | Автоматическое точное чтение, атомарные Gift+Outbox, restart/STOP/rollback/partial/completion, одна оплата |
+| Gift без ACK / конфликт / refund / late evidence | PASS SAFETY | Карантин не снимается по отсутствию доказательств; повтора платежа нет |
+| Склад / текст / Gifts / Playerok-native, завершение, UNKNOWN/STOP/restart | READY IN TESTS | Production services/workers и controlled transports, не реальные продажи |
+| 50 лотов / независимые оплаченные заказы | PASS IN TESTS | 49 подтверждены за 28.312s при одном неизвестном результате; real API SLA не подтверждён |
+| Live Мишка [TXE], Сердечко [VPM] | READ ONLY | На момент чтений APPROVED, sequence 329/320 затем 330/321 при priority_position=10. Конфигурация лотов и платежи не менялись; живая выдача не проверена |
+| GitHub Actions на итоговом коде | NOT VERIFIED / EXTERNAL BLOCK | Последний опубликованный run 42037573966 не стартовал из-за billing/spending limit; новые коммиты локальные |
+| Автономная эксплуатация 24/7 | NOT VERIFIED | Нужны разрешённая контролируемая живая продажа, физический VPN/restart тест и наблюдение |
+
+Новых кнопок/экранов/настроек/подтверждений нет. STOP, финансовые лимиты, история, UUID, резервы и неизвестные результаты сохранены. Промежуточный упавший прогон (6 constructor regressions) не скрыт; причина исправлена, старые тесты сохранены, последующий полный прогон зелёный. Последующий документальный коммит не меняет app/tests/tools.

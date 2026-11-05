@@ -6,16 +6,16 @@ Owner contract: threshold refers to the listing header «Звезды: N / total
 
 Read the production listing HTML and its served public frontend chunks, without mutations:
 
-- `https://playerok.com/_next/static/chunks/pages/products/%5Bslug%5D-e131581a98c334f5.js`
-- `https://playerok.com/_next/static/chunks/pages/_app-a42b11efeef6f55e.js`
+- [Production listing-page chunk](https://playerok.com/_next/static/chunks/pages/products/%5Bslug%5D-e131581a98c334f5.js)
+- [Production GraphQL/hooks chunk](https://playerok.com/_next/static/chunks/pages/_app-a42b11efeef6f55e.js)
 
 The listing-header component reads `c=t?.sequence??null`, uses category name, and renders the sequence followed by `/` and `countItems`. `priorityPosition` is NOT used by this component. The count query is `countItems(filter: $filter)` with the listing category ID and status `[APPROVED]`. This establishes the field mapping without a rank conversion formula. The existing pinned PlayerokAPI parser already exposes `sequence`; no new HTTP client or scraping dependency is necessary.
 
-The independent published `playerok-requests-api` 0.1.6 wheel was inspected as text (not installed/executed). Its `get_item_positioninfind` reads `data.item.sequence` from a persisted `item` query. This is corroboration; the served website code is the primary evidence.
+The independent published [playerok-requests-api 0.1.6 wheel](https://pypi.org/project/playerok-requests-api/) was inspected as text (not installed/executed). Its `get_item_positioninfind` reads `data.item.sequence` from a persisted `item` query. This is corroboration; the served website code is the primary evidence.
 
 ## Two live read-only observations
 
-2026-11-05, initial reads approximately 18:20–18:30 UTC:
+2026-11-05, initial read-only observation (exact time not captured):
 
 | Product | Existing get_item sequence | priority_position |
 |---|---:|---:|
