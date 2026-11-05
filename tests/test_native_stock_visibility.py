@@ -8,6 +8,7 @@ import pytest
 from app.services.orders import Orders
 from app.workers.delivery_chains import ChainWorker
 from app.workers.enrollment import EnrollmentWorker
+from app.workers.notifications import Notifications
 from tests.test_logical_faults import reopen
 from tests.test_stage_a_controls import shop as shop_fixture
 from tests.test_universal_delivery_e2e import click, setup_ui
@@ -69,6 +70,41 @@ async def drain(r, count=12):
         await EnrollmentWorker(r.store, r.api).once()
         ChainWorker(r.store, r.api).once()
         await r.worker.once()
+
+
+async def test_denied_native_pause_warns_once_and_never_reserves_extra_stock(shop):
+    r = await shop()
+    await setup_ui(r, "unique_stock")
+    native_transport(r)
+    r.api.item["pause_available"] = False
+    for i in range(4):
+        Orders(r.store).ingest(r.api.order(f"denied-{i}"))
+    await drain(r)
+    pause = r.store.rows("SELECT id,status,started_at FROM outbox WHERE kind='stock_pause'")[0]
+    assert pause["status"] == "RETRYABLE_FAILED" and pause["started_at"] is None
+    await Notifications(r.store, r.bot).once()
+    reopen(r)
+    r.store.execute("UPDATE outbox SET retry_at=0 WHERE id=?", (pause["id"],))
+    await r.worker.once(operation_id=pause["id"])
+    await Notifications(r.store, r.bot).once()
+    assert not r.api.visibility_writes
+    assert r.api.item["status"] == "APPROVED"
+    assert r.store.rows("SELECT status FROM inventory") == [{"status": "DELIVERED"}] * 3
+    assert len(r.store.rows("SELECT * FROM reservations")) == 3
+    assert (
+        len(
+            [
+                call
+                for call in r.session.calls
+                if "Playerok не разрешил снять" in (getattr(call, "text", "") or "")
+                and call.__api_method__ == "sendMessage"
+            ]
+        )
+        == 1
+    )
+    assert r.store.rows(
+        "SELECT status FROM notifications WHERE event_key=?", ("stock-pause-unavailable:" + pause["id"],)
+    ) == [{"status": "SUCCEEDED"}]
 
 
 async def test_native_empty_pause_preserves_reserved_deliveries_and_refill_resumes_same_listing(shop):

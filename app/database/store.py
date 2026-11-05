@@ -548,6 +548,21 @@ class Store:
                     (json.loads(row["payload"])["draft_id"],),
                 )
             payload = json.loads(row["payload"])
+            if (
+                row["kind"] == "stock_pause"
+                and status == "RETRYABLE_FAILED"
+                and error == "VISIBILITY_NOT_AVAILABLE"
+            ):
+                db.execute(
+                    "INSERT OR IGNORE INTO inbox(key,kind,payload,received_at,processed_at) "
+                    "VALUES(?,'stock_empty',?,?,?)",
+                    (
+                        "stock-pause-unavailable:" + ident,
+                        encode({"item_id": row["target"], "pause_operation": ident}),
+                        now(),
+                        now(),
+                    ),
+                )
             if row["kind"] == "edit_fields" and status == "SUCCEEDED":
                 db.execute("UPDATE logical_listings SET verified_at=NULL WHERE item_id=?", (row["target"],))
             if row["kind"] == "edit":

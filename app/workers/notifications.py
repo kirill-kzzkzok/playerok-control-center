@@ -267,23 +267,36 @@ class Notifications:
 
                 inventory = Inventory(self.store, None)
                 available = inventory.counts(payload["item_id"])["AVAILABLE"]
+                pause_operation = payload.get("pause_operation")
+                pause_finished = pause_operation and self.store.rows(
+                    "SELECT 1 FROM outbox WHERE id=? AND status='SUCCEEDED'", (pause_operation,)
+                )
                 generation = self.store.rows(
                     "SELECT MAX(id) AS id FROM inventory WHERE item_id=?",
                     (inventory.scope(payload["item_id"]),),
                 )[0]["id"]
-                if available != (1 if event["kind"] == "stock_low" else 0) or (
-                    event["kind"] == "stock_low" and payload.get("generation") != generation
+                if (
+                    pause_finished
+                    or available != (1 if event["kind"] == "stock_low" else 0)
+                    or (event["kind"] == "stock_low" and payload.get("generation") != generation)
                 ):
                     self.store.execute(
                         "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT ?,user_id,'SKIPPED' FROM administrators",
                         (event["key"],),
                     )
                     continue
-                text = (
-                    "📦 <b>На складе осталась 1 единица</b>\nПополните запас, чтобы продажи не остановились."
-                    if event["kind"] == "stock_low"
-                    else "📦 <b>Доступный запас закончился</b>\nНовые выдачи остановлены до пополнения. Уже зарезервированные товары будут выданы; карантинные данные не используются повторно."
-                )
+                if pause_operation:
+                    text = (
+                        "⚠️ <b>Playerok не разрешил снять товар с продажи</b>\n"
+                        "Склад пуст. Объявление может оставаться доступным для покупки. "
+                        "Бот не выдаст отсутствующий товар и повторит безопасную проверку."
+                    )
+                else:
+                    text = (
+                        "📦 <b>На складе осталась 1 единица</b>\nПополните запас, чтобы продажи не остановились."
+                        if event["kind"] == "stock_low"
+                        else "📦 <b>Доступный запас закончился</b>\nНовые выдачи остановлены до пополнения. Уже зарезервированные товары будут выданы; карантинные данные не используются повторно."
+                    )
                 markup = keyboard([[("Пополнить склад", "stock:add:" + payload["item_id"])]])
             elif event["kind"] == "order_problem":
                 if not self.store.rows(
