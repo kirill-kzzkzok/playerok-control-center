@@ -42,7 +42,7 @@ class Notifications:
         # Startup, not the last inaccessible historical chat, defines the boundary.
         boundary = notification_baseline(self.store)
         critical = (
-            "(i.kind IN ('worker_failed','operation_uncertain','stock_empty','order_problem','delivery_delayed',"
+            "(i.kind IN ('worker_failed','operation_uncertain','stock_empty','stock_low','order_problem','delivery_delayed',"
             "'promotion_guard','promotion_error','enrollment_blocked','logical_product_blocked') OR "
             "(i.kind='message' AND json_extract(i.payload,'$.user') IS NULL "
             "AND json_extract(i.payload,'$.text')='{{DEAL_HAS_PROBLEM}}'))"
@@ -78,7 +78,7 @@ class Notifications:
             "'promotion_guard','enrollment_blocked','logical_product_blocked') "
             "OR (i.kind='order' AND json_extract(i.payload,'$.status')='PAID') "
             "OR (i.kind='message' AND json_extract(i.payload,'$.text')='{{DEAL_HAS_PROBLEM}}') THEN 1 "
-            "WHEN i.kind IN ('message','order','stock_empty','promotion_error') THEN 2 ELSE 3 END"
+            "WHEN i.kind IN ('message','order','stock_empty','stock_low','promotion_error') THEN 2 ELSE 3 END"
         )
         events = self.store.rows(
             "WITH eligible AS (SELECT i.*, "
@@ -262,17 +262,29 @@ class Notifications:
                     )
                 )
                 markup = keyboard([[("Проверить товар", "lp:item:" + rows[0]["item_id"])]])
-            elif event["kind"] == "stock_empty":
+            elif event["kind"] in {"stock_empty", "stock_low"}:
                 from app.services.inventory import Inventory
 
-                if Inventory(self.store, None).counts(payload["item_id"])["AVAILABLE"]:
+                inventory = Inventory(self.store, None)
+                available = inventory.counts(payload["item_id"])["AVAILABLE"]
+                generation = self.store.rows(
+                    "SELECT MAX(id) AS id FROM inventory WHERE item_id=?",
+                    (inventory.scope(payload["item_id"]),),
+                )[0]["id"]
+                if available != (1 if event["kind"] == "stock_low" else 0) or (
+                    event["kind"] == "stock_low" and payload.get("generation") != generation
+                ):
                     self.store.execute(
                         "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT ?,user_id,'SKIPPED' FROM administrators",
                         (event["key"],),
                     )
                     continue
-                text = "📦 <b>Доступный запас закончился</b>\nАвтовыдача этого товара выключена. Пустые данные не отправляются; зарезервированные и карантинные коды не используются повторно."
-                markup = keyboard([[("Открыть заказ", "order:" + payload["order_id"])]])
+                text = (
+                    "📦 <b>На складе осталась 1 единица</b>\nПополните запас, чтобы продажи не остановились."
+                    if event["kind"] == "stock_low"
+                    else "📦 <b>Доступный запас закончился</b>\nНовые выдачи остановлены до пополнения. Уже зарезервированные товары будут выданы; карантинные данные не используются повторно."
+                )
+                markup = keyboard([[("Пополнить склад", "stock:add:" + payload["item_id"])]])
             elif event["kind"] == "order_problem":
                 if not self.store.rows(
                     "SELECT 1 FROM orders WHERE id=? AND json_extract(payload,'$.has_problem')=1",

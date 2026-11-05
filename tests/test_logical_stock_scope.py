@@ -106,7 +106,7 @@ async def test_import_rejects_bucket_changed_after_quantity_confirmation(stock):
     assert not store.rows("SELECT * FROM inventory")
 
 
-def test_alias_reservation_is_pinned_and_exhaustion_stops_all_aliases(stock):
+def test_alias_reservation_is_pinned_and_exhaustion_preserves_owner_intent(stock):
     store, api, order = stock
     Orders(store).add_stock("original", ["unit-one"])
     order("sale")
@@ -115,8 +115,8 @@ def test_alias_reservation_is_pinned_and_exhaustion_stops_all_aliases(stock):
     scope = store.rows("SELECT * FROM logical_order_scopes WHERE order_id='sale'")[0]
     assert scope["item_id"] == "relisted" and scope["stock_item_id"] == "original"
     assert store.rows("SELECT status FROM inventory WHERE id=?", (reserved,))[0]["status"] == "RESERVED"
-    assert store.setting("delivery:original:enabled") is False
-    assert store.setting("delivery:relisted:enabled") is False
+    assert store.setting("delivery:original:enabled") is None
+    assert store.setting("delivery:relisted:enabled") is None
     # Exhaustion stops admission, not the already reserved order's authority.
     from app.services.logical_products import LogicalProducts
 

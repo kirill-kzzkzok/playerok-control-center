@@ -19,6 +19,8 @@ async def test_stock_resume_confirmation_cannot_override_a_later_logical_stop(sh
     await setup_ui(r, "unique_stock")
     with r.store.transaction() as db:
         Orders.empty_stock(db, "lot", "no-order")
+    # A legacy persisted pause must still require explicit safe resume.
+    r.store.set_setting("delivery:lot:enabled", False)
     await r.ui.click("stock:resume:lot")
     confirmation = next(key for key in buttons(r.session.last_panel) if key.startswith("stock:resumeok:"))
     logical = LogicalProducts(r.store, r.api)
@@ -35,6 +37,8 @@ async def test_stock_resume_cannot_ignore_changed_logical_identity(shop):
     await setup_ui(r, "unique_stock")
     with r.store.transaction() as db:
         Orders.empty_stock(db, "lot", "no-order")
+    # A legacy persisted pause must still require explicit safe resume.
+    r.store.set_setting("delivery:lot:enabled", False)
     await r.ui.click("stock:resume:lot")
     confirmation = next(key for key in buttons(r.session.last_panel) if key.startswith("stock:resumeok:"))
     r.api.item["attributes"] = {"delivery-critical": "changed by another client"}
@@ -56,6 +60,9 @@ async def test_relisted_stock_resume_keeps_reserved_orders_and_logical_authority
         Orders(r.store).ingest(r.api.order(f"reserved-{i}", "next-lot"))
     await EnrollmentWorker(r.store, r.api).once()
     reservations = r.store.rows("SELECT * FROM reservations ORDER BY order_id")
+    # Backward compatibility with a pause persisted before automatic restocking.
+    r.store.set_setting("delivery:next-lot:enabled", False)
+    r.store.set_setting("delivery:lot:enabled", False)
     assert len(reservations) == 3 and r.store.setting("delivery:next-lot:enabled") is False
     await r.ui.click("stock:add:next-lot")
     await r.ui.message("one-new-private-unit")

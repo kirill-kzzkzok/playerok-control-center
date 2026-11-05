@@ -29,7 +29,7 @@ class EnrollmentWorker:
         with self.store.transaction() as db:
             return db.execute(
                 "UPDATE auto_enrollment SET lease_token=NULL,lease_until=NULL,updated_at=? "
-                "WHERE status='PENDING' AND lease_token IS NOT NULL",
+                "WHERE (status='PENDING' OR (status='BLOCKED' AND error_code='STOCK_EMPTY')) AND lease_token IS NOT NULL",
                 (now(),),
             ).rowcount
 
@@ -57,7 +57,18 @@ class EnrollmentWorker:
     def claim(self):
         with self.store.transaction() as db:
             row = db.execute(
-                "SELECT e.* FROM auto_enrollment e WHERE status='PENDING' AND due_at<=? AND (lease_until IS NULL OR lease_until<?) ORDER BY due_at,updated_at,order_id LIMIT 1",
+                "SELECT e.* FROM auto_enrollment e WHERE (e.status='PENDING' OR "
+                "(e.status='BLOCKED' AND e.error_code='STOCK_EMPTY' AND EXISTS("
+                "SELECT 1 FROM orders o JOIN delivery_policies p ON p.item_id=o.item_id "
+                "JOIN logical_listings l ON l.item_id=o.item_id "
+                "JOIN logical_products lp ON lp.id=l.product_id "
+                "WHERE o.id=e.order_id AND o.status='PAID' AND p.revision=e.policy_revision "
+                "AND json_extract(p.payload,'$.enabled')=1 AND json_extract(p.payload,'$.auto_enroll')=1 "
+                "AND lp.handler='unique_stock' AND lp.enabled=1 AND lp.state='VERIFIED' AND l.verified_at IS NOT NULL "
+                "AND (EXISTS(SELECT 1 FROM inventory i WHERE i.item_id=lp.stock_item_id AND i.status='AVAILABLE') "
+                "OR EXISTS(SELECT 1 FROM delivery_chains c WHERE c.order_id=o.id))))) "
+                "AND e.due_at<=? AND (e.lease_until IS NULL OR e.lease_until<?) "
+                "ORDER BY e.due_at,e.updated_at,e.order_id LIMIT 1",
                 (time.time(), time.time()),
             ).fetchone()
             if not row:
@@ -132,6 +143,7 @@ class EnrollmentWorker:
                 )
                 if result is None:
                     status, code = "BLOCKED", "STOCK_EMPTY"
+                    delay = 30
             except APIError as error:
                 status, code = "PENDING", error.code
                 delay = min(900, 30 * 2 ** min(row["attempts"], 5))

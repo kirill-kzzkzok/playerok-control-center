@@ -221,26 +221,46 @@ class Orders:
             return total
 
     @staticmethod
+    def stock_level(db, item_id, order_id=None):
+        product = db.execute(
+            "SELECT p.stock_item_id FROM logical_products p JOIN logical_listings l ON l.product_id=p.id "
+            "WHERE l.item_id=? AND p.handler='unique_stock' AND p.state='VERIFIED' AND l.verified_at IS NOT NULL",
+            (item_id,),
+        ).fetchone()
+        scope = product[0] if product else item_id
+        available = db.execute(
+            "SELECT COUNT(*) FROM inventory WHERE item_id=? AND status='AVAILABLE'", (scope,)
+        ).fetchone()[0]
+        if available == 0:
+            Orders.empty_stock(db, item_id, order_id)
+        elif available == 1:
+            generation = db.execute("SELECT MAX(id) FROM inventory WHERE item_id=?", (scope,)).fetchone()[0]
+            db.execute(
+                "INSERT OR IGNORE INTO inbox(key,kind,payload,received_at,processed_at) VALUES(?,'stock_low',?,?,?)",
+                (
+                    f"stock_low:{scope}:{generation}",
+                    encode({"item_id": item_id, "generation": generation}),
+                    now(),
+                    now(),
+                ),
+            )
+
+    @staticmethod
     def empty_stock(db, item_id, order_id):
         product = db.execute(
             "SELECT p.id,p.stock_item_id FROM logical_products p JOIN logical_listings l ON l.product_id=p.id "
             "WHERE l.item_id=? AND p.handler='unique_stock' AND p.state='VERIFIED' AND l.verified_at IS NOT NULL",
             (item_id,),
         ).fetchone()
-        aliases = [item_id]
         scope = item_id
         if product:
             scope = product["stock_item_id"]
-            aliases = [
-                row[0]
-                for row in db.execute(
-                    "SELECT item_id FROM logical_listings WHERE product_id=?", (product["id"],)
-                )
-            ]
-        for alias in aliases:
+        else:
+            # Legacy stock has no canonical owner intent. Keep its conservative
+            # pause contract; modern stock uses atomic reservation for readiness.
             db.execute(
                 "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (f"delivery:{alias}:enabled", "false"),
+                (f"delivery:{item_id}:enabled", "false"),
             )
         last_id = db.execute(
             "SELECT COALESCE(MAX(id),0) FROM inventory WHERE item_id=?", (scope,)
@@ -322,10 +342,7 @@ class Orders:
                     now(),
                 ),
             )
-            if not db.execute(
-                "SELECT 1 FROM inventory WHERE item_id=? AND status='AVAILABLE' LIMIT 1", (scope,)
-            ).fetchone():
-                self.empty_stock(db, order["item_id"], order_id)
+            self.stock_level(db, order["item_id"], order_id)
             return stock[0]
 
     def ingest_message(self, chat_id, message):

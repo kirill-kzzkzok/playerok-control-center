@@ -28,6 +28,8 @@ async def test_stock_resume_keeps_reserved_orders_deliverable(shop, already_queu
         Orders(r.store).ingest(r.api.order(f"reserved-{i}"))
     await EnrollmentWorker(r.store, r.api).once()
     assert len(r.store.rows("SELECT * FROM reservations")) == 3
+    # Retain the persisted empty-stock pause shape from earlier releases.
+    r.store.set_setting("delivery:lot:enabled", False)
     assert r.store.setting("delivery:lot:enabled") is False
     before = r.store.rows("SELECT * FROM reservations ORDER BY order_id")
     if not saved_fence:

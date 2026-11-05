@@ -136,14 +136,8 @@ class DeliveryChains:
                 "INSERT INTO order_history(order_id,source,new_status,actor,note,created_at) VALUES(?,'AUTOMATION_CHAIN','PAID',?,'Цепочка сохранена; отправка не подтверждена',?)",
                 (ident, actor, now()),
             )
-            if (
-                policy.mode == "stock"
-                and not db.execute(
-                    "SELECT 1 FROM inventory WHERE item_id=? AND status='AVAILABLE' LIMIT 1",
-                    (inventory_item,),
-                ).fetchone()
-            ):
-                Orders.empty_stock(db, item_id, ident)
+            if policy.mode == "stock":
+                Orders.stock_level(db, item_id, ident)
         return ident
 
     def policy_authorized(self, chain):

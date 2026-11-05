@@ -4,7 +4,7 @@ LABELS = {
     "messages": "Сообщения покупателей",
     "orders": "Изменения заказов",
     "problems": "Проблемы в сделках",
-    "stock": "Пустой запас",
+    "stock": "Остаток на складе",
     "promotions": "Остановка продвижения по лимиту",
     "enrollment": "Блокировка автоматической выдачи",
 }
@@ -13,6 +13,7 @@ KINDS = {
     "order": "orders",
     "order_problem": "problems",
     "stock_empty": "stock",
+    "stock_low": "stock",
     "promotion_guard": "promotions",
     "enrollment_blocked": "enrollment",
     "delivery_delayed": "enrollment",

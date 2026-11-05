@@ -143,8 +143,8 @@ async def test_three_alias_sales_get_distinct_stock_and_one_thanks_each_then_emp
             assert await EnrollmentWorker(store, api).once() == 1
             assert len(store.rows("SELECT * FROM reservations WHERE order_id=?", (ident,))) == 1
             if ident == "three":
-                assert store.setting("delivery:original:enabled") is False
-                assert store.setting("delivery:relisted:enabled") is False
+                assert store.setting("delivery:original:enabled") is None
+                assert store.setting("delivery:relisted:enabled") is None
             await drain(store, api)
             assert store.rows("SELECT status FROM delivery_chains WHERE order_id=?", (ident,)) == [
                 {"status": "NEEDS_FULFILLMENT"}

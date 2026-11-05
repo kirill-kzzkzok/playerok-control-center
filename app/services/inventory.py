@@ -96,6 +96,9 @@ class Inventory:
                     "INSERT OR IGNORE INTO inventory(item_id,secret,fingerprint) VALUES(?,?,?)",
                     (current["scope"], value, hashlib.sha256(value.encode()).hexdigest()),
                 ).rowcount
+            from app.services.orders import Orders
+
+            Orders.stock_level(db, ident)
             if draft_id:
                 db.execute(
                     "INSERT INTO draft_stock_imports VALUES(?,?,?,?,?)",

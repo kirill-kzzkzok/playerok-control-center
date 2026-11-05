@@ -28,6 +28,8 @@ async def test_stock_notice_uses_shared_scope_and_never_resumes_delivery(shop, r
     await EnrollmentWorker(r.store, r.api).once()
     reservations = r.store.rows("SELECT * FROM reservations ORDER BY order_id")
     assert len(reservations) == 3
+    # Notifications must never lift a persisted legacy/local pause.
+    r.store.set_setting("delivery:next-lot:enabled", False)
     if restock:
         await r.ui.click("stock:add:next-lot")
         await r.ui.message("new-private-stock")
