@@ -31,6 +31,11 @@ def native_transport(r):
     async def call(method, **kwargs):
         if method == "get_item_visibility":
             return copy.deepcopy(r.api.items[kwargs["id"]])
+        if method == "get_my_items":
+            statuses = {getattr(value, "name", value) for value in kwargs.get("statuses", [])}
+            return r.api.page(
+                "items", [item for item in r.api.items.values() if not statuses or item["status"] in statuses]
+            )
         return await original(method, **kwargs)
 
     r.api.call = call
@@ -79,7 +84,14 @@ async def test_native_empty_pause_preserves_reserved_deliveries_and_refill_resum
     assert r.api.item["status"] == "DISCONTINUED"
     assert len(r.store.rows("SELECT 1 FROM inventory WHERE status='DELIVERED'")) == 3
     reopen(r)
-    await r.ui.click("stock:add:lot")
+    await r.ui.message("/start")
+    await click(r, action="items")
+    await click(r, action="itemfilter:ARCHIVE")
+    await click(r, action="item:lot")
+    assert "Снят с продажи" in r.session.last_panel.text
+    await click(r, action="iv:delivery:lot")
+    await click(r, action="stock:view:lot")
+    await click(r, action="stock:add:lot")
     await r.ui.message("new-stock-after-native-pause")
     await click(r, action=next(k for k in buttons(r.session.last_panel) if k.startswith("stock:commit:")))
     await drain(r)
