@@ -16,16 +16,74 @@ ACTION_MAX_WAIT = 10
 
 # Only static routing words are diagnostic; never callback identifiers or input.
 TRACE_GROUPS = frozenset(
-    (
-        "home items item iv lp ap auto stock ar chat chatpage chatmedia orders order od settings profile sp tools "
-        "finance fin providers stats sd sr st promotions promo payp pp gft launch ln nav ops result sync attention "
-        "create editname editdesc discount"
-    ).split()
+    [
+        "home",
+        "items",
+        "item",
+        "iv",
+        "lp",
+        "ap",
+        "auto",
+        "stock",
+        "ar",
+        "chat",
+        "chatpage",
+        "chatmedia",
+        "orders",
+        "order",
+        "od",
+        "settings",
+        "profile",
+        "sp",
+        "tools",
+        "finance",
+        "fin",
+        "providers",
+        "stats",
+        "sd",
+        "sr",
+        "st",
+        "promotions",
+        "promo",
+        "payp",
+        "pp",
+        "gft",
+        "launch",
+        "ln",
+        "nav",
+        "ops",
+        "result",
+        "sync",
+        "attention",
+        "create",
+        "editname",
+        "editdesc",
+        "discount",
+    ]
 )
 TRACE_VERBS = frozenset(
-    (
-        "view show item details history list open add edit commit check stop enable arm new menu settings reply close back"
-    ).split()
+    [
+        "view",
+        "show",
+        "item",
+        "details",
+        "history",
+        "list",
+        "open",
+        "add",
+        "edit",
+        "commit",
+        "check",
+        "stop",
+        "enable",
+        "arm",
+        "new",
+        "menu",
+        "settings",
+        "reply",
+        "close",
+        "back",
+    ]
 )
 
 
