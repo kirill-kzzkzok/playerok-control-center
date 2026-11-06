@@ -23,8 +23,9 @@ async def test_inactive_schedule_cannot_consume_selected_slots_or_buy(rig, exclu
         r.store.execute("INSERT INTO promotion_schedule(item_id,due_at) VALUES(?, -1)", (f"excluded-{i:03}",))
     worker = PromotionWorker(r.store, r.api, per_cycle=2)
     await worker.once()
-    observed = r.store.rows("SELECT item_id FROM promotion_observations ORDER BY item_id")
+    observed = r.store.rows("SELECT item_id,position,source FROM promotion_observations ORDER BY item_id")
     assert {row["item_id"] for row in observed} == {"item", "other"}
+    assert all(row["position"] == 319 and "item.sequence" in row["source"] for row in observed)
     assert not r.store.rows(
         "SELECT item_id FROM promotion_schedule WHERE item_id LIKE 'excluded-%' AND checked_at IS NOT NULL"
     )
@@ -40,3 +41,8 @@ async def test_inactive_schedule_cannot_consume_selected_slots_or_buy(rig, exclu
     r.store.execute("UPDATE promotion_schedule SET lease_until=NULL")
     assert worker.claim(r.settings.get()[0])[0] in {"item", "other"}
     assert r.store.setting("promotions:approved:item") == approval
+    revision, policy, _ = r.settings.get()
+    r.settings.save(7, revision, asdict(policy), "all")
+    r.store.execute("UPDATE promotion_schedule SET lease_until=NULL")
+    assert worker.claim(r.settings.get()[0])[0].startswith("excluded-")
+    assert len(r.store.rows("SELECT * FROM promotion_observations")) == len(observed)
