@@ -7,6 +7,16 @@ from app.playerok.adapter import APIError
 from app.services.orders import Orders
 from app.services.products import ValidationError
 
+# First observed PAID is a durable wait clock, never a substitute for the
+# upstream creation/payment evidence used by delivery admission.
+ENROLLMENT_WAIT_SQL = (
+    "SELECT e.order_id,e.error_code,e.due_at,"
+    "CAST(MAX(0,(julianday('now')-julianday(i.received_at))*86400) AS INTEGER) AS wait_seconds "
+    "FROM auto_enrollment e LEFT JOIN inbox i ON i.key='order:'||e.order_id||':PAID' "
+    "WHERE e.status='PENDING' AND e.policy_revision=(SELECT MAX(n.policy_revision) "
+    "FROM auto_enrollment n WHERE n.order_id=e.order_id)"
+)
+
 
 def sale(order, ident, account_id):
     item = order.get("item") or {}

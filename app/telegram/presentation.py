@@ -265,3 +265,30 @@ OPERATIONS = {
 
 def operation_name(value):
     return OPERATIONS.get(value, "Действие магазина")
+
+
+def enrollment_wait_text(row):
+    from datetime import UTC, datetime
+
+    code = row.get("error_code")
+    reason = (
+        "Playerok ещё не вернул полные данные заказа"
+        if code
+        in {
+            "DELIVERY_FLAGS_NOT_YET_AVAILABLE",
+            "DELIVERY_SELLER_NOT_YET_AVAILABLE",
+            "DELIVERY_CHAT_NOT_YET_AVAILABLE",
+            "DEAL_DETAILS_INCOMPLETE",
+        }
+        else "ожидается восстановление ответа Playerok"
+        if code
+        else "подготовка выдачи"
+    )
+    waited = row.get("wait_seconds")
+    duration = f"{waited // 60} мин" if waited is not None else "время не подтверждено"
+    due = row.get("due_at")
+    due_text = local_time(datetime.fromtimestamp(due, UTC).isoformat()) if due else "ближайший цикл"
+    return (
+        f"Заказ ожидает проверки: {duration}. Причина: {reason}. "
+        f"Следующая проверка: {due_text}. Бот продолжит автоматически. Ручное действие пока не требуется."
+    )

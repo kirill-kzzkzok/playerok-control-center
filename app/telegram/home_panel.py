@@ -5,9 +5,10 @@ import time
 
 from app.database.store import Conflict
 from app.gifts.outcomes import DELAYED_PREFLIGHT_SQL
+from app.services.order_management import ENROLLMENT_WAIT_SQL
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard, main_menu
-from app.telegram.presentation import connection_summary
+from app.telegram.presentation import connection_summary, enrollment_wait_text
 from app.workers.supervisor import CYCLE_LABELS
 
 
@@ -19,7 +20,10 @@ class HomePanel:
         if not 0 <= page <= 1_000_000:
             raise Conflict("Страница недоступна")
         return self.store.rows(
-            "WITH issues AS (SELECT o.id,o.status,json_extract(o.payload,'$.item.name') AS name, "
+            "WITH waiting AS ("
+            + ENROLLMENT_WAIT_SQL
+            + "), issues AS (SELECT o.id,o.status,json_extract(o.payload,'$.item.name') AS name, "
+            "COALESCE(w.wait_seconds>=180,0) AS enrollment_wait,w.wait_seconds,w.error_code,w.due_at, "
             "EXISTS(SELECT 1 FROM auto_enrollment e WHERE e.order_id=o.id AND e.status='BLOCKED') AS enrollment, "
             "(SELECT c.status FROM delivery_chains c WHERE c.order_id=o.id) AS chain, "
             "EXISTS(SELECT 1 FROM reservations r JOIN inventory i ON i.id=r.inventory_id "
@@ -46,10 +50,10 @@ class HomePanel:
             "EXISTS(SELECT 1 FROM gift_listings g JOIN logical_listings l ON l.item_id=g.item_id "
             "JOIN logical_products p ON p.id=l.product_id WHERE g.item_id=o.item_id "
             "AND g.enabled=1 AND p.state='LEGACY' "
-            "AND NOT EXISTS(SELECT 1 FROM gift_jobs j WHERE j.order_id=o.id)) AS binding_unverified FROM orders o), "
+            "AND NOT EXISTS(SELECT 1 FROM gift_jobs j WHERE j.order_id=o.id)) AS binding_unverified FROM orders o LEFT JOIN waiting w ON w.order_id=o.id), "
             "actionable AS (SELECT * FROM issues WHERE uncertain OR payment_unknown OR "
             "status IN ('PAID','SENT') AND (enrollment OR chain IN ('BLOCKED','NEEDS_FULFILLMENT') "
-            "OR quarantine OR gift_blocked OR binding_unverified OR delayed OR stopped_delivery)) "
+            "OR quarantine OR gift_blocked OR binding_unverified OR delayed OR stopped_delivery OR enrollment_wait)) "
             "SELECT *,COUNT(*) OVER() AS total FROM actionable "
             "ORDER BY (uncertain OR payment_unknown OR quarantine) DESC,id LIMIT 10 OFFSET ?",
             (time.time(), page * 10),
@@ -62,6 +66,15 @@ class HomePanel:
             reasons.append("Результат операции неизвестен. Сверьте без повторной отправки")
         if row["quarantine"]:
             reasons.append("Выдача запаса требует проверки; данные остаются в карантине")
+        if row.get("enrollment_wait") and not (
+            reasons
+            or row.get("stopped_delivery")
+            or row["enrollment"]
+            or row["chain"] in {"BLOCKED", "NEEDS_FULFILLMENT"}
+            or row["gift_blocked"]
+            or row["binding_unverified"]
+        ):
+            reasons.append(enrollment_wait_text(row))
         if row.get("delayed"):
             reasons.append("Выдача долго ожидает соединения. Безопасные проверки продолжаются автоматически")
         if row.get("stopped_delivery"):
@@ -231,7 +244,7 @@ class HomePanel:
         problems = self.problems(include_paid=False) or bool(paid_total)
         connection = connection_summary(self.api)
         note = (
-            "Есть вопросы, требующие решения."
+            "Есть важные события по заказам или работе магазина."
             if problems
             else (
                 "В локальной истории проблем нет."
@@ -260,12 +273,12 @@ class HomePanel:
                 for row in paid
             ]
             total = paid[0]["total"] if paid else 0
-            text = "⚠️ <b>Требует моего действия</b>\n"
+            text = "⚠️ <b>Оплаченные заказы: важное</b>\n"
             if paid:
                 text += f"Проблемных заказов: {total}\n"
                 text += (
                     "\n\n".join(
-                        escaped(str(row["name"] or "Товар"), 90) + "\n" + escaped(self.paid_reason(row), 270)
+                        escaped(str(row["name"] or "Товар"), 90) + "\n" + escaped(self.paid_reason(row), 600)
                         for row in paid
                     )
                     + "\n"
@@ -279,7 +292,7 @@ class HomePanel:
                 rows.append(navigation)
             rows += self.problems(include_paid=False)
             return text + (
-                "Выберите вопрос для проверки. Повтор отправки не запускается."
+                "Бот продолжает безопасные проверки автоматически. Для конфликтов причина указана в заказе. Повтор отправки не запускается."
                 if rows
                 else "В сохранённых данных проблем нет."
             ), keyboard(rows, back=("⬅️ Мой магазин", "home"))

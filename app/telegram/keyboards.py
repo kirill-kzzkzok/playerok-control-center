@@ -20,7 +20,7 @@ def main_menu(*, attention=False):
             [("📊 Статистика", "stats:7"), ("⚙️ Настройки", "settings")],
         ]
         + (
-            [[(f"⚠️ Требуют действия: {attention}", "attention")]]
+            [[(f"⚠️ Важные заказы: {attention}", "attention")]]
             if type(attention) is int and attention > 0
             else []
         ),

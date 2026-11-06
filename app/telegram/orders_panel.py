@@ -8,11 +8,16 @@ from app.database.store import Conflict
 from app.services.automation import Automation
 from app.services.catalog import ORDER_FILTERS, order_page
 from app.services.finance import checked_time
-from app.services.order_management import OrderManagement, deliverable, order_snapshot
+from app.services.order_management import (
+    ENROLLMENT_WAIT_SQL,
+    OrderManagement,
+    deliverable,
+    order_snapshot,
+)
 from app.services.products import ValidationError
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
-from app.telegram.presentation import history_event, local_time, status
+from app.telegram.presentation import enrollment_wait_text, history_event, local_time, status
 
 
 class OrdersPanel:
@@ -311,6 +316,9 @@ class OrdersPanel:
         )
         if delivered:
             return "✅ Доставка товара подтверждена."
+        waiting = self.store.rows("SELECT * FROM (" + ENROLLMENT_WAIT_SQL + ") WHERE order_id=?", (ident,))
+        if waiting and order["status"] == "PAID":
+            return enrollment_wait_text(waiting[0])
         if policy.mode == "playerok":
             return "📦 Товар выдаёт Playerok. Бот выполняет разрешённые сопровождающие действия."
         if order["status"] == "PAID" and (product and product["enabled"] or policy.enabled):

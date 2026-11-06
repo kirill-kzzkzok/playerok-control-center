@@ -32,7 +32,7 @@ async def test_paid_conflict_has_exact_direct_attention_badge_on_home(shop):
     Orders(r.store).ingest(r.api.order("blocked-paid"))
     await EnrollmentWorker(r.store, r.api).once()
     await r.ui.click("home")
-    assert buttons(r.session.last_panel).get("attention") == "⚠️ Требуют действия: 1"
+    assert buttons(r.session.last_panel).get("attention") == "⚠️ Важные заказы: 1"
     await r.ui.click("attention")
     assert "order:blocked-paid" in buttons(r.session.last_panel)
     assert not r.api.messages and not r.api.remote.payments
