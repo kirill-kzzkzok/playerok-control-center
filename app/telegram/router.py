@@ -82,11 +82,54 @@ def create_router(store, api, products, synchronizer):
     navigator = Navigation(store)
 
     def recovery_markup(message, owner):
-        panel = store.setting(navigator.key(message.bot, owner), {})
+        # The proposal was captured before the failing save. Do not require
+        # another SQLite read merely to choose a safe display destination.
+        panel = getattr(message, "proposed", None)
+        if not panel:
+            try:
+                panel = store.setting(navigator.key(message.bot, owner), {})
+            except sqlite3.Error:
+                panel = {}
         route = panel.get("route") or "home"
-        # Only display routes, never replay a commit/arm/toggle capability.
-        if route not in {"home", "items", "orders", "chats", "settings"} and not route.startswith(
-            ("item:", "iv:", "stock:view:", "finance:", "order:", "lp:item:", "auto:item:", "ar:show:")
+        # Explicit read/display routes only. Navigation.safe_route also knows
+        # setup toggles; those must never become error-recovery capabilities.
+        if route not in {
+            "home",
+            "items",
+            "orders",
+            "chats",
+            "settings",
+            "promotions",
+            "promo:catalog",
+            "gft:home",
+            "gft:settings",
+            "gft:bindings",
+            "gft:catalog",
+        } and not route.startswith(
+            (
+                "item:",
+                "iv:delivery:",
+                "iv:more:",
+                "stock:view:",
+                "finance:",
+                "order:",
+                "lp:item:",
+                "lp:details:",
+                "lp:product:",
+                "auto:item:",
+                "ar:show:",
+                "chat:",
+                "payp:item:",
+                "promo:item:",
+                "launch:open:",
+                "gft:job:",
+                "gft:item:",
+                "ops:list:",
+                "ops:show:",
+                "result:show:",
+                "aq:chain:",
+                "od:details:",
+            )
         ):
             route = "home"
         return keyboard([], back=("⬅️ Вернуться", route))
@@ -792,7 +835,7 @@ def create_router(store, api, products, synchronizer):
         except sqlite3.Error:
             await message.answer(
                 "❗ Не удалось сохранить локальные данные. Изменения транзакции отменены. Проверьте свободное место и откройте раздел заново.",
-                reply_markup=keyboard([]),
+                reply_markup=recovery_markup(message, message.from_user.id),
             )
 
     @router.message(F.text | F.photo | F.document)
@@ -967,7 +1010,7 @@ def create_router(store, api, products, synchronizer):
         except sqlite3.Error:
             await message.answer(
                 "❗ Не удалось сохранить локальные данные. Изменения транзакции отменены. Проверьте свободное место и откройте раздел заново.",
-                reply_markup=keyboard([]),
+                reply_markup=recovery_markup(message, message.from_user.id),
             )
 
     return router
