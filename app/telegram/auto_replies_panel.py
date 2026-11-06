@@ -57,6 +57,7 @@ class AutoRepliesPanel:
             + "»\nБот ответит:\n«"
             + escaped(rule["response_text"], 2200)
             + f"»\nСтатус: {'🟢 Включён' if rule['enabled'] else '⚪ Выключен'}"
+            + ("\nСодержит фразу" if rule["match_mode"] == "contains" else "\nТочное совпадение фразы")
         )
         if rule["enabled"] and self.blocked_reason():
             text += "\n⚠️ " + self.blocked_reason()
@@ -122,7 +123,13 @@ class AutoRepliesPanel:
                 (self.service.account(), page * 8),
             )
             text = f"💬 <b>Журнал автоответов · {page + 1}</b>\n" + "\n".join(
-                local_time(row["created_at"]) + " · " + status(row["operation_status"] or row["status"])
+                local_time(row["created_at"])
+                + " · "
+                + (
+                    "Сообщение получено с задержкой более 5 минут: ответ не отправлялся"
+                    if row["error_code"] == "SYNC_DELAY"
+                    else status(row["operation_status"] or row["status"])
+                )
                 for row in rows[:8]
             )
             buttons = [
@@ -144,7 +151,7 @@ class AutoRepliesPanel:
             return self.menu(owner, listing=True)
         if action == "ar:settings":
             return (
-                "⚙️ <b>Настройки автоответов</b>\nТочное совпадение фразы, без учёта регистра и лишних пробелов.\nПауза и суточный лимит задаются в каждом правиле.\nОтправка только на новые сообщения; неопределённый результат не повторяется.",
+                "⚙️ <b>Настройки автоответов</b>\nСпособ сравнения выбирается в правиле. Регистр и лишние пробелы не учитываются.\nПауза и суточный лимит задаются в каждом правиле.\nОтправка только на новые сообщения; неопределённый результат не повторяется.",
                 keyboard(
                     [
                         [("⛔ Выключить все", "ar:stop")],
@@ -166,16 +173,76 @@ class AutoRepliesPanel:
             return f"Выключено правил: {count}. Уже переданный серверу запрос остановить нельзя.", keyboard(
                 [[("Правила", "ar:menu")]]
             )
-        if action == "ar:new" or action.startswith("ar:edit:"):
-            rule = self.service.get(owner, action.split(":", 2)[2]) if action.startswith("ar:edit:") else None
-            if action.startswith("ar:edit:") and not rule:
+        if action.startswith("ar:match:"):
+            _, _, ident, mode = action.split(":")
+            data = (await state.get_data()).get("auto_reply_edit") or {}
+            rule = self.service.get(owner, ident)
+            if (
+                not rule
+                or data.get("id") != ident
+                or data.get("revision") != rule["revision"]
+                or data.get("account_id") != self.service.account()
+            ):
+                raise Conflict("Правило изменилось. Откройте его заново")
+            self.service.save(
+                owner,
+                {**rule, "enabled": bool(rule["enabled"]), "match_mode": mode},
+                ident=ident,
+                revision=rule["revision"],
+                armed=bool(rule["enabled"]),
+            )
+            await state.clear()
+            return self.card(owner, ident)
+        if action.startswith("ar:field:"):
+            _, _, ident, field = action.split(":")
+            rule = self.service.get(owner, ident)
+            if not rule or field not in {"trigger_text", "response_text", "cooldown", "daily_limit"}:
+                raise Conflict("Поле правила недоступно")
+            await state.set_state("autoreply:field")
+            await state.set_data(
+                {"auto_reply_form": {**rule, "enabled": bool(rule["enabled"]), "field": field}}
+            )
+            prompt = {
+                "trigger_text": "Введите фразу покупателя (1–200 символов).",
+                "response_text": "Введите новый текст ответа (1–3500 UTF-16 символов).",
+                "cooldown": "Введите паузу в секундах: 60–86400.",
+                "daily_limit": "Введите максимум попыток в сутки: 1–100.",
+            }[field]
+            return prompt, keyboard([], back=("Отмена", "ar:show:" + ident))
+        if action.startswith("ar:edit:"):
+            ident = action.split(":", 2)[2]
+            rule = self.service.get(owner, ident)
+            if not rule:
                 raise Conflict("Правило удалено")
+            await state.update_data(
+                auto_reply_edit={
+                    "id": ident,
+                    "revision": rule["revision"],
+                    "account_id": self.service.account(),
+                }
+            )
+            return "✏️ Что изменить в автоответе? Остальные настройки сохранятся.", keyboard(
+                [
+                    [("Фраза покупателя", "ar:field:" + ident + ":trigger_text")],
+                    [("Текст ответа", "ar:field:" + ident + ":response_text")],
+                    [
+                        ("Пауза", "ar:field:" + ident + ":cooldown"),
+                        ("Лимит в сутки", "ar:field:" + ident + ":daily_limit"),
+                    ],
+                    [
+                        ("Точное совпадение", "ar:match:" + ident + ":exact"),
+                        ("Содержит фразу", "ar:match:" + ident + ":contains"),
+                    ],
+                ],
+                back=("К автоответу", "ar:show:" + ident),
+            )
+        if action == "ar:new":
             await state.set_state("autoreply:trigger")
             await state.set_data(
                 {
                     "auto_reply_form": {
-                        "id": rule["id"] if rule else None,
-                        "revision": rule["revision"] if rule else 0,
+                        "id": None,
+                        "revision": 0,
                         "account_id": self.service.account(),
                     }
                 }
@@ -211,7 +278,7 @@ class AutoRepliesPanel:
             raise Conflict("Правило недоступно")
         if command == "details":
             return (
-                f"⚙️ <b>Условия автоответа</b>\nПауза в чате: {rule['cooldown']} с\nМаксимум попыток в сутки: {rule['daily_limit']}\nЛимит учитывает неуспешные и неопределённые попытки.\nИзменение выключает правило до нового подтверждения.",
+                f"⚙️ <b>Условия автоответа</b>\nПауза в чате: {rule['cooldown']} с\nМаксимум попыток в сутки: {rule['daily_limit']}\nЛимит учитывает неуспешные и неопределённые попытки.\nИзменение одного поля сохраняет остальные настройки и состояние правила.",
                 keyboard([[("Изменить", "ar:edit:" + ident)]], back=("⬅️ К автоответу", "ar:show:" + ident)),
             )
         if command == "show":
@@ -251,53 +318,30 @@ class AutoRepliesPanel:
         form, value = data.get("auto_reply_form"), (message.text or "").strip()
         if not form or form["account_id"] != self.service.account():
             raise Conflict("Форма устарела")
-        steps = {
-            "autoreply:trigger": (
-                "trigger_text",
-                "autoreply:response",
-                "Введите текст автоответа (1–3500 UTF-16 символов).",
-            ),
-            "autoreply:response": (
-                "response_text",
-                "autoreply:cooldown",
-                "Введите паузу между ответами в одном чате, 60–86400 секунд (например 600).",
-            ),
-            "autoreply:cooldown": (
-                "cooldown",
-                "autoreply:limit",
-                "Введите максимум попыток этого правила в сутки, 1–100 (например 20).",
-            ),
-        }
-        if current in steps:
-            field, following, prompt = steps[current]
-            form[field] = (
-                phrase(value)
+        if current == "autoreply:field":
+            field = form["field"]
+            values = {
+                **form,
+                field: phrase(value)
                 if field == "trigger_text"
                 else reply_text(value)
                 if field == "response_text"
-                else int(value)
+                else int(value),
+            }
+            ident = self.service.save(
+                owner, values, ident=form["id"], revision=form["revision"], armed=form["enabled"]
             )
-            if field == "cooldown" and not 60 <= form[field] <= 86400:
-                raise ValueError("Пауза: 60–86400 секунд")
+            await state.clear()
+            return self.card(owner, ident)
+        if current == "autoreply:response":
+            ident = self.service.save(owner, {**form, "response_text": reply_text(value), "enabled": False})
+            await state.clear()
+            return self.card(owner, ident)
+        if current == "autoreply:trigger":
+            form["trigger_text"] = phrase(value)
             await state.set_data({"auto_reply_form": form})
-            await state.set_state(following)
-            return prompt, keyboard([[("Отмена", "ar:menu")]])
-        if current != "autoreply:limit" or not value.isdigit() or not 1 <= int(value) <= 100:
-            raise ValueError("Лимит: целое число 1–100")
-        values = {**form, "daily_limit": int(value), "enabled": False}
-        return await self.confirm(
-            state,
-            {
-                "kind": "save",
-                "id": form["id"],
-                "revision": form["revision"],
-                "account_id": form["account_id"],
-                "values": values,
-            },
-            "Сохранить выключенное правило?\nФраза: "
-            + escaped(form["trigger_text"], 800)
-            + "\nОтвет:\n"
-            + escaped(form["response_text"], 2200)
-            + f"\nПауза: {form['cooldown']} с · лимит: {value}/сутки. Включение требует отдельного подтверждения.",
-            message=message,
-        )
+            await state.set_state("autoreply:response")
+            return "Введите текст автоответа (1–3500 UTF-16 символов).", keyboard(
+                [], back=("Отмена", "ar:menu")
+            )
+        raise Conflict("Старая форма создания устарела. Откройте автоответ заново")

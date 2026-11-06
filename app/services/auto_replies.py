@@ -50,10 +50,14 @@ class AutoReplies:
 
     def rules(self, actor):
         self.owner(actor)
-        return self.store.rows(
+        rules = self.store.rows(
             "SELECT * FROM auto_reply_rules WHERE owner_id=? AND account_id=? ORDER BY id",
             (actor, self.account()),
         )
+        return [
+            {**rule, "match_mode": self.store.setting(f"auto_reply:{rule['id']}:match_mode", "exact")}
+            for rule in rules
+        ]
 
     def save(self, actor, values, *, ident=None, revision=0, armed=False):
         self.owner(actor)
@@ -73,6 +77,11 @@ class AutoReplies:
             raise ValueError("Пауза: 60–86400 секунд; лимит: 1–100; enabled должен быть bool")
         if enabled and armed is not True:
             raise Conflict("Включение требует отдельного подтверждения будущих автоответов")
+        mode = values.get(
+            "match_mode", self.store.setting(f"auto_reply:{ident}:match_mode", "exact") if ident else "exact"
+        )
+        if mode not in {"exact", "contains"}:
+            raise ValueError("Неизвестный способ сравнения фразы")
         account = self.account()
         with self.store.transaction() as db:
             if db.execute(
@@ -112,6 +121,10 @@ class AutoReplies:
                 != 1
             ):
                 raise Conflict("Правило изменилось; откройте заново")
+            db.execute(
+                "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (f"auto_reply:{ident}:match_mode", encode(mode)),
+            )
             db.execute(
                 "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (
@@ -180,6 +193,8 @@ class AutoReplies:
         ):
             return False
         try:
+            if self.store.setting(f"auto_reply:{rule['id']}:match_mode", "exact") == "contains":
+                return rule["trigger_text"] in " ".join(reply_text(message.get("text")).casefold().split())
             return phrase(message.get("text")) == rule["trigger_text"]
         except ValueError:
             return False
@@ -256,6 +271,14 @@ class AutoReplies:
         )
         rule = next((rule for rule in rules if self.matches(message, rule, row["received_at"])), None)
         status, code, operation = "SKIPPED", None, None
+        created = parsed_time(message.get("created_at"))
+        if (
+            not rule
+            and created
+            and created < datetime.now(UTC) - timedelta(minutes=5)
+            and any(self.matches(message, candidate, row["received_at"], at=created) for candidate in rules)
+        ):
+            code = "SYNC_DELAY"
         if rule:
             await self.fresh(rule, row["chat_id"], message["id"], message_signature(message))
         with self.store.transaction() as db:

@@ -368,10 +368,8 @@ async def test_dispatcher_create_disabled_then_separate_arming_restart_and_no_se
     state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
     try:
         await ui.click("ar:new")
-        for value in ["Привет", "<Здравствуйте>", "600", "20"]:
+        for value in ["Привет", "<Здравствуйте>"]:
             await ui.message(value)
-        nonce = (await state.get_data())["auto_reply_nonce"]
-        await ui.click("ar:commit:" + nonce)
         rule = service.rules(7)[0]
         assert not rule["enabled"]
         await ui.click("ar:toggle:" + rule["id"])
