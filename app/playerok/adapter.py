@@ -22,6 +22,21 @@ from playerokapi.misc import PERSISTED_QUERIES, QUERIES
 
 ACCEPT_AGREEMENT_QUERY = "mutation acceptGameCategoryAgreement($input: AcceptGameCategoryAgreementInput!) { acceptGameCategoryAgreement(input: $input) { id } }"
 
+# Website listing form contract; the upstream SDK's old persisted hash returns
+# HTTP 500. Keep seller instructions/agreements and the full obtaining metadata.
+OBTAINING_TYPES_QUERY = """query gameCategoryObtainingTypes($pagination: Pagination, $filter: GameCategoryObtainingTypeFilter!) {
+  gameCategoryObtainingTypes(pagination: $pagination, filter: $filter) {
+    edges { cursor node {
+      id name stockType description gameCategoryId noCommentFromBuyer
+      instructionForBuyer instructionForSeller sequence feeMultiplier
+      agreements { id description iconType sequence }
+      props { minTestimonialsForSeller }
+    } }
+    pageInfo { startCursor endCursor hasPreviousPage hasNextPage }
+    totalCount
+  }
+}"""
+
 
 class APIError(RuntimeError):
     def __init__(self, code, uncertain=False, retry_after=None, diagnostics=None):
@@ -263,6 +278,22 @@ class SafeAccount(Account):
         if not isinstance(result, dict) or result.get("id") != agreement_id:
             raise APIError("AGREEMENT_RESULT_UNKNOWN", uncertain=True)
         return result
+
+    def get_game_category_obtaining_types(self, game_category_id, count=24, after_cursor=None):
+        from playerokapi.parser import game_category_obtaining_type_list
+
+        payload = {
+            "operationName": "gameCategoryObtainingTypes",
+            "query": OBTAINING_TYPES_QUERY,
+            "variables": json.dumps(
+                {
+                    "pagination": {"first": count, "after": after_cursor},
+                    "filter": {"gameCategoryId": game_category_id},
+                }
+            ),
+        }
+        data = self.request("get", self.base_url + "/graphql", {}, payload).json()
+        return game_category_obtaining_type_list(data["data"]["gameCategoryObtainingTypes"])
 
     def get_exchange_rate(self):
         payload = {
