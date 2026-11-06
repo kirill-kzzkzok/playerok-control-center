@@ -1086,6 +1086,7 @@ class OutboxWorker:
                     in {
                         "DELIVERY_CHAT_NOT_YET_AVAILABLE",
                         "DELIVERY_SNAPSHOT_NOT_YET_AVAILABLE",
+                        "DELIVERY_LISTING_DETAILS_NOT_YET_AVAILABLE",
                         "DELIVERY_SELLER_NOT_YET_AVAILABLE",
                         "DELIVERY_FLAGS_NOT_YET_AVAILABLE",
                         "PLATFORM_DETAILS_NOT_YET_AVAILABLE",

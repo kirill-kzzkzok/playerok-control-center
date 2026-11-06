@@ -1627,6 +1627,15 @@ class LogicalProducts:
         else:
             item = await self.api.call("get_item", id=item_id)
         if (
+            any(not isinstance(item.get(key), str) for key in ("id", "name", "status", "description"))
+            or item.get("price") is None
+            or any(
+                not isinstance(item.get(key), dict) or not item[key].get("id")
+                for key in ("user", "category", "obtaining_type")
+            )
+        ):
+            raise APIError("DELIVERY_LISTING_DETAILS_NOT_YET_AVAILABLE")
+        if (
             item.get("id") != item_id
             or item.get("deleted_at")
             or item.get("status") not in {"APPROVED", "SOLD"}
