@@ -232,6 +232,9 @@ async def test_resolution_transaction_rolls_back_with_quarantine_on_storage_fail
     store, api, service = setup
     order, ident, expected = delivery(store)
     messages = api.call.return_value
+    # A delivery receipt must follow its queued operation. Otherwise a second
+    # boundary during fixture setup rejects it before the injected SQL failure.
+    messages["messages"][0]["created_at"] = now()
     api.call.side_effect = lambda method, **kwargs: order if method == "get_deal" else messages
     store.execute(
         "CREATE TRIGGER resolution_fail BEFORE UPDATE ON outbox BEGIN SELECT RAISE(ABORT,'test failure'); END"

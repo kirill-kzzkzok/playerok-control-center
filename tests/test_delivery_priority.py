@@ -14,8 +14,21 @@ def test_delivery_is_claimed_before_background_work_but_old_work_is_not_starved(
         urgent = store.enqueue("urgent", "gift_send", "order", {})
         assert store.claim()["id"] == urgent
         store.execute("UPDATE outbox SET created_at='2020-01-01T00:00:00+00:00' WHERE id=?", (background,))
-        store.enqueue("urgent2", "gift_send", "other", {})
-        assert store.claim()["id"] == background
+        for index in range(10):
+            store.enqueue(f"urgent-{index}", "gift_send", f"other-{index}", {})
+        claimed = []
+        for index in range(5):
+            if index == 2:
+                path = store.path
+                store.close()
+                store = Store(path)
+            claimed.append(store.claim()["id"])
+            if claimed[-1] == background:
+                break
+        # Four paid turns then an aged ordinary turn, despite a continuous
+        # paid backlog and a restart; age no longer overtakes every new sale.
+        assert background in claimed and len(claimed) <= 5
+        assert len(claimed) == len(set(claimed))
     finally:
         store.close()
 
