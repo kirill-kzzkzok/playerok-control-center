@@ -311,14 +311,30 @@ def confirm_offer_group(store, owner, account, members, *, expected=None):
     return group_id
 
 
+def logical_offer_groups(store, owner, account):
+    """Only verified UUID aliases; never infer identity from a marketing title."""
+    groups = defaultdict(list)
+    if not account or store.setting("playerok:account_id") != account:
+        return groups
+    for row in store.rows(
+        "SELECT l.item_id,p.id FROM logical_listings l JOIN logical_products p ON p.id=l.product_id "
+        "JOIN administrators a ON a.user_id=p.owner_id "
+        "WHERE p.owner_id=? AND p.account_id=? AND l.verified_at IS NOT NULL ORDER BY l.item_id",
+        (owner, account),
+    ):
+        groups["group:logical_" + row["id"]].append(row["item_id"])
+    return {key: members for key, members in groups.items() if len(members) > 1}
+
+
 def grouped_statistics(store, owner, account, days=7):
     result = statistics(store, days, account_id=account or "")
     identities = offer_identities(store, account)
-    mapping, sources = {}, {}
+    sources = logical_offer_groups(store, owner, account)
+    mapping = {ident: group for group, members in sources.items() for ident in members}
     if account and store.setting("playerok:account_id") == account:
         for group in store.setting(f"analytics:{owner}:{account}:offer_groups", []):
             members = group["members"]
-            if all(
+            if not any(ident in mapping for ident in members) and all(
                 ident in identities and identities[ident]["identity"] == group["identity"]
                 for ident in members
             ):
@@ -352,6 +368,9 @@ def offer_suggestions(store, owner, account, days=7):
         for group in store.setting(f"analytics:{owner}:{account}:offer_groups", [])
         for ident in group["members"]
     }
+    assigned.update(
+        ident for members in logical_offer_groups(store, owner, account).values() for ident in members
+    )
     buckets = defaultdict(list)
     for ident, value in identities.items():
         if ident in sold and ident not in assigned:

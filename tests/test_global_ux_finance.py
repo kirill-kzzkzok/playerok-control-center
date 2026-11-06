@@ -366,13 +366,13 @@ async def test_offer_group_rejects_unconfirmed_or_different_product(ux, variant)
     assert not ux.store.rows("SELECT * FROM outbox")
 
 
-async def test_legacy_saved_filter_is_preserved_without_hiding_active_products_on_fresh_entry(ux):
+async def test_explicitly_saved_filter_wins_over_later_unsaved_selection(ux):
     await ux.ui.click("items")
     await ux.ui.click("itemfilter:DRAFT")
     await ux.ui.click("il:remember")
     await ux.ui.click("itemfilter:APPROVED")
     await ux.ui.click("home")
     await ux.ui.click("items")
-    assert (await ux.state.get_data())["item_filters"]["status"] == "APPROVED"
+    assert (await ux.state.get_data())["item_filters"]["status"] == "DRAFT"
     assert ux.store.setting("ui:7:item_filters")["status"] == "DRAFT"
     assert not ux.store.rows("SELECT * FROM outbox")
