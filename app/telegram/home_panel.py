@@ -244,7 +244,7 @@ class HomePanel:
         problems = self.problems(include_paid=False) or bool(paid_total)
         connection = connection_summary(self.api)
         note = (
-            "Есть важные события по заказам или работе магазина."
+            "Есть важные события по заказам или работе магазина, требующие внимания."
             if problems
             else (
                 "В локальной истории проблем нет."

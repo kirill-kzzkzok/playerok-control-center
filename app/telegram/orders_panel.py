@@ -99,6 +99,20 @@ class OrdersPanel:
         cached = bool(saved)
         if cached:
             order = json.loads(saved[0]["payload"])
+            seller = ((order.get("item") or {}).get("user") or {}).get("id")
+            if not seller and order.get("id") == ident and order.get("direction") == "OUT":
+                from app.workers.sync import request_sync
+
+                request_sync(self.store, "deal", ident)
+                # Omitted identity is neither ownership proof nor a conflict.
+                # Do not expose unverified buyer/item data or action tokens.
+                return (
+                    "🛒 Статус заказа: "
+                    + status(order.get("status"), "order")
+                    + "\nБот ожидает подтверждённые данные Playerok. "
+                    "Ручное действие пока не требуется. Проверка продолжится автоматически.",
+                    keyboard([], back=("⬅️ К заказам", "orders")),
+                )
             if (
                 order.get("id") != ident
                 or order.get("direction") != "OUT"

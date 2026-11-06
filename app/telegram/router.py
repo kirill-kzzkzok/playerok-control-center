@@ -109,6 +109,10 @@ def create_router(store, api, products, synchronizer):
             (
                 "item:",
                 "iv:delivery:",
+                "iv:edit:",
+                "iv:details:",
+                "iv:other:",
+                "iv:history:",
                 "iv:more:",
                 "stock:view:",
                 "finance:",
