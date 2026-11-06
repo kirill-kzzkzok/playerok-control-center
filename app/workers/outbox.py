@@ -1085,6 +1085,7 @@ class OutboxWorker:
                     and error.code
                     in {
                         "DELIVERY_CHAT_NOT_YET_AVAILABLE",
+                        "DELIVERY_SNAPSHOT_NOT_YET_AVAILABLE",
                         "DELIVERY_SELLER_NOT_YET_AVAILABLE",
                         "DELIVERY_FLAGS_NOT_YET_AVAILABLE",
                         "PLATFORM_DETAILS_NOT_YET_AVAILABLE",
@@ -1106,6 +1107,7 @@ class OutboxWorker:
                         "BALANCE_OBSERVATION_STALE",
                         "DAILY_BUDGET_EXHAUSTED",
                         "GIFT_LISTING_DETAILS_NOT_YET_AVAILABLE",
+                        "DELIVERY_SNAPSHOT_NOT_YET_AVAILABLE",
                         "DELIVERY_FLAGS_NOT_YET_AVAILABLE",
                     }
                     or visibility_retry

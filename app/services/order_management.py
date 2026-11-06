@@ -117,15 +117,32 @@ async def deal_details(
     Read the SAME deal through the full contract before applying delivery guards.
     Never infer a chat or switch a purchased item to a different public listing.
     """
+    def complete(snapshot):
+        # Missing is different from a positively conflicting identity. Never
+        # use a full-detail fallback to erase a known seller/direction conflict.
+        item = snapshot.get("item") or {}
+        if (
+            snapshot.get("id") not in (None, ident)
+            or snapshot.get("direction") not in (None, "OUT")
+            or (item.get("user") or {}).get("id") not in (None, api.account.id)
+        ):
+            sale(snapshot, ident, api.account.id)
+        return bool(
+            snapshot.get("id") and snapshot.get("direction") and snapshot.get("status") and item.get("id")
+        )
+
     order = await api.call("get_deal", deal_id=ident)
-    sale(order, ident, api.account.id)
+    short_complete = complete(order)
+    if short_complete:
+        sale(order, ident, api.account.id)
     item = order.get("item") or {}
     fields = order.get("obtaining_fields")
     has_field = isinstance(fields, list) and any(
         isinstance(f, dict) and f.get("id") == obtaining_field_id and f.get("value") for f in fields
     )
     if (
-        force_full
+        not short_complete
+        or force_full
         or need_chat
         and not (order.get("chat") or {}).get("id")
         or full_item
@@ -145,8 +162,10 @@ async def deal_details(
         or order.get("is_automated") is None
     ):
         detailed = await api.call("get_delivery_deal", deal_id=ident)
+        if not complete(detailed):
+            raise APIError("DELIVERY_SNAPSHOT_NOT_YET_AVAILABLE")
         sale(detailed, ident, api.account.id)
-        if (detailed.get("item") or {}).get("id") != item["id"]:
+        if item.get("id") and (detailed.get("item") or {}).get("id") != item["id"]:
             raise Conflict("Полная сделка относится к другому товару; выдача остановлена")
         compatible_detail(order, detailed)
         order = detailed
