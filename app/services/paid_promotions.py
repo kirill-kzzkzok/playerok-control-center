@@ -656,6 +656,7 @@ class PaidPromotions:
                     "automatic_receipt_check": True,
                 },
             )
+        stage = "MUTATION_RESPONSE"
         try:
             self.diagnostic(action["id"], "MUTATION_RESPONSE")
             result = await executor.mutate(
@@ -665,21 +666,30 @@ class PaidPromotions:
                 item_id=action["target"],
                 priority_status_id=value["quote_id"],
             )
-            self.diagnostic(action["id"], "CANDIDATE_EXTRACTION")
+            stage = "CANDIDATE_EXTRACTION"
             candidate = (result.get("status_payment") or {}).get("id") if isinstance(result, dict) else None
             self.update_intent(
                 action["id"],
                 candidate_id=candidate,
                 candidate_source="MUTATION_RESPONSE",
                 mutation_returned=True,
+                diagnostic={
+                    "stage": stage,
+                    "reason": "CHECKING",
+                    "candidate_present": bool(candidate),
+                    "checks": {},
+                },
             )
+            stage = "READBACK"
             return await self.confirm_receipt(action, persist=True)
         except Exception as error:  # noqa: BLE001 -- never repeat a possibly accepted POST
             diagnostic = self.store.setting(intent_key(action["id"]), {}).get("diagnostic", {})
             stage = (
                 "PERSISTENCE"
                 if isinstance(error, APIError) and error.code == "PREMIUM_RECEIPT_PERSISTENCE_FAILED"
-                else diagnostic.get("stage", "MUTATION_RESPONSE")
+                else diagnostic.get("stage", stage)
+                if stage == "READBACK"
+                else stage
             )
             try:
                 self.diagnostic(

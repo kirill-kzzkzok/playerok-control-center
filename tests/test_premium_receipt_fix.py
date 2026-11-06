@@ -358,3 +358,23 @@ def test_sdk_retains_old_mutation_receipt_and_reads_new_item_receipt_without_los
         assert current["status_payment"]["value"] == 9
     finally:
         account.close()
+
+
+async def test_diagnostic_write_cannot_precede_saving_returned_candidate(rig, monkeypatch):
+    r = rig
+    op, _ = await scenario(r, mutation="full")
+    original = r.store.set_setting
+
+    def storage(key, value):
+        if (
+            key == intent_key(op)
+            and value.get("diagnostic", {}).get("stage") == "CANDIDATE_EXTRACTION"
+            and "candidate_id" not in value
+        ):
+            raise OSError("a diagnostic must not lose an already returned candidate")
+        return original(key, value)
+
+    monkeypatch.setattr(r.store, "set_setting", storage)
+    await r.worker.once(operation_id=op)
+    assert r.store.setting(intent_key(op))["candidate_id"] == "receipt-1"
+    assert r.store.rows("SELECT status FROM outbox WHERE id=?", (op,)) == [{"status": "SUCCEEDED"}]
