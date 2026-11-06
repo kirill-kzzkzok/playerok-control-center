@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>PREPARED ONLY. Register as the existing shop owner after an isolated launch/restart test. Does not grant spending permission.</Description>
+  </RegistrationInfo>
+  <Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers>
+  <Principals>
+    <Principal id="Owner"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure>
+  </Settings>
+  <Actions Context="Owner">
+    <Exec>
+      <Command>C:\Users\user\Documents\ChatGPT\playerok\.venv\Scripts\python.exe</Command>
+      <Arguments>-u -m app</Arguments>
+      <WorkingDirectory>C:\Users\user\Documents\ChatGPT\playerok</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>

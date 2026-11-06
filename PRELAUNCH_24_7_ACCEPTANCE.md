@@ -212,3 +212,10 @@ Ruff check, Ruff format --check, compileall, pip check и selfcheck прошли
 | Автономная эксплуатация 24/7 | NOT VERIFIED | Нужны разрешённая контролируемая живая продажа, физический VPN/restart тест и наблюдение |
 
 Новых кнопок/экранов/настроек/подтверждений нет. STOP, финансовые лимиты, история, UUID, резервы и неизвестные результаты сохранены. Промежуточный упавший прогон (6 constructor regressions) не скрыт; причина исправлена, старые тесты сохранены, последующий полный прогон зелёный. Последующий документальный коммит не меняет app/tests/tools.
+
+
+## Независимая adversarial-приёмка —6 ноября2026
+
+Проверенный source/test HEAD `2a9266638bf76ef9bcd60b37d8f56772a36e1549`:2465passed/0failed/0errors/0skipped,12 непересекающихся частей, один HEAD, все exit0. Ruff/format/compileall/pip check/selfcheck exit0; backup reopen/migrations вошли в полный набор. Найдено и исправлено10 адресных дефектов без новых кнопок, настроек и финансовых разрешений. Полные RED/GREEN, матрицы guards/recovery и ограничения —[FINAL_24_7_ADVERSARIAL_AUDIT.md](FINAL_24_7_ADVERSARIAL_AUDIT.md).
+
+Офлайн PASS не означает готовность Windows-магазина24/7: Task Scheduler только подготовлен, физический Happ/DNS/egress/reboot и реальные платежи не испытаны, визуальное сравнение owner counters недоступно. Рабочие лоты/.env/SQLite/сессии и настройки Windows не менялись. Свежие Playerok reads TXE427/VPM418 подтверждают sequence, priority_position10 не используется для решения. GitHub CI на этом SHA отсутствует. UNKNOWN без достаточной корреляции и явный STOP сохраняются.
