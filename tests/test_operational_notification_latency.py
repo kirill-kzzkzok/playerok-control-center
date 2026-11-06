@@ -59,4 +59,5 @@ async def test_critical_send_precedes_one_hundred_slow_historical_edits(tmp_path
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+        await Notifications(store, bot).close()
         store.close()

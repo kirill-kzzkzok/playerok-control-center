@@ -11,7 +11,7 @@ import time
 
 from app.database.store import Conflict, encode, now
 from app.services.replies import Replies
-from app.telegram.errors import REJECTED_CONTENT, telegram_error
+from app.telegram.errors import REJECTED_CONTENT, send_failure, telegram_error
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 from app.telegram.panel_tracking import panel_owner
@@ -132,11 +132,26 @@ class ChatCards:
 
     async def flush(self):
         async with self.store.chat_card_lock:
+            # Expired SENDING after a crash is not proof that HTTP never ran.
+            with self.store.transaction() as db:
+                expired = db.execute(
+                    "SELECT owner_id,chat_id FROM chat_cards WHERE state='SENDING' AND busy_until<=?",
+                    (time.time(),),
+                ).fetchall()
+                db.execute(
+                    "UPDATE chat_cards SET state='UNCERTAIN',busy_until=0 WHERE state='SENDING' AND busy_until<=?",
+                    (time.time(),),
+                )
+                for row in expired:
+                    self.unknown_notice(db, row)
             self.confirmed_replies()
+            started = time.monotonic()
             for row in self.store.rows(
                 "SELECT * FROM chat_cards WHERE account_id=? AND state IN ('NEW','OPEN') AND busy_until<=? AND retry_after<=? AND failures<8 ORDER BY CASE state WHEN 'NEW' THEN 0 ELSE 1 END,updated_at LIMIT 100",
                 (self.account, time.time(), time.time()),
             ):
+                if time.monotonic() - started >= 2:
+                    break  # Budget between RPCs, never cancel a possible send.
                 await self.update(row)
 
     async def refresh(self, owner, token):
@@ -146,6 +161,13 @@ class ChatCards:
         )
         if rows:
             await self.update(rows[0])
+
+    @staticmethod
+    def unknown_notice(db, row):
+        db.execute(
+            "UPDATE notifications SET status='UNCERTAIN' WHERE owner_id=? AND status='CARD' AND event_key IN (SELECT 'message:'||id FROM chat_messages WHERE chat_id=?)",
+            (row["owner_id"], row["chat_id"]),
+        )
 
     async def update(self, row):
         from app.telegram.navigation_context import panel_key
@@ -200,10 +222,13 @@ class ChatCards:
                 )
                 ident = row["telegram_message_id"]
         except asyncio.CancelledError:
-            self.store.execute(
-                "UPDATE chat_cards SET state=?,busy_until=0,retry_after=? WHERE token=? AND busy_token=?",
-                ("UNCERTAIN" if sending else "OPEN", time.time() + 30, row["token"], token),
-            )
+            with self.store.transaction() as db:
+                changed = db.execute(
+                    "UPDATE chat_cards SET state=?,busy_until=0,retry_after=? WHERE token=? AND busy_token=? AND state!='CLOSED'",
+                    ("UNCERTAIN" if sending else "OPEN", time.time() + 30, row["token"], token),
+                ).rowcount
+                if sending and changed:
+                    self.unknown_notice(db, row)
             raise
         except Exception as error:  # noqa: BLE001 -- never repeat an unknown send
             code = telegram_error(error)
@@ -216,13 +241,21 @@ class ChatCards:
                 )
                 return
             else:
-                rejected = code == "RATE_LIMITED"
+                outcome, _, delay = send_failure(error)
+                rejected = outcome == "PENDING"
+                retryable = (
+                    rejected or not sending and code in {"TIMEOUT", "NETWORK_ERROR", "PROXY_UNAVAILABLE"}
+                )
                 self.store.execute(
                     "UPDATE chat_cards SET state=?,busy_until=0,retry_after=?,failures=? WHERE token=? AND busy_token=?",
                     (
                         "NEW" if sending and rejected else "UNCERTAIN" if sending else "OPEN",
-                        time.time() + max(5 * 2 ** min(row["failures"], 8), getattr(error, "retry_after", 0)),
-                        8 if code in REJECTED_CONTENT else row["failures"] + 1,
+                        time.time() + max(min(60, 5 * 2 ** min(row["failures"], 8)), delay),
+                        min(7, row["failures"] + 1)
+                        if retryable
+                        else 8
+                        if code in REJECTED_CONTENT
+                        else row["failures"] + 1,
                         row["token"],
                         token,
                     ),

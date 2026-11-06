@@ -35,6 +35,24 @@ class Notifications:
         self.preferences = NotificationPreferences(store)
         notification_baseline(store)
 
+    async def flush_chats(self):
+        task = getattr(self.store, "chat_card_flush_task", None)
+        if task is None or task.done():
+            if task is not None:
+                await task  # Retrieve a completed RPC failure before replacing it.
+            task = asyncio.create_task(ChatCards(self.store, self.bot).flush(), name="chat-card-flush")
+            self.store.chat_card_flush_task = task
+        # Only stop waiting. The one owned task retains its lease and journals
+        # the real RPC outcome, and the next cycle joins it instead of resending.
+        await asyncio.wait_for(asyncio.shield(task), timeout=2)
+
+    async def close(self):
+        task = getattr(self.store, "chat_card_flush_task", None)
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            self.store.chat_card_flush_task = None
+
     async def once(self):
         if not self.store.rows("SELECT user_id FROM administrators LIMIT 1"):
             return
@@ -440,7 +458,7 @@ class Notifications:
         # cannot monopolize the next cycle. Receipt cancellation retains the
         # existing PROCESSING -> UNCERTAIN contract; no business action repeats.
         for name, callback in (
-            ("chats", lambda: ChatCards(self.store, self.bot).flush()),
+            ("chats", self.flush_chats),
             ("receipts", lambda: OperationResults(self.store).notify(self.bot)),
             ("edits", self.refresh_actions),
         ):
@@ -690,10 +708,13 @@ class Notifications:
         self.store.execute(
             "UPDATE operation_receipts SET notice_status='UNCERTAIN' WHERE notice_status='PROCESSING'"
         )
-        while not stop.is_set():
-            with worker_cycle(self.store, "notifications", 5):
-                await self.once()
-            try:
-                await asyncio.wait_for(stop.wait(), timeout=5)
-            except TimeoutError:
-                continue
+        try:
+            while not stop.is_set():
+                with worker_cycle(self.store, "notifications", 5):
+                    await self.once()
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=5)
+                except TimeoutError:
+                    continue
+        finally:
+            await self.close()
