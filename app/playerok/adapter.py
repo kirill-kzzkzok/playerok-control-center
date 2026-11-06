@@ -17,6 +17,7 @@ import httpx
 
 from app.playerok.response_diagnostics import response_facts
 from app.playerok.thread_calls import CallsClosedError, calls_for
+from app.telemetry import measurements, record
 from playerokapi.account import Account
 from playerokapi.misc import PERSISTED_QUERIES, QUERIES
 
@@ -186,6 +187,7 @@ class SafeAccount(Account):
         # Pace admission separately from exclusive mutation ownership. Reads
         # use the existing thread-safe client while permit() keeps the writer
         # RLock through the entire synchronous POST, even after async cancellation.
+        http_started = time.perf_counter()
         try:
             if method == "get":
                 response = self.client.get(url, params=payload, headers=request_headers)
@@ -198,6 +200,7 @@ class SafeAccount(Account):
         except httpx.HTTPError:
             raise APIError("NETWORK_ERROR", uncertain=not read) from None
         finally:
+            record("http", time.perf_counter() - http_started)
             for attachment in (files or {}).values():
                 if hasattr(attachment[1], "close"):
                     attachment[1].close()
@@ -570,6 +573,13 @@ class Playerok:
 
         try:
             for attempt in range(2):
+                trace = measurements.get()
+                if trace is not None:
+                    entry = trace.setdefault("playerok_methods", {}).setdefault(
+                        method, {"attempts": 0, "retries": 0}
+                    )
+                    entry["attempts"] += 1
+                    entry["retries"] += int(attempt > 0)
                 try:
                     result = await calls_for(self).call(
                         run, independent_read=isinstance(self.account, SafeAccount) and method != "get"

@@ -13,6 +13,7 @@ LABELS = {
     "playerok_lock": "ожидание Playerok",
     "playerok": "запрос Playerok",
     "telegram": "обновление Telegram",
+    "http": "HTTP Playerok",
 }
 
 
@@ -28,6 +29,7 @@ def finish(started, values):
     if elapsed >= 3:
         from app.security.logging import event
 
-        stage = max(values, key=values.get) if values else None
+        durations = {key: value for key, value in values.items() if type(value) in {int, float}}
+        stage = max(durations, key=durations.get) if durations else None
         name = LABELS.get(stage, "подготовка интерфейса")
         event("WARNING", f"Медленный отклик кнопки · {elapsed:.1f} с · {name}", level=logging.WARNING)

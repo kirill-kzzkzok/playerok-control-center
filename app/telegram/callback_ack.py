@@ -14,6 +14,21 @@ ACK_TIMEOUT = 2
 ACTION_MAX_WAIT = 10
 
 
+# Only static routing words are diagnostic; never callback identifiers or input.
+TRACE_GROUPS = frozenset(
+    (
+        "home items item iv lp ap auto stock ar chat chatpage chatmedia orders order od settings profile sp tools "
+        "finance fin providers stats sd sr st promotions promo payp pp gft launch ln nav ops result sync attention "
+        "create editname editdesc discount"
+    ).split()
+)
+TRACE_VERBS = frozenset(
+    (
+        "view show item details history list open add edit commit check stop enable arm new menu settings reply close back"
+    ).split()
+)
+
+
 async def acknowledge(query, **kwargs):
     status = "transport"
     try:
@@ -140,6 +155,11 @@ class CallbackAcknowledgements(BaseMiddleware):
 
         started = time.perf_counter()
         values = {}
+        query = getattr(event, "callback_query", None)
+        parts = str(getattr(query, "data", "") or "").split(":")
+        group = parts[0] if parts[0] in TRACE_GROUPS else "other"
+        verb = parts[1] if len(parts) > 1 and parts[1] in TRACE_VERBS else None
+        values["context"] = {"callback_group": group, "action": group + (":" + verb if verb else "")}
         token = measurements.set(values)
         scope = card_scope.set(scope_for(self.access.store, event, data["bot"].id))
         try:
