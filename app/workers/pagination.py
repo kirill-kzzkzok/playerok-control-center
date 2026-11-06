@@ -2,7 +2,7 @@
 
 import json
 
-from app.database.store import encode, now
+from app.database.store import Conflict, encode, now
 from app.playerok.adapter import APIError, validate_page
 
 
@@ -12,7 +12,7 @@ class PageScanner:
             raise ValueError("Лимит страниц должен быть положительным")
         self.store, self.api, self.pages_per_stream = store, api, pages_per_stream
 
-    async def scan(self, key, method, collection, ingest, *, page_guard=None, **kwargs):
+    async def scan(self, key, method, collection, ingest, *, page_guard=None, on_entry_error=None, **kwargs):
         """Poll the head, then resume a bounded history pass. Never infer cursor ordering.
 
         Entries commit before the checkpoint: interruption replays at most a page,
@@ -26,11 +26,21 @@ class PageScanner:
 
         async def fetch(after, visited):
             page = await self.api.call(method, after_cursor=after, **kwargs)
-            entries, following = validate_page(page, collection, visited)
+            entries, following = validate_page(
+                page, collection, visited, validate_entries=on_entry_error is None
+            )
             if page_guard:
                 page_guard(page)
             for entry in entries:
-                ingest(entry)
+                if on_entry_error is None:
+                    ingest(entry)
+                    continue
+                try:
+                    if not isinstance(entry, dict) or not entry.get("id"):
+                        raise ValueError("Incomplete entry identity")
+                    ingest(entry)
+                except (ValueError, KeyError, TypeError, Conflict) as error:
+                    on_entry_error(entry, error)
             return len(entries), following
 
         try:

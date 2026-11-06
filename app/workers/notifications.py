@@ -233,12 +233,34 @@ class Notifications:
                     )
                 markup = keyboard([[("Настройки продвижения", "promotions")]])
             elif event["kind"] == "enrollment_blocked":
-                text = (
-                    "⚠️ <b>Автоматическая выдача не запущена</b>\nЗаказ: "
-                    + escaped(payload["order_id"], 100)
-                    + "\nТребуется проверка владельца. Сбой условий не запускает слепой повтор."
+                if payload.get("snapshot_wait"):
+                    ident = payload.get("order_id")
+                    if ident and self.store.rows("SELECT 1 FROM orders WHERE id=?", (ident,)):
+                        self.store.execute(
+                            "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) "
+                            "SELECT ?,user_id,'RESOLVED' FROM administrators",
+                            (event["key"],),
+                        )
+                        continue
+                    text = (
+                        "⏳ Playerok вернул неполные данные сделки. Бот повторит чтение автоматически. "
+                        "Остальные заказы обрабатываются; ручное действие пока не требуется."
+                    )
+                else:
+                    text = (
+                        "⚠️ <b>Автоматическая выдача не запущена</b>\nЗаказ: "
+                        + escaped(payload.get("order_id") or "неизвестен", 100)
+                        + (
+                            "\nPlayerok вернул противоречащую идентичность этой сделки. Нужна её проверка."
+                            if payload.get("identity_conflict")
+                            else "\nТребуется проверка владельца. Сбой условий не запускает слепой повтор."
+                        )
+                    )
+                markup = keyboard(
+                    [[("Заказ", "order:" + payload["order_id"])]]
+                    if payload.get("order_id")
+                    else [[("Заказы", "orders")]]
                 )
-                markup = keyboard([[("Заказ", "order:" + payload["order_id"])]])
             elif event["kind"] == "logical_product_blocked":
                 rows = self.store.rows(
                     "SELECT p.code,p.error_code,l.item_id FROM logical_products p JOIN logical_listings l ON l.product_id=p.id WHERE p.id=? LIMIT 1",

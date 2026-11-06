@@ -68,9 +68,7 @@ class SafeAccount(Account):
         self._is_initiated = False
         self.writes_enabled = writes_enabled
         self.auto_accept_agreements = auto_accept_agreements
-        self.client = client or httpx.Client(
-            timeout=20, follow_redirects=False, verify=True, trust_env=False
-        )
+        self.client = client or httpx.Client(timeout=20, follow_redirects=False, verify=True, trust_env=False)
         self._lock = threading.RLock()
         self._permitted = None
         self._permit_thread = None
@@ -637,11 +635,13 @@ class Playerok:
         raise APIError("PAGINATION_LIMIT_INCOMPLETE")
 
 
-def validate_page(page, collection, seen=()):
+def validate_page(page, collection, seen=(), *, validate_entries=True):
     """Validate the entire envelope before committing any entries or cursor."""
     if not isinstance(page, dict) or not isinstance(page.get(collection), list):
         raise APIError("INCOMPLETE_PAGE")
-    if any(not isinstance(entry, dict) or not entry.get("id") for entry in page[collection]):
+    if validate_entries and any(
+        not isinstance(entry, dict) or not entry.get("id") for entry in page[collection]
+    ):
         raise APIError("INCOMPLETE_PAGE_ENTRY")
     info = page.get("page_info")
     if not isinstance(info, dict) or not isinstance(info.get("has_next_page"), bool):

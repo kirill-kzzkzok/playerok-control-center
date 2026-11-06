@@ -1,9 +1,10 @@
 import asyncio
+import hashlib
 import logging
 import random
 import time
 
-from app.database.store import encode, now
+from app.database.store import Conflict, encode, now
 from app.playerok.adapter import APIError
 from app.services.notification_preferences import notification_baseline
 from app.services.sync_health import orders_sync_failed
@@ -102,6 +103,45 @@ class Synchronizer(PageScanner):
             self.store.set_setting("realtime:reconciliation", {"pending": pending, "at": now()})
             return len(requests)
 
+    def invalid_order(self, snapshot, error):
+        ident = snapshot.get("id") if isinstance(snapshot, dict) else None
+        ident = ident if isinstance(ident, str) and ident else None
+        conflict = isinstance(error, Conflict)
+        evidence = encode(snapshot)
+        key = "sync:invalid:" + hashlib.sha256(evidence.encode()).hexdigest()
+        with self.store.transaction() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO inbox(key,kind,payload,received_at,processed_at) "
+                "VALUES(?,'sync_deal_evidence',?,?,?)",
+                (key, evidence, now(), now()),
+            )
+            db.execute(
+                "INSERT OR IGNORE INTO inbox(key,kind,payload,received_at,processed_at) "
+                "VALUES(?,'enrollment_blocked',?,?,?)",
+                (
+                    "sync:invalid:notice:" + (ident or "unidentified"),
+                    encode({"order_id": ident, "snapshot_wait": not conflict, "identity_conflict": conflict}),
+                    now(),
+                    now(),
+                ),
+            )
+            if conflict and ident:
+                # System-origin annotation; never claim the owner made a decision.
+                db.execute(
+                    "INSERT INTO order_annotations(order_id,problem,note,revision,actor,updated_at) "
+                    "SELECT id,1,?,1,0,? FROM orders WHERE id=? "
+                    "ON CONFLICT(order_id) DO UPDATE SET problem=1,note=excluded.note,"
+                    "revision=order_annotations.revision+1,actor=0,updated_at=excluded.updated_at "
+                    "WHERE order_annotations.problem=0",
+                    (
+                        "Playerok вернул противоречащую идентичность сделки. Нужна проверка этой сделки.",
+                        now(),
+                        ident,
+                    ),
+                )
+        if ident:
+            self.request("deal", ident)
+
     def ingest_chat(self, chat):
         self.store.execute(
             "INSERT INTO sync_chats(id,payload,discovered_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
@@ -155,7 +195,14 @@ class Synchronizer(PageScanner):
         ]
         for key, method, collection, ingest, kwargs in streams:
             try:
-                counts[key], complete = await self.scan(key, method, collection, ingest, **kwargs)
+                counts[key], complete = await self.scan(
+                    key,
+                    method,
+                    collection,
+                    ingest,
+                    on_entry_error=self.invalid_order if key == "orders" else None,
+                    **kwargs,
+                )
                 if key == "orders" and complete:
                     self.store.set_setting("orders:last_complete_sync", now())
             except APIError as error:
