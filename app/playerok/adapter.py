@@ -85,6 +85,7 @@ class SafeAccount(Account):
         self.auto_accept_agreements = auto_accept_agreements
         self.client = client or httpx.Client(timeout=20, follow_redirects=False, verify=True, trust_env=False)
         self._lock = threading.RLock()
+        self._request_lock = threading.RLock()
         self._permitted = None
         self._permit_thread = None
         self._dispatch_guard = None
@@ -167,7 +168,7 @@ class SafeAccount(Account):
             "x-apollo-operation-name": operation,
             "cookie": "; ".join(f"{k}={v}" for k, v in self.cookies.items()),
         }
-        with self._lock:
+        with self._request_lock:
             if not read and (self._permitted != operation or self._permit_thread != threading.get_ident()):
                 raise APIError("WRITE_NOT_AUTHORIZED")
             time.sleep(max(0, 0.3 - (time.monotonic() - self._last_request)))
@@ -182,8 +183,9 @@ class SafeAccount(Account):
                 raise APIError("CONNECTION_NOT_VERIFIED")
             if not read and self._dispatch_start:
                 self._dispatch_start()
-        # Read requests use the same thread-safe HTTP client. Only admission is
-        # paced under the account lock. A write still holds permit()'s outer RLock.
+        # Pace admission separately from exclusive mutation ownership. Reads
+        # use the existing thread-safe client while permit() keeps the writer
+        # RLock through the entire synchronous POST, even after async cancellation.
         try:
             if method == "get":
                 response = self.client.get(url, params=payload, headers=request_headers)
