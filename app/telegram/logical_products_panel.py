@@ -38,11 +38,14 @@ class LogicalProductsPanel:
 
     async def card(self, owner, item_id, state, *, details=False):
         self.owner(owner)
-        item = await self.api.call("get_item", id=item_id)
+        from app.services.product_readiness import ProductReadiness
+
+        item = await ProductReadiness(self.store, self.api).ui_item(owner, item_id)
         account = self.service.authority(owner)
         if item.get("id") != item_id or (item.get("user") or {}).get("id") != account:
             raise Conflict("Владелец объявления не подтверждён")
-        await self.service.refresh_title(item)
+        if not item.get("_ui_cached"):
+            await self.service.refresh_title(item)
         product = self.service.listing(item_id)
         if product and product["owner_id"] != owner:
             raise Conflict("Настройки принадлежат другому владельцу")
@@ -58,6 +61,10 @@ class LogicalProductsPanel:
         await state.set_data({"logical_view": view})
         prefix = "lp:" + view["nonce"] + ":"
         text = "⚡ <b>Автовыдача товара</b>\n" + escaped(view["title"], 120)
+        if item.get("_ui_cached"):
+            text += "\n🕒 Сохранённые данные: " + local_time(item.get("_ui_observed_at"))
+            if item.get("_ui_stale"):
+                text += " · обновляются в фоне"
         rows = []
         if product:
             config = json.loads(product["config"])
@@ -96,11 +103,16 @@ class LogicalProductsPanel:
                 text += "\nПривязка отключена. Публичный код не разрешает выдачу."
             else:
                 try:
-                    self.service.verify_listing(product, item)
+                    if not item.get("_ui_stale"):
+                        self.service.verify_listing(product, item)
                 except ValueError as exc:
                     text += "\n⚠️ " + escaped(str(exc), 300)
                 else:
-                    text += "\nОписание подтверждено Playerok"
+                    text += (
+                        "\nСохранённая привязка товара"
+                        if item.get("_ui_stale")
+                        else "\nКод товара подтверждён Playerok"
+                    )
                 text += "\nНаследование перевыставлений: " + (
                     "разрешено" if product["inherit_enabled"] else "выключено"
                 )

@@ -634,9 +634,9 @@ def create_router(store, api, products, synchronizer):
                 )
                 return
             elif action == "sync":
-                await synchronizer.once()
+                synchronizer.request("catchup", "owner")
                 text, markup = (
-                    "Цикл сверки завершён. Статус: "
+                    "Сверка запрошена и будет выполнена в фоне. Текущее состояние: "
                     + escaped(synchronizer.health.get("status", "UNKNOWN"))
                     + ". Сохранённая история доступна локально; полная загрузка может занять несколько циклов.",
                     keyboard([[("🛒 Заказы", "orders")]]),

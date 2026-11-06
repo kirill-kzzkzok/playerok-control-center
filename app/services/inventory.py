@@ -35,7 +35,14 @@ class Inventory:
         return stock_scope(self.store, ident)
 
     async def item(self, owner, ident):
-        item = await self.automation.item(owner, ident)
+        from app.services.logical_products import LogicalProducts
+        from app.services.product_readiness import ProductReadiness
+
+        item = (
+            await ProductReadiness(self.store, self.automation.api).ui_item(owner, ident)
+            if LogicalProducts(self.store, self.automation.api).listing(ident)
+            else await self.automation.item(owner, ident)
+        )
         if item.get("deleted_at") or item.get("status") not in {
             "DRAFT",
             "APPROVED",

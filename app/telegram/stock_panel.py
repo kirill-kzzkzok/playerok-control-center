@@ -3,7 +3,7 @@ from dataclasses import asdict
 
 from app.database.store import Conflict
 from app.services.inventory import LABELS, Inventory
-from app.telegram.formatting import escaped
+from app.telegram.formatting import escaped, html_pages
 from app.telegram.keyboards import keyboard
 
 
@@ -12,10 +12,12 @@ class StockPanel:
         self.store, self.service = store, Inventory(store, api)
 
     async def card(self, owner, ident):
-        item = await self.service.automation.item(owner, ident)
+        from app.services.product_readiness import ProductReadiness
+
+        item = await ProductReadiness(self.store, self.service.automation.api).ui_item(owner, ident)
         counts = self.service.counts(ident)
         rows = [[("➕ Загрузить запас", "stock:add:" + ident)]]
-        rows += [[(f"{LABELS[s]}: {n}", f"stock:list:{ident}:{s}:0")] for s, n in counts.items()]
+        rows += [[(f"{LABELS[s]}: {n}", f"stock:list:{ident}:{s}:0")] for s, n in counts.items() if n]
         for draft in self.service.prepared(owner, ident):
             rows.append([("📥 Перенести запас из мастера", "stock:transfer:" + draft)])
         guard = self.store.setting(f"delivery:{ident}:enabled")
@@ -30,7 +32,7 @@ class StockPanel:
             "📚 <b>Склад · "
             + escaped(item.get("name") or ident, 150)
             + "</b>\n"
-            + "\n".join(f"{LABELS[s]}: {n}" for s, n in counts.items())
+            + ("\n".join(f"{LABELS[s]}: {n}" for s, n in counts.items() if n) or "📦 Склад пуст")
             + "\nСодержимое единиц скрыто. Выданные и карантинные значения повторно не используются."
             + note,
             keyboard(rows),
@@ -97,7 +99,7 @@ class StockPanel:
             text, markup = await self.card(owner, pending["id"])
             return f"✅ Добавлено: {count}. Автоматизация не включалась.\n\n" + text, markup
         if command == "list":
-            await self.service.automation.item(owner, ident)
+            await self.service.item(owner, ident)
             selected, page = parts[3], int(parts[4])
             if selected not in LABELS or not 0 <= page <= 100000:
                 raise Conflict("Страница недоступна")
@@ -113,6 +115,9 @@ class StockPanel:
                 or "Единиц нет."
             )
             buttons = [
+                [("Открыть единицу №" + str(row["id"]), f"stock:unit:{ident}:{row['id']}:0")]
+                for row in rows[:10]
+            ] + [
                 [("Заказ единицы №" + str(row["id"]), "order:" + row["order_id"])]
                 for row in rows[:10]
                 if row["order_id"]
@@ -125,6 +130,31 @@ class StockPanel:
             if nav:
                 buttons.append(nav)
             return text, keyboard(buttons + [[("К складу", "stock:view:" + ident)]])
+        if command == "unit":
+            await self.service.item(owner, ident)
+            unit, page = int(parts[3]), int(parts[4])
+            values = self.store.rows(
+                "SELECT i.*,r.order_id FROM inventory i LEFT JOIN reservations r ON r.inventory_id=i.id WHERE i.id=? AND i.item_id=?",
+                (unit, self.service.scope(ident)),
+            )
+            if not values:
+                raise Conflict("Единица недоступна в этом складе")
+            row = values[0]
+            pages = html_pages(row["secret"], 2800)
+            if not 0 <= page < len(pages):
+                raise Conflict("Страница недоступна")
+            nav = []
+            if page:
+                nav.append(("← Данные", f"stock:unit:{ident}:{unit}:{page - 1}"))
+            if page + 1 < len(pages):
+                nav.append(("Данные →", f"stock:unit:{ident}:{unit}:{page + 1}"))
+            rows = [nav] if nav else []
+            if row["order_id"]:
+                rows.append([("Связанный заказ", "order:" + row["order_id"])])
+            return (
+                f"📦 Единица №{unit} · {LABELS[row['status']]}\n<pre>{pages[page]}</pre>\nДоступно только владельцу. Повторная выдача использованных данных запрещена.",
+                keyboard(rows, back=("К списку", f"stock:list:{ident}:{row['status']}:0")),
+            )
         if command == "resume":
             await self.service.item(owner, ident)
             revision, policy = self.service.automation.get(ident)

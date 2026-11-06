@@ -43,7 +43,13 @@ class ItemPanel:
         ]
 
     async def card(self, ident, state):
-        item = await self.owned(ident)
+        from app.services.product_readiness import ProductReadiness
+
+        item = (
+            await ProductReadiness(self.store, self.api).ui_item(state.key.user_id, ident)
+            if self.store
+            else await self.owned(ident)
+        )
         images = self.images(item)
         if len(images) > 100:
             raise ValidationError("Слишком много изображений в ответе Playerok")
@@ -291,6 +297,14 @@ class ItemPanel:
                         url="https://playerok.com/products/" + quote(str(item.get("slug") or ident), safe=""),
                     )
                 ],
+            )
+        if item.get("_ui_cached"):
+            from app.telegram.presentation import local_time
+
+            text += (
+                "\n🕒 Сохранённые данные: "
+                + local_time(item.get("_ui_observed_at"))
+                + (" · ожидается обновление" if item.get("_ui_stale") else "")
             )
         return text, markup
 

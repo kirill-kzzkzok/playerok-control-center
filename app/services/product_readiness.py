@@ -69,6 +69,49 @@ class ProductReadiness:
                 return projection
         return cached
 
+    async def ui_item(self, owner, ident):
+        """Saved display only. Never used by payment/delivery/write preflight."""
+        self.automation.orders.owner(owner)
+        account = self.api.account.id
+        saved = self.store.setting("playerok:account_id")
+        if not account or saved and saved != account:
+            raise Conflict("Подключённый аккаунт Playerok изменился; локальные данные закрыты")
+        product = self.logical.listing(ident)
+        if product and (product["owner_id"] != owner or product["account_id"] != account):
+            raise Conflict("Настройки принадлежат другому владельцу или аккаунту")
+        key = (account, ident)
+        cached = getattr(self.api, "readiness_items", {}).get(key)
+        stamp = getattr(self.api, "readiness_item_times", {}).get(key)
+        current = self.observed_item(ident)
+        if cached and (cached.get("user") or {}).get("id") == account:
+            item = deepcopy(cached)
+            item.update(_ui_cached=True, _ui_stale=current is None, _ui_observed_at=stamp)
+        elif product:
+            baseline = json.loads(product["baseline"] or "{}")
+            item = {
+                "id": ident,
+                "user": {"id": account},
+                "name": product["title_snapshot"] or f"Товар [{product['code']}]",
+                "price": baseline.get("price"),
+                "status": product["server_status"],
+                "_ui_cached": True,
+                "_ui_stale": True,
+                "_ui_observed_at": product["verified_at"],
+            }
+        else:
+            item = await self.api.call("get_item", id=ident)
+            if item.get("id") != ident or (item.get("user") or {}).get("id") != account:
+                raise Conflict("Владелец объявления не подтверждён")
+            self.remember_item(item)
+            return item
+        if not fresh(stamp, 30):
+            prior = self.store.setting("readiness:" + ident, {})
+            self.store.set_setting(
+                "readiness:" + ident,
+                {**prior, "ui_owner": owner, "ui_account": account, "ui_requested": True},
+            )
+        return item
+
     def item_version(self, ident):
         # An edit queued/closed after the observation invalidates UI evidence too.
         rows = self.store.rows(
@@ -722,6 +765,14 @@ class ProductReadiness:
             "AND l.source_order_id IS NULL AND l.server_status='APPROVED'",
             (account.id,),
         )
+        requested = self.store.rows(
+            "SELECT substr(s.key,11) AS item_id,a.user_id AS owner_id FROM settings s "
+            "JOIN administrators a ON a.user_id=json_extract(s.value,'$.ui_owner') "
+            "WHERE s.key LIKE 'readiness:%' AND json_extract(s.value,'$.ui_requested')=1 "
+            "AND json_extract(s.value,'$.ui_account')=?",
+            (account.id,),
+        )
+        candidates = list({row["item_id"]: row for row in [*candidates, *requested]}.values())
         candidates.sort(
             key=lambda row: self.store.setting("readiness:" + row["item_id"], {}).get("attempt", "")
         )
@@ -735,6 +786,9 @@ class ProductReadiness:
         async def check(row):
             async with slots:
                 await self.check(row["owner_id"], row["item_id"], automatic=True)
+                if self.observed_item(row["item_id"]):
+                    key = "readiness:" + row["item_id"]
+                    self.store.set_setting(key, {**self.store.setting(key, {}), "ui_requested": False})
 
         await asyncio.gather(*(check(row) for row in due))
         return len(due)
