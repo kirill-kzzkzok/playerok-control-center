@@ -121,11 +121,11 @@
 
 Завершена на**c7e6af401bef159143a6ebbb2a9e88a755208625**. **2592passed /0failed /0errors /0skipped**.12непересекающихся shards, max4параллельно;2592уникальных manifest nodeids и2592уникальных XML testcase pairs, общий SHA/число collection/exit0 проверены. Не обнаружены lost-task, unretrieved exception, unawaited coroutine, closed-loop или RuntimeWarning в финальных outputs.
 
-Ruff check, Ruff format --check (487files), compileall app/playerokapi/tests/tools, pip check, selfcheck —exit0 на том же источнике. Selfcheck:OFFLINE_TEMPORARY_DATA/OK, external_requests0, миграции старой схемы и reopen/restore backup проверены на временных данных. Отдельные package/runtime проверки не выдаются за живые платежи.
+Ruff check, Ruff format --check (488files), compileall app/playerokapi/tests/tools, pip check, selfcheck —exit0 на том же источнике. Selfcheck:OFFLINE_TEMPORARY_DATA/OK, external_requests0, миграции старой схемы и reopen/restore backup проверены на временных данных. Отдельные package/runtime проверки не выдаются за живые платежи.
 
 Артефакты:data/full-ux-acceptance.json; data/full-ux-accepted-{0..11}.txt/.exit/.xml/-manifest.json; data/full-ux-accepted-{ruff,format,compile,pip,selfcheck}.txt. Четыре части полного набора дают обычные PytestWarning о record_property/xunit2; они не являются skipped/xfail и не скрывают провалы. Повторный профиль и исходные неуспешные прогоны сохранены. После принятого источника изменяются только Markdown-отчёты/инвентаризация; тождество production-кода и тестов проверяется черезgit diff.
 
-GitHub Actions будет указан после push итогового отчётного HEAD. Локальная приёмка не подменяет CI или доказательство24/7 в реальной сети.
+GitHub Actions после push635cd2ba66551514c94696f3036596f0022e779b: [run42271543076](https://github.com/kirill-kzzkzok/playerok-control-center/actions/runs/42271543076), conclusion=failure. Все3jobs имеют steps=[], проверки не запускались. Annotation GitHub: recent account payments failed or spending limit needs increase (Billing & plans). Это **BLOCKED_CI**, не падение теста и неSUCCESS. Локальная приёмка не подменяет CI или доказательство24/7 в реальной сети.
 
 
 ## Дополнительная проверка после первого полного прогона
@@ -140,3 +140,10 @@ GitHub Actions будет указан после push итогового отч
 Финальный повтор скорости наc7e6af4 при четырёх фоновых pytest-процессах:20кликов/0API, delay3s p50=14.94ms,p95=p99=21.21ms,ACK p95=0.39ms; delay6s p50=16.18ms,p95=p99=21.36ms,ACK p95=0.82ms. Первоначальная таблица выше — предшествующий сопоставимый замер; финальные after JSON обновлены этим повтором. Показатели сетевых сервисов по ним не утверждаются.
 
 Предварительная проверка GitHub: origin/master8e9a83d является предком локального HEAD, чужие изменения не откатывались. Старый Actions run42234855377 не запускал jobs: GitHub сообщил failed recent account payments/spending limit. Это не зелёный CI и не ошибка pytest; финальный push/run нужно проверить отдельно.
+
+
+## Итоговый вывод
+
+Адресные исправления и офлайн-приёмка33+5 требований завершены. **Офлайн2592/0/0/0; выпуск с подтверждённым CI заблокирован внешней оплатой GitHub.** Реальные эксплуатационные SLA/24×7 не подтверждены этим запуском. Финальный принятый runtime/test SHA:c7e6af401bef159143a6ebbb2a9e88a755208625; следующие коммиты меняют только Markdown-отчёты/route inventory. Разница635cd2b против принятого источника — FULL_BOT_UX_AUDIT.md,PROGRESS.md,UX_BUTTON_MAP.md; идентичность production-кода/тестов проверена. Полный SHA отчётного HEAD и финальная ссылка Actions доступны в сообщении о завершении.
+
+Применение: обычный перезапуск приложения для загрузки нового кода. Агент не останавливал рабочий магазин и не выполнял операции с реальными товарами. Не требуется пересоздавать товары или очищать историю/резервы/UNKNOWN.
