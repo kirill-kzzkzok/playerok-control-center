@@ -59,6 +59,14 @@ class Executor:
         }
 
     def dispatch_guard(self, action):
+        if action["kind"] == "edit" and self.store.rows(
+            "SELECT 1 FROM audit_log WHERE action='RECOVER_UNSTARTED_EDIT' AND target=?", (action["id"],)
+        ):
+            from app.services.operation_outcomes import historical_edit_authority
+
+            with self.store.transaction() as db:
+                if not historical_edit_authority(db, action):
+                    raise Conflict("Правка отменена последующим решением владельца")
         if action["kind"] in {"stock_pause", "stock_resume"}:
             from app.services.stock_visibility import guard
 
@@ -986,7 +994,7 @@ class OutboxWorker:
         if recovered:
             event(
                 "WARNING",
-                f"Восстановлено операций после истечения lease: {recovered}. Неизвестные отправки не повторяются.",
+                f"Восстановлено операций: {recovered}. Неизвестные отправки не повторяются.",
                 level=30,
             )
         action = self.store.claim(

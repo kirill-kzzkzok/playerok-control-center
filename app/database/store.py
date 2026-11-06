@@ -675,6 +675,9 @@ class Store:
 
     def recover(self):
         with self.transaction() as db:
+            from app.services.operation_outcomes import recover_historical_edits
+
+            restored_edits = recover_historical_edits(db)
             affected = db.execute(
                 "SELECT id,operation_key,kind,target,started_at,attempts FROM outbox WHERE status='PROCESSING' AND lease_until<?",
                 (time.time(),),
@@ -759,7 +762,7 @@ class Store:
                         "INSERT INTO order_history(order_id,source,new_status,note,created_at) SELECT id,'FULFILLMENT_RESULT',status,'UNCERTAIN: LEASE_EXPIRED',? FROM orders WHERE id=?",
                         (now(), row["target"]),
                     )
-            return len(affected)
+            return len(affected) + restored_edits
 
     def audit(self, actor, action, target, outcome):
         self.execute(
