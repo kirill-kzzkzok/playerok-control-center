@@ -91,6 +91,9 @@ async def test_finance_withdrawal_choice_preserves_product_context(cards):
     await r.ui.click("fin:select:SBP")
     assert "finance:lot" in buttons(r.session.last_panel)
     assert "profile" not in buttons(r.session.last_panel)
+    await r.ui.click("fin:refresh")
+    assert "finance:lot" in buttons(r.session.last_panel)
+    assert "profile" not in buttons(r.session.last_panel)
     await r.ui.click("finance:lot")
     assert "Financial fixture" in r.session.last_panel.text
     assert not r.store.rows("SELECT * FROM financial_operations")

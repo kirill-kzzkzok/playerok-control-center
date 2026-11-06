@@ -320,8 +320,9 @@ class FinancePanel:
             if data.get("withdrawal_amount") is not None:
                 return self.amount_text(data["withdrawal_amount"], snapshot, owner)
             await state.set_state(None)
+            origin = data.get("finance_origin")
             return "✅ Условия выбранного способа обновлены для всех товаров.", keyboard(
-                [[("К профилю", "profile")]]
+                [[("К расчёту", "finance:" + origin) if origin else ("К профилю", "profile")]]
             )
         if action.startswith("finance:"):
             await state.clear()
