@@ -5,7 +5,6 @@ from urllib.parse import quote
 from aiogram.types import InlineKeyboardButton
 
 from app.database.store import Conflict
-from app.playerok.adapter import APIError
 from app.services.automation import Automation
 from app.services.catalog import ORDER_FILTERS, order_page
 from app.services.finance import checked_time
@@ -86,15 +85,27 @@ class OrdersPanel:
         return text, keyboard(rows, back=("⬅️ Мой магазин", "home"))
 
     async def card(self, owner, ident, *, details=False):
-        cached = False
-        try:
+        self.service.owner(owner)
+        account = getattr(self.service.api.account, "id", None)
+        bound = self.store.setting("playerok:account_id")
+        if not account or bound and bound != account:
+            raise Conflict("Аккаунт Playerok изменился; ожидается проверка принадлежности заказа")
+        saved = self.store.rows("SELECT payload FROM orders WHERE id=?", (ident,))
+        cached = bool(saved)
+        if cached:
+            order = json.loads(saved[0]["payload"])
+            if (
+                order.get("id") != ident
+                or order.get("direction") != "OUT"
+                or ((order.get("item") or {}).get("user") or {}).get("id") != account
+            ):
+                raise Conflict("Принадлежность сохранённого заказа текущему аккаунту не подтверждена")
+            from app.workers.sync import request_sync
+
+            request_sync(self.store, "deal", ident)
+        else:
             order = await self.service.fresh(owner, ident)
-        except APIError:
-            self.service.owner(owner)
-            rows = self.store.rows("SELECT payload FROM orders WHERE id=?", (ident,))
-            if not rows:
-                raise
-            order, cached = json.loads(rows[0]["payload"]), True
+        observed = order.get("_observed_at")
         item, user = order.get("item") or {}, order.get("user") or {}
         delivery_summary = self.delivery_summary(order)
         annotation = self.service.local(ident)
@@ -124,7 +135,11 @@ class OrdersPanel:
             f"Локальных событий: {history_count} · Событий Playerok: {len(order.get('logs') or [])}"
         )
         if cached:
-            text += "\n\n⚠️ API недоступен. Показан локальный кеш; актуальность не подтверждена."
+            text += (
+                "\n\nСохранённые данные. Обновлено: "
+                + local_time(observed)
+                + "\nБот обновляет статус автоматически."
+            )
         if annotation["note"]:
             text += "\nЗаметка: " + escaped(annotation["note"], 500)
         if operation:
@@ -136,7 +151,7 @@ class OrdersPanel:
         chat = (order.get("chat") or {}).get("id")
         if chat:
             rows.append([("💬 Диалог", "chat:" + chat), ("✉️ Написать", "compose:" + chat)])
-        if not cached and order["status"] == "PAID" and order.get("is_automated") is not True:
+        if order["status"] == "PAID" and order.get("is_automated") is not True:
             rows.append([("✅ Подтвердить выполнение", "ff:start:" + ident)])
             can_deliver = False
             try:
@@ -177,7 +192,11 @@ class OrdersPanel:
             )
             text += "\n" + delivery_summary
             if cached:
-                text += "\n⚠️ Сохранённые данные. Связь с Playerok не подтверждена."
+                text += (
+                    "\nСохранённые данные. Обновлено: "
+                    + local_time(observed)
+                    + "\nБот обновляет статус автоматически."
+                )
             followup = self.store.rows(
                 "SELECT s.kind,o.status,o.error_code FROM delivery_chains c JOIN delivery_chain_steps s ON s.order_id=c.order_id LEFT JOIN outbox o ON o.id=s.operation_id WHERE c.order_id=? AND json_extract(c.policy,'$.mode')='playerok' ORDER BY s.position",
                 (ident,),

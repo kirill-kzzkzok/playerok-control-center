@@ -13,6 +13,21 @@ from app.workers.supervisor import worker_cycle
 from playerokapi.enums import ItemDealDirections
 
 
+def request_sync(store, kind, target):
+    if (
+        kind not in {"chat", "deal", "catchup"}
+        or not isinstance(target, str)
+        or not target
+        or len(target) > 100
+    ):
+        raise ValueError("Некорректный сигнал сверки")
+    store.execute(
+        "INSERT INTO sync_requests(key,kind,target,updated_at) VALUES(?,?,?,?) "
+        "ON CONFLICT(key) DO UPDATE SET revision=revision+1,updated_at=excluded.updated_at",
+        (kind + ":" + target, kind, target, now()),
+    )
+
+
 class Synchronizer(PageScanner):
     def __init__(self, store, api, orders, *, pages_per_stream=4, chats_per_cycle=12):
         if pages_per_stream < 1 or chats_per_cycle < 1:
@@ -29,18 +44,7 @@ class Synchronizer(PageScanner):
         notification_baseline(store)
 
     def request(self, kind, target):
-        if (
-            kind not in {"chat", "deal", "catchup"}
-            or not isinstance(target, str)
-            or not target
-            or len(target) > 100
-        ):
-            raise ValueError("Некорректный сигнал сверки")
-        self.store.execute(
-            "INSERT INTO sync_requests(key,kind,target,updated_at) VALUES(?,?,?,?) "
-            "ON CONFLICT(key) DO UPDATE SET revision=revision+1,updated_at=excluded.updated_at",
-            (kind + ":" + target, kind, target, now()),
-        )
+        request_sync(self.store, kind, target)
         self.wake.set()
 
     async def process_requests(self, limit=8, *, chat_only=False):

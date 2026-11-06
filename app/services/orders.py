@@ -81,6 +81,7 @@ class Orders:
                         retained[prefix + field] = "null" if field in target else "absent"
                         target[field] = source[field]
             order["item"] = item
+            order["_observed_at"] = now()
             if retained:
                 order["_retained_fields"] = retained
             else:

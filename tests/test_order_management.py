@@ -202,11 +202,17 @@ async def test_card_falls_back_to_cache_without_displaying_delivery_secrets(setu
     text, markup = await OrdersPanel(store, api).card(1, "order")
     assert "Сохранённые данные" in text and "&lt;product&gt;" in text
     assert "private code" not in text
-    assert not any(
+    assert any(
         button.callback_data and button.callback_data.startswith("od:prepare:")
         for row in markup.inline_keyboard
         for button in row
     )
+    # A navigation link is not dispatch authority: its prepare must still read
+    # Playerok and fail closed on the unavailable connection.
+    with pytest.raises(APIError, match="NETWORK_ERROR"):
+        await service.prepare_delivery(1, "order")
+    assert not store.rows("SELECT * FROM outbox")
+    assert store.rows("SELECT status FROM inventory") == [{"status": "AVAILABLE"}]
     assert any(button.callback_data == "od:details:order" for row in markup.inline_keyboard for button in row)
     _, markup = await OrdersPanel(store, api).card(1, "order", details=True)
     assert any(
