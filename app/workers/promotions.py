@@ -210,6 +210,22 @@ class PromotionWorker:
             discovery_failed and discovery.get("failures", 0) >= 3
         )
         current_revision, current, _ = self.settings.get()
+        from app.services.paid_promotions import PaidPromotions
+
+        paid = PaidPromotions(self.store, self.api)
+        purchase_authority = any(
+            paid.has_authority(row["item_id"], revision)
+            for row in self.store.rows(
+                "SELECT s.item_id FROM promotion_schedule s LEFT JOIN promotion_targets t ON t.item_id=s.item_id "
+                "WHERE t.disposition='include' OR (?='all' AND coalesce(t.disposition,'default')!='exclude')",
+                (selection,),
+            )
+        )
+        if purchase_authority:
+            try:
+                paid.permissions(automatic=True)
+            except ValidationError:
+                purchase_authority = False
         status = (
             "DISABLED"
             if not current.enabled
@@ -218,7 +234,7 @@ class PromotionWorker:
             else "DEGRADED"
             if degraded
             else "SCHEDULED"
-            if self.store.setting("promotions:paid_authority", {}).get("revision") == revision
+            if purchase_authority
             else "DRY_RUN"
         )
         self.store.set_setting(
