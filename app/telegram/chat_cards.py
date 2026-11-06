@@ -67,10 +67,26 @@ class ChatCards:
                 if payload.get("deleted_at")
                 else payload.get("text") or ("[фотография]" if payload.get("images") else "[событие]")
             )
+            from app.playerok.adapter import safe_media_url
+
+            images = payload.get("images") or []
+            links = [
+                f'<a href="{escaped(image["url"], 1800)}">📷 Вложение {i + 1}</a>'
+                for i, image in enumerate(images[:5])
+                if isinstance(image, dict) and safe_media_url(image.get("url"))
+            ]
+            if links:
+                text += "\n" + " · ".join(links)
             stamp = local_time(entry["created_at"]) if entry["created_at"] else "время не получено"
             if payload.get("local_confirmed_at"):
                 stamp = "подтверждено " + stamp
-            block = f"[{stamp}] <b>{'Вы' if mine else 'Покупатель'}:</b> {escaped(text, min(2200, budget))}"
+            body = escaped(
+                payload.get("text") or ("[сообщение удалено]" if payload.get("deleted_at") else "[вложение]"),
+                min(1800, budget),
+            )
+            if links and not payload.get("deleted_at"):
+                body += "\n" + " · ".join(links)
+            block = f"[{stamp}] <b>{'Вы' if mine else 'Покупатель'}:</b> {body}"
             # Budget escaped HTML, also bounded below Telegram's UTF16 limit.
             units = len(block.encode("utf-16-le")) // 2
             if units > budget:

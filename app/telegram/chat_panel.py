@@ -79,6 +79,15 @@ class ChatPanel:
             attachment = f"\n📷 Изображений: {len(images)}" if images else ""
             blocks.append(f"<b>{author}</b> · {date}\n{escaped(text, 290)}{attachment}")
         rows = [[("✉️ Ответить", "compose:" + ident), ("✖️ Закрыть", "chatclose:" + ident)]]
+        navigation = []
+        if following:
+            navigation.append(("Старые сообщения", f"chatpage:{view['nonce']}:older"))
+        if view["index"]:
+            navigation.append(("Новые сообщения", f"chatpage:{view['nonce']}:newer"))
+        if navigation:
+            rows.append(navigation)
+        if media:
+            rows.append([("📷 Открыть вложения", f"chatmedia:{view['nonce']}:0")])
         return (
             f"💬 <b>Переписка с покупателем</b>\n👤 {escaped(peer_name, 80)}\nстраница {view['index'] + 1}\n\n"
             + ("\n\n".join(blocks) if blocks else "Сообщений нет."),

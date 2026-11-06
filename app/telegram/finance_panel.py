@@ -258,6 +258,7 @@ class FinancePanel:
         if action.startswith("fin:options:"):
             ident = action.split(":", 2)[2]
             await self.read_owned(ident)
+            await state.update_data(finance_origin=ident)
             return (
                 "⚙️ <b>Параметры прогноза</b>\nСебестоимость и распределение расходов задаются для этого товара. Способ получения денег общий для магазина. Исторические продажи не пересчитываются.",
                 keyboard(
@@ -272,16 +273,18 @@ class FinancePanel:
                 ),
             )
         if action == "providers":
+            origin = (await state.get_data()).get("finance_origin")
             methods = await withdrawal_methods(self.api)
             await state.set_state(None)
-            await state.set_data({"finance_methods": methods})
+            await state.set_data({"finance_methods": methods, "finance_origin": origin})
             text = "💳 <b>Способы вывода · только расчёт</b>\n" + "\n".join(
                 f"{escape(value.get('name') or value['id'])}: {value.get('fee')}%, минимум комиссии {value.get('min_fee_amount') if value.get('min_fee_amount') is not None else 'не задан'} ₽"
                 for value in methods
             )
             text += "\n\nВыберите способ для оценки. Никаких средств бот не выводит. Для USDT дополнительно учитывается 1 USDT по актуальному курсу."
             return text, keyboard(
-                [[(str(value.get("name") or value["id"]), "fin:select:" + value["id"])] for value in methods]
+                [[(str(value.get("name") or value["id"]), "fin:select:" + value["id"])] for value in methods],
+                back=("К расчёту", "finance:" + origin) if origin else ("К профилю", "profile"),
             )
         if action.startswith("fin:select:"):
             ident = action.split(":", 2)[2]
@@ -291,12 +294,20 @@ class FinancePanel:
             snapshot = await withdrawal_snapshot(self.api, ident)
             self.store.set_setting(self.preference_key(owner), snapshot)
             await state.set_state(None)
-            await state.set_data({"withdrawal": snapshot})
+            origin = data.get("finance_origin")
+            await state.set_data({"withdrawal": snapshot, "finance_origin": origin})
             return (
                 "✅ Способ получения денег сохранён для всех товаров: "
                 + escape(snapshot["provider"].get("name") or ident)
                 + ".\nКомиссии и лимиты будут проверяться заново при расчёте товара. Вывод средств не выполняется.",
-                keyboard([[("Сменить способ", "providers"), ("К профилю", "profile")]]),
+                keyboard(
+                    [
+                        [
+                            ("Сменить способ", "providers"),
+                            ("К расчёту", "finance:" + origin) if origin else ("К профилю", "profile"),
+                        ]
+                    ]
+                ),
             )
         if action == "fin:refresh":
             data = await state.get_data()
@@ -314,6 +325,7 @@ class FinancePanel:
             )
         if action.startswith("finance:"):
             await state.clear()
+            await state.update_data(finance_origin=action.split(":", 1)[1])
             return await self.item(owner, action.split(":", 1)[1])
         if action.startswith("fin:cost:"):
             ident = action.split(":", 2)[2]
