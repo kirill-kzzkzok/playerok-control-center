@@ -209,7 +209,7 @@ async def test_visible_routes_execute_real_dispatcher_and_context_back(ux, tmp_p
         (["stats:7", "sr:7:top"], "Лучшие товары"),
         (["stats:7", "sr:7:finance"], "Финансы"),
         (["settings", "tools", "tools:operations"], "История и результаты"),
-        (["settings", "tools", "tools:delivery"], "Выдача и цепочки"),
+        (["settings", "tools", "tools:delivery"], "История выдачи"),
         (["settings", "tools", "tools:data"], "Диагностика и данные"),
         (["promotions"], "Автопродвижение"),
         (["promotions", "promo:catalog"], "продвижения"),

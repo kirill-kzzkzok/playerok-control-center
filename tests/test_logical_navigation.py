@@ -112,8 +112,8 @@ async def test_uncertain_description_ui_allows_only_read_reconcile_not_duplicate
     r.ui.dp = production_dispatcher(r.store, r.api)
     await r.ui.click(old_commit)
     assert len(r.store.rows("SELECT * FROM outbox")) == 1
-    await click(r, action="home")
-    await open_logical(r)
+    # Contextual recovery returns directly to this product, not the global menu.
+    await click(r, action="lp:item:lot")
     reconcile = next(key for key in buttons(r.session.last_panel) if key.endswith(":reconcile"))
     r.api.account.writes_enabled = False
     await click(r, action=reconcile)
