@@ -82,6 +82,22 @@ class ListingLaunch:
             if product["owner_id"] != owner or product["account_id"] != self.api.account.id:
                 raise Conflict("Исходные настройки принадлежат другому аккаунту")
             config = json.loads(product["config"])
+            _, policy = self.automation.get(target)
+            platform = config.get("platform_only") is True
+            new_created = source.get("managed_product_id") == product["id"] and not product["armed_at"]
+            source = {
+                **source,
+                "inherit": bool(product["inherit_enabled"]),
+                "greeting": policy.greeting if platform else config.get("greeting", ""),
+                "after": config.get("after", ""),
+                "auto_complete": (policy.mark_sent if policy.account_id else new_created)
+                if platform
+                else config.get("auto_fulfill", new_created)
+                if product["handler"] == "telegram_gifts"
+                else config.get("automatic_completion", new_created),
+                "platform_reply": policy.paid_reply if platform else False,
+                "refund": config.get("options", {}).get("refund", config.get("refund", False)),
+            }
             if config.get("platform_only"):
                 source = {**source, "delivery": "playerok"}
             else:
@@ -123,7 +139,7 @@ class ListingLaunch:
                 # local preparation must pass PREPARE/COMMIT again.
                 source = source or previous["payload"]
             value = source if source is not None else self.source_configuration(owner, target)
-            order, day = self.gifts.limits()
+            order, day = self.gifts.limits(target)
             mode = value.get("delivery", value.get("mode", "manual"))
             if mode not in {"manual", "text", "stock", "gifts", "playerok"}:
                 mode = "manual"
@@ -143,17 +159,17 @@ class ListingLaunch:
                     "mode": mode,
                     "manual_delivery_confirmed": False,
                     "gift_code": gift_code,
-                    "inherit": mode != "manual",
+                    "inherit": value.get("inherit", mode != "manual"),
                     "data": "" if imported else value.get("delivery_data", ""),
-                    "greeting": "",
-                    "after": "",
-                    "auto_complete": mode != "manual",
-                    "platform_reply": False,
+                    "greeting": value.get("greeting", ""),
+                    "after": value.get("after", ""),
+                    "auto_complete": value.get("auto_complete", mode != "manual"),
+                    "platform_reply": value.get("platform_reply", False),
                     "platform_switch_confirmed": False,
-                    "refund": False,
+                    "refund": value.get("refund", False),
                     "order_limit": order,
                     "day_limit": day,
-                    "publication": "DEFAULT",
+                    "publication": value.get("publication", "DEFAULT"),
                     "quote_id": None,
                     "promotion": False,
                     "promotion_policy": asdict(PromotionSettings(self.store, self.api).get()[1]),
