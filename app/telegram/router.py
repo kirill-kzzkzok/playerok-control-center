@@ -387,7 +387,12 @@ def create_router(store, api, products, synchronizer):
                 if not restoring:
                     await state.clear()
                     if action == "items":
-                        await state.update_data(item_filters={"status": "APPROVED"})
+                        from app.services.item_filters import checked_filters
+
+                        filters = {"status": "APPROVED"}
+                        if store.setting(f"ui:{owner}:item_filters_pinned", False):
+                            filters = checked_filters(store.setting(f"ui:{owner}:item_filters", {}))
+                        await state.update_data(item_filters=filters)
                 text, markup = await listings_panel.show(action, state, restore=restoring)
             elif action == "itemfilters":
                 await state.set_state(None)
