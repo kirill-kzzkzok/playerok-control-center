@@ -73,9 +73,28 @@ class PromotionsPanel:
         await state.set_data({"promotion": data})
         nonce, values = data["nonce"], data["values"]
         text = f"🚀 <b>Продвижение — проверка</b>\nПолитика: {'включена для проверки' if values['enabled'] else 'выключена'}\nРежим: {'по времени' if values['mode'] == 'time' else 'по позиции'}\nВыбор: {'все подходящие кроме исключённых' if data['selection'] == 'all' else 'только выбранные'}\nНочь: {'включена' if values['night_enabled'] else 'выключена'} · {values['night_start_hour']:02d}:00–{values['night_end_hour']:02d}:00 МСК\nСохранение и проверка ничего не покупают. Разрешение расходов — отдельным действием."
+        if data.get("advanced"):
+            text += (
+                "\nИзменения ниже остаются в форме до сохранения. Нажмите «Сохранить», чтобы применить их."
+            )
         rows = [
-            [("Переключить политику", f"pp:{nonce}:toggle:enabled"), ("Режим", f"pp:{nonce}:mode")],
-            [("Ночной режим", f"pp:{nonce}:toggle:night_enabled"), ("Выбор лотов", f"pp:{nonce}:selection")],
+            [
+                (
+                    "Автоподнятие в форме: " + ("да" if values["enabled"] else "нет"),
+                    f"pp:{nonce}:toggle:enabled",
+                ),
+                ("Режим", f"pp:{nonce}:mode"),
+            ],
+            [
+                (
+                    "Особые условия ночью: " + ("да" if values["night_enabled"] else "нет"),
+                    f"pp:{nonce}:toggle:night_enabled",
+                ),
+                (
+                    "Участники: " + ("все товары" if data["selection"] == "all" else "выбранные"),
+                    f"pp:{nonce}:selection",
+                ),
+            ],
         ]
         for name, label in EDIT.items():
             rows.append([(f"{label}: {values[name]}", f"pp:{nonce}:edit:{name}")])
@@ -254,7 +273,7 @@ class PromotionsPanel:
                 for i, q in enumerate(view.get("quote_previews", []))
             ]
             rows += [
-                [("Наследовать настройки магазина", f"pi:{nonce}:target:default")],
+                [("Использовать общее правило магазина", f"pi:{nonce}:target:default")],
                 [("К автоподнятию товара", f"pi:{nonce}:more:close")],
             ]
         return text, keyboard(rows, back=("К продвижению товара", "payp:item:" + ident))

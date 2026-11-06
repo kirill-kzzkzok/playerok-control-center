@@ -19,7 +19,7 @@ class StockPanel:
         rows = [[("➕ Загрузить запас", "stock:add:" + ident)]]
         rows += [[(f"{LABELS[s]}: {n}", f"stock:list:{ident}:{s}:0")] for s, n in counts.items() if n]
         for draft in self.service.prepared(owner, ident):
-            rows.append([("📥 Перенести запас из мастера", "stock:transfer:" + draft)])
+            rows.append([("📥 Добавить подготовленный запас", "stock:transfer:" + draft)])
         guard = self.store.setting(f"delivery:{ident}:enabled")
         _, policy = self.service.automation.get(ident)
         note = ""
@@ -27,7 +27,7 @@ class StockPanel:
             note = "\n⛔ Выдача остановлена. Пополнение её не возобновляет."
             if counts["AVAILABLE"] and policy.enabled and policy.mode == "stock":
                 rows.append([("Подготовить возобновление", "stock:resume:" + ident)])
-        rows += [[("⚡ Настроить политику", "auto:item:" + ident)], [("📦 К товару", "item:" + ident)]]
+        rows += [[("⚡ Настроить выдачу", "auto:item:" + ident)], [("📦 К товару", "item:" + ident)]]
         return (
             "📚 <b>Склад · "
             + escaped(item.get("name") or ident, 150)

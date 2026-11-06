@@ -158,7 +158,7 @@ class LaunchPanel:
         rows = [
             [("⚡ Способ выдачи", p + "modes")],
             [("⭐ Тип публикации и тариф", p + "quotes")],
-            [("✅ Проверить готовность", p + "check")],
+            [("🔍 Обновить проверку запуска", p + "check")],
         ]
         if self.store.rows("SELECT 1 FROM logical_listings WHERE item_id=?", (item["id"],)):
             text += "\nПосле перевыставления: " + (
@@ -167,7 +167,14 @@ class LaunchPanel:
                 else "каждое новое объявление проверяется отдельно; автоматическое наследование выключено."
             )
             rows.insert(
-                1, [("Наследовать настройки: " + ("да" if value.get("inherit") else "нет"), p + "inherit")]
+                1,
+                [
+                    (
+                        "Сохранять выдачу после перевыставления: "
+                        + ("да" if value.get("inherit") else "нет"),
+                        p + "inherit",
+                    )
+                ],
             )
         if value["mode"] in {"text", "stock"}:
             rows.insert(1, [("🔐 Данные выдачи", p + "edit:data"), ("Приветствие", p + "edit:greeting")])
@@ -189,12 +196,27 @@ class LaunchPanel:
                 rows.insert(2, [("Изменить сообщение после оплаты", p + "edit:greeting")])
             rows.insert(2, [("Автоматическая отметка выполнения", p + "complete")])
         elif value["mode"] != "manual":
-            rows.insert(1, [("Сообщение после выдачи", p + "edit:after"), ("Автозавершение", p + "complete")])
+            rows.insert(
+                1,
+                [
+                    ("Сообщение после выдачи", p + "edit:after"),
+                    (
+                        "Завершение заказа: " + ("авто" if value["auto_complete"] else "вручную"),
+                        p + "complete",
+                    ),
+                ],
+            )
         if value["mode"] == "gifts":
             rows.insert(1, [("🎁 Выбрать подарки", p + "catalog"), ("Лимиты Stars", p + "edit:limits")])
             rows.insert(2, [("Автовозврат: переключить", p + "refund")])
         if value["publication"] == "PREMIUM":
-            rows.insert(1, [("Лимиты Playerok", p + "edit:budget"), ("Расписание", p + "edit:schedule")])
+            rows.insert(
+                1,
+                [
+                    ("🌍 Лимиты всего магазина", p + "edit:budget"),
+                    ("🌍 Частота поднятий всего магазина", p + "edit:schedule"),
+                ],
+            )
             rows.insert(2, [("Платное автоподнятие: переключить", p + "promotion")])
         if can_launch:
             rows.append([("🚀 Опубликовать и запустить", p + "commit")])
@@ -259,7 +281,20 @@ class LaunchPanel:
             return (
                 (
                     "✅ Общие настройки продвижения сохранены. Черновик запуска синхронизирован.\n"
-                    "Разрешённые автоподнятия других лотов потребуют повторного подтверждения."
+                    + (
+                        "Денежные условия изменены — потребуется новое разрешение на автоподнятие."
+                        if any(
+                            asdict(_current)[key] != asdict(saved)[key]
+                            for key in (
+                                "enabled",
+                                "per_operation",
+                                "daily",
+                                "monthly",
+                                "max_operations_per_item",
+                            )
+                        )
+                        else "Действующие разрешения расходов сохранены. Остановленные покупки не возобновляются."
+                    )
                 ),
                 keyboard([[("Продолжить настройку", "launch:open:" + proposal["draft_id"])]]),
             )
@@ -340,6 +375,11 @@ class LaunchPanel:
                 if field == "greeting" and value["mode"] == "playerok"
                 else FIELDS[field]
             )
+            if field in {"budget", "schedule"}:
+                prompt = (
+                    "🌍 Общие настройки всего магазина. Применяются ко всем товарам, а не только к этому лоту.\n"
+                    + prompt
+                )
             return prompt, keyboard([], back=("Отмена", "launch:open:" + draft["id"]))
         elif command == "quotes":
             item = await self.service.automation.item(owner, value["launch_target"])
@@ -524,11 +564,11 @@ class LaunchPanel:
             return (
                 "🌍 <b>Изменение ОБЩИХ настроек продвижения</b>\n"
                 "Применяются ко всем товарам магазина. Меняются: "
-                + escaped(", ".join(diff_keys) or "нет изменений", 300)
+                + escaped(scope if diff_keys else "нет изменений", 300)
                 + "\nОбласть: "
                 + scope
-                + ".\n\n⚠️ Действующие платные разрешения других лотов потребуют "
-                "повторного подтверждения после сохранения.\n\n"
+                + ".\n\nНовое разрешение на расходы потребуется только при изменении денежных условий. "
+                "Изменение одной частоты сохраняет действующие разрешения.\n\n"
                 "Данные выдачи и черновик запуска не затрагиваются.",
                 keyboard(
                     [

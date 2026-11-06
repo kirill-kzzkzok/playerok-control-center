@@ -200,7 +200,7 @@ class ItemPanel:
                 text += "\nПокупателю отправляется сохранённый текст"
             rows = [
                 [("📦 Выдача", "iv:delivery:" + ident), ("✏️ Изменить", "iv:edit:" + ident)],
-                [("🚀 Продвижение", "payp:item:" + ident), ("💰 Прибыль", "finance:" + ident)],
+                [("🚀 Продвижение", "payp:item:" + ident), ("💰 Расчёт прибыли", "finance:" + ident)],
             ]
             terminal = next((p for p in readiness["problems"] if p["terminal"]), None)
             if terminal:
@@ -246,13 +246,13 @@ class ItemPanel:
                 if readiness["mode"] == "unique_stock":
                     rows.insert(1, [("📚 Пополнить склад", "stock:view:" + ident)])
                 if readiness["mode"] in {"unique_stock", "fixed_text"}:
-                    rows.append([("Проверить конкретный заказ без отправки", "auto:check:" + ident)])
+                    rows.append([("Проверить заказ", "auto:check:" + ident)])
                 if readiness["mode"] == "telegram_gifts":
                     rows[0] = [("🎁 Состав, сообщения и лимиты", route)]
                 if not product:
                     rows.append([("📦 Выдаёт Playerok", "platform:item:" + ident)])
                 for draft in stock.service.prepared(owner, ident):
-                    rows.append([("📥 Перенести запас из мастера", "stock:transfer:" + draft)])
+                    rows.append([("📥 Добавить подготовленный запас", "stock:transfer:" + draft)])
             elif section in {"messages", "completion"}:
                 text += "\n\n" + (
                     "Сообщение после оплаты и отметка выполнения настраиваются независимо."
@@ -275,7 +275,7 @@ class ItemPanel:
                 [("Подробности", "iv:details:" + ident)],
             ]
             if item.get("status") == "DRAFT":
-                rows.insert(0, [("🚦 Настроить и запустить", "launch:item:" + ident)])
+                rows.insert(0, [("🚀 Подготовить запуск", "launch:item:" + ident)])
             problem = Products(self.store, self.api).deletion_problem(ident) if self.store else None
             if problem:
                 text += "\nУдаление заблокировано: " + escaped(problem["reason"])

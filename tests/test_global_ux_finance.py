@@ -79,7 +79,7 @@ async def test_global_withdrawal_selection_never_requests_amount(ux):
 
 async def test_item_exposes_net_calculator_on_primary_card(ux):
     await ux.ui.click("item:lot")
-    assert buttons(ux.session.calls[-1])["finance:lot"] == "💰 Прибыль"
+    assert buttons(ux.session.calls[-1])["finance:lot"] == "💰 Расчёт прибыли"
 
 
 async def test_per_sale_forecast_quote_matches_display(ux):

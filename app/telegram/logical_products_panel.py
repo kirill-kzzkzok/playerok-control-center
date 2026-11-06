@@ -171,7 +171,7 @@ class LogicalProductsPanel:
             and product["handler"] in {"unique_stock", "fixed_text"}
             and not json.loads(product["config"]).get("platform_only")
         ):
-            rows.append([("Проверить конкретный заказ без отправки", "auto:check:" + item_id)])
+            rows.append([("Проверить заказ", "auto:check:" + item_id)])
         from app.services.product_readiness import ProductReadiness
         from app.telegram.product_presentation import STATES
 

@@ -212,7 +212,7 @@ class OperationResults:
             if binding:
                 target = binding[0]["remote_id"]
                 buttons += [
-                    [("🚦 Настроить и запустить до публикации", "launch:from:" + row["target"])],
+                    [("🚀 Подготовить запуск", "launch:from:" + row["target"])],
                     [("📦 Лот и доступные действия", "item:" + target)],
                     [("📚 Склад / перенос из мастера", "stock:view:" + target)],
                 ]
