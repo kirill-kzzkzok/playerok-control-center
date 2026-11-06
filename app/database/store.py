@@ -476,7 +476,35 @@ class Store:
             ).fetchone()
             if not evidence:
                 raise Conflict("Lease операции потерян")
-            from app.services.operation_outcomes import AUTOMATIC_DELIVERY_KINDS, unstarted_delivery
+            from app.services.operation_outcomes import (
+                AUTOMATIC_DELIVERY_KINDS,
+                unstarted_delivery,
+                unstarted_listing,
+            )
+
+            listing_kind = evidence["kind"] in {
+                "edit",
+                "edit_fields",
+                "discount",
+                "premium_publish",
+                "premium_bump",
+            }
+            listing_unstarted = unstarted_listing(db, {"id": ident}) if listing_kind else False
+            if status == "UNCERTAIN" and error == "PROCESS_CANCELLED" and listing_unstarted:
+                status = "RETRYABLE_FAILED"
+            if status == "RETRYABLE_FAILED" and listing_kind and not listing_unstarted:
+                status = "UNCERTAIN"
+            if (
+                listing_kind
+                and status in {"PERMANENT_FAILED", "RETRYABLE_FAILED"}
+                and (
+                    evidence["late_result"]
+                    or db.execute(
+                        "SELECT 1 FROM settings WHERE key=?", ("promotions:intent:" + ident,)
+                    ).fetchone()
+                )
+            ):
+                status = "UNCERTAIN"
 
             if (
                 evidence["kind"] not in {"gift_send", "gift_refund"}
@@ -595,6 +623,8 @@ class Store:
                     ident,
                     "SUCCEEDED"
                     if status == "SUCCEEDED"
+                    else "RESERVED"
+                    if status == "RETRYABLE_FAILED"
                     else "UNCERTAIN"
                     if status == "UNCERTAIN"
                     else "FAILED",
@@ -654,7 +684,15 @@ class Store:
                 (time.time(),),
             )
             for row in affected:
-                from app.services.operation_outcomes import unstarted_delivery
+                from app.services.operation_outcomes import unstarted_delivery, unstarted_listing
+
+                if unstarted_listing(db, row):
+                    db.execute(
+                        "UPDATE outbox SET status='RETRYABLE_FAILED',error_code='PREFLIGHT_INTERRUPTED',"
+                        "retry_at=?,lease_token=NULL,lease_until=NULL WHERE id=?",
+                        (time.time() + 30, row["id"]),
+                    )
+                    continue
 
                 if row["kind"] in {"stock_pause", "stock_resume"}:
                     from app.services.stock_visibility import unstarted

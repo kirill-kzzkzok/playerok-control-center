@@ -627,11 +627,12 @@ async def test_recovered_before_intent_can_be_stopped_without_claiming_a_payment
     action = r.store.claim(lease_seconds=1)
     r.store.execute("UPDATE outbox SET lease_until=0 WHERE id=?", (op,))
     r.store.recover()
-    service = Reconciliation(r.store, r.api)
-    row = r.store.rows("SELECT * FROM outbox WHERE id=?", (op,))[0]
-    await service.resolve(
-        7, op, signature(row), "STOP_UNCERTAIN", "Запрос не начинался, выполнение остановлено"
-    )
+    # Proven unstarted preflight now recovers automatically; it is not UNKNOWN.
+    # The existing owner STOP must still fence the queued payment and old lease.
+    assert r.store.rows("SELECT status FROM outbox WHERE id=?", (op,)) == [{"status": "RETRYABLE_FAILED"}]
+    r.settings.stop(7)
+    r.store.execute("UPDATE outbox SET retry_at=0 WHERE id=?", (op,))
+    await r.worker.once(operation_id=op)
     assert r.store.rows("SELECT status FROM promotion_expenses") == [{"status": "FAILED"}]
     with pytest.raises(ValidationError):
         await r.service.execute(r.worker.executor, action)

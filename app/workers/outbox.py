@@ -1025,13 +1025,14 @@ class OutboxWorker:
             # request was never sent: PERMANENT_FAILED, not an uncertain external outcome.
             self.finish(action["id"], action["lease_token"], "PERMANENT_FAILED", error="VALIDATION_FAILED")
         except APIError as error:
-            from app.services.operation_outcomes import unstarted_delivery
+            from app.services.operation_outcomes import unstarted_delivery, unstarted_listing
 
             with self.store.transaction() as db:
                 delivery_retry = unstarted_delivery(db, action)
+                listing_retry = unstarted_listing(db, action)
             if (
                 error.code == "WRITES_DISABLED"
-                and delivery_retry
+                and (delivery_retry or listing_retry)
                 and getattr(
                     getattr(getattr(self.executor, "api", None), "connection", None),
                     "awaiting_verification",
@@ -1063,6 +1064,7 @@ class OutboxWorker:
                     or gift_retry
                     or delivery_retry
                     or visibility_retry
+                    or listing_retry
                 )
                 and not error.uncertain
                 and (

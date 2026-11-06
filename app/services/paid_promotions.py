@@ -133,17 +133,27 @@ class PaidPromotions:
     def authority(self, value):
         revision, policy, selection = self.settings.get()
         approval = self.store.setting("promotions:approved:" + value["item"]["id"], {})
-        if (
-            not policy.enabled
-            or revision != value["policy_revision"]
-            or not self.has_authority(value["item"]["id"], revision)
-            or not self.settings.selected(value["item"]["id"], selection)
-            or any(
-                approval.get(k) != value.get(k)
-                for k in ("account_id", "quote_id", "amount", "type", "period", "policy_revision")
+        if not policy.enabled:
+            raise ValidationError("Автоподнятие остановлено владельцем")
+        if revision != value["policy_revision"]:
+            raise ValidationError(
+                "Эта заявка создана до изменения настроек продвижения и больше не действует"
             )
-        ):
-            raise ValidationError("Платное автоподнятие не разрешено для текущей версии настроек и тарифа")
+        if not self.has_authority(value["item"]["id"], revision):
+            raise ValidationError("Расходы по текущим лимитам ещё не разрешены владельцем")
+        if not self.settings.selected(value["item"]["id"], selection):
+            raise ValidationError("Товар исключён из автоподнятия")
+        if not approval:
+            raise ValidationError("Для этого товара ещё не подтверждён тариф автоподнятия")
+        # Budget consent is revision-bound above. The tariff approval records
+        # exact monetary terms; its historical policy revision is not a term.
+        # Never rewrite it or carry budget authority across a financial edit.
+        if approval.get("account_id") != value.get("account_id"):
+            raise ValidationError("Подтверждение тарифа относится к другому аккаунту Playerok")
+        if any(approval.get(k) != value.get(k) for k in ("quote_id", "amount", "type", "period")):
+            raise ValidationError(
+                "Playerok изменил стоимость, срок или вид подтверждённого тарифа. Нужно новое согласие на этот тариф"
+            )
         return policy
 
     def has_authority(self, item, revision):

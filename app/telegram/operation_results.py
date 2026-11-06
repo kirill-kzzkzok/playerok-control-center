@@ -145,7 +145,12 @@ class OperationResults:
             reason = "Условия операции не прошли повторную проверку. Откройте объект и проверьте актуальные данные."
             if code in {"UNAUTHORIZED_OR_CHALLENGE", "SESSION_EXPIRED"}:
                 reason = "Playerok не подтвердил сессию. Проверьте подключение; обход защиты не выполняется."
-            if code.startswith("HTTP_"):
+            if (
+                code in {"HTTP_500", "HTTP_502", "HTTP_503", "HTTP_504", "HTTP_429", "NETWORK_ERROR"}
+                and row["started_at"] is None
+            ):
+                reason = "Playerok не вернул данные предварительной проверки. Бот не отправлял запрос на изменение или оплату; сохранённые настройки не отменены."
+            elif code.startswith("HTTP_"):
                 reason = "Playerok отклонил запрос. Проверьте данные и фактическое состояние объекта перед новым действием."
             from app.services.platform_orders import REASONS
 
