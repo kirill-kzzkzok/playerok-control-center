@@ -15,7 +15,6 @@ from uuid import UUID
 
 import httpx
 
-from app.localvpn import direct_playerok
 from app.playerok.response_diagnostics import response_facts
 from app.playerok.thread_calls import CallsClosedError, calls_for
 from playerokapi.account import Account
@@ -70,7 +69,7 @@ class SafeAccount(Account):
         self.writes_enabled = writes_enabled
         self.auto_accept_agreements = auto_accept_agreements
         self.client = client or httpx.Client(
-            timeout=20, follow_redirects=False, verify=True, trust_env=not direct_playerok()
+            timeout=20, follow_redirects=False, verify=True, trust_env=False
         )
         self._lock = threading.RLock()
         self._permitted = None
