@@ -17,6 +17,7 @@ from app.gifts.core import (
 )
 from app.gifts.mtproto import GiftFailure, InvalidRecipient
 from app.localvpn import active_proxy
+from app.playerok.adapter import APIError
 from app.security.logging import event
 from app.services.order_management import deal_details, deliverable, sale
 from app.services.orders import Orders
@@ -85,6 +86,17 @@ class GiftService:
             item = fresh.get("item") or {}
         else:
             item = observed_item if observed_item is not None else await self.api.call("get_item", id=item_id)
+        # An incomplete read is not evidence that the owner changed the lot.
+        # Keep the existing permission, but do not prepare or dispatch a payment.
+        if (
+            not isinstance(item, dict)
+            or any(not isinstance(item.get(key), str) for key in ("id", "name", "status", "description"))
+            or any(
+                not isinstance(item.get(key), dict) or not item[key].get("id")
+                for key in ("user", "category", "obtaining_type")
+            )
+        ):
+            raise APIError("GIFT_LISTING_DETAILS_NOT_YET_AVAILABLE")
         if (
             item.get("id") != item_id
             or not self.api.account.id

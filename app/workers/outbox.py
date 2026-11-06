@@ -1105,6 +1105,7 @@ class OutboxWorker:
                         "CATALOG_UNAVAILABLE",
                         "BALANCE_OBSERVATION_STALE",
                         "DAILY_BUDGET_EXHAUSTED",
+                        "GIFT_LISTING_DETAILS_NOT_YET_AVAILABLE",
                         "DELIVERY_FLAGS_NOT_YET_AVAILABLE",
                     }
                     or visibility_retry
