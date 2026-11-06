@@ -46,12 +46,15 @@ logger = logging.getLogger(__name__)
 
 
 async def outbox_loop(worker, stop):
-    # The same durable worker owns two bounded serial resource lanes. Stars
-    # purchases never overlap each other; waiting on MTProto does not occupy
-    # the independent Playerok transport lane.
+    # One durable worker, independent bounded preflight lanes. Actual Playerok
+    # mutations still share the transport fence; paid reads must not occupy the
+    # stock/text scheduler lane. Stars purchases never overlap each other.
     async with asyncio.TaskGroup() as group:
         group.create_task(outbox_lane(worker, stop, kinds=("gift_send",)))
-        group.create_task(outbox_lane(worker, stop, excluded_kinds=("gift_send",)))
+        group.create_task(outbox_lane(worker, stop, kinds=("premium_publish", "premium_bump")))
+        group.create_task(
+            outbox_lane(worker, stop, excluded_kinds=("gift_send", "premium_publish", "premium_bump"))
+        )
 
 
 async def outbox_lane(worker, stop, *, kinds=None, excluded_kinds=()):
