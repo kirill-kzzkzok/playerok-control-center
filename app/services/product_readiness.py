@@ -83,20 +83,37 @@ class ProductReadiness:
         cached = getattr(self.api, "readiness_items", {}).get(key)
         stamp = getattr(self.api, "readiness_item_times", {}).get(key)
         version = getattr(self.api, "readiness_item_versions", {}).get(key)
-        if cached and version != self.item_version(ident):
-            # A local edit changed after this observation. Do not compare an
-            # old title/code against a newly confirmed binding.
-            item = await self.api.call("get_item", id=ident)
-            if item.get("id") != ident or (item.get("user") or {}).get("id") != account:
-                raise Conflict("Владелец объявления не подтверждён")
-            self.remember_item(item)
-            return item
+        durable = self.store.setting("readiness:" + ident, {}).get("ui_snapshot", {})
+        if not cached and durable.get("account") == account:
+            cached, stamp, version = durable.get("item"), durable.get("at"), durable.get("version")
+        changed = bool(cached and version != self.item_version(ident))
         current = self.observed_item(ident)
         if cached and (cached.get("user") or {}).get("id") == account:
             item = deepcopy(cached)
             if product and product["state"] == "VERIFIED" and product["title_snapshot"]:
                 item["name"] = product["title_snapshot"]
-            item.update(_ui_cached=True, _ui_stale=current is None, _ui_observed_at=stamp)
+            if changed:
+                for operation in self.store.rows(
+                    "SELECT kind,payload,result FROM outbox WHERE target=? AND status='SUCCEEDED' AND COALESCE(started_at,created_at)>? ORDER BY COALESCE(started_at,created_at),id",
+                    (ident, stamp or ""),
+                ):
+                    receipt = json.loads(operation["result"] or "{}")
+                    if receipt.get("remote_id") != ident:
+                        continue
+                    proven = {
+                        k: receipt[k]
+                        for k in ("name", "price", "raw_price", "status", "priority", "slug")
+                        if k in receipt
+                    }
+                    if operation["kind"] == "edit":
+                        request = json.loads(operation["payload"])
+                        proven.update(
+                            {k: request[k] for k in ("name", "description", "price") if k in request}
+                        )
+                    item.update(proven)
+            if product and product["state"] == "VERIFIED" and product["title_snapshot"]:
+                item["name"] = product["title_snapshot"]
+            item.update(_ui_cached=True, _ui_stale=changed or current is None, _ui_observed_at=stamp)
         elif product:
             baseline = json.loads(product["baseline"] or "{}")
             item = {
@@ -115,7 +132,7 @@ class ProductReadiness:
                 raise Conflict("Владелец объявления не подтверждён")
             self.remember_item(item)
             return item
-        if not fresh(stamp, 30):
+        if changed or not fresh(stamp, 30):
             prior = self.store.setting("readiness:" + ident, {})
             self.store.set_setting(
                 "readiness:" + ident,
@@ -127,7 +144,7 @@ class ProductReadiness:
         # An edit queued/closed after the observation invalidates UI evidence too.
         rows = self.store.rows(
             "SELECT id,status,attempts,error_code,started_at FROM outbox "
-            "WHERE target=? AND kind IN ('edit','edit_fields') ORDER BY id",
+            "WHERE target=? AND kind IN ('edit','edit_fields','publish','premium_publish','premium_bump','discount','stock_pause','stock_resume','delete') ORDER BY id",
             (ident,),
         )
         return hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
@@ -136,6 +153,9 @@ class ProductReadiness:
         """Record a freshly owner-checked read for consistent UI projections."""
         if item.get("_ui_cached"):
             return  # Displaying stale data cannot renew its observation clock.
+        current_version = self.item_version(item["id"])
+        if version is not None and version != current_version:
+            return False
         key = (self.api.account.id, item["id"])
         if (item.get("user") or {}).get("id") != key[0]:
             raise Conflict("Владелец наблюдаемого объявления не подтверждён")
@@ -148,7 +168,47 @@ class ProductReadiness:
             self.api.readiness_item_versions.clear()
         self.api.readiness_items[key] = deepcopy(item)
         self.api.readiness_item_times[key] = now()
-        self.api.readiness_item_versions[key] = self.item_version(item["id"]) if version is None else version
+        self.api.readiness_item_versions[key] = current_version
+        public = {
+            k: deepcopy(item[k])
+            for k in (
+                "id",
+                "name",
+                "description",
+                "price",
+                "raw_price",
+                "status",
+                "priority",
+                "priority_position",
+                "slug",
+                "images",
+                "is_attachments_forbidden",
+                "is_editable",
+                "created_at",
+                "deleted_at",
+            )
+            if k in item
+        }
+        public["user"] = {"id": key[0]}
+        for field in ("category", "obtaining_type"):
+            if isinstance(item.get(field), dict):
+                public[field] = {
+                    k: item[field][k] for k in ("id", "name", "fee_multiplier") if k in item[field]
+                }
+        setting = "readiness:" + item["id"]
+        self.store.set_setting(
+            setting,
+            {
+                **self.store.setting(setting, {}),
+                "ui_snapshot": {
+                    "account": key[0],
+                    "item": public,
+                    "version": current_version,
+                    "at": self.api.readiness_item_times[key],
+                },
+            },
+        )
+        return True
 
     def snapshot(self, ident, *, item=None, for_arm=False):
         if not for_arm and (
@@ -307,9 +367,13 @@ class ProductReadiness:
                     "lp:item:" + ident,
                     terminal=True,
                 )
-            complete_item = item and all(
-                item.get(key) is not None
-                for key in ("description", "category", "obtaining_type", "price", "name")
+            complete_item = (
+                item
+                and not item.get("_ui_stale")
+                and all(
+                    item.get(key) is not None
+                    for key in ("description", "category", "obtaining_type", "price", "name")
+                )
             )
             if item and product["state"] == "VERIFIED" and not complete_item:
                 add(
