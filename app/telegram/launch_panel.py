@@ -6,7 +6,6 @@ from dataclasses import asdict
 
 from app.database.store import Conflict
 from app.gifts.core import gift_name
-from app.playerok.adapter import APIError
 from app.services.automation import message_text
 from app.services.inventory import stock_values
 from app.services.listing_launch import ListingLaunch, launch_prefix
@@ -41,7 +40,9 @@ class LaunchPanel:
     async def show(self, owner, state, ident, *, advanced=False):
         draft = self.service.load(owner, ident)
         value = draft["payload"]
-        item = await self.service.automation.item(owner, value["launch_target"])
+        from app.services.product_readiness import ProductReadiness
+
+        item = await ProductReadiness(self.store, self.api).ui_item(owner, value["launch_target"])
         if draft["state"] != "DRAFT":
             ops = self.store.rows(
                 "SELECT id FROM outbox WHERE operation_key LIKE ? ORDER BY created_at DESC LIMIT 1",
@@ -67,17 +68,6 @@ class LaunchPanel:
         if preparation_error and value.pop("ready", None):
             self.store.update_draft(ident, owner, draft["revision"], value)
             draft = self.service.load(owner, ident)
-        if not value.get("ready") and not preparation_error:
-            try:
-                prepared = await self.service.check(owner, value)
-            except (APIError, ValueError) as error:
-                from app.telegram.presentation import error_text
-
-                preparation_error = error_text(error)
-            else:
-                value["ready"] = prepared
-                self.store.update_draft(ident, owner, draft["revision"], value)
-                draft = self.service.load(owner, ident)
         nonce = secrets.token_hex(6)
         await replace_context(
             state, None, {"launch": {"id": ident, "revision": draft["revision"], "nonce": nonce}}
@@ -87,6 +77,9 @@ class LaunchPanel:
         needs_choice = self.service.needs_delivery_choice(owner, value)
         if needs_choice:
             ready = None
+        can_launch = (
+            not preparation_error and not needs_choice and (bool(ready) or value["publication"] == "DEFAULT")
+        )
         text = (
             "🚦 <b>Подготовка к публикации</b>\n"
             + escaped(item.get("name") or "Товар", 200)
@@ -203,7 +196,7 @@ class LaunchPanel:
         if value["publication"] == "PREMIUM":
             rows.insert(1, [("Лимиты Playerok", p + "edit:budget"), ("Расписание", p + "edit:schedule")])
             rows.insert(2, [("Платное автоподнятие: переключить", p + "promotion")])
-        if ready:
+        if can_launch:
             rows.append([("🚀 Опубликовать и запустить", p + "commit")])
         if needs_choice:
             text += "\n⚠️ Ранее выбрана автовыдача. Выберите способ выдачи заново; прежний ручной режим не подтверждён."
@@ -216,7 +209,7 @@ class LaunchPanel:
             elif value["mode"] == "gifts":
                 rows.append([("🎁 Выбрать подарок", p + "catalog")])
             rows.append([("Дополнительные параметры", p + "advanced")])
-            if ready:
+            if can_launch:
                 rows.append([("🚀 Опубликовать и запустить", p + "commit")])
         else:
             rows.append([("⬅️ К запуску", p + "basic")])
@@ -379,6 +372,13 @@ class LaunchPanel:
             value["manual_premium"] = selected["type"] == "PREMIUM"
             if selected["type"] == "DEFAULT":
                 value["promotion"] = False
+            else:
+                # Paid consent needs a fresh, visible exact quote. Ordinary
+                # navigation never implicitly prepares financial authority.
+                value.pop("ready", None)
+                value["ready"] = await self.service.check(owner, value)
+                self.store.update_draft(draft["id"], owner, draft["revision"], value)
+                return await self.show(owner, state, draft["id"])
         elif command == "catalog":
             await self.service.gifts.refresh()
             entries = self.store.rows("SELECT code,stars FROM gift_catalog WHERE available=1 ORDER BY code")
@@ -438,6 +438,10 @@ class LaunchPanel:
             self.store.update_draft(draft["id"], owner, draft["revision"], value)
             return await self.show(owner, state, draft["id"])
         elif command == "commit":
+            if not value.get("ready") and value["publication"] == "DEFAULT":
+                value["ready"] = await self.service.check(owner, value)
+                self.store.update_draft(draft["id"], owner, draft["revision"], value)
+                draft = self.service.load(owner, draft["id"])
             op = await self.service.queue(owner, draft["id"], draft["revision"])
             await state.clear()
             return (

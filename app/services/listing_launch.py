@@ -125,7 +125,9 @@ class ListingLaunch:
         )
 
     async def open(self, owner, target, source=None):
-        item = await self.automation.item(owner, target)
+        from app.services.product_readiness import ProductReadiness
+
+        item = await ProductReadiness(self.store, self.api).ui_item(owner, target)
         if item.get("status") != "DRAFT":
             raise ValidationError("Настройка запуска доступна до публикации. Обновите карточку товара")
         key = "launch:config:" + target
