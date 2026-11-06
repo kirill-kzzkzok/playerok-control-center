@@ -82,9 +82,20 @@ class ProductReadiness:
         key = (account, ident)
         cached = getattr(self.api, "readiness_items", {}).get(key)
         stamp = getattr(self.api, "readiness_item_times", {}).get(key)
+        version = getattr(self.api, "readiness_item_versions", {}).get(key)
+        if cached and version != self.item_version(ident):
+            # A local edit changed after this observation. Do not compare an
+            # old title/code against a newly confirmed binding.
+            item = await self.api.call("get_item", id=ident)
+            if item.get("id") != ident or (item.get("user") or {}).get("id") != account:
+                raise Conflict("Владелец объявления не подтверждён")
+            self.remember_item(item)
+            return item
         current = self.observed_item(ident)
         if cached and (cached.get("user") or {}).get("id") == account:
             item = deepcopy(cached)
+            if product and product["state"] == "VERIFIED" and product["title_snapshot"]:
+                item["name"] = product["title_snapshot"]
             item.update(_ui_cached=True, _ui_stale=current is None, _ui_observed_at=stamp)
         elif product:
             baseline = json.loads(product["baseline"] or "{}")
@@ -123,6 +134,8 @@ class ProductReadiness:
 
     def remember_item(self, item, *, version=None):
         """Record a freshly owner-checked read for consistent UI projections."""
+        if item.get("_ui_cached"):
+            return  # Displaying stale data cannot renew its observation clock.
         key = (self.api.account.id, item["id"])
         if (item.get("user") or {}).get("id") != key[0]:
             raise Conflict("Владелец наблюдаемого объявления не подтверждён")

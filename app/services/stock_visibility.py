@@ -215,6 +215,9 @@ async def execute(executor, action):
             raise ValueError
     except (APIError, ValueError, Conflict):
         raise APIError("VISIBILITY_RESULT_UNKNOWN", uncertain=True) from None
+    from app.services.product_readiness import ProductReadiness
+
+    ProductReadiness(store, api).remember_item(fresh)
     return {
         "remote_id": ident,
         "bot_paused": not resume,

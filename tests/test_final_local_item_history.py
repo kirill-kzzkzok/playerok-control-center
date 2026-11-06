@@ -27,4 +27,6 @@ async def test_history_opens_when_the_public_item_is_gone_and_keeps_receipts(sho
     assert not calls and r.store.rows("SELECT * FROM outbox") == before
     assert not r.api.messages and not r.api.remote.payments
     await r.ui.click("item:lot")
-    assert calls == ["get_item"]  # A current card still needs the real server.
+    assert not calls  # Same-account saved card remains available during API outage.
+    assert "Сохранённые данные" in r.session.last_panel.text
+    assert r.store.rows("SELECT * FROM outbox") == before
