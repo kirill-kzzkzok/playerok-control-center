@@ -113,6 +113,11 @@ class Orders:
                     encode(order),
                 ),
             )
+            from app.services.order_finance import OrderFinance
+
+            OrderFinance(self.store, self.store.setting("playerok:account_id")).snapshot_product_cost(
+                db, order
+            )
             db.execute("UPDATE inbox SET processed_at=? WHERE key=?", (now(), key))
             # Missing upstream dates are not permanent refusals. A later API
             # observation may prove eligibility against the ORIGINAL policy

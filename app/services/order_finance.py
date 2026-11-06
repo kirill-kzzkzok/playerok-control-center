@@ -62,6 +62,56 @@ class OrderFinance:
     def __init__(self, store, account_id):
         self.store, self.account_id = store, account_id
 
+    def snapshot_product_cost(self, db, order):
+        """Reporting only: dated owner declaration, never a spending permission."""
+        from app.services.logical_products import LogicalProducts
+
+        item = order.get("item") or {}
+        created = parsed_time(order.get("created_at"))
+        if (
+            order.get("status") != "PAID"
+            or order.get("_created_at_conflict")
+            or not created
+            or not self.account_id
+            or (item.get("user") or {}).get("id") != self.account_id
+        ):
+            return
+        if db.execute("SELECT 1 FROM order_costs WHERE order_id=?", (order["id"],)).fetchone():
+            return
+        product = LogicalProducts(self.store).listing(item["id"])
+        if product and product["account_id"] != self.account_id:
+            return
+        scope = product["id"] if product else item["id"]
+        owners = [row["user_id"] for row in db.execute("SELECT user_id FROM administrators").fetchall()]
+        if product:
+            owners = [owner for owner in owners if owner == product["owner_id"]]
+        declarations = []
+        for owner in owners:
+            basis = self.store.setting(f"finance:{owner}:cost_basis:{scope}")
+            if not isinstance(basis, dict) or basis.get("account") != self.account_id:
+                continue
+            declared = parsed_time(basis.get("declared_at"))
+            cost = amount_or_none(basis.get("cost"))
+            if (
+                declared
+                and declared <= created <= datetime.now(UTC) + timedelta(minutes=5)
+                and cost is not None
+                and cost <= 1_000_000_000
+            ):
+                declarations.append((owner, str(cost)))
+        if len(declarations) != 1:
+            return
+        owner, cost = declarations[0]
+        inserted = db.execute(
+            "INSERT OR IGNORE INTO order_costs VALUES(?,?,?,?,?,?,?,?)",
+            (order["id"], self.account_id, cost, None, 1, None, owner, now()),
+        ).rowcount
+        if inserted:
+            db.execute(
+                "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'SNAPSHOT_PRODUCT_COST',?,'DECLARED_COST_ONLY',?)",
+                (owner, order["id"], now()),
+            )
+
     def context(self, db, actor, order_id):
         if not db.execute("SELECT 1 FROM administrators WHERE user_id=?", (actor,)).fetchone():
             raise Conflict("Доступ закрыт")

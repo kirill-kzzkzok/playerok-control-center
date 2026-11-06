@@ -386,7 +386,15 @@ class FinancePanel:
             return await self.item(owner, ident)
         if action.startswith("fin:clearcost:"):
             ident = action.split(":", 2)[2]
-            self.store.execute("DELETE FROM settings WHERE key=?", (f"finance:{owner}:cost:{ident}",))
+            from app.services.logical_products import LogicalProducts
+
+            product = LogicalProducts(self.store, self.api).listing(ident)
+            scope = product["id"] if product else ident
+            with self.store.transaction():
+                self.store.execute(
+                    "DELETE FROM settings WHERE key IN (?,?)",
+                    (f"finance:{owner}:cost:{ident}", f"finance:{owner}:cost_basis:{scope}"),
+                )
             await state.clear()
             return await self.item(owner, ident)
         raise ValueError("Неизвестное действие финансового калькулятора")
@@ -429,7 +437,16 @@ class FinancePanel:
             owner, ident = message.from_user.id, data["finance_item_id"]
             # Read ownership before storing a product-specific preference.
             await self.read_owned(ident)
-            self.store.set_setting(f"finance:{owner}:cost:{ident}", str(amount))
+            from app.services.logical_products import LogicalProducts
+
+            product = LogicalProducts(self.store, self.api).listing(ident)
+            scope = product["id"] if product else ident
+            with self.store.transaction():
+                self.store.set_setting(f"finance:{owner}:cost:{ident}", str(amount))
+                self.store.set_setting(
+                    f"finance:{owner}:cost_basis:{scope}",
+                    {"account": self.api.account.id, "cost": str(amount), "declared_at": now()},
+                )
             await state.clear()
             return await self.item(owner, ident)
         raise ValueError("Финансовый сценарий устарел")
