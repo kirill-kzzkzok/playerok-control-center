@@ -94,9 +94,9 @@ class LogicalProductsPanel:
                     "SELECT status FROM outbox WHERE id=?", (product["operation_id"],)
                 )
                 outcome = operation[0]["status"] if operation else None
-                text += "\nОписание: " + status(outcome)
+                text += "\nИзменение лота: " + status(outcome)
                 if outcome == "UNCERTAIN":
-                    rows.append([("🔎 Сверить описание без повторной записи", prefix + "reconcile")])
+                    rows.append([("🔎 Проверить изменение без повторной отправки", prefix + "reconcile")])
                 elif outcome == "PERMANENT_FAILED":
                     text += "\nПривязка не завершена. Обновите настройки и подтвердите новое превью."
             elif product["state"] == "DETACHED":
