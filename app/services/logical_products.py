@@ -18,8 +18,25 @@ from app.services.products import field_baseline, listing_text
 PROBLEMS = {
     "CATALOG_MARKER_INVALID": "В названии обнаружен некорректный код. Проверьте связанные объявления.",
     "DUPLICATE_ACTIVE_MARKER": "Найдено несколько активных объявлений с одним кодом. Разрешите конфликт.",
+    "RELIST_CRITICAL_FIELDS_CHANGED": "Критические параметры нового объявления отличаются от подтверждённого товара.",
+    "RELIST_ITEM_CHANGED": "Перевыставленный товар изменился во время фоновой проверки. Бот повторит сверку автоматически.",
+    "RELIST_PERMISSION_MISSING": "Автоматическое наследование этого товара не разрешено.",
+    "RELIST_BINDING_CONFLICT": "Серверные данные объявления противоречат сохранённой привязке.",
+    "RELIST_CANDIDATE_INVALID": "Кандидат не подтверждён как объявление этого товара и аккаунта.",
+    "RELIST_SOURCE_UNVERIFIED": "Нет подтверждённого исходного объявления для безопасного наследования.",
+    "RELIST_GIFT_CONFIGURATION_CHANGED": "Изменились цена или доступность выбранного подарка; нужна настройка состава выдачи.",
+    "RELIST_CONTROL_CHANGED": "Настройки или остановка изменились во время проверки; старое наблюдение отклонено.",
     "RELIST_CONFIRMATION_REQUIRED": "Новое объявление не прошло проверку. Проверьте его параметры и настройки.",
 }
+
+
+class RelistConflict(Conflict):
+    """Safe classified evidence; never carries raw API responses or credentials."""
+
+    def __init__(self, code):
+        self.code = code
+        super().__init__(PROBLEMS[code])
+
 
 HANDLERS = frozenset({"telegram_gifts", "unique_stock", "fixed_text", "manual"})
 
@@ -1299,7 +1316,12 @@ class LogicalProducts:
             product[key] != expected_product[key]
             for key in ("revision", "control_revision", "state", "enabled", "inherit_enabled", "config")
         ):
-            raise Conflict("Управление товаром изменилось во время сверки; старый результат отклонён")
+            raise RelistConflict("RELIST_CONTROL_CHANGED")
+        if not self.api.account.writes_enabled and getattr(
+            getattr(self.api, "connection", None), "awaiting_verification", False
+        ):
+            self.authority(owner, product["account_id"])
+            raise APIError("CONNECTION_NOT_VERIFIED")
         self.authority(owner, product["account_id"], writes=True)
         existing = self.listing(item.get("id"))
         if existing:
@@ -1310,7 +1332,7 @@ class LogicalProducts:
             or not existing
             and (not product["enabled"] or not product["inherit_enabled"])
         ):
-            raise Conflict("Автоматическое наследование для этого товара не разрешено")
+            raise RelistConflict("RELIST_PERMISSION_MISSING")
         if (
             not existing
             and {k: v for k, v in critical(item).items() if k != "price"}
@@ -1319,18 +1341,18 @@ class LogicalProducts:
             or item.get("status") not in ({"APPROVED", "SOLD"} if paid_order else {"APPROVED"})
             or item.get("deleted_at")
         ):
-            raise Conflict("Перевыставленный товар не совпадает с подтверждёнными параметрами")
+            raise RelistConflict("RELIST_CRITICAL_FIELDS_CHANGED")
         if source_order_id and (
             not paid_order
             or paid_order.get("id") != source_order_id
             or product["handler"] not in {"telegram_gifts", "fixed_text", "unique_stock"}
             and not json.loads(product["config"]).get("platform_only")
         ):
-            raise Conflict("Снимок сделки не разрешает этот способ выдачи")
+            raise RelistConflict("RELIST_CANDIDATE_INVALID")
         active = []
         for observed in complete_snapshot:
             if (observed.get("user") or {}).get("id") != product["account_id"]:
-                raise Conflict("Каталог содержит товар другого аккаунта")
+                raise RelistConflict("RELIST_CANDIDATE_INVALID")
             if (
                 observed.get("id") not in snapshot_item_ids
                 and observed.get("status") == "APPROVED"
@@ -1350,11 +1372,11 @@ class LogicalProducts:
             if (paid_order.get("item") or {}).get("id") != item["id"] or not future_order(
                 paid_order.get("created_at"), product["armed_at"]
             ):
-                raise Conflict("Оплаченный заказ не подтверждает новое объявление этой настройки")
+                raise RelistConflict("RELIST_CANDIDATE_INVALID")
         if (not source_order_id and item.get("status") == "APPROVED" and set(active) != {item["id"]}) or len(
             set(active)
         ) > 1:
-            raise Conflict("Обнаружены активные копии кода или полнота каталога не подтверждена")
+            raise RelistConflict("DUPLICATE_ACTIVE_MARKER")
         existing = self.listing(item["id"])
         if existing:
             self.verify_listing(product, item)
@@ -1373,7 +1395,7 @@ class LogicalProducts:
             (product_id, product["revision"]),
         )
         if not links:
-            raise Conflict("Нет подтверждённого исходного объявления для наследования")
+            raise RelistConflict("RELIST_SOURCE_UNVERIFIED")
         if not isinstance(item.get("description"), str):
             raise Conflict("Описание нового объявления не получено; ожидаем полную серверную карточку")
         if source_order_id and (
@@ -1384,7 +1406,7 @@ class LogicalProducts:
         ):
             # A private purchased snapshot cannot inherit a later marketing
             # edit of the public listing. Preserve its original identity proof.
-            raise Conflict("Снимок оплаченного товара отличается от подтверждённого объявления")
+            raise RelistConflict("RELIST_BINDING_CONFLICT")
         if any(link["description_sha256"] != digest(item["description"]) for link in links) or not any(
             link["title_snapshot"] == marked_title(item["name"], product["code"]) for link in links
         ):
@@ -1399,14 +1421,14 @@ class LogicalProducts:
             if critical(fresh) != critical(item) or any(
                 fresh.get(k) != item.get(k) for k in ("id", "name", "description", "status", "deleted_at")
             ):
-                raise Conflict("Перевыставленный товар изменился во время фоновой проверки")
+                raise RelistConflict("RELIST_ITEM_CHANGED")
         config = json.loads(product["config"])
         platform = config.get("platform_only") is True
         if product["handler"] == "telegram_gifts" and not platform:
             gifts = self.gift_service()
             await gifts.refresh()
             if gifts.catalog_bundle(config["code"]) != config["bundle"]:
-                raise Conflict("Цена или доступность подарков изменилась; подтвердите настройки")
+                raise RelistConflict("RELIST_GIFT_CONFIGURATION_CHANGED")
         with self.store.transaction() as db:
             current = self.product(product_id)
             if (
@@ -1417,14 +1439,19 @@ class LogicalProducts:
                 or current["config"] != product["config"]
                 or not current["inherit_enabled"]
             ):
-                raise Conflict("Наследование остановлено во время проверки")
+                raise RelistConflict("RELIST_CONTROL_CHANGED")
+            if not self.api.account.writes_enabled and getattr(
+                getattr(self.api, "connection", None), "awaiting_verification", False
+            ):
+                self.authority(owner, product["account_id"])
+                raise APIError("CONNECTION_NOT_VERIFIED")
             self.authority(owner, product["account_id"], writes=True)
             if source_order_id:
                 from app.services.order_management import deliverable
 
                 row = db.execute("SELECT payload FROM orders WHERE id=?", (source_order_id,)).fetchone()
                 if not row:
-                    raise Conflict("Сделка не найдена")
+                    raise RelistConflict("RELIST_CANDIDATE_INVALID")
                 local_order = json.loads(row[0])
                 if platform:
                     from app.services.platform_orders import platform_sale
@@ -1433,7 +1460,7 @@ class LogicalProducts:
                 else:
                     deliverable(local_order, source_order_id, product["account_id"])
                 if (local_order.get("item") or {}).get("id") != item["id"]:
-                    raise Conflict("Снимок относится к другой сделке")
+                    raise RelistConflict("RELIST_CANDIDATE_INVALID")
             source = product["stock_item_id"]
             source_cost = self.store.setting(f"finance:{owner}:cost:{source}")
             target_cost = self.store.setting(f"finance:{owner}:cost:{item['id']}")

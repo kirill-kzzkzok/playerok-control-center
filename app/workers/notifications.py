@@ -281,10 +281,23 @@ class Notifications:
                 )
             elif event["kind"] == "logical_product_blocked":
                 rows = self.store.rows(
-                    "SELECT p.code,p.error_code,l.item_id FROM logical_products p JOIN logical_listings l ON l.product_id=p.id WHERE p.id=? LIMIT 1",
+                    "SELECT code,error_code,revision,control_revision FROM logical_products WHERE id=?",
                     (payload["product_id"],),
                 )
-                if not rows or rows[0]["error_code"] != payload["code"]:
+                latest = self.store.setting("logical:problem:" + payload["product_id"])
+                if (
+                    not rows
+                    or rows[0]["error_code"] != payload["code"]
+                    or any(
+                        payload.get(field, rows[0][field]) != rows[0][field]
+                        for field in ("revision", "control_revision")
+                    )
+                    or latest
+                    and any(
+                        latest.get(field) != payload.get(field)
+                        for field in ("code", "candidate_id", "revision", "control_revision")
+                    )
+                ):
                     self.store.execute(
                         "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT ?,user_id,'SKIPPED' FROM administrators",
                         (event["key"],),
@@ -301,7 +314,19 @@ class Notifications:
                         300,
                     )
                 )
-                markup = keyboard([[("Проверить товар", "lp:item:" + rows[0]["item_id"])]])
+                candidate = payload.get("candidate_id")
+                if not candidate:
+                    text += "\nКандидат неизвестен; показаны связанные объявления этого товара."
+                markup = keyboard(
+                    [
+                        [
+                            (
+                                "Проверить товар",
+                                "item:" + candidate if candidate else "lp:product:" + payload["product_id"],
+                            )
+                        ]
+                    ]
+                )
             elif event["kind"] in {"stock_empty", "stock_low"}:
                 from app.services.inventory import Inventory
 

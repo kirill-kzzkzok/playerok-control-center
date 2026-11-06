@@ -235,7 +235,43 @@ class LogicalProductsPanel:
         result = await ProductReadiness(self.store, self.api).check(owner, item_id, for_arm=True)
         return [p for p in result["problems"] if p["blocking"]]
 
+    def linked_items(self, owner, product_id, page=0, *, back=None, prefix=None):
+        product = self.service.product(product_id, owner)
+        self.service.authority(owner, product["account_id"])
+        prefix = prefix or "lp:product:" + product_id + ":"
+        if not 0 <= page <= 100000:
+            raise Conflict("Некорректная страница")
+        links = self.store.rows(
+            "SELECT item_id,server_status,verified_at FROM logical_listings WHERE product_id=? ORDER BY verified_at DESC,item_id DESC LIMIT 11 OFFSET ?",
+            (product["id"], page * 10),
+        )
+        lines = ["🔗 <b>Связанные объявления</b>", escaped(product["code"], 20)]
+        lines += [
+            escaped(row["item_id"], 80)
+            + " · "
+            + status(row["server_status"], "item")
+            + (" · проверено" if row["verified_at"] else " · не проверено")
+            for row in links[:10]
+        ]
+        rows = [[("Открыть объявление", "item:" + row["item_id"])] for row in links[:10]]
+        paging = []
+        if page:
+            paging.append(("⬅️", prefix + str(page - 1)))
+        if len(links) > 10:
+            paging.append(("➡️", prefix + str(page + 1)))
+        if paging:
+            rows.append(paging)
+        return "\n".join(lines), keyboard(
+            rows,
+            back=back or ("⬅️ Товары", "items"),
+        )
+
     async def callback(self, action, owner, state):
+        if action.startswith("lp:product:"):
+            parts = action.split(":")
+            if len(parts) not in {3, 4}:
+                raise Conflict("Кнопка просмотра устарела")
+            return self.linked_items(owner, parts[2], int(parts[3]) if len(parts) == 4 else 0)
         if action.startswith("lp:details:"):
             return await self.card(owner, action.split(":", 2)[2], state, details=True)
         parts = action.split(":")
@@ -642,32 +678,12 @@ class LogicalProductsPanel:
                 [[("К товару", "item:" + view["item"])]]
             )
         if command == "links":
-            page = int(value or "0")
-            if not 0 <= page <= 100000:
-                raise Conflict("Некорректная страница")
-            links = self.store.rows(
-                "SELECT item_id,server_status,verified_at FROM logical_listings WHERE product_id=? ORDER BY verified_at DESC,item_id DESC LIMIT 11 OFFSET ?",
-                (product["id"], page * 10),
-            )
-            lines = ["🔗 <b>Связанные объявления</b>", escaped(product["code"], 20)]
-            lines += [
-                escaped(row["item_id"], 80)
-                + " · "
-                + status(row["server_status"], "item")
-                + (" · проверено" if row["verified_at"] else " · не проверено")
-                for row in links[:10]
-            ]
-            rows = [[("Открыть объявление", "item:" + row["item_id"])] for row in links[:10]]
-            paging = []
-            if page:
-                paging.append(("⬅️", prefix + "links:" + str(page - 1)))
-            if len(links) > 10:
-                paging.append(("➡️", prefix + "links:" + str(page + 1)))
-            if paging:
-                rows.append(paging)
-            return "\n".join(lines), keyboard(
-                rows,
+            return self.linked_items(
+                owner,
+                product["id"],
+                int(value or "0"),
                 back=("К товару", "lp:item:" + view["item"]),
+                prefix=prefix + "links:",
             )
         if command == "orders":
             page = int(value or "0")

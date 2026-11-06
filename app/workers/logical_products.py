@@ -9,7 +9,7 @@ from app.database.store import Conflict, encode, now
 from app.playerok.adapter import APIError
 from app.security.logging import event
 from app.services.automation import future_order
-from app.services.logical_products import LogicalProducts, critical, marker
+from app.services.logical_products import LogicalProducts, RelistConflict, critical, marker
 from app.services.order_management import compatible_detail, deal_details, deliverable
 from app.services.orders import Orders
 from app.workers.pagination import PageScanner
@@ -248,7 +248,7 @@ class LogicalProductWorker:
                         or fresh.get("description") != item.get("description")
                         or critical(fresh) != critical(item)
                     ):
-                        raise Conflict("Объявление изменилось после загрузки каталога")
+                        raise RelistConflict("RELIST_ITEM_CHANGED")
                     await self.service.adopt(
                         product["owner_id"],
                         product["id"],
@@ -259,8 +259,20 @@ class LogicalProductWorker:
                         snapshot_item_ids=frozenset(snapshot_orders),
                         expected_product=product,
                     )
-                except (ValueError, Conflict):
-                    self.problem(product, "RELIST_CONFIRMATION_REQUIRED")
+                except APIError as error:
+                    self.store.set_setting(
+                        key + ":error", {"code": error.code, "candidate_id": item["id"], "at": now()}
+                    )
+                    raise
+                except (ValueError, Conflict) as error:
+                    code = (
+                        error.code
+                        if isinstance(error, RelistConflict)
+                        else "RELIST_BINDING_CONFLICT"
+                        if isinstance(error, Conflict)
+                        else "RELIST_CANDIDATE_INVALID"
+                    )
+                    self.problem(product, code, candidate_id=item["id"])
                     continue
                 adopted += int(self.service.listing(item["id"]) is not None)
                 if source_order:
@@ -271,7 +283,7 @@ class LogicalProductWorker:
         self.store.set_setting(key, {})
         return adopted
 
-    def problem(self, product, code):
+    def problem(self, product, code, *, candidate_id=None):
         with self.store.transaction() as db:
             changed = db.execute(
                 "UPDATE logical_products SET error_code=? WHERE id=? AND revision=? AND control_revision=? "
@@ -288,6 +300,14 @@ class LogicalProductWorker:
             ).rowcount
             if not changed:
                 return
+            evidence = {
+                "product_id": product["id"],
+                "code": code,
+                "candidate_id": candidate_id,
+                "revision": product["revision"],
+                "control_revision": product["control_revision"],
+            }
+            self.store.set_setting("logical:problem:" + product["id"], evidence)
             db.execute(
                 "INSERT OR IGNORE INTO inbox(key,kind,payload,received_at,processed_at) VALUES(?,'logical_product_blocked',?,?,?)",
                 (
@@ -298,8 +318,9 @@ class LogicalProductWorker:
                     + ":"
                     + str(product["control_revision"])
                     + ":"
-                    + code,
-                    encode({"product_id": product["id"], "code": code}),
+                    + code
+                    + (":" + candidate_id if candidate_id else ""),
+                    encode(evidence),
                     now(),
                     now(),
                 ),
