@@ -1,4 +1,4 @@
-"""Best-effort cleanup of owner FSM input, independent of successful persistence."""
+"""Best-effort cleanup only after durable acceptance of owner FSM input."""
 
 import asyncio
 import logging
@@ -8,11 +8,16 @@ from aiogram import BaseMiddleware
 from aiogram.exceptions import TelegramAPIError
 
 service_input = ContextVar("service_input", default=None)
+input_accepted = ContextVar("input_accepted", default=False)
+
+
+def accept_input():
+    input_accepted.set(True)
 
 
 async def cleanup_input():
     message = service_input.get()
-    if message is None:
+    if message is None or not input_accepted.get():
         return
     # Consume before I/O: a timeout must not cause a second deletion attempt.
     service_input.set(None)
@@ -40,6 +45,7 @@ class InputCleanup(BaseMiddleware):
             and await state.get_state() != "chatcard:reply"
         )
         token = service_input.set(event if consume else None)
+        accepted = input_accepted.set(False)
         try:
             return await handler(event, data)
         finally:
@@ -47,3 +53,4 @@ class InputCleanup(BaseMiddleware):
                 await cleanup_input()
             finally:
                 service_input.reset(token)
+                input_accepted.reset(accepted)

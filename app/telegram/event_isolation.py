@@ -10,7 +10,7 @@ card_scope = ContextVar("event_card_scope", default=None)
 
 
 def scope_for(store, update, bot_id):
-    from app.telegram.navigation_context import callback_panel_key, panel_key
+    from app.telegram.navigation_context import callback_panel_key, panel_key, waiting_forms
 
     query = update.callback_query
     message = query.message if query else update.message
@@ -29,6 +29,9 @@ def scope_for(store, update, bot_id):
     reply = message.reply_to_message
     if reply and getattr(reply.from_user, "id", None) == bot_id:
         return panel_key(store, bot_id, actor.id, reply.message_id)
+    forms = waiting_forms(store, bot_id, actor.id)
+    if len(forms) == 1:
+        return next(iter(forms))
     return store.setting(f"navigation:active:{bot_id}:{actor.id}", primary)
 
 

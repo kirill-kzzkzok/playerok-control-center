@@ -13,13 +13,12 @@ ux = ux_fixture
 @pytest.mark.parametrize(
     "route,value", [("il:search", "Item"), ("il:price", "not-a-number"), ("gft:limits", "20 100")]
 )
-async def test_processed_or_invalid_fsm_input_is_deleted_once(ux, route, value):
+async def test_only_accepted_fsm_input_is_deleted_once(ux, route, value):
     r = ux
     await r.ui.click(route)
     await r.ui.message(value)
-    assert [(m.chat_id, m.message_id) for m in r.session.calls if m.__api_method__ == "deleteMessage"] == [
-        (7, r.ui.counter)
-    ]
+    removed = [(m.chat_id, m.message_id) for m in r.session.calls if m.__api_method__ == "deleteMessage"]
+    assert removed == ([] if value == "not-a-number" else [(7, r.ui.counter)])
 
 
 async def test_media_input_is_removed_after_durable_staging(ux):

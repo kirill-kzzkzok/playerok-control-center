@@ -32,7 +32,7 @@ from app.telegram.formatting import escaped
 from app.telegram.fulfillment_panel import FulfillmentPanel
 from app.telegram.gifts_panel import GiftsPanel
 from app.telegram.home_panel import HomePanel
-from app.telegram.input_cleanup import InputCleanup
+from app.telegram.input_cleanup import InputCleanup, accept_input
 from app.telegram.interface_cleanup_panel import InterfaceCleanupPanel
 from app.telegram.item_panel import ItemPanel
 from app.telegram.keyboards import keyboard, main_menu
@@ -907,6 +907,7 @@ def create_router(store, api, products, synchronizer):
                 except BaseException:
                     wizard.attachments.discard(source)
                     raise
+                accept_input()
                 await message.answer_photo(
                     BufferedInputFile(await wizard.attachments.read(source), filename="replacement.jpg"),
                     caption=(
@@ -956,6 +957,8 @@ def create_router(store, api, products, synchronizer):
                 )
             else:
                 text, markup = "Выберите действие в меню.", main_menu()
+            if current and current != "reply" and not current.startswith("quick:"):
+                accept_input()
             await display(message, text, markup)
         except (APIError, ValidationError, Conflict, ValueError) as error:
             await message.answer(
