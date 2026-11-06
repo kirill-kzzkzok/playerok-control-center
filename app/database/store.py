@@ -351,13 +351,20 @@ class Store:
             if excluded_kinds:
                 filters += " AND kind NOT IN (" + ",".join("?" for _ in excluded_kinds) + ")"
                 args.extend(excluded_kinds)
+            # Four paid claims, then one aged ordinary claim. Reuse durable
+            # attempts in this lane: restarts do not reset fairness, and other
+            # execution lanes cannot consume its ordinary-service turn.
+            ordinary_turn = db.execute(
+                "SELECT COALESCE(SUM(attempts),0)%5=4 FROM outbox WHERE 1=1" + filters,
+                args[1:],
+            ).fetchone()[0]
             row = db.execute(
                 "SELECT * FROM outbox WHERE status IN ('PENDING','RETRYABLE_FAILED') AND retry_at<=? "
                 "AND (json_extract(payload,'$.code_migration.product_id') IS NULL OR NOT EXISTS(SELECT 1 FROM outbox active WHERE active.id<>outbox.id AND active.status IN ('PROCESSING','UNCERTAIN') AND json_extract(active.payload,'$.code_migration.product_id')=json_extract(outbox.payload,'$.code_migration.product_id')))"
                 + filters
-                + " ORDER BY CASE WHEN created_at<=? THEN 0 "
+                + " ORDER BY CASE WHEN ? AND created_at<=? AND kind NOT IN ('gift_send','delivery','delivery_text','chain_message') THEN 0 "
                 "WHEN kind IN ('gift_send','delivery','delivery_text','chain_message') THEN 1 ELSE 2 END,created_at,id LIMIT 1",
-                [*args, datetime.fromtimestamp(time.time() - 120, UTC).isoformat()],
+                [*args, ordinary_turn, datetime.fromtimestamp(time.time() - 120, UTC).isoformat()],
             ).fetchone()
             if row is None:
                 return None
