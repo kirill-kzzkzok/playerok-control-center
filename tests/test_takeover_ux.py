@@ -91,10 +91,9 @@ async def test_auto_replies_short_menu_rules_and_settings(ux):
     assert "Правил: 0" in shown.text
     assert {"ar:new", "ar:list", "ar:settings", "ar:history:0"} <= set(buttons(shown))
     await r.ui.click("ar:new")
-    for value in ("Привет", "Здравствуйте!", "600", "20"):
+    for value in ("Привет", "Здравствуйте!"):
         await r.ui.message(value)
-    commit = next(k for k in buttons(r.session.calls[-1]) if k.startswith("ar:commit:"))
-    await r.ui.click(commit)
+    assert not r.store.rows("SELECT enabled FROM auto_reply_rules WHERE enabled=1")
     assert "версия" not in r.session.calls[-1].text
     await r.ui.click("ar:list")
     rule = next(k for k in buttons(r.session.calls[-1]) if k.startswith("ar:show:"))

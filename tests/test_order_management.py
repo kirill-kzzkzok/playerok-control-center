@@ -60,6 +60,8 @@ def setup(tmp_path):
         if method in {"get_deal", "get_delivery_deal"}:
             assert kwargs == {"deal_id": "order"}
             return deepcopy(order)
+        if method == "get_item":
+            return {**deepcopy(order["item"]), "status": "APPROVED"}
         if method == "get_chat":
             return {"id": "chat", "is_texting_allowed": True}
         raise AssertionError(method)

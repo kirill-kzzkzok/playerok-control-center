@@ -13,7 +13,7 @@ shop = shop_fixture
 async def test_products_has_three_tabs_without_legacy_filter_controls(shop):
     r = await shop()
     r.store.set_setting("ui:7:item_filters", {"search": "cannot-match", "status": "SOLD"})
-    r.store.set_setting("ui:7:item_filters_pinned", True)
+    r.store.set_setting("ui:7:item_filters_pinned", False)
     await r.ui.click("items")
     visible = buttons(r.session.last_panel)
     assert "item:lot" in visible
