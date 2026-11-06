@@ -82,7 +82,9 @@ class UploadCleanup:
             try:
                 await asyncio.wait_for(
                     stop.wait(),
-                    timeout=60 if self.store.setting("backups:retention", {}).get("status") == "ERROR" else 3600,
+                    timeout=60
+                    if self.store.setting("backups:retention", {}).get("status") == "ERROR"
+                    else 3600,
                 )
             except TimeoutError:
                 continue

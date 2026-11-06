@@ -16,6 +16,7 @@ shop = shop_fixture
 
 async def test_slow_premium_preflight_does_not_starve_paid_stock_and_text(shop):
     r = await shop()
+
     def update(id, **changes):
         r.api.items[id].update(changes)
         return deepcopy(r.api.items[id])
@@ -23,9 +24,7 @@ async def test_slow_premium_preflight_does_not_starve_paid_stock_and_text(shop):
     r.api.account.update_item = update
     await setup_ui(r, "unique_stock")
     await configure_other_item(r, "text", "fixed_text")
-    r.api.items["premium"] = {
-        **deepcopy(r.api.item), "id": "premium", "priority": "PREMIUM", "raw_price": 90
-    }
+    r.api.items["premium"] = {**deepcopy(r.api.item), "id": "premium", "priority": "PREMIUM", "raw_price": 90}
     original = r.api.call
     slow = False
     entered, release = asyncio.Event(), asyncio.Event()
@@ -59,7 +58,9 @@ async def test_slow_premium_preflight_does_not_starve_paid_stock_and_text(shop):
         assert not release.is_set()
         assert len(r.store.rows("SELECT 1 FROM inventory WHERE status='DELIVERED'")) == 1
         assert sum(m["text"] == "isolated-fixed-text" for m in r.api.messages) == 1
-        assert r.store.rows("SELECT started_at FROM outbox WHERE id=?", (operation,)) == [{"started_at": None}]
+        assert r.store.rows("SELECT started_at FROM outbox WHERE id=?", (operation,)) == [
+            {"started_at": None}
+        ]
     finally:
         stop.set()
         release.set()

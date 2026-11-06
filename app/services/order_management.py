@@ -117,6 +117,7 @@ async def deal_details(
     Read the SAME deal through the full contract before applying delivery guards.
     Never infer a chat or switch a purchased item to a different public listing.
     """
+
     def complete(snapshot):
         # Missing is different from a positively conflicting identity. Never
         # use a full-detail fallback to erase a known seller/direction conflict.
