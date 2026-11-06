@@ -75,15 +75,10 @@ class ChatCards:
                 for i, image in enumerate(images[:5])
                 if isinstance(image, dict) and safe_media_url(image.get("url"))
             ]
-            if links:
-                text += "\n" + " · ".join(links)
             stamp = local_time(entry["created_at"]) if entry["created_at"] else "время не получено"
             if payload.get("local_confirmed_at"):
                 stamp = "подтверждено " + stamp
-            body = escaped(
-                payload.get("text") or ("[сообщение удалено]" if payload.get("deleted_at") else "[вложение]"),
-                min(1800, budget),
-            )
+            body = escaped(text, min(1800, budget))
             if links and not payload.get("deleted_at"):
                 body += "\n" + " · ".join(links)
             block = f"[{stamp}] <b>{'Вы' if mine else 'Покупатель'}:</b> {body}"
