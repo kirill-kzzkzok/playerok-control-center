@@ -160,7 +160,7 @@ GitHub Actions после push635cd2ba66551514c94696f3036596f0022e779b: [run4227
 |3|ProductReadiness: смена версии после подтверждённой правки вызывала GET в UI; теперь локальная карточка и фоновая сверка|test_final18_item_cache: настоящий Dispatcher → Outbox SUCCEEDED → API с задержкой6с → карточка <0,7с; restart и late-read fencing. RED1 → GREEN51 профиль|PASS|FIXED|4349dae|
 |4|Восстановление контекста после ошибок|Расширенная матрица ещё не выполнена|NOT_RUN|NOT_VERIFIED|—|
 |5|Инвалидация карточек после мутаций и ограждение поздних чтений|Расширен item_version; SUCCEEDED-only overlay. Профиль51 PASS; расширенная матрица UNKNOWN/всех видов ещё требуется|PASS частично|NOT_VERIFIED|4349dae|
-|6|Приоритет STOP/блокировок/паузы в Gifts UI|Новая матрица ещё не выполнена|NOT_RUN|NOT_VERIFIED|—|
+|6|GiftsPanel считал паузу раньше STOP, enabled-проекция оставляла кнопку остановки; теперь существующий runtime_reason и STOP → риск → PAUSE|Dispatcher RED3 → GREEN86/36,82с с финансовыми Gifts/unified controls; флаги и Outbox не изменяются от открытия|PASS|FIXED|следующий коммит fix: show actual gift admission|
 |7|VPM: историческое событие без кандидата и первичной причины|Readonly: событие18:07:43UTC, более поздний APPROVED alias19:13:22UTC, текущая ошибка NULL. Историческую причину доказать нельзя; будущая диагностика ещё проверяется|NOT_RUN код|BLOCKED историческое доказательство|—|
 |8|Привязка уведомления к точному кандидату|Новая адресная проверка ещё не завершена|NOT_RUN|NOT_VERIFIED|—|
 |9|Консоль временных сетевых сбоев|Новая адресная проверка ещё не завершена|NOT_RUN|NOT_VERIFIED|—|

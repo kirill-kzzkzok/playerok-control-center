@@ -122,20 +122,25 @@ class GiftsPanel:
             b = self.store.setting("gifts:balance", {})
             enabled = self.store.rows("SELECT 1 FROM gift_listings WHERE enabled=1 LIMIT 1")
             stopped = self.store.setting("gifts:stopped", True)
-            active = bool(
-                s.settings.payment_enabled
-                and not stopped
-                and not self.store.setting("gifts:paused", False)
-                and enabled
-                and getattr(s.api.account, "writes_enabled", False)
-                and getattr(s.api.account, "automation_enabled", False)
+            reason = s.runtime_reason()
+            label = (
+                "остановлена владельцем"
+                if stopped
+                else {
+                    "PAYMENT_LOCKED": "Результат покупки неизвестен — повтор запрещён до сверки",
+                    "CONNECTION_NOT_VERIFIED": "ожидает подтверждения подключения Playerok",
+                    "PROXY_UNAVAILABLE": "ожидает восстановления подключения Telegram",
+                    "GIFT_SYNC_PENDING": "ожидает данных Playerok; бот проверит автоматически",
+                    "GIFT_TEMPORARY_PAUSE": "временная пауза — настройки сохранены",
+                    "AUTOMATION_STOPPED_OR_STALE": "покупки подарков не разрешены",
+                }.get(reason, "разрешена для включённых товаров" if enabled else "нет включённых товаров")
             )
             rows = [
                 [("📦 Товары с подарками", "gft:bindings")],
                 [("🛒 История выдачи", "gft:history")],
                 [("⚙️ Настроить", "gft:settings")],
             ]
-            if not stopped or enabled:
+            if not stopped:
                 rows.insert(0, [("⛔ Остановить выдачу", "gft:stop")])
             return (
                 "🎁 <b>Telegram-подарки</b>\n"
@@ -147,13 +152,7 @@ class GiftsPanel:
                 + "\nПроверено: "
                 + (checked_time(b["at"]) if b.get("at") else "ещё не проверялось")
                 + "\nАвтовыдача: "
-                + (
-                    "временная пауза — настройки сохранены"
-                    if self.store.setting("gifts:paused", False)
-                    else "разрешена для включённых товаров"
-                    if active
-                    else "выключена"
-                ),
+                + label,
                 keyboard(rows, back=("⬅️ Мой магазин", "home")),
             )
         if command == "history":

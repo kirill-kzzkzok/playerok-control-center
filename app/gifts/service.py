@@ -333,6 +333,10 @@ class GiftService:
             ):
                 return "CONNECTION_NOT_VERIFIED"
             return "AUTOMATION_STOPPED_OR_STALE"
+        if self.store.rows(
+            "SELECT 1 FROM gift_jobs WHERE state='UNCERTAIN' OR refund_state='UNCERTAIN' LIMIT 1"
+        ):
+            return "PAYMENT_LOCKED"
         if self.store.setting("gifts:paused", False):
             return "GIFT_TEMPORARY_PAUSE"
         if self.settings.telegram_transport == "localvpn" and not (
@@ -341,10 +345,6 @@ class GiftService:
             return "PROXY_UNAVAILABLE"
         if not self.store.setting("orders:last_complete_sync") or orders_sync_failed(self.store):
             return "GIFT_SYNC_PENDING"
-        if self.store.rows(
-            "SELECT 1 FROM gift_jobs WHERE state='UNCERTAIN' OR refund_state='UNCERTAIN' LIMIT 1"
-        ):
-            return "PAYMENT_LOCKED"
         return None
 
     def pause(self, owner, paused):
