@@ -1,4 +1,5 @@
 import asyncio
+import math
 import time
 import uuid
 from datetime import datetime
@@ -13,10 +14,10 @@ from app.services.promotion_settings import PromotionSettings
 class PromotionWorker:
     """Bounded evaluator; explicit current authority may queue paid work through Outbox."""
 
-    def __init__(self, store, api, *, per_cycle=4):
+    def __init__(self, store, api, *, per_cycle=None):
         self.store, self.api, self.settings = store, api, PromotionSettings(store, api)
         self.per_cycle = per_cycle
-        if not 1 <= per_cycle <= 20:
+        if per_cycle is not None and not 1 <= per_cycle <= 20:
             raise ValueError("Недопустимый лимит проверок")
 
     async def discover(self, revision, selection):
@@ -92,7 +93,17 @@ class PromotionWorker:
         last_success = previous_health.get("last_success")
         await self.discover(revision, selection)
         processed = 0
-        for _ in range(self.per_cycle):
+        selected_count = self.store.rows(
+            "SELECT COUNT(*) AS n FROM promotion_schedule s LEFT JOIN promotion_targets t ON t.item_id=s.item_id "
+            "WHERE t.disposition='include' OR (?='all' AND coalesce(t.disposition,'default')!='exclude')",
+            (selection,),
+        )[0]["n"]
+        capacity = self.per_cycle or (
+            max(4, min(20, math.ceil(selected_count * 30 / policy.check_seconds)))
+            if policy.mode == "position"
+            else 4
+        )
+        for _ in range(capacity):
             current_revision, current, _ = self.settings.get()
             if current_revision != revision or not current.enabled:
                 break
@@ -240,6 +251,7 @@ class PromotionWorker:
         from app.workers.supervisor import worker_cycle
 
         while not stop.is_set():
+            started = time.monotonic()
             try:
                 with worker_cycle(self.store, "promotions", 30) as cycle:
                     cycle["processed"] = await self.once() or 0
@@ -253,6 +265,6 @@ class PromotionWorker:
                     },
                 )
             try:
-                await asyncio.wait_for(stop.wait(), 30)
+                await asyncio.wait_for(stop.wait(), max(1, 30 - (time.monotonic() - started)))
             except TimeoutError:
                 pass
