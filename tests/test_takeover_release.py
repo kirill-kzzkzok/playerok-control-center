@@ -8,8 +8,10 @@ import pytest
 
 from app.database.store import Store
 from app.services.paid_promotions import PaidPromotions, intent_key
+from app.services.products import Products, ValidationError
 from app.services.promotion_settings import PromotionSettings
 from app.services.reconciliation import Reconciliation, signature
+from app.workers.outbox import Executor, OutboxWorker
 from app.workers.promotions import PromotionWorker
 from tests.test_gifts import rig  # noqa: F401
 from tests.test_listing_launch import configured
@@ -115,7 +117,7 @@ async def test_unknown_premium_keeps_spend_blocked_until_never_started_proof(lau
 @pytest.mark.parametrize("started", [False, True])
 async def test_restart_recovery_keeps_unknown_budget_and_old_rpc_unrepeatable(launch, started):
     r = launch
-    ident, operation, _ = await premium_text(r)
+    ident, operation, action = await premium_text(r)
     if started:
         r.store.set_setting(
             intent_key(operation), {"pending": True, "started_at": "2026-11-01T00:00:00+00:00"}
@@ -129,11 +131,27 @@ async def test_restart_recovery_keeps_unknown_budget_and_old_rpc_unrepeatable(la
         assert not reopened.claim(operation_id=operation)
         assert reopened.get_draft(ident, 7)["state"] == "QUEUED"
         assert reopened.setting("launch:prepared:item")["operation"] == operation
-        assert reopened.rows("SELECT status FROM promotion_expenses")[0]["status"] == "UNCERTAIN"
-        current = reopened.rows("SELECT * FROM outbox WHERE id=?", (operation,))[0]
-        await Reconciliation(reopened, r.api).resolve(
-            7, operation, signature(current), "STOP_UNCERTAIN", "Проверено после перезапуска: остановить"
-        )
+        if started:
+            assert reopened.rows("SELECT status FROM promotion_expenses")[0]["status"] == "UNCERTAIN"
+            current = reopened.rows("SELECT * FROM outbox WHERE id=?", (operation,))[0]
+            await Reconciliation(reopened, r.api).resolve(
+                7, operation, signature(current), "STOP_UNCERTAIN", "Проверено после перезапуска: остановить"
+            )
+        else:
+            # No intent or dispatch: recovery retains the reservation and retries
+            # PREPARE. Owner STOP must still fence the old launch and old lease.
+            assert reopened.rows("SELECT status FROM promotion_expenses")[0]["status"] == "RESERVED"
+            assert (
+                reopened.rows("SELECT status FROM outbox WHERE id=?", (operation,))[0]["status"]
+                == "RETRYABLE_FAILED"
+            )
+            PromotionSettings(reopened, r.api).stop(7)
+            reopened.execute("UPDATE outbox SET retry_at=0 WHERE id=?", (operation,))
+            executor = Executor(reopened, r.api, Products(reopened, r.api))
+            await OutboxWorker(reopened, executor).once(operation_id=operation)
+            assert reopened.rows("SELECT status FROM promotion_expenses")[0]["status"] == "FAILED"
+            with pytest.raises(ValidationError):
+                await PaidPromotions(reopened, r.api).execute(executor, action)
         assert not reopened.claim(operation_id=operation)
         assert reopened.get_draft(ident, 7)["state"] == ("QUEUED" if started else "DRAFT")
         assert not r.publications and not r.remote.payments
