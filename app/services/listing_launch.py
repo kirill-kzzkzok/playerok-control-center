@@ -87,7 +87,7 @@ class ListingLaunch:
             new_created = source.get("managed_product_id") == product["id"] and not product["armed_at"]
             source = {
                 **source,
-                "inherit": bool(product["inherit_enabled"]),
+                "inherit": new_created or bool(product["inherit_enabled"]),
                 "greeting": policy.greeting if platform else config.get("greeting", ""),
                 "after": config.get("after", ""),
                 "auto_complete": (policy.mark_sent if policy.account_id else new_created)
@@ -128,6 +128,9 @@ class ListingLaunch:
         from app.services.product_readiness import ProductReadiness
 
         item = await ProductReadiness(self.store, self.api).ui_item(owner, target)
+        if item.get("status") != "DRAFT" and item.get("_ui_cached"):
+            # A local view cannot prove that publication is impossible either.
+            item = await self.automation.item(owner, target)
         if item.get("status") != "DRAFT":
             raise ValidationError("Настройка запуска доступна до публикации. Обновите карточку товара")
         key = "launch:config:" + target

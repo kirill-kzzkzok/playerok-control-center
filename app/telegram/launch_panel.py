@@ -376,6 +376,10 @@ class LaunchPanel:
                 # Paid consent needs a fresh, visible exact quote. Ordinary
                 # navigation never implicitly prepares financial authority.
                 value.pop("ready", None)
+                self.store.update_draft(draft["id"], owner, draft["revision"], value)
+                draft = self.service.load(owner, draft["id"])
+                context = (await state.get_data())["launch"]
+                await state.update_data(launch={**context, "revision": draft["revision"]})
                 value["ready"] = await self.service.check(owner, value)
                 self.store.update_draft(draft["id"], owner, draft["revision"], value)
                 return await self.show(owner, state, draft["id"])
