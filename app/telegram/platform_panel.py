@@ -19,6 +19,8 @@ class PlatformPanel:
         text = "📦 <b>Выдача: Playerok</b>\n"
         if saved:
             text += "✅ Сохранено для будущих покупок.\n"
+        elif data.get("configured") and not data.get("active"):
+            text += "⏸ Выполнение остановлено. Сохранённые настройки показаны ниже.\n"
         product = self.service.logical.listing(data["id"])
         if product and product["state"] == "VERIFIED":
             text += "✅ Привязка подтверждена\n🔐 Постоянный код: " + escaped(product["code"], 20) + "\n"
@@ -120,8 +122,10 @@ class PlatformPanel:
                 {
                     "id": parts[2],
                     "revision": revision,
-                    "reply": active and policy.paid_reply,
-                    "fulfill": active and policy.mark_sent,
+                    "reply": selected and policy.paid_reply,
+                    "fulfill": selected and policy.mark_sent,
+                    "configured": selected,
+                    "active": active,
                     "text": policy.greeting if selected else DEFAULT_REPLY,
                     "saved_text": policy.greeting if selected else None,
                 },

@@ -56,7 +56,7 @@ class StopConfirmation:
             data["policy"] = self.store.rows("SELECT * FROM promotion_policy ORDER BY id")
             data["targets"] = self.store.rows("SELECT * FROM promotion_targets ORDER BY item_id")
             data["permission"] = self.store.setting("promotions:paid_authority", {})
-            count = len(data["targets"])
+            count = sum(row["disposition"] == "include" for row in data["targets"])
         else:
             data["rules"] = self.store.rows(
                 "SELECT * FROM auto_reply_rules WHERE owner_id=? AND account_id=? ORDER BY id",
@@ -83,7 +83,16 @@ class StopConfirmation:
         label, back = LABELS[kind]
         scope = f"Затронуто товаров или правил: {count}."
         if kind == "promo":
-            scope = f"Явно выбранных товаров: {count}. Также остановятся остальные товары общего расписания, если оно включено."
+            excluded = self.store.rows(
+                "SELECT COUNT(*) AS n FROM promotion_targets WHERE disposition='exclude'"
+            )[0]["n"]
+            policy = self.store.rows("SELECT selection FROM promotion_policy WHERE id=1")
+            all_items = bool(policy and policy[0]["selection"] == "all")
+            scope = f"Явно выбранных товаров: {count}. Исключённых: {excluded}."
+            scope += "\nОстановится автопродвижение всех товаров магазина."
+            if all_items:
+                scope += " Общее правило также распространяется на остальные подходящие товары."
+            scope += "\nЭто сохранённый выбор; текущее число активных объявлений без Playerok не проверяется."
         return (
             "⛔ <b>"
             + label
