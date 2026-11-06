@@ -103,11 +103,6 @@ class GiftsPanel:
             logical = LogicalProducts(self.store, s.api)
             product = logical.listing(ident) if ident else None
             if product:
-                if command in {"arm", "confirmbind"}:
-                    await state.clear()
-                    raise Conflict(
-                        "Старое подтверждение больше не действует. Откройте товар → Выдача и подтвердите настройку заново"
-                    )
                 if command == "off":
                     logical.stop(owner, product["id"])
                 return await LogicalProductsPanel(self.store, s.api).card(owner, ident, state)
