@@ -278,3 +278,8 @@ Windows до login и sleep/hibernate не заменяются этой схе�
 | `ThreadCalls.call` | `app/playerok/thread_calls.py:30` |
 | `ThreadCalls.drain` | `app/playerok/thread_calls.py:94` |
 | `InstanceLock.__enter__` | `app/security/instance.py:11` |
+
+
+## Последующий инцидент 06.11.2026 12:14
+
+После исходной приёмки установлен и исправлен реальный SDK persisted-query сбой способов получения, terminal preflight PREMIUM/edit и избыточная связь версии тарифа с версией бюджета. Подробности: [разбор инцидента](docs/INCIDENT_2026_11_06_PREMIUM_AND_EDIT.md). Финальный source/test HEAD e0b15bdc7617b07d81a09d2261fae3f2bc848014, полный pytest2485 passed/0 failed/0 skipped, quality/selfcheck зелёные. Прежние результаты2465 относятся к прежнему HEAD и не подменяют этот новый прогон. Реальных платных операций не было; эксплуатационные ограничения выше не сняты.
