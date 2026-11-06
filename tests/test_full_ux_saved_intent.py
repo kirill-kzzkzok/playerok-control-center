@@ -4,8 +4,8 @@ from app.services.automation import Automation
 from app.services.logical_products import LogicalProducts
 from tests.test_playerok_delivery import configure
 from tests.test_product_readiness import shop as shop_fixture
-from tests.test_universal_delivery_e2e import click
 from tests.test_unified_delivery_controls import state
+from tests.test_universal_delivery_e2e import click
 from tests.test_ux_redesign import buttons
 
 shop = shop_fixture
