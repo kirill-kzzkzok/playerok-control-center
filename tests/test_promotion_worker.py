@@ -72,7 +72,7 @@ async def test_only_explicit_targets_evaluated_and_exclusions_remain_skipped(set
     await settings.target(1, "item", "exclude")
     store.execute("UPDATE promotion_schedule SET due_at=0")
     calls = api.call.await_count
-    assert await worker.once() == 1
+    assert await worker.once() == 0  # Excluded rows no longer consume evaluator capacity.
     assert api.call.await_count == calls
 
 
@@ -99,7 +99,8 @@ async def test_discovery_resumes_next_page_after_restart(setup):
 
 
 async def test_lease_prevents_parallel_claim_and_expiry_allows_safe_read_recheck(setup):
-    store, _, _, worker = setup
+    store, _, settings, worker = setup
+    enable(settings)  # Claims now enforce the real policy/selection admission.
     store.execute("INSERT INTO promotion_schedule(item_id) VALUES('item')")
     first = worker.claim()
     assert first and worker.claim() is None

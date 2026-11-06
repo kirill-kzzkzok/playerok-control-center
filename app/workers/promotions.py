@@ -62,11 +62,18 @@ class PromotionWorker:
             },
         )
 
-    def claim(self, revision=0):
+    def claim(self, revision=None):
         with self.store.transaction() as db:
+            current_revision, policy, selection = self.settings.get()
+            if not policy.enabled or revision is not None and revision != current_revision:
+                return None
+            revision = current_revision
             row = db.execute(
-                "SELECT item_id FROM promotion_schedule WHERE (due_at<=? OR policy_revision!=?) AND (lease_until IS NULL OR lease_until<?) ORDER BY due_at,item_id LIMIT 1",
-                (time.time(), revision, time.time()),
+                "SELECT s.item_id FROM promotion_schedule s LEFT JOIN promotion_targets t ON t.item_id=s.item_id "
+                "WHERE (s.due_at<=? OR s.policy_revision!=?) AND (s.lease_until IS NULL OR s.lease_until<?) "
+                "AND (t.disposition='include' OR (?='all' AND coalesce(t.disposition,'default')!='exclude')) "
+                "ORDER BY s.due_at,s.item_id LIMIT 1",
+                (time.time(), revision, time.time(), selection),
             ).fetchone()
             if not row:
                 return None
