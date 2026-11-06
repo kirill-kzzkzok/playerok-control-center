@@ -21,6 +21,10 @@ class Synchronizer(PageScanner):
         self.orders, self.chats_per_cycle = orders, chats_per_cycle
         self.health = {"status": "NOT_STARTED"}
         self.lock = asyncio.Lock()
+        self.request_lock = asyncio.Lock()
+        self.chat_lock = asyncio.Lock()
+        self._background_chats = False
+        self._chat_task = None
         self.wake = asyncio.Event()
         notification_baseline(store)
 
@@ -39,19 +43,25 @@ class Synchronizer(PageScanner):
         )
         self.wake.set()
 
-    async def process_requests(self, limit=8):
-        async with self.lock:
+    async def process_requests(self, limit=8, *, chat_only=False):
+        async with self.chat_lock if chat_only else self.request_lock:
+            lane = (
+                " AND kind='chat' " if chat_only else " AND kind!='chat' " if self._background_chats else " "
+            )
             requests = self.store.rows(
                 "SELECT * FROM sync_requests WHERE revision>completed_revision AND not_before<=? "
-                "ORDER BY updated_at,key LIMIT ?",
+                + lane
+                + "ORDER BY updated_at,key LIMIT ?",
                 (time.time(), limit),
             )
             for request in requests:
                 try:
                     kind, target = request["kind"], request["target"]
                     if kind == "catchup":
-                        await self._once()
-                        if self.health["status"] == "ERROR":
+                        async with self.lock:
+                            await self._once()
+                        self._start_chat_refresh()
+                        if orders_sync_failed(self.store):
                             raise APIError("RECONCILE_PARTIAL")
                     elif kind == "deal":
                         deal = await self.api.call("get_deal", deal_id=target)
@@ -60,21 +70,11 @@ class Synchronizer(PageScanner):
                         if deal.get("direction") == "OUT":
                             self.orders.ingest(deal)
                     else:
-                        chat = await self.api.call("get_chat", chat_id=target)
-                        if chat.get("id") != target:
-                            raise APIError("CHAT_ID_MISMATCH")
-                        self.ingest_chat(chat)
-                        _, complete = await self.scan(
-                            "messages:" + target,
-                            "get_chat_messages",
-                            "messages",
-                            lambda message, chat_id=target: self.orders.ingest_message(chat_id, message),
-                            chat_id=target,
-                        )
-                        self.store.execute(
-                            "UPDATE sync_chats SET initial_complete=MAX(initial_complete,?),last_synced_at=?,error_code=NULL WHERE id=?",
-                            (int(complete), now(), target),
-                        )
+                        if chat_only:
+                            await self._requested_chat(target)
+                        else:
+                            async with self.chat_lock:
+                                await self._requested_chat(target)
                 except (APIError, ValueError, KeyError, TypeError) as error:
                     failures = request["failures"] + 1
                     code = error.code if isinstance(error, APIError) else "SYNC_REQUEST_SCHEMA_ERROR"
@@ -102,6 +102,23 @@ class Synchronizer(PageScanner):
             )[0]["n"]
             self.store.set_setting("realtime:reconciliation", {"pending": pending, "at": now()})
             return len(requests)
+
+    async def _requested_chat(self, target):
+        chat = await self.api.call("get_chat", chat_id=target)
+        if chat.get("id") != target:
+            raise APIError("CHAT_ID_MISMATCH")
+        self.ingest_chat(chat)
+        _, complete = await self.scan(
+            "messages:" + target,
+            "get_chat_messages",
+            "messages",
+            lambda message, chat_id=target: self.orders.ingest_message(chat_id, message),
+            chat_id=target,
+        )
+        self.store.execute(
+            "UPDATE sync_chats SET initial_complete=MAX(initial_complete,?),last_synced_at=?,error_code=NULL WHERE id=?",
+            (int(complete), now(), target),
+        )
 
     def invalid_order(self, snapshot, error):
         ident = snapshot.get("id") if isinstance(snapshot, dict) else None
@@ -150,20 +167,25 @@ class Synchronizer(PageScanner):
 
     async def once(self):
         async with self.lock:
-            from app.security.logging import event
-
-            # Regular unchanged polling is DEBUG; state transitions stay visible at INFO.
-            event(
-                "CHECK",
-                "Начало синхронизации заказов",
-                level=logging.DEBUG,
-            )
             await self._once()
-            event(
-                "CHECK",
-                "Синхронизация заказов завершена: " + self.health["status"],
-                level=logging.DEBUG,
-            )
+        if self._background_chats:
+            self._start_chat_refresh()
+            await asyncio.sleep(0)
+        else:
+            await self._chat_refresh()
+
+    def _start_chat_refresh(self):
+        if self._chat_task is not None and not self._chat_task.done():
+            return
+        previous, self._chat_task = self._chat_task, None
+        if previous is not None:
+            try:
+                previous.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as error:  # noqa: BLE001 -- consume owned failure and restart this lane
+                logging.getLogger(__name__).error("Chat sync child failed: %s", type(error).__name__)
+        self._chat_task = asyncio.create_task(self._chat_refresh(), name="playerok-chat-sync")
 
     def queue_order_details(self, limit=32):
         """Persist a bounded read-only backfill, once per missing-date order.
@@ -191,7 +213,6 @@ class Synchronizer(PageScanner):
         orders_retry_after = 0
         streams = [
             ("orders", "get_deals", "deals", self.orders.ingest, {"direction": ItemDealDirections.OUT}),
-            ("chats", "get_chats", "chats", self.ingest_chat, {}),
         ]
         for key, method, collection, ingest, kwargs in streams:
             try:
@@ -210,6 +231,40 @@ class Synchronizer(PageScanner):
                 if key == "orders" and str(error.retry_after or "").isdigit():
                     orders_retry_after = int(error.retry_after)
         self.queue_order_details()
+        errors = {
+            **{
+                k: v
+                for k, v in self.health.get("errors", {}).items()
+                if k == "chats" or k.startswith("messages:")
+            },
+            **errors,
+        }
+        self._health(errors, counts, orders_retry_after)
+
+    async def _chat_refresh(self):
+        try:
+            await self.process_requests(chat_only=True)
+            async with self.chat_lock:
+                await self._chats_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:  # noqa: BLE001 -- isolate chat lane, never paid order reads
+            errors = {
+                k: v
+                for k, v in self.health.get("errors", {}).items()
+                if not (k == "chats" or k.startswith("messages:"))
+            }
+            errors["chats"] = (
+                error.code if isinstance(error, APIError) else "CHAT_SYNC_SCHEMA_OR_STORAGE_ERROR"
+            )
+            self._health(errors, {}, self.health.get("orders_retry_after", 0))
+
+    async def _chats_once(self):
+        errors = {}
+        try:
+            await self.scan("chats", "get_chats", "chats", self.ingest_chat)
+        except APIError as error:
+            errors["chats"] = error.code
         # Oldest attempted chat first. An inaccessible chat cannot starve the others.
         chats = self.store.rows(
             "SELECT id FROM sync_chats ORDER BY last_synced_at IS NOT NULL,last_synced_at,id LIMIT ?",
@@ -236,6 +291,17 @@ class Synchronizer(PageScanner):
                     "UPDATE sync_chats SET last_synced_at=?,initial_complete=MAX(initial_complete,?),error_code=NULL WHERE id=?",
                     (now(), int(complete), ident),
                 )
+        errors = {
+            **{
+                k: v
+                for k, v in self.health.get("errors", {}).items()
+                if not (k == "chats" or k.startswith("messages:"))
+            },
+            **errors,
+        }
+        self._health(errors, {}, self.health.get("orders_retry_after", 0))
+
+    def _health(self, errors, counts, orders_retry_after):
         backlog = self.store.rows("SELECT COUNT(*) AS n FROM sync_chats WHERE initial_complete=0")[0]["n"]
         initialized = bool(
             self.store.setting("orders:completed_at")
@@ -243,9 +309,10 @@ class Synchronizer(PageScanner):
             and backlog == 0
         )
         self.health = {
+            **self.health,
             "status": "ERROR" if errors else "OK" if initialized else "BACKFILL",
             "at": now(),
-            "orders": counts.get("orders", 0),
+            "orders": counts.get("orders", self.health.get("orders", 0)),
             "chat_backlog": backlog,
             "errors": errors,
             "orders_retry_after": orders_retry_after,
@@ -253,6 +320,16 @@ class Synchronizer(PageScanner):
         self.store.set_setting("sync:health", self.health)
 
     async def run(self, stop):
+        self._background_chats = True
+        try:
+            await self._run(stop)
+        finally:
+            if self._chat_task is not None:
+                self._chat_task.cancel()
+                await asyncio.gather(self._chat_task, return_exceptions=True)
+            self._background_chats = False
+
+    async def _run(self, stop):
         failures = 0
         next_full = 0
         while not stop.is_set():
@@ -302,7 +379,7 @@ class Synchronizer(PageScanner):
                 )
                 next_full = time.monotonic() + min(900, 60 * 2 ** min(failures, 4))
             pending = self.store.rows(
-                "SELECT MIN(not_before) AS due FROM sync_requests WHERE revision>completed_revision"
+                "SELECT MIN(not_before) AS due FROM sync_requests WHERE revision>completed_revision AND kind!='chat'"
             )[0]["due"]
             delay = max(
                 1,
