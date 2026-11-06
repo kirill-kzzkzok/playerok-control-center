@@ -26,7 +26,20 @@ async def test_slow_authorized_post_does_not_delay_paid_read_and_cancel_keeps_wr
             dispatched.append(request)
             entered.set()
             assert release.wait(25)
-        return httpx.Response(200, json={"data": {"viewer": {"id": "seller"}, "deal": {"id": "paid"}}})
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "deal": {
+                        "id": "paid",
+                        "status": "PAID",
+                        "direction": "OUT",
+                        "hasProblem": False,
+                        "isAutomated": False,
+                    }
+                }
+            },
+        )
 
     account = SafeAccount(
         "token=test", writes_enabled=True, client=httpx.Client(transport=httpx.MockTransport(respond))
@@ -35,12 +48,6 @@ async def test_slow_authorized_post_does_not_delay_paid_read_and_cancel_keeps_wr
     api = Playerok(account)
     ident = store.enqueue("original", "edit", "lot", {"name": "confirmed"})
     action = store.claim(operation_id=ident)
-    account.get_deal = lambda deal_id: account.request(
-        "get",
-        account.base_url + "/graphql",
-        {},
-        {"operationName": "viewer", "query": "query { viewer { id } }"},
-    ).json()["data"]["deal"]
 
     def write(cancelled):
         with account.permit(
@@ -66,7 +73,9 @@ async def test_slow_authorized_post_does_not_delay_paid_read_and_cancel_keeps_wr
     second = None
     try:
         assert await asyncio.to_thread(entered.wait, 3)
-        assert await asyncio.wait_for(api.call("get_deal", deal_id="paid"), 1) == {"id": "paid"}
+        observed = await asyncio.wait_for(api.call("get_deal", deal_id="paid"), 1)
+        assert observed["id"] == "paid" and observed["status"] == "PAID"
+        assert observed["has_problem"] is False and observed["is_automated"] is False
         assert not release.is_set() and len(dispatched) == 1
         second = asyncio.create_task(calls.call(write))
         first.cancel()
