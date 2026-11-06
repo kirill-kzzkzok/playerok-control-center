@@ -246,7 +246,7 @@ class HomePanel:
             + self.overview(owner, paid_problems=paid_total)
             + "\n"
             + note,
-            main_menu(attention=bool(problems)),
+            main_menu(attention=paid_total),
         )
 
     def show(self, action, owner):
@@ -292,7 +292,7 @@ class HomePanel:
                 "🛠 Инструменты",
                 [
                     [("История и результаты", "tools:operations")],
-                    [("Выдача и цепочки", "tools:delivery")],
+                    [("История выдачи", "tools:delivery")],
                     [("Диагностика и данные", "tools:data")],
                     [("История продвижения", "tools:promotion")],
                 ],
@@ -306,12 +306,12 @@ class HomePanel:
                 ],
             ),
             "tools:delivery": (
-                "📦 Выдача и цепочки",
+                "📦 История выдачи",
                 [
-                    [("Выдано — ожидает подтверждения", "delivered:0")],
-                    [("Цепочки выдачи", "aq:list:chains:0")],
-                    [("Автовыдача новых заказов", "aq:list:enrollment:0")],
-                    [("Все настройки выдачи", "aq:list:policies:0")],
+                    [("Доставленные заказы", "delivered:0")],
+                    [("Ход выполнения заказов", "aq:list:chains:0")],
+                    [("Обработка оплаченных заказов", "aq:list:enrollment:0")],
+                    [("Настройки товаров", "aq:list:policies:0")],
                 ],
             ),
             "tools:data": (

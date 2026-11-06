@@ -18,6 +18,11 @@ def main_menu(*, attention=False):
             [("📦 Товары", "items"), ("🛒 Заказы", "orders")],
             [("💬 Сообщения", "chats"), ("🚀 Продвижение", "promotions")],
             [("📊 Статистика", "stats:7"), ("⚙️ Настройки", "settings")],
-        ],
+        ]
+        + (
+            [[(f"⚠️ Требуют действия: {attention}", "attention")]]
+            if type(attention) is int and attention > 0
+            else []
+        ),
         home=False,
     )

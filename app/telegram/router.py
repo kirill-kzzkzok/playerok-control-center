@@ -80,6 +80,17 @@ def create_router(store, api, products, synchronizer):
     router.message.middleware(MessageNavigation(store))
     router.message.middleware(InputCleanup(store))
     navigator = Navigation(store)
+
+    def recovery_markup(message, owner):
+        panel = store.setting(navigator.key(message.bot, owner), {})
+        route = panel.get("route") or "home"
+        # Only display routes, never replay a commit/arm/toggle capability.
+        if route not in {"home", "items", "orders", "chats", "settings"} and not route.startswith(
+            ("item:", "iv:", "stock:view:", "finance:", "order:", "lp:item:", "auto:item:", "ar:show:")
+        ):
+            route = "home"
+        return keyboard([], back=("⬅️ Вернуться", route))
+
     wizard = Wizard(store, api, products)
     finance = FinancePanel(store, api, products)
     chats = ChatPanel(store, api)
@@ -505,8 +516,15 @@ def create_router(store, api, products, synchronizer):
                     raise ValidationError("API не вернул базовую цену. Изменение скидки недоступно.")
                 await state.set_state("discount")
                 await state.set_data({"item_id": ident})
+                from app.services.finance import discount_percent
+
+                discount = (
+                    discount_percent(item["raw_price"], item["price"])
+                    if item["price"] < item["raw_price"]
+                    else "0.00"
+                )
                 text, markup = (
-                    f"💰 <b>Цена и скидка</b>\nБазовая цена: {item['raw_price']} ₽\nТекущая цена: {item['price']} ₽\n\nВведите цену со скидкой (минимум 5%). Для снятия скидки укажите базовую цену. Базовая цена не изменяется.",
+                    f"💰 <b>Цена и скидка</b>\nБазовая цена: {item['raw_price']} ₽\nТекущая цена: {item['price']} ₽\nСкидка: {discount}%\n\nВведите цену со скидкой (минимум 5%). Для снятия скидки укажите базовую цену. Базовая цена не изменяется: проверенный способ редактирования Playerok позволяет менять цену продажи и снимать скидку.",
                     keyboard([]),
                 )
             elif action.startswith(("editphoto:", "ipe:")):
@@ -770,7 +788,7 @@ def create_router(store, api, products, synchronizer):
                     not preserve,
                 )
             else:
-                await message.answer("❗ " + error_text(error), reply_markup=keyboard([]))
+                await message.answer("❗ " + error_text(error), reply_markup=recovery_markup(message, owner))
         except sqlite3.Error:
             await message.answer(
                 "❗ Не удалось сохранить локальные данные. Изменения транзакции отменены. Проверьте свободное место и откройте раздел заново.",
@@ -940,7 +958,9 @@ def create_router(store, api, products, synchronizer):
                 text, markup = "Выберите действие в меню.", main_menu()
             await display(message, text, markup)
         except (APIError, ValidationError, Conflict, ValueError) as error:
-            await message.answer("❗ " + error_text(error))
+            await message.answer(
+                "❗ " + error_text(error), reply_markup=recovery_markup(message, message.from_user.id)
+            )
         except sqlite3.Error:
             await message.answer(
                 "❗ Не удалось сохранить локальные данные. Изменения транзакции отменены. Проверьте свободное место и откройте раздел заново.",
