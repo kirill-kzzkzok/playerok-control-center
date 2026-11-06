@@ -1,6 +1,8 @@
 """Paid placement through existing Outbox, budgets and exact server payment receipts."""
 
+import asyncio
 import json
+import re
 import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -375,14 +377,7 @@ class PaidPromotions:
             or money(payment["value"]) != money(value["amount"])
         ):
             raise APIError("PREMIUM_PAYMENT_NOT_CONFIRMED", uncertain=True)
-        if debit_reviewed_elsewhere(self.store, expected_payment, value.get("operation_id")):
-            raise APIError("PREMIUM_RECEIPT_ALREADY_USED", uncertain=True)
-        for row in self.store.rows("SELECT key,value FROM settings WHERE key LIKE 'promotions:intent:%'"):
-            prior = json.loads(row["value"])
-            if prior.get("receipt_id") == expected_payment and prior.get("operation_id") != value.get(
-                "operation_id"
-            ):
-                raise APIError("PREMIUM_RECEIPT_ALREADY_USED", uncertain=True)
+        self.unused_receipt(expected_payment, value.get("operation_id"))
         return {
             "remote_id": item["id"],
             "name": item.get("name"),
@@ -391,6 +386,174 @@ class PaidPromotions:
             "paid_rub": value["amount"],
             "payment_id": expected_payment,
         }
+
+    def unused_receipt(self, payment, operation):
+        if debit_reviewed_elsewhere(self.store, payment, operation) or self.store.rows(
+            "SELECT 1 FROM outbox WHERE id<>? AND json_extract(result,'$.payment_id')=? LIMIT 1",
+            (operation, payment),
+        ):
+            raise APIError("PREMIUM_RECEIPT_ALREADY_USED", uncertain=True)
+        for row in self.store.rows("SELECT value FROM settings WHERE key LIKE 'promotions:intent:%'"):
+            prior = json.loads(row["value"])
+            if prior.get("receipt_id") == payment and prior.get("operation_id") != operation:
+                raise APIError("PREMIUM_RECEIPT_ALREADY_USED", uncertain=True)
+
+    def update_intent(self, ident, **updates):
+        try:
+            with self.store.transaction():
+                intent = self.store.setting(intent_key(ident), {})
+                self.store.set_setting(intent_key(ident), {**intent, **updates})
+        except Exception as error:
+            raise APIError("PREMIUM_RECEIPT_PERSISTENCE_FAILED", uncertain=True) from error
+
+    def diagnostic(self, ident, stage, *, error=None, candidate=None, checks=None):
+        reason = getattr(error, "code", type(error).__name__) if error else "CHECKING"
+        if not isinstance(reason, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,80}", reason):
+            reason = "UNCLASSIFIED_ERROR"
+        self.update_intent(
+            ident,
+            diagnostic={
+                "stage": stage,
+                "reason": reason,
+                "candidate_present": bool(candidate),
+                "checks": checks or {},
+            },
+        )
+
+    async def confirm_receipt(self, action, *, persist=False):
+        """PREPARE with reads only; caller decides whether to journal discovery.
+
+        A mutation candidate is causal evidence. Discovery from a subsequent
+        item requires an acknowledged mutation, the item's exact receipt link
+        and an independent, narrowly timed transaction, never amount-only search.
+        """
+        value = json.loads(action["payload"]) if isinstance(action["payload"], str) else action["payload"]
+        intent = self.store.setting(intent_key(action["id"]), {})
+        candidate = intent.get("candidate_id")
+        if intent.get("operation_id") != action["id"]:
+            raise Conflict("Журнал платежа не соответствует операции")
+        acknowledged = intent.get("mutation_returned") or "candidate_id" in intent
+        if not acknowledged:
+            raise Conflict("Ответ платежа потерян. Нет однозначного ID квитанции; повтор запрещён")
+        confirmed = intent.get("confirmed_receipt")
+        if isinstance(confirmed, dict) and (
+            confirmed.get("remote_id") == action["target"] == value["item"]["id"]
+            and confirmed.get("payment_id") == intent.get("receipt_id") == candidate
+            and candidate != value.get("before_payment_id")
+            and money(confirmed.get("paid_rub")) == money(value["amount"])
+            and self.api.account.id == value["account_id"]
+            and self.store.setting("playerok:account_id", value["account_id"]) == value["account_id"]
+            and intent.get("diagnostic", {}).get("reason") == "CONFIRMED"
+        ):
+            self.settings.access.orders.owner(value["actor"])
+            self.unused_receipt(candidate, action["id"])
+            return confirmed  # Durable successful validation is not erased by a later outage.
+        discovery = intent.get("candidate_source") == "ITEM_READBACK"
+        anchored = discovery and intent.get("candidate_target") == action["target"]
+        last_error = APIError("PREMIUM_PAYMENT_NOT_CONFIRMED", uncertain=True)
+        stage, checks = "READBACK", {}
+        for attempt in range(3):
+            if attempt:
+                await asyncio.sleep((0.5, 1.5)[attempt - 1])
+            try:
+                stage = "READBACK"
+                if persist:
+                    self.diagnostic(action["id"], stage, candidate=candidate)
+                # Receipt PREPARE must not refresh titles/projections or write
+                # any local product data (including during owner diagnostics).
+                self.settings.access.orders.owner(value["actor"])
+                item = await self.api.call("get_item", id=action["target"])
+                checks = {
+                    "item": item.get("id") == action["target"] == value["item"]["id"],
+                    "owner": (item.get("user") or {}).get("id") == value["account_id"] == self.api.account.id,
+                }
+                stage = "RECEIPT_VALIDATION"
+                if not all(checks.values()):
+                    raise APIError("PREMIUM_RECEIPT_ITEM_MISMATCH", uncertain=True)
+                payment = item.get("status_payment") or {}
+                observed = payment.get("id")
+                if (
+                    (not candidate or candidate == value.get("before_payment_id"))
+                    and acknowledged
+                    and observed
+                    and observed != value.get("before_payment_id")
+                ):
+                    candidate, discovery, anchored = observed, True, True
+                    if persist:
+                        # Save the exact item-linked ID BEFORE the history RPC.
+                        self.update_intent(
+                            action["id"],
+                            candidate_id=candidate,
+                            candidate_source="ITEM_READBACK",
+                            candidate_target=action["target"],
+                        )
+                checks.update(
+                    id=bool(candidate) and observed == candidate,
+                    new_id=bool(candidate) and candidate != value.get("before_payment_id"),
+                    amount=payment.get("value") is not None
+                    and money(payment["value"]) == money(value["amount"]),
+                    direction=payment.get("direction") == "OUT",
+                    operation=payment.get("operation") == "ITEM_PREMIUM_PRIORITY",
+                    status=payment.get("status") == "CONFIRMED",
+                    provider=payment.get("provider_id") in {"LOCAL", "PENDING_INCOME"},
+                )
+                if persist:
+                    self.diagnostic(action["id"], stage, candidate=candidate, checks=checks)
+                if not candidate or candidate == value.get("before_payment_id"):
+                    raise APIError("PREMIUM_NEW_RECEIPT_NOT_VISIBLE", uncertain=True)
+                if discovery and not anchored:
+                    raise Conflict("Нет сохранённой серверной связи квитанции с этим товаром")
+                if not discovery and observed == candidate and item.get("status") != "SOLD":
+                    result = self.receipt({**value, "operation_id": action["id"]}, item, candidate)
+                else:
+                    # A different later item receipt never replaces a valid
+                    # mutation candidate. Find the EXACT ID in account history.
+                    stage = "READBACK"
+                    result = await self.historical_receipt(
+                        action, value, item, candidate, max_age=30 if discovery else 600
+                    )
+                    stage = "RECEIPT_VALIDATION"
+                    if discovery and observed == candidate and item.get("status") != "SOLD":
+                        self.receipt({**value, "operation_id": action["id"]}, item, candidate)
+                    checks.update(result.get("receipt_checks", {}))
+                    checks["item_anchor"] = bool(anchored or not discovery)
+                self.unused_receipt(candidate, action["id"])
+                if persist:
+                    with self.store.transaction() as db:
+                        current = db.execute(
+                            "SELECT status,lease_token,lease_until FROM outbox WHERE id=?", (action["id"],)
+                        ).fetchone()
+                        if (
+                            not current
+                            or current["status"] != "PROCESSING"
+                            or current["lease_token"] != action["lease_token"]
+                            or (current["lease_until"] or 0) <= time.time()
+                        ):
+                            raise APIError("PREMIUM_CONFIRMATION_LEASE_LOST", uncertain=True)
+                        self.unused_receipt(candidate, action["id"])
+                        self.update_intent(
+                            action["id"],
+                            receipt_id=candidate,
+                            pending=False,
+                            confirmed_receipt=result,
+                            diagnostic={
+                                "stage": "RECEIPT_VALIDATION",
+                                "reason": "CONFIRMED",
+                                "candidate_present": True,
+                                "checks": checks,
+                            },
+                        )
+                return result
+            except (APIError, Conflict, ValueError, KeyError, TypeError) as error:
+                last_error = error
+                if isinstance(error, APIError) and error.diagnostics:
+                    checks.update(error.diagnostics.get("receipt_checks", {}))
+                    stage = "RECEIPT_VALIDATION"
+                if isinstance(error, APIError) and error.code == "PREMIUM_RECEIPT_PERSISTENCE_FAILED":
+                    raise
+                if persist:
+                    self.diagnostic(action["id"], stage, error=error, candidate=candidate, checks=checks)
+        raise last_error
 
     async def execute(self, executor, action):
         value = action["payload"]
@@ -490,9 +653,11 @@ class PaidPromotions:
                     "started_at": now(),
                     "checked_at": fresh["checked_at"],
                     "pending": True,
+                    "automatic_receipt_check": True,
                 },
             )
         try:
+            self.diagnostic(action["id"], "MUTATION_RESPONSE")
             result = await executor.mutate(
                 action,
                 "publishItem" if action["kind"] == "premium_publish" else "increaseItemPriorityStatus",
@@ -500,32 +665,43 @@ class PaidPromotions:
                 item_id=action["target"],
                 priority_status_id=value["quote_id"],
             )
+            self.diagnostic(action["id"], "CANDIDATE_EXTRACTION")
             candidate = (result.get("status_payment") or {}).get("id") if isinstance(result, dict) else None
-            intent = self.store.setting(intent_key(action["id"]))
-            self.store.set_setting(intent_key(action["id"]), {**intent, "candidate_id": candidate})
-            current = await executor.owned_item(action["target"])
-            receipt = self.receipt({**value, "operation_id": action["id"]}, current, candidate)
-            self.store.set_setting(
-                intent_key(action["id"]),
-                {**intent, "candidate_id": candidate, "receipt_id": candidate, "pending": False},
+            self.update_intent(
+                action["id"],
+                candidate_id=candidate,
+                candidate_source="MUTATION_RESPONSE",
+                mutation_returned=True,
             )
-            return receipt
-        except Exception:  # noqa: BLE001 -- any failure after intent preserves payment uncertainty
+            return await self.confirm_receipt(action, persist=True)
+        except Exception as error:  # noqa: BLE001 -- never repeat a possibly accepted POST
+            diagnostic = self.store.setting(intent_key(action["id"]), {}).get("diagnostic", {})
+            stage = (
+                "PERSISTENCE"
+                if isinstance(error, APIError) and error.code == "PREMIUM_RECEIPT_PERSISTENCE_FAILED"
+                else diagnostic.get("stage", "MUTATION_RESPONSE")
+            )
+            try:
+                self.diagnostic(
+                    action["id"],
+                    stage,
+                    error=error,
+                    candidate=self.store.setting(intent_key(action["id"]), {}).get("candidate_id"),
+                    checks=diagnostic.get("checks"),
+                )
+            except APIError:
+                from app.security.logging import event
+
+                event("CHECK", "PREMIUM receipt diagnostic: PERSISTENCE", level=10)
             raise APIError("PREMIUM_PAYMENT_RESULT_UNKNOWN", uncertain=True) from None
 
     async def reconcile(self, action):
         value = json.loads(action["payload"]) if isinstance(action["payload"], str) else action["payload"]
         if self.api.account.id != value["account_id"]:
             raise Conflict("Аккаунт сверки не совпадает")
-        candidate = self.store.setting(intent_key(action["id"]), {}).get("candidate_id")
-        if not candidate:
-            raise Conflict("Ответ платежа потерян. Нет однозначного ID квитанции; повтор запрещён")
-        item = await self.settings.access.item(value["actor"], action["target"])
-        if item.get("status") == "SOLD":
-            return await self.historical_receipt(action, value, item, candidate)
-        return self.receipt({**value, "operation_id": action["id"]}, item, candidate)
+        return await self.confirm_receipt(action)
 
-    async def historical_receipt(self, action, value, item, candidate):
+    async def historical_receipt(self, action, value, item, candidate, *, max_age=600):
         """A sold item no longer exposes the receipt of each earlier placement."""
         from playerokapi.enums import TransactionOperations
 
@@ -541,6 +717,8 @@ class PaidPromotions:
             page = await self.api.call(
                 "get_transactions",
                 operation=TransactionOperations.ITEM_PREMIUM_PRIORITY,
+                from_date=started.astimezone(UTC) - timedelta(seconds=1),
+                to_date=started.astimezone(UTC) + timedelta(seconds=max_age + 1),
                 count=24,
                 after_cursor=cursor,
             )
@@ -548,26 +726,32 @@ class PaidPromotions:
             matches = [t for t in transactions if t.get("id") == candidate]
             if matches:
                 payment = matches[0]
+                checks = {}
                 try:
                     created = datetime.fromisoformat(payment["created_at"])
-                    valid = (
-                        len(matches) == 1
-                        and payment.get("status") == "CONFIRMED"
-                        and payment.get("direction") == "OUT"
-                        and payment.get("operation") == "ITEM_PREMIUM_PRIORITY"
-                        and payment.get("provider_id") in {"LOCAL", "PENDING_INCOME"}
-                        and (payment.get("user") or {}).get("id")
+                    checks = {
+                        "history_id": len(matches) == 1 and payment.get("id") == candidate,
+                        "history_status": payment.get("status") == "CONFIRMED",
+                        "history_direction": payment.get("direction") == "OUT",
+                        "history_operation": payment.get("operation") == "ITEM_PREMIUM_PRIORITY",
+                        "history_provider": payment.get("provider_id") in {"LOCAL", "PENDING_INCOME"},
+                        "history_account": (payment.get("user") or {}).get("id")
                         == value["account_id"]
                         == self.api.account.id
-                        == self.store.setting("playerok:account_id")
-                        and money(payment.get("value")) == money(value["amount"])
-                        and created.tzinfo is not None
-                        and started <= created <= started + timedelta(minutes=10)
-                    )
+                        == self.store.setting("playerok:account_id"),
+                        "history_amount": money(payment.get("value")) == money(value["amount"]),
+                        "history_time": created.tzinfo is not None
+                        and started <= created <= started + timedelta(seconds=max_age),
+                    }
+                    valid = all(checks.values())
                 except (KeyError, TypeError, ValueError):
                     valid = False
                 if not valid:
-                    raise APIError("PREMIUM_HISTORICAL_RECEIPT_NOT_CONFIRMED", uncertain=True)
+                    raise APIError(
+                        "PREMIUM_HISTORICAL_RECEIPT_NOT_CONFIRMED",
+                        uncertain=True,
+                        diagnostics={"receipt_checks": checks},
+                    )
                 if debit_reviewed_elsewhere(self.store, candidate, action["id"]):
                     raise Conflict("Списание уже учтено в другой операции")
                 if self.store.rows(
@@ -587,9 +771,51 @@ class PaidPromotions:
                     "paid_rub": str(money(payment["value"])),
                     "payment_id": candidate,
                     "historical_payment": True,
+                    "receipt_checks": checks,
+                    "payment_created_at": payment["created_at"],
                 }
             if not following:
                 break
             cursor = following
             seen.append(cursor)
         raise Conflict("Историческая квитанция не найдена. Исход неизвестен; повтор платежа запрещён")
+
+    async def reconcile_due(self):
+        """Only new acknowledged intents opt into read-only background proof.
+
+        Legacy operations and explicit owner decisions require their existing
+        reconciliation route; loading a new version must not rewrite them.
+        """
+        rows = self.store.rows(
+            "SELECT o.* FROM outbox o JOIN settings s ON s.key='promotions:intent:'||o.id "
+            "WHERE o.kind IN ('premium_publish','premium_bump') AND o.status='UNCERTAIN' "
+            "AND json_extract(s.value,'$.automatic_receipt_check')=1 "
+            "AND json_type(s.value,'$.candidate_id') IS NOT NULL "
+            "AND coalesce(json_extract(s.value,'$.receipt_retry_at'),0)<=? "
+            "AND NOT EXISTS(SELECT 1 FROM operation_resolutions r WHERE r.operation_id=o.id) "
+            "AND NOT EXISTS(SELECT 1 FROM settings r WHERE r.key='promotions:review:'||o.id) "
+            "ORDER BY o.created_at LIMIT 1",
+            (time.time(),),
+        )
+        for action in rows:
+            from app.services.reconciliation import Reconciliation, signature
+
+            value = json.loads(action["payload"])
+            try:
+                await Reconciliation(self.store, self.api).resolve(
+                    value["actor"],
+                    action["id"],
+                    signature(action),
+                    "CONFIRM_READ_STATE",
+                    "Автоматическая проверка точной серверной квитанции",
+                    automatic=True,
+                )
+            except (APIError, Conflict, ValueError, KeyError, TypeError) as error:
+                intent = self.store.setting(intent_key(action["id"]), {})
+                failures = intent.get("receipt_failures", 0) + 1
+                self.update_intent(
+                    action["id"],
+                    receipt_failures=failures,
+                    receipt_retry_at=time.time() + min(300, 30 * 2 ** min(failures, 4)),
+                )
+                self.diagnostic(action["id"], "READBACK", error=error, candidate=intent.get("candidate_id"))

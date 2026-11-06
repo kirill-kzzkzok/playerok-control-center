@@ -273,8 +273,17 @@ class Reconciliation:
             "Сообщение не найдено в проверенных страницах. Это не доказывает отсутствие отправки; повтор не разрешён"
         )
 
-    async def resolve(self, actor, ident, expected, decision, reason, message_id=None):
+    async def resolve(self, actor, ident, expected, decision, reason, message_id=None, *, automatic=False):
         action = self.action(actor, ident, uncertain=True)
+        if automatic and (
+            action["kind"] not in {"premium_publish", "premium_bump"}
+            or decision != "CONFIRM_READ_STATE"
+            or action["status"] != "UNCERTAIN"
+            or not self.store.setting("promotions:intent:" + ident, {}).get("automatic_receipt_check")
+            or self.store.rows("SELECT 1 FROM operation_resolutions WHERE operation_id=?", (ident,))
+            or self.store.setting("promotions:review:" + ident)
+        ):
+            raise Conflict("Автоматическая сверка этой операции не разрешена")
         if signature(action) != expected:
             raise Conflict("Операция изменилась. Откройте её заново")
         if not isinstance(reason, str) or not 10 <= len(reason.strip()) <= 500:
@@ -289,7 +298,12 @@ class Reconciliation:
             status, error = "SUCCEEDED", None
         else:
             raise ValueError("Недопустимое решение")
-        result = {**evidence, "resolution_source": "OWNER_DECISION", "actor": actor, "decision": decision}
+        result = {
+            **evidence,
+            "resolution_source": "SERVER_RECEIPT" if automatic else "OWNER_DECISION",
+            "actor": actor,
+            "decision": decision,
+        }
         with self.store.transaction() as db:
             current = db.execute("SELECT * FROM outbox WHERE id=?", (ident,)).fetchone()
             reconfirm = current["error_code"] == "MANUALLY_STOPPED_UNCERTAIN" and decision != "STOP_UNCERTAIN"
@@ -312,11 +326,44 @@ class Reconciliation:
                     db, actor, draft["id"], draft["payload"], evidence["creation"]
                 )
             if action["kind"] in {"premium_publish", "premium_bump"} and status == "SUCCEEDED":
-                from app.services.paid_promotions import finish_expense, intent_key
+                from app.services.paid_promotions import PaidPromotions, finish_expense, intent_key
 
+                value = json.loads(action["payload"])
+                expense = db.execute(
+                    "SELECT item_id,amount,status FROM promotion_expenses WHERE operation_key=?",
+                    (action["operation_key"],),
+                ).fetchone()
+                from app.services.finance import money
+
+                if (
+                    not expense
+                    or expense["item_id"] != action["target"]
+                    or money(expense["amount"]) != money(value["amount"])
+                    or expense["status"] != "UNCERTAIN"
+                    or self.api.account.id != value["account_id"]
+                    or self.store.setting("playerok:account_id", value["account_id"]) != value["account_id"]
+                    or not db.execute("SELECT 1 FROM administrators WHERE user_id=?", (actor,)).fetchone()
+                    or automatic
+                    and (
+                        self.store.setting("promotions:review:" + ident)
+                        or db.execute(
+                            "SELECT 1 FROM operation_resolutions WHERE operation_id=?", (ident,)
+                        ).fetchone()
+                    )
+                ):
+                    raise Conflict("Финансовый журнал, аккаунт или решение владельца изменились")
+                # Evidence preparation can race another confirmation. The exact
+                # receipt claim and both ledger transitions share this COMMIT.
+                PaidPromotions(self.store, self.api).unused_receipt(evidence["payment_id"], ident)
                 intent = self.store.setting(intent_key(ident), {})
                 self.store.set_setting(
-                    intent_key(ident), {**intent, "receipt_id": evidence["payment_id"], "pending": False}
+                    intent_key(ident),
+                    {
+                        **intent,
+                        "candidate_id": evidence["payment_id"],
+                        "receipt_id": evidence["payment_id"],
+                        "pending": False,
+                    },
                 )
                 finish_expense(db, ident, "SUCCEEDED")
             if action["kind"] in {"premium_publish", "premium_bump"} and decision == "STOP_UNCERTAIN":
@@ -432,7 +479,13 @@ class Reconciliation:
                     (actor, decision, now(), action["target"]),
                 )
             db.execute(
-                "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'RESOLVE_OPERATION',?,?,?)",
-                (actor, ident, decision, now()),
+                "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,?,?,?,?)",
+                (
+                    None if automatic else actor,
+                    "AUTO_CONFIRM_PREMIUM" if automatic else "RESOLVE_OPERATION",
+                    ident,
+                    decision,
+                    now(),
+                ),
             )
         return result

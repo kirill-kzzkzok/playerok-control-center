@@ -85,6 +85,9 @@ class PromotionWorker:
             return row[0], token
 
     async def once(self):
+        from app.services.paid_promotions import PaidPromotions
+
+        await PaidPromotions(self.store, self.api).reconcile_due()
         revision, policy, selection = self.settings.get()
         if not policy.enabled:
             self.store.set_setting("promotions:health", {"status": "DISABLED", "at": now()})
