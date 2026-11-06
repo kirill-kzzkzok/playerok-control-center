@@ -44,6 +44,7 @@ class AutomationPanel:
 
     async def show(self, data, state):
         data.pop("arm_pending", None)
+        data["account"] = self.service.api.account.id
         nonce = secrets.token_hex(6)
         data["nonce"] = nonce
         await state.set_state(None)
@@ -158,6 +159,15 @@ class AutomationPanel:
                 return await LogicalProductsPanel(self.store, self.service.api).card(owner, parts[2], state)
             await self.service.item(owner, parts[2])
             revision, policy = self.service.get(parts[2])
+            draft = (await state.get_data()).get("automation_draft") or {}
+            if (
+                draft.get("id") == parts[2]
+                and draft.get("revision") == revision
+                and draft.get("account") == self.service.api.account.id
+            ):
+                return await self.show(
+                    {"id": parts[2], "revision": revision, "values": draft["values"]}, state
+                )
             return await self.show({"id": parts[2], "revision": revision, "values": asdict(policy)}, state)
         data = (await state.get_data()).get("automation", {})
         if (

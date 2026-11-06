@@ -103,6 +103,7 @@ CONTEXT = {
     "list_catalog_at",
     "gift_picker",
     "promotion_picker",
+    "automation_draft",
 }
 
 
@@ -356,6 +357,13 @@ class Navigation:
                 return message  # Explicit Telegram flood limit; no blind resend/re-execution.
             view = deepcopy(proposal or {name: panel.get(name) for name in ("route", "history", "context")})
             view["context"] = {k: v for k, v in (await state.get_data()).items() if k in CONTEXT}
+            editing = (await state.get_data()).get("automation")
+            if editing and not editing.get("logical_check"):
+                # Keep editable values, never one-shot arm/commit capabilities.
+                view["context"]["automation_draft"] = {
+                    "account": editing.get("account"),
+                    **{key: editing[key] for key in ("id", "revision", "values")},
+                }
             # Incoming Telegram models carry a private mounted Bot. Copying
             # that object traverses its live session/middleware (including locks).
             markup = (
@@ -526,7 +534,7 @@ class Navigation:
                 token=token,
                 content_fingerprint=fingerprint,
                 restoring=False,
-                context={k: v for k, v in (await state.get_data()).items() if k in CONTEXT},
+                context=view["context"],
             )
             self.store.set_setting(key, panel)
             self.track_result(owner, panel, markup)
