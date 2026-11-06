@@ -53,7 +53,12 @@ async def test_slow_premium_preflight_does_not_starve_paid_stock_and_text(shop):
         await EnrollmentWorker(r.store, r.api).once()
         ChainWorker(r.store, r.api).once()
         async with asyncio.timeout(4):
-            while len(r.api.messages) < 2:
+            # The transport thread appends the message before its response is
+            # consumed. Await the durable receipt too, not an in-flight send.
+            while not (
+                r.store.rows("SELECT 1 FROM inventory WHERE status='DELIVERED'")
+                and any(m["text"] == "isolated-fixed-text" for m in r.api.messages)
+            ):
                 await asyncio.sleep(0.02)
         assert not release.is_set()
         assert len(r.store.rows("SELECT 1 FROM inventory WHERE status='DELIVERED'")) == 1
