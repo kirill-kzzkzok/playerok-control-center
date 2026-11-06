@@ -179,9 +179,9 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
         connection = PlayerokConnection(store, api)
         await connection.check(cooldown=0)
         tasks.append(supervisor.start("playerok-connection-recovery", lambda: connection.run(stop), stop))
-        from app.services.backup_retention import startup_backup
+        from app.services.backup_retention import attempt_startup_backup
 
-        await asyncio.to_thread(startup_backup, store, Path("data/backups"))
+        await asyncio.to_thread(attempt_startup_backup, store, Path("data/backups"))
         orders = Orders(store)
         products = Products(store, api)
         from app.services.logical_products import LogicalProducts

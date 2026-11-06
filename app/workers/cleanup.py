@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import time
+from pathlib import Path
 
 from app.database.store import now
 from app.services.attachments import Attachments
@@ -67,6 +68,10 @@ class UploadCleanup:
 
     async def run(self, stop):
         while not stop.is_set():
+            if self.store.setting("backups:retention", {}).get("status") == "ERROR":
+                from app.services.backup_retention import attempt_startup_backup
+
+                await asyncio.to_thread(attempt_startup_backup, self.store, Path("data/backups"))
             try:
                 await asyncio.to_thread(self.once)
             except (OSError, ValueError, ValidationError) as error:
@@ -75,6 +80,9 @@ class UploadCleanup:
                 )
                 logging.getLogger(__name__).error("Upload cleanup failed: %s", type(error).__name__)
             try:
-                await asyncio.wait_for(stop.wait(), timeout=3600)
+                await asyncio.wait_for(
+                    stop.wait(),
+                    timeout=60 if self.store.setting("backups:retention", {}).get("status") == "ERROR" else 3600,
+                )
             except TimeoutError:
                 continue

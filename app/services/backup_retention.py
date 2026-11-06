@@ -100,3 +100,26 @@ def startup_backup(store, directory):
     result = prune_startup_backups(directory, protected=destination)
     store.set_setting("backups:retention", {**result, "at": datetime.now(UTC).isoformat()})
     return result
+
+
+def attempt_startup_backup(store, directory):
+    """Optional snapshot availability must not stop a healthy writable journal."""
+    from app.database.store import now
+    from app.security.logging import event
+
+    previous = store.setting("backups:retention", {})
+    try:
+        result = startup_backup(store, directory)
+    except (OSError, ValueError, sqlite3.Error) as error:
+        # Never continue on a corrupt source, or swallow a failure to write the
+        # durable health record (including a full source volume).
+        if [tuple(row.values()) for row in store.rows("PRAGMA quick_check")] != [("ok",)]:
+            raise
+        result = {"status": "ERROR", "code": type(error).__name__, "at": now()}
+        store.set_setting("backups:retention", result)
+        if previous.get("status") != "ERROR":
+            event("WARNING", "Резервная копия недоступна; бот повторит создание автоматически", level=30)
+    else:
+        if previous.get("status") == "ERROR":
+            event("SUCCESS", "Создание резервных копий восстановлено")
+    return result
