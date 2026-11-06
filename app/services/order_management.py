@@ -239,9 +239,13 @@ class OrderManagement:
         order = await self.fresh(actor, ident)
         if order_snapshot(order) != expected:
             raise Conflict("Сделка изменилась. Откройте заказ заново")
-        count = self.orders.add_stock(order["item"]["id"], text.splitlines())
-        self.store.audit(actor, "ADD_STOCK", order["item"]["id"], str(count))
-        return count
+        from app.services.inventory import Inventory
+
+        inventory = Inventory(self.store, self.api)
+        item = await inventory.item(actor, order["item"]["id"])
+        return await inventory.import_values(
+            actor, item["id"], text, inventory.preview(item["id"], text), item["status"]
+        )
 
     def local(self, ident):
         rows = self.store.rows("SELECT * FROM order_annotations WHERE order_id=?", (ident,))

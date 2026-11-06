@@ -436,6 +436,8 @@ async def test_order_notes_search_stock_and_guarded_delivery_ui(tmp_path):
             self.calls.append((method, kwargs))
             if method == "get_deal":
                 return deepcopy(order)
+            if method == "get_item":
+                return {**deepcopy(order["item"]), "status": "APPROVED"}
             assert method == "get_chat"
             return {"id": "chat", "is_texting_allowed": True}
 
@@ -463,10 +465,10 @@ async def test_order_notes_search_stock_and_guarded_delivery_ui(tmp_path):
         assert len(api.calls) == count
         await ui.click("od:stock:order")
         await ui.message("private code")
-        token = (await state.get_data())["order_token"]
+        token = (await state.get_data())["stock_pending"]["nonce"]
         assert "private code" not in session.calls[-1].text
         assert not store.rows("SELECT * FROM inventory")
-        await ui.click("od:apply:" + token)
+        await ui.click("stock:commit:" + token)
         assert len(store.rows("SELECT * FROM inventory")) == 1
         assert not store.rows("SELECT * FROM outbox")
         await ui.click("od:prepare:order")

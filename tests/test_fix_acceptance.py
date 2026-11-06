@@ -142,7 +142,7 @@ async def test_owner_recovery_of_proven_preflight_stop_uses_same_operation_and_r
     def token(key):
         return json.loads(r.store.rows("SELECT data FROM fsm")[0]["data"])[key]
 
-    await r.ui.click("od:apply:" + token("order_token"))
+    await r.ui.click("stock:commit:" + token("stock_pending")["nonce"])
     await r.ui.click("od:prepare:stock")
     await r.ui.click("od:apply:" + token("order_token"))
     ident = r.store.rows("SELECT id FROM outbox")[0]["id"]

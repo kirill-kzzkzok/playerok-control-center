@@ -147,7 +147,7 @@ class OrdersPanel:
             if can_deliver and not operation and not gifts and not gift_listing:
                 rows.append([("📦 Выдать из запаса", "od:prepare:" + ident)])
             if not gifts and not gift_listing:
-                rows.append([("➕ Добавить уникальные коды", "od:stock:" + ident)])
+                rows.append([("➕ Пополнить склад товара", "od:stock:" + ident)])
         if gifts:
             rows.append([("🎁 Подарок / сверка / возврат", "gft:job:" + ident)])
         if operation:
@@ -480,7 +480,16 @@ class OrdersPanel:
                 result = "Локальная отметка сохранена. Проблема в Playerok не создавалась и не снималась."
             await state.clear()
             return result, keyboard([[("К заказу", "order:" + target)]])
-        if command in {"prepare", "stock"}:
+        if command == "stock":
+            from app.telegram.stock_panel import StockPanel
+
+            rows = self.store.rows("SELECT item_id FROM orders WHERE id=?", (ident,))
+            if not rows:
+                raise Conflict("Сначала откройте карточку заказа")
+            return await StockPanel(self.store, self.service.api).callback(
+                "stock:add:" + rows[0]["item_id"], owner, state
+            )
+        if command == "prepare":
             order = await (
                 self.service.prepare_delivery(owner, ident)
                 if command == "prepare"
