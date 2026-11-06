@@ -47,6 +47,18 @@ async def test_happ_predispatch_outage_recovers_one_card_with_all_messages(cards
     assert r.store.rows("SELECT DISTINCT status FROM notifications") == [{"status": "SUCCEEDED"}]
 
 
+async def test_stale_card_claim_cannot_send_a_second_notification(cards):
+    r = cards
+    incoming(r, 1)
+    service = ChatCards(r.store, r.bot)
+    service.touch(7, "chat")
+    stale = r.store.rows("SELECT * FROM chat_cards")[0]
+    await service.update_card(stale)
+    await service.update_card(stale)
+    assert len(calls(r, "sendMessage")) == 1
+    assert r.store.rows("SELECT state FROM chat_cards") == [{"state": "OPEN"}]
+
+
 async def test_five_second_send_outlives_background_budget_and_is_not_duplicated(cards):
     r = cards
     entered = asyncio.Event()
@@ -152,3 +164,36 @@ async def test_lost_send_receipt_with_three_later_messages_is_never_resent(cards
     assert len(calls(r, "sendMessage")) == 1
     assert r.store.rows("SELECT state FROM chat_cards") == [{"state": "UNCERTAIN"}]
     assert len(r.store.rows("SELECT * FROM chat_messages")) == 4
+
+
+@pytest.mark.parametrize("phase", ["send", "edit_missing"])
+async def test_owner_close_during_send_is_not_undone_by_late_network_error(cards, phase):
+    from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
+
+    r = cards
+    release = asyncio.Event()
+    original = r.session.make_request
+    if phase == "edit_missing":
+        incoming(r, 0)
+        await r.notifications.once()
+
+    async def transport(bot, method, timeout=None):
+        result = await original(bot, method, timeout)
+        if method.__api_method__ == ("sendMessage" if phase == "send" else "editMessageText"):
+            await release.wait()
+            if phase == "edit_missing":
+                raise TelegramBadRequest(method=method, message="message to edit not found")
+            raise TelegramNetworkError(method=method, message="response lost after delivery")
+        return result
+
+    r.session.make_request = transport
+    incoming(r, 1)
+    await r.notifications.once()
+    row = r.store.rows("SELECT * FROM chat_cards")[0]
+    await r.ui.click("cc:close:" + row["token"], message_id=r.session.sequence)
+    assert r.store.rows("SELECT state FROM chat_cards") == [{"state": "CLOSED"}]
+    release.set()
+    await r.store.chat_card_flush_task
+    await r.notifications.once()
+    assert r.store.rows("SELECT state FROM chat_cards") == [{"state": "CLOSED"}]
+    assert len(calls(r, "sendMessage")) == 1

@@ -208,7 +208,7 @@ class ChatCards:
                 row["state"],
                 time.time(),
             ),
-        )
+        ).rowcount
         if not changed:
             return
         tracking = panel_owner.set(None)
@@ -236,7 +236,7 @@ class ChatCards:
                 ident = row["telegram_message_id"]
             elif not sending and code in {"MESSAGE_NOT_FOUND", "MESSAGE_NOT_EDITABLE"}:
                 self.store.execute(
-                    "UPDATE chat_cards SET state='NEW',token=?,telegram_message_id=NULL,fingerprint=NULL,busy_until=0,busy_token=NULL,failures=failures+1 WHERE token=? AND busy_token=?",
+                    "UPDATE chat_cards SET state='NEW',token=?,telegram_message_id=NULL,fingerprint=NULL,busy_until=0,busy_token=NULL,failures=failures+1 WHERE token=? AND busy_token=? AND state='OPEN'",
                     (secrets.token_hex(12), row["token"], token),
                 )
                 return
@@ -246,33 +246,31 @@ class ChatCards:
                 retryable = (
                     rejected or not sending and code in {"TIMEOUT", "NETWORK_ERROR", "PROXY_UNAVAILABLE"}
                 )
-                self.store.execute(
-                    "UPDATE chat_cards SET state=?,busy_until=0,retry_after=?,failures=? WHERE token=? AND busy_token=?",
-                    (
-                        "NEW" if sending and rejected else "UNCERTAIN" if sending else "OPEN",
-                        time.time() + max(min(60, 5 * 2 ** min(row["failures"], 8)), delay),
-                        min(7, row["failures"] + 1)
-                        if retryable
-                        else 8
-                        if code in REJECTED_CONTENT
-                        else row["failures"] + 1,
-                        row["token"],
-                        token,
-                    ),
-                )
-                self.store.audit(row["owner_id"], "CHAT_CARD", row["chat_id"], code)
-                if sending and not rejected:
-                    self.store.execute(
-                        "UPDATE notifications SET status='UNCERTAIN' WHERE owner_id=? AND status='CARD' AND event_key IN (SELECT 'message:'||id FROM chat_messages WHERE chat_id=?)",
-                        (row["owner_id"], row["chat_id"]),
-                    )
+                with self.store.transaction() as db:
+                    changed = db.execute(
+                        "UPDATE chat_cards SET state=?,busy_until=0,retry_after=?,failures=? WHERE token=? AND busy_token=? AND state!='CLOSED'",
+                        (
+                            "NEW" if sending and rejected else "UNCERTAIN" if sending else "OPEN",
+                            time.time() + max(min(60, 5 * 2 ** min(row["failures"], 8)), delay),
+                            min(7, row["failures"] + 1)
+                            if retryable
+                            else 8
+                            if code in REJECTED_CONTENT
+                            else row["failures"] + 1,
+                            row["token"],
+                            token,
+                        ),
+                    ).rowcount
+                    self.store.audit(row["owner_id"], "CHAT_CARD", row["chat_id"], code)
+                    if sending and not rejected and changed:
+                        self.unknown_notice(db, row)
                 return
         finally:
             panel_owner.reset(tracking)
         saved = self.store.execute(
             "UPDATE chat_cards SET state='OPEN',telegram_message_id=?,fingerprint=?,busy_until=0,busy_token=NULL,retry_after=0,failures=0,updated_at=? WHERE token=? AND busy_token=? AND state!='CLOSED'",
             (ident, fingerprint, now(), row["token"], token),
-        )
+        ).rowcount
         if saved:
             self.store.execute(
                 "UPDATE notifications SET status='SUCCEEDED',telegram_message_id=? WHERE owner_id=? AND status='CARD' AND event_key IN (SELECT 'message:'||id FROM chat_messages WHERE chat_id=?)",
