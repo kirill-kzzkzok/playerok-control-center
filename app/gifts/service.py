@@ -91,6 +91,9 @@ class GiftService:
         if (
             not isinstance(item, dict)
             or any(not isinstance(item.get(key), str) for key in ("id", "name", "status", "description"))
+            or binding
+            and binding["state"] != "LEGACY"
+            and item.get("price") is None
             or any(
                 not isinstance(item.get(key), dict) or not item[key].get("id")
                 for key in ("user", "category", "obtaining_type")

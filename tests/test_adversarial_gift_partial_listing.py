@@ -11,7 +11,7 @@ from tests.test_universal_delivery_e2e import setup_ui
 shop = shop_fixture
 
 
-@pytest.mark.parametrize("field", ["user", "category", "obtaining_type", "status", "description"])
+@pytest.mark.parametrize("field", ["user", "category", "obtaining_type", "status", "description", "price"])
 async def test_incomplete_listing_waits_without_disarming_then_delivers_once(shop, field):
     r = await shop(gift=True)
     await setup_ui(r, "telegram_gifts", "gift: heart")
