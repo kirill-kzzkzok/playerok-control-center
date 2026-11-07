@@ -336,3 +336,33 @@ async def test_all_main_menu_buttons_and_restart_via_production_dispatcher(tmp_p
     finally:
         await bot.session.close()
         store.close()
+
+
+async def test_transport_reports_only_persistent_connection_incident(caplog):
+    import logging
+
+    from app.telegram.transport import TelegramNetworkSession
+
+    session = TelegramNetworkSession()
+    try:
+
+        def finish(method, code=None):
+            state, token, started = session._begin(method)
+            if code:
+                state["error_code"] = code
+            session._finish(state, token, started, "FAILED" if code else "OK")
+
+        with caplog.at_level(logging.DEBUG, logger="pcc.shop"):
+            finish("getUpdates", "NETWORK_ERROR")
+            finish("getUpdates")
+            assert not [r for r in caplog.records if r.levelno >= logging.INFO]
+            for code in ("NETWORK_ERROR", "TIMEOUT", "DNS_ERROR", "NETWORK_ERROR"):
+                finish("getUpdates", code)
+            finish("sendMessage")
+            assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+            assert not [r for r in caplog.records if r.levelno == logging.INFO]
+            finish("getUpdates")
+            finish("getUpdates")
+            assert len([r for r in caplog.records if r.levelno == logging.INFO]) == 1
+    finally:
+        await session.close()

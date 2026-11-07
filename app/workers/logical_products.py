@@ -186,7 +186,7 @@ class LogicalProductWorker:
             except APIError as error:
                 self.store.audit(None, "DEAL_ITEM_READ", row["id"], error.code)
                 event(
-                    "WARNING", "Не удалось проверить товар сделки: " + error.code, order=row["id"], level=30
+                    "WARNING", "Не удалось проверить товар сделки: " + error.code, order=row["id"], level=10
                 )
                 continue
         if len(pending_orders) < 20:
@@ -331,16 +331,19 @@ class LogicalProductWorker:
 
         failures = 0
         while not stop.is_set():
+            prior = self.store.setting("runtime:cycle:logical-products", {})
             try:
                 with worker_cycle(self.store, "logical-products", min(900, 30 * 2 ** min(failures + 1, 5))):
                     await self.once()
+                if prior.get("consecutive_failures", 0) >= 3:
+                    event("INFO", "Сверка перевыставлений восстановлена")
                 failures = 0
             except (APIError, ValueError) as error:
                 failures += 1
                 event(
                     "WARNING",
                     "Сверка перевыставлений остановлена: " + getattr(error, "code", type(error).__name__),
-                    level=30,
+                    level=30 if prior.get("consecutive_failures", 0) == 2 else 10,
                 )
             try:
                 pending = self.store.setting("logical:scan:" + str(self.api.account.id), {})

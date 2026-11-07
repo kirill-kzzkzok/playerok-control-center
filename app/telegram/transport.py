@@ -38,6 +38,7 @@ class TelegramNetworkSession(AiohttpSession):
         self.diagnostics = diagnostics
         self.results = {}
         self._reported = {}
+        self._connection_failures = {}
 
     async def create_session(self):
         # AiohttpSession has no trace_configs constructor argument. Retain its
@@ -157,20 +158,25 @@ class TelegramNetworkSession(AiohttpSession):
             state.get("retry_after", 0),
         )
         code = state.get("error_code") or state.get("blocked") or outcome
-        # Expected no-op and outer ACK cancellation aren't connection outages.
+        # Recovery must come from the affected API method, not an unrelated ACK.
+        method = state["method"]
         if outcome in {"OK", "CANCELLED"} or code == "MESSAGE_NOT_MODIFIED":
             if outcome == "OK":
+                if self._connection_failures.pop(method, 0) >= 3:
+                    event("INFO", f"Связь Telegram восстановлена · {method}")
                 for key in tuple(self._reported):
-                    if key[0] != state["method"]:
-                        continue
-                    previous = self._reported.pop(key)
-                    if key[1] in {
-                        "NETWORK_ERROR",
-                        "TIMEOUT",
-                        "PROXY_UNAVAILABLE",
-                        "DNS_ERROR",
-                    }:
-                        event("INFO", f"Telegram-соединение восстановлено · {previous[1]} неудачных попыток")
+                    if key[0] == method:
+                        self._reported.pop(key)
+            return
+        if code in {"NETWORK_ERROR", "TIMEOUT", "PROXY_UNAVAILABLE", "DNS_ERROR", "PROXY_ROUTE_CHANGED"}:
+            failures = min(4, self._connection_failures.get(method, 0) + 1)
+            self._connection_failures[method] = failures
+            if failures == 3:
+                event(
+                    "WARNING",
+                    f"Telegram не отвечает несколько попыток подряд · {method}",
+                    level=logging.WARNING,
+                )
             return
         key = (state["method"], code)
         clock = time.monotonic()
