@@ -15,7 +15,7 @@ from tests.test_universal_delivery_e2e import simulation as simulation_fixture
 
 
 @pytest.fixture
-async def case(tmp_path):
+async def case(tmp_path, request):
     async for create in simulation_fixture.__wrapped__(tmp_path):
         r = await create(gift=True)
         await setup_ui(r, "telegram_gifts", "gift: heart, heart")
@@ -43,7 +43,8 @@ async def case(tmp_path):
             return await original_call(method, **kwargs)
 
         r.api.call = call
-        Orders(r.store).ingest(r.partial)
+        if getattr(request, "param", True):
+            Orders(r.store).ingest(r.partial)
         yield r
 
 
@@ -361,3 +362,53 @@ async def test_sold_source_with_changed_category_cannot_clear_saved_conflict(cas
     assert logical.listing("lot")["error_code"] is not None
     assert not r.store.rows("SELECT 1 FROM gift_jobs")
     assert not r.api.remote.payments
+
+
+async def test_paid_private_snapshot_is_processed_when_public_inheritance_is_off(case):
+    r = case
+    r.store.execute("UPDATE logical_products SET inherit_enabled=0")
+    logical = LogicalProducts(r.store, r.api)
+    r.api.items["new-public"] = {**copy.deepcopy(r.original), "id": "new-public"}
+    await LogicalProductWorker(r.store, r.api).once()
+    assert logical.listing("new-public") is None
+    link = logical.listing("deal-item-copy")
+    assert link and link["source_order_id"] == "snapshot-paid"
+    assert not link["inherit_enabled"]
+    gifts = GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender)
+    await gifts.once()
+    await r.worker.once()
+    await r.worker.once()
+    assert len(r.api.remote.payments) == 2
+    assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "SUCCEEDED"}]
+
+
+@pytest.mark.parametrize("case", [False], indirect=True)
+async def test_new_paid_private_snapshot_wakes_idle_binding_worker(case):
+    import asyncio
+
+    r = case
+    r.store.execute("UPDATE logical_products SET inherit_enabled=0")
+    worker = LogicalProductWorker(r.store, r.api)
+    initial_scan, ready, stop = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    once = worker.once
+
+    async def observed_scan():
+        await once()
+        initial_scan.set()
+        if LogicalProducts(r.store, r.api).listing("deal-item-copy"):
+            ready.set()
+
+    worker.once = observed_scan
+    task = asyncio.create_task(worker.run(stop))
+    try:
+        await asyncio.wait_for(initial_scan.wait(), 3)
+        assert not ready.is_set()
+        Orders(r.store).ingest(r.partial)
+        await asyncio.wait_for(ready.wait(), 3)
+        await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+        await r.worker.once()
+        await r.worker.once()
+        assert len(r.api.remote.payments) == 2
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, 3)

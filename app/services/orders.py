@@ -177,6 +177,14 @@ class Orders:
             ingest_review(self.store, db, order)
             if added and status in STAGES and (status == "PAID" or previous):
                 order_event(order, status)
+            wake = getattr(self.store, "logical_paid_wake", None)
+            if (
+                added
+                and status == "PAID"
+                and wake is not None
+                and not db.execute("SELECT 1 FROM logical_listings WHERE item_id=?", (item["id"],)).fetchone()
+            ):
+                wake.set()
             return bool(added)
 
     def annotate(self, order_id, actor, revision, problem, note):

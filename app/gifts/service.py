@@ -648,6 +648,16 @@ class GiftService:
             "UPDATE gift_jobs SET recipient_username=? WHERE order_id=? AND state='CHECKING'",
             (username, j["order_id"]),
         )
+        if not j["recipient_username"]:
+            from app.services.shop_events import buyer, short_title
+
+            name = short_title((order.get("item") or {}).get("name"))
+            event(
+                "🔎 ПОЛУЧАТЕЛЬ",
+                f"{name} · {buyer(order)} · Telegram username извлечён",
+                order=j["order_id"],
+                operation=action["id"],
+            )
         j["recipient_username"] = username
         stage_start = time.perf_counter()
         try:

@@ -44,6 +44,9 @@ class LogicalProductWorker:
         self.service = LogicalProducts(store, api)
         if not hasattr(store, "logical_scan_lock"):
             store.logical_scan_lock = asyncio.Lock()
+        if not hasattr(store, "logical_paid_wake"):
+            store.logical_paid_wake = asyncio.Event()
+        self.paid_wake = store.logical_paid_wake
 
     async def once(self):
         return await self.scan()
@@ -55,7 +58,7 @@ class LogicalProductWorker:
     async def _scan(self, *, product_id=None):
         products = self.store.rows(
             "SELECT * FROM logical_products WHERE state='VERIFIED' AND "
-            + ("id=?" if product_id else "enabled=1 AND inherit_enabled=1"),
+            + ("id=?" if product_id else "enabled=1"),
             (product_id,) if product_id else (),
         )
         if not products:
@@ -269,6 +272,12 @@ class LogicalProductWorker:
                             require_listing_details(sold)
                             candidates.append(sold)
             for item in candidates:
+                if (
+                    not product["inherit_enabled"]
+                    and item["id"] not in snapshot_orders
+                    and not self.service.listing(item["id"])
+                ):
+                    continue
                 if product_id and not self.service.listing(item["id"]):
                     # An explicit binding recovery can verify existing aliases,
                     # never adopt a new item or enable an execution projection.
@@ -410,6 +419,7 @@ class LogicalProductWorker:
 
         failures = 0
         while not stop.is_set():
+            self.paid_wake.clear()
             prior = self.store.setting("runtime:cycle:logical-products", {})
             try:
                 with worker_cycle(
@@ -437,9 +447,18 @@ class LogicalProductWorker:
                     and getattr(error, "code", None) != "CONNECTION_NOT_VERIFIED"
                 ):
                     event("WARNING", "Перевыставления временно недоступны. Бот повторит проверку.", level=30)
+            pending = self.store.setting("logical:scan:" + str(self.api.account.id), {})
+            delay = cycle["retry_delay"] if failures else 5 if pending else 120
+            if failures:
+                try:
+                    await asyncio.wait_for(stop.wait(), delay)
+                except TimeoutError:
+                    pass
+                continue
+            waiting = [asyncio.create_task(signal.wait()) for signal in (stop, self.paid_wake)]
             try:
-                pending = self.store.setting("logical:scan:" + str(self.api.account.id), {})
-                delay = cycle["retry_delay"] if failures else 5 if pending else 120
-                await asyncio.wait_for(stop.wait(), delay)
-            except TimeoutError:
-                pass
+                await asyncio.wait(waiting, timeout=delay, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for task in waiting:
+                    task.cancel()
+                await asyncio.gather(*waiting, return_exceptions=True)

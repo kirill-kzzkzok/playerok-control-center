@@ -1404,7 +1404,7 @@ class LogicalProducts:
         if (
             product["state"] != "VERIFIED"
             or not existing
-            and (not product["enabled"] or not product["inherit_enabled"])
+            and (not product["enabled"] or not (product["inherit_enabled"] or source_order_id))
         ):
             raise RelistConflict("RELIST_PERMISSION_MISSING")
         if (
@@ -1516,7 +1516,8 @@ class LogicalProducts:
                 or current["control_revision"] != product["control_revision"]
                 or current["armed_at"] != product["armed_at"]
                 or current["config"] != product["config"]
-                or not current["inherit_enabled"]
+                or current["inherit_enabled"] != product["inherit_enabled"]
+                or not (current["inherit_enabled"] or source_order_id)
             ):
                 raise RelistConflict("RELIST_CONTROL_CHANGED")
             if not self.api.account.writes_enabled and getattr(
