@@ -312,3 +312,19 @@ async def test_temporary_viewer_outage_logs_one_warning_and_one_recovery(rig, ca
         await conn.check(cooldown=0)
         await conn.check(cooldown=0)
         assert len([r for r in caplog.records if r.levelno == logging.INFO]) == 1
+
+
+async def test_late_viewer_success_cannot_restore_revoked_identity(rig):
+    store, api = rig
+    connection = PlayerokConnection(store, api)
+    await connection.check(cooldown=0)
+    api.wait = asyncio.Event()
+    api.started.clear()
+    check = asyncio.create_task(connection.check(cooldown=0))
+    await asyncio.wait_for(api.started.wait(), 2)
+    connection.invalidate("AUTH_REJECTED")
+    api.wait.set()
+    result = await check
+    assert result["reason"] == "AUTH_REJECTED"
+    assert not api.account.writes_enabled and not connection.reads_allowed
+    assert (await connection.check(cooldown=0))["status"] == "CONNECTED"

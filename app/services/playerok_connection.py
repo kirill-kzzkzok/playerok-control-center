@@ -45,6 +45,7 @@ class PlayerokConnection:
         self.lock = asyncio.Lock()
         self.last_started = None
         self.viewer = None
+        self.invalidation_generation = 0
         self.read_account_id = None
         self.desired_writes = bool(getattr(api.account, "writes_enabled", False))
         self.desired_automation = bool(getattr(api.account, "automation_enabled", False))
@@ -81,6 +82,7 @@ class PlayerokConnection:
         )
 
     def invalidate(self, code, diagnostics=None):
+        self.invalidation_generation += 1
         self.disable()
         if code not in TEMPORARY_READ_FAILURES:
             self.read_account_id = None
@@ -101,6 +103,7 @@ class PlayerokConnection:
             return {**self.state, "busy": True}
         async with self.lock:
             previous = self.store.setting("playerok:verification", {})
+            generation = self.invalidation_generation
             self.last_started = time.monotonic()
             self.disable()
             self.viewer = None
@@ -110,6 +113,8 @@ class PlayerokConnection:
             try:
                 async with asyncio.timeout(25):
                     viewer = await self.api.call("get")
+                if generation != self.invalidation_generation:
+                    return dict(self.state)
                 ident = viewer.get("id")
                 if not isinstance(ident, str) or not ident.strip() or ident != self.api.account.id:
                     raise APIError("CHECK_FAILED")
@@ -120,6 +125,8 @@ class PlayerokConnection:
                 self.read_account_id = None
                 self.state.update(status="DISCONNECTED", reason="ACCOUNT_MISMATCH")
             except APIError as error:
+                if generation != self.invalidation_generation:
+                    return dict(self.state)
                 if error.code not in TEMPORARY_READ_FAILURES:
                     self.read_account_id = None
                 code = error.code if error.code in REASONS else "CHECK_FAILED"
@@ -135,10 +142,13 @@ class PlayerokConnection:
                     reason=code,
                 )
             except TimeoutError:
+                if generation != self.invalidation_generation:
+                    return dict(self.state)
                 self.state.update(status="UNKNOWN", reason="CHECK_TIMEOUT")
             except asyncio.CancelledError:
                 self.last_started = time.monotonic()
-                self.state.update(status="UNKNOWN", reason="CHECK_FAILED")
+                if generation == self.invalidation_generation:
+                    self.state.update(status="UNKNOWN", reason="CHECK_FAILED")
                 self.store.set_setting("playerok:verification", self.state)
                 raise
             except Exception:  # noqa: BLE001 -- never expose raw account/request errors
