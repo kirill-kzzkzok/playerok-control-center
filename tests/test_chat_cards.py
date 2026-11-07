@@ -322,14 +322,25 @@ async def test_more_than_one_batch_of_dialogs_does_not_starve_later_card_updates
     r = cards
     for n in range(101):
         incoming(r, n, chat="chat-" + str(n))
-    await r.notifications.once()
-    await r.notifications.once()
+    # The two-second budget is per cycle, so the number of cycles depends on
+    # SQLite latency under parallel test load. Verify progress and no duplicate
+    # sends without assuming a throughput that the worker does not promise.
+    for _ in range(101):
+        sent_before = len(calls(r, "sendMessage"))
+        await r.notifications.once()
+        sent = len(calls(r, "sendMessage"))
+        assert sent_before < sent <= 101
+        if sent == 101:
+            break
     assert len(calls(r, "sendMessage")) == 101
     incoming(r, 200, chat="chat-100", text="Latest message must appear")
-    await r.notifications.once()
-    await r.notifications.once()
     row = r.store.rows("SELECT * FROM chat_cards WHERE chat_id='chat-100'")[0]
+    for _ in range(101):
+        await r.notifications.once()
+        if "Latest message must appear" in r.session.messages[row["telegram_message_id"]]["text"]:
+            break
     assert "Latest message must appear" in r.session.messages[row["telegram_message_id"]]["text"]
+    assert len(calls(r, "sendMessage")) == 101
 
 
 async def test_new_incoming_after_navigation_preserves_form_and_reopens_one_notice(cards):
