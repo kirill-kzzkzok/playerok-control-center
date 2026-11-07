@@ -78,10 +78,10 @@ class PlayerokConnection:
     @property
     def awaiting_verification(self):
         return bool(
-            self.reads_allowed
-            and self.desired_writes
+            self.desired_writes
             and self.desired_automation
-            and self.state.get("reason") in TEMPORARY_READ_FAILURES | {"CHECK_IN_PROGRESS"}
+            and self.state.get("reason")
+            in TEMPORARY_READ_FAILURES | {"CHECK_IN_PROGRESS", "UNAUTHORIZED_OR_CHALLENGE"}
         )
 
     def invalidate(self, code, diagnostics=None):
