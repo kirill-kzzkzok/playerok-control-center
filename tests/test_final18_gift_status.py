@@ -37,3 +37,33 @@ async def test_home_uses_stop_safety_pause_precedence(shop, stopped, paused, unk
     assert r.store.setting("gifts:paused") is paused
     assert r.store.rows("SELECT id,status FROM outbox") == before
     assert not r.api.remote.payments and not r.api.messages
+
+
+@pytest.mark.parametrize("paused,unknown", [(False, False), (True, True)])
+async def test_settings_stop_hides_duplicate_stop_even_with_enabled_projection(shop, paused, unknown):
+    r = await shop(gift=True)
+    await setup_ui(r, "telegram_gifts", "gift: heart")
+    Orders(r.store).ingest(r.api.order("paid"))
+    service = GiftService(r.store, r.api, r.api.gift_settings, r.api.gift_sender)
+    assert service.discover() == 1
+    if unknown:
+        r.store.execute("UPDATE gift_jobs SET state='UNCERTAIN' WHERE order_id='paid'")
+    r.store.set_setting("gifts:stopped", True)
+    r.store.set_setting("gifts:paused", paused)
+    projections = r.store.rows("SELECT enabled FROM gift_listings")
+    assert projections == [{"enabled": 1}]
+    before = r.store.rows("SELECT id,status FROM outbox")
+    jobs = r.store.rows("SELECT * FROM gift_jobs")
+    await r.ui.click("gft:settings")
+    visible = buttons(r.session.last_panel)
+    assert "gft:stop" not in visible
+    assert "gft:resume" in visible
+    assert "Экстренная остановка: да" in r.session.last_panel.text
+    await r.ui.click("gft:resume")
+    assert any(key.startswith("gft:resume_confirm:") for key in buttons(r.session.last_panel))
+    assert r.store.setting("gifts:stopped") is True
+    assert r.store.setting("gifts:paused") is paused
+    assert r.store.rows("SELECT enabled FROM gift_listings") == projections
+    assert r.store.rows("SELECT id,status FROM outbox") == before
+    assert r.store.rows("SELECT * FROM gift_jobs") == jobs
+    assert not r.api.remote.payments and not r.api.messages

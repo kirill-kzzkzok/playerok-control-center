@@ -164,8 +164,10 @@ class GiftsPanel:
         if command == "settings":
             await state.clear()
             order, day = s.limits()
+            stopped = self.store.setting("gifts:stopped", True)
+            paused = self.store.setting("gifts:paused", False)
             return (
-                "⚙️ <b>Настройки подарков</b>\nЛимит заказа: "
+                "⚙️ <b>Настройки подарков</b>\nДля всего магазина. Состав подарков меняется в разделе «Выдача» конкретного товара.\nЛимит заказа: "
                 + str(order)
                 + " ⭐\nЛимит суток: "
                 + (f"{day} ⭐ (UTC)" if day is not None else "отключён")
@@ -174,33 +176,21 @@ class GiftsPanel:
                 + "\nАвтовозврат: "
                 + ("разрешён с проверками" if s.settings.refund_enabled else "выключен")
                 + "\nВременная пауза: "
-                + ("да" if self.store.setting("gifts:paused", False) else "нет")
+                + ("да" if paused else "нет")
                 + "\nЭкстренная остановка: "
-                + (
-                    "да — требуется отдельное разрешение"
-                    if self.store.setting("gifts:stopped", True)
-                    else "нет"
-                ),
+                + ("да — требуется отдельное разрешение" if stopped else "нет"),
                 keyboard(
                     [
                         [("🔄 Проверить подключение и баланс", "gft:refresh")],
                         [("Каталог подарков", "gft:catalog")],
                         [("Лимиты расходов", "gft:limits")],
                         [("Проверить метку в описании", "gft:description")],
-                        *(
-                            [[("⛔ Остановить выдачу", "gft:stop")]]
-                            if not self.store.setting("gifts:stopped", True)
-                            or self.store.rows("SELECT 1 FROM gift_listings WHERE enabled=1 LIMIT 1")
-                            else []
-                        ),
+                        [("▶️ Разрешить новые покупки", "gft:resume")]
+                        if stopped
+                        else [("⛔ Остановить выдачу", "gft:stop")],
                         [("▶️ Снять временную паузу", "gft:unpause")]
-                        if self.store.setting("gifts:paused", False)
+                        if paused
                         else [("⏸ Временная пауза покупок", "gft:pause")],
-                        *(
-                            [[("▶️ Разрешить новые покупки", "gft:resume")]]
-                            if self.store.setting("gifts:stopped", True)
-                            else []
-                        ),
                     ],
                     back=("⬅️ Подарки", "gft:home"),
                 ),
