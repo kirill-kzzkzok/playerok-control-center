@@ -43,6 +43,8 @@ class PlayerokConnection:
     def __init__(self, store, api):
         self.store, self.api = store, api
         self.lock = asyncio.Lock()
+        self.recheck = asyncio.Event()
+        self.last_recheck_request = None
         self.last_started = None
         self.viewer = None
         self.invalidation_generation = 0
@@ -83,6 +85,12 @@ class PlayerokConnection:
         )
 
     def invalidate(self, code, diagnostics=None):
+        current = time.monotonic()
+        if self.state["status"] == "CONNECTED" and (
+            self.last_recheck_request is None or current - self.last_recheck_request >= 10
+        ):
+            self.last_recheck_request = current
+            self.recheck.set()
         self.invalidation_generation += 1
         self.disable()
         if code not in TEMPORARY_READ_FAILURES:
@@ -206,14 +214,27 @@ class PlayerokConnection:
     async def run(self, stop):
         """Reverify identity after failure, never restore gates from cached success."""
         delay = 30
-        while not stop.is_set():
-            try:
-                await asyncio.wait_for(stop.wait(), timeout=delay)
-            except TimeoutError:
+        stopped = asyncio.create_task(stop.wait())
+        try:
+            while not stop.is_set():
+                requested = asyncio.create_task(self.recheck.wait())
+                try:
+                    done, _ = await asyncio.wait(
+                        {stopped, requested}, timeout=delay, return_when=asyncio.FIRST_COMPLETED
+                    )
+                finally:
+                    requested.cancel()
+                    await asyncio.gather(requested, return_exceptions=True)
+                if stop.is_set():
+                    break
+                self.recheck.clear()
                 if self.state["status"] != "CONNECTED":
-                    await self.check()
+                    await self.check(cooldown=0 if requested in done else 5)
                     delay = 30 if self.state["status"] == "CONNECTED" else min(delay * 2, 300)
                 else:
                     if self.last_started is None or time.monotonic() - self.last_started >= 300:
                         await self.check()
                     delay = 30
+        finally:
+            stopped.cancel()
+            await asyncio.gather(stopped, return_exceptions=True)

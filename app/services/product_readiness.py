@@ -332,7 +332,7 @@ class ProductReadiness:
                 "Как разрешить записи",
                 "rd:permissions:" + ident,
             )
-        if not getattr(account, "automation_enabled", False):
+        if not getattr(manager, "desired_automation", getattr(account, "automation_enabled", False)):
             add(
                 "AUTOMATION_OFF",
                 "Глобальная автоматизация выключена.",
@@ -837,15 +837,22 @@ class ProductReadiness:
                     "WARNING",
                     f"Readiness stage={stage} type={type(exc).__name__} code={safe_code}",
                     level=10
-                    if automatic
-                    and code
-                    in TEMPORARY_READ_FAILURES
-                    | {
-                        "PROXY_UNAVAILABLE",
-                        "MTPROTO_TIMEOUT",
-                        "PROXY_ROUTE_CHANGED",
-                        "ITEM_READ_SUPERSEDED",
-                    }
+                    if (
+                        stage == "item"
+                        and isinstance(exc, APIError)
+                        and code in {"UNAUTHORIZED_OR_CHALLENGE", "CONNECTION_NOT_VERIFIED", "AUTH_REJECTED"}
+                    )
+                    or (
+                        automatic
+                        and code
+                        in TEMPORARY_READ_FAILURES
+                        | {
+                            "PROXY_UNAVAILABLE",
+                            "MTPROTO_TIMEOUT",
+                            "PROXY_ROUTE_CHANGED",
+                            "ITEM_READ_SUPERSEDED",
+                        }
+                    )
                     else 30,
                 )
                 error = "Проверка не завершена: " + (

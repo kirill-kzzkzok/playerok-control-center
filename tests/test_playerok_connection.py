@@ -90,6 +90,25 @@ async def test_other_account_never_adopts_database(rig):
     assert store.setting("playerok:bound_account_id") == "old-shop" and not api.account.writes_enabled
 
 
+async def test_transient_rejection_wakes_existing_verifier_without_manual_check(rig):
+    store, api = rig
+    connection = PlayerokConnection(store, api)
+    await connection.check(cooldown=0)
+    api.started.clear()
+    stop = asyncio.Event()
+    loop = asyncio.create_task(connection.run(stop))
+    try:
+        connection.invalidate("UNAUTHORIZED_OR_CHALLENGE", {"http_status": 403})
+        assert not api.account.writes_enabled
+        await asyncio.wait_for(api.started.wait(), 2)
+        assert connection.state["status"] == "CONNECTED"
+        assert api.account.writes_enabled and api.calls == ["get", "get"]
+    finally:
+        stop.set()
+        loop.cancel()
+        await asyncio.gather(loop, return_exceptions=True)
+
+
 async def test_concurrent_checks_and_immediate_double_click_send_only_one_read(rig):
     store, api = rig
     connection = PlayerokConnection(store, api)

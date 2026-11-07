@@ -116,7 +116,7 @@ def connection_summary(api):
         return "⚪ Playerok: аккаунт подтверждён\nПоследняя проверка: " + local_time(
             value.get("last_success")
         )
-    return "🟡 Подключение Playerok нужно проверить"
+    return "🟡 Бот автоматически перепроверяет подключение Playerok"
 
 
 def automation_summary(store, api, ident, *, item=None, compact=False):
@@ -148,6 +148,10 @@ def error_text(error):
         }
         return escaped(reasons.get(error.code, gift_reason(error.code)), 800)
     if isinstance(error, APIError):
+        if error.code == "CONNECTION_NOT_VERIFIED":
+            return "Бот перепроверяет подключение Playerok. Действие пока недоступно."
+        if error.code == "UNAUTHORIZED_OR_CHALLENGE" and getattr(error, "read_only", False):
+            return "Playerok отклонил чтение. Бот автоматически перепроверяет подключение."
         if error.code == "ITEM_READ_SUPERSEDED":
             return "Товар изменился, пока Playerok отвечал. Бот обновит данные автоматически; устаревший ответ не применён."
         if getattr(error, "read_only", False) and error.code in {
