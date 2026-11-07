@@ -16,7 +16,7 @@ from app.security.logging import event
 from app.services.automation import Automation, DeliveryPolicy
 from app.services.edit_confirmation import is_ordinary_edit
 from app.services.inventory import Inventory
-from app.services.logical_products import PROBLEMS, LogicalProducts
+from app.services.logical_products import MODERATION_STATUSES, PROBLEMS, LogicalProducts
 from app.services.playerok_connection import REASONS, TEMPORARY_READ_FAILURES
 from app.services.products import ValidationError
 from app.services.sync_health import orders_sync_failed
@@ -445,7 +445,9 @@ class ProductReadiness:
         if item and (item.get("status") and item.get("status") != "APPROVED" or item.get("deleted_at")):
             add(
                 "NOT_PUBLISHED",
-                "Товар сейчас не опубликован. Настройки сохраняются для будущих продаж.",
+                "Товар на модерации Playerok. Настройки сохраняются для будущих продаж."
+                if item.get("status") in MODERATION_STATUSES and not item.get("deleted_at")
+                else "Товар сейчас не опубликован. Настройки сохраняются для будущих продаж.",
                 "Открыть товар",
                 "item:" + ident,
             )
@@ -737,6 +739,13 @@ class ProductReadiness:
             "ready": state == "READY",
             "problems": problems,
             "message": message,
+            "auto_message": bool(gift)
+            if mode == "telegram_gifts"
+            else bool(
+                policy.paid_reply
+                if mode == "playerok"
+                else mode in {"unique_stock", "fixed_text"} and policy.after
+            ),
             "complete": complete,
             "completion_note": completion_note,
             "additional_ready": "CHECK_ORDER" if complete else "OFF",

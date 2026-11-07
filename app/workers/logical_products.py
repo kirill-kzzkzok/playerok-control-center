@@ -9,7 +9,13 @@ from app.database.store import Conflict, encode, now
 from app.playerok.adapter import APIError
 from app.security.logging import event
 from app.services.automation import future_order
-from app.services.logical_products import LogicalProducts, RelistConflict, critical, marker
+from app.services.logical_products import (
+    MODERATION_STATUSES,
+    LogicalProducts,
+    RelistConflict,
+    critical,
+    marker,
+)
 from app.services.order_management import compatible_detail, deal_details, deliverable
 from app.services.orders import Orders
 from app.workers.pagination import PageScanner
@@ -86,7 +92,11 @@ class LogicalProductWorker:
                 "get_my_items",
                 "items",
                 ingest,
-                statuses=[ItemStatuses.APPROVED],
+                statuses=[
+                    ItemStatuses.APPROVED,
+                    ItemStatuses.PENDING_APPROVAL,
+                    ItemStatuses.PENDING_MODERATION,
+                ],
                 count=24,
             )
             if not complete:
@@ -204,6 +214,10 @@ class LogicalProductWorker:
             valid_snapshot = []
             malformed = False
             for item in snapshot:
+                if item.get("status") in MODERATION_STATUSES:
+                    linked = self.service.listing(item["id"])
+                    if not linked or linked["id"] != product["id"]:
+                        continue
                 try:
                     code = marker(item.get("name"))
                 except ValueError:
@@ -250,6 +264,13 @@ class LogicalProductWorker:
                     else:
                         fresh = await self.api.call("get_item", id=item["id"])
                     require_listing_details(fresh)
+                    if (
+                        not source_order
+                        and fresh.get("status") != item.get("status")
+                        and {fresh.get("status"), item.get("status")} <= MODERATION_STATUSES | {"APPROVED"}
+                    ):
+                        # The next scan will use one coherent publication state.
+                        continue
                     if (
                         fresh.get("id") != item["id"]
                         or fresh.get("status") != item.get("status")

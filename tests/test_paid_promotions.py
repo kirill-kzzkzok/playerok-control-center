@@ -347,7 +347,8 @@ async def test_unknown_bump_shows_specific_block_on_promotion_screen(rig):
     session = TelegramSession()
     bot = Bot("123:" + "x" * 35, session=session)
     try:
-        await Interaction(bot, dispatcher(r.store, r.api)).click("payp:item:item")
+        ui = Interaction(bot, dispatcher(r.store, r.api))
+        await ui.click("payp:item:item")
         panel = session.calls[-1]
         assert "10.00 ₽" in panel.text and "неизвестен" in panel.text
         assert any(
@@ -355,6 +356,11 @@ async def test_unknown_bump_shows_specific_block_on_promotion_screen(rig):
             for row in panel.reply_markup.inline_keyboard
             for button in row
         )
+        await ui.click("promotions")
+        overview = session.last_panel.text
+        assert overview.count("не подтверждён платёж 10.00 ₽") == 1
+        assert "Лимиты:" in overview and "Следующая проверка" not in overview
+        assert "ожидает сверки расхода" not in overview
         assert len(r.api.charges) == 1
     finally:
         await bot.session.close()

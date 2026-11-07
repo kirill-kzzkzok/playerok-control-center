@@ -183,6 +183,45 @@ async def test_unrelated_description_does_not_create_a_code_conflict(shop):
     assert len(r.api.mutations) == 1 and not r.api.remote.payments
 
 
+async def test_moderation_does_not_report_code_conflict_and_allows_saving_auto_reply(shop):
+    r = await shop()
+    await r.ui.click("platform:item:lot")
+    await click(r, suffix=":fulfill")
+    await click(r, suffix=":save")
+    await click(r, suffix=":bind")
+    update = r.api.account.update_item
+
+    def moderated_edit(**kwargs):
+        result = update(**kwargs)
+        r.api.item["status"] = result["status"] = "PENDING_MODERATION"
+        return result
+
+    r.api.account.update_item = moderated_edit
+    await r.worker.once()
+    r.api.items["other"] = {**deepcopy(r.api.item), "id": "other"}
+    original = r.api.call
+
+    async def catalog(method, **kwargs):
+        if method == "get_my_items":
+            return r.api.page("items", list(r.api.items.values()))
+        return await original(method, **kwargs)
+
+    r.api.call = catalog
+    logical = LogicalProducts(r.store, r.api)
+    worker = LogicalProductWorker(r.store, r.api)
+    await worker.once()
+    assert logical.listing("lot")["error_code"] is None
+    assert not logical.listing("other")
+    worker.problem(logical.listing("lot"), "RELIST_CRITICAL_FIELDS_CHANGED", candidate_id="lot")
+    await r.ui.click("platform:item:lot")
+    await click(r, suffix=":reply")
+    assert "Не сохранено" in r.session.last_panel.text
+    await click(r, suffix=":save")
+    assert Automation(r.store, r.api).get("lot")[1].paid_reply
+    assert logical.listing("lot")["error_code"] is None
+    assert len(r.api.mutations) == 1 and not r.api.messages and not r.api.remote.payments
+
+
 async def test_edit_permission_revoked_after_confirmation_never_arms(shop):
     r = await shop()
     await save(r)

@@ -1,5 +1,6 @@
 """Small owner tools; all remote writes stay in the existing wizard/Outbox."""
 
+import json
 import secrets
 
 from app.database.store import Conflict
@@ -109,10 +110,67 @@ class QuickShopPanel:
 
         return brief(ProductReadiness(self.store, self.api).snapshot(ident))
 
-    async def status(self, owner, state, page=0):
+    async def status(self, owner):
+        from app.playerok.adapter import validate_page
+        from app.services.finance import quote_fresh
+        from app.services.item_filters import catalog_item
+        from app.services.product_readiness import ProductReadiness
         from app.telegram.listings_panel import ListingsPanel
+        from playerokapi.enums import ItemStatuses
 
         Automation(self.store, self.api).orders.owner(owner)
-        await state.clear()
-        await state.set_data({"item_filters": {"status": "APPROVED"}})
-        return await ListingsPanel(self.api, self.store).show("items", state)
+        account = self.api.account.id
+        bound = self.store.setting("playerok:account_id")
+        if not account or bound not in (None, account):
+            raise ValidationError("Аккаунт Playerok не подтверждён")
+        cache = self.store.setting("ui:catalog:" + account, {}) if bound else {}
+        if not cache and bound:
+            saved = self.store.setting("ui:catalog_pages:" + account, {}).get(
+                json.dumps(["APPROVED", None, {}, None], sort_keys=True)
+            )
+            if saved:
+                items, cursor = validate_page(saved["page"], "items")
+                if not cursor:
+                    cache = {"items": items, "complete": True, "at": saved["at"]}
+        if not cache:
+            items, cursor, seen = {}, None, []
+            for _ in range(3):
+                page = await self.api.call(
+                    "get_my_items", count=24, after_cursor=cursor, statuses=[ItemStatuses.APPROVED]
+                )
+                if self.api.account.id != account or self.store.setting("playerok:account_id") != bound:
+                    raise ValidationError("Аккаунт Playerok изменился")
+                values, cursor = validate_page(page, "items", seen)
+                items.update((item["id"], catalog_item(item, account)) for item in values)
+                if not cursor:
+                    break
+                seen.append(cursor)
+            cache = {"items": list(items.values()), "complete": not cursor}
+        if not cache.get("complete") or cache.get("at") and not quote_fresh(cache["at"], max_age=60):
+            ListingsPanel(self.api, self.store).request_catalog(account)
+        active = [
+            item for item in cache["items"] if item["status"] == "APPROVED" and not item.get("deleted_at")
+        ]
+        text = f"📦 <b>Активные товары</b> · {len(active)}" + ("+" if not cache["complete"] else "")
+        if cache.get("at") and not quote_fresh(cache["at"], max_age=60):
+            text += " · сохранённый список"
+        readiness = ProductReadiness(self.store, self.api)
+        for index, item in enumerate(active, 1):
+            result = readiness.snapshot(item["id"])
+            delivery = (
+                "Playerok"
+                if result["mode"] == "playerok"
+                else ("вкл" if result["ready"] else "пауза" if result["enabled"] else "выкл")
+            )
+            completion = "вкл" if result["enabled"] and result["complete"] else "выкл"
+            reply = "вкл" if result["enabled"] and result["auto_message"] else "выкл"
+            row = f"\n\n{index}. {escaped(item.get('name') or 'Товар', 90)}\nВыдача: {delivery} · Завершение: {completion} · Сообщение: {reply}"
+            if result["mode"] == "playerok" and result["enabled"] and not result["ready"]:
+                row += " · действия бота на паузе"
+            if len((text + row).encode("utf-16-le")) > 7800:
+                text += f"\n\nНе поместилось товаров: {len(active) - index + 1}."
+                break
+            text += row
+        if not cache["complete"]:
+            text += "\nСписок ещё обновляется."
+        return text

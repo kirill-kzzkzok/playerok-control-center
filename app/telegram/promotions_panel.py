@@ -1,7 +1,6 @@
 import json
 import secrets
 from dataclasses import asdict
-from datetime import UTC, datetime
 
 from app.database.store import Conflict
 from app.services.finance import money
@@ -38,9 +37,8 @@ def buying_conditions(policy):
         text = f"Поднимает товар через {interval(max(policy.interval_seconds, policy.cooldown_seconds))} после предыдущей покупки."
     else:
         text = (
-            f"Поднимает товар, если его позиция в категории ниже {policy.threshold}-й при двух проверках подряд."
-            f" Проверяет каждые {interval(policy.check_seconds)}."
-            f" Покупает не чаще раза в {interval(policy.cooldown_seconds)}."
+            f"Поднимает, если позиция в категории ниже {policy.threshold}-й дважды подряд."
+            f" Проверка каждые {interval(policy.check_seconds)}, покупка не чаще раза в {interval(policy.cooldown_seconds)}."
         )
     if policy.night_enabled:
         night = (
@@ -50,8 +48,8 @@ def buying_conditions(policy):
         )
         text += f"\nС {policy.night_start_hour:02}:00 до {policy.night_end_hour:02}:00 МСК: {night}."
     return (
-        text + f"\nДо {policy.per_operation} ₽ за покупку, {policy.daily} ₽ в сутки, "
-        f"{policy.monthly} ₽ в месяц. Максимум покупок на товар: {policy.max_operations_per_item}."
+        text + f"\nЛимиты: {policy.per_operation} ₽ за раз · {policy.daily} ₽ в день · "
+        f"{policy.monthly} ₽ в месяц · {policy.max_operations_per_item} покупок на товар."
         + (
             " Нулевой лимит запрещает автопокупки."
             if not all(
@@ -147,37 +145,34 @@ class PromotionsPanel:
                     status = "Включено для подтверждённых товаров"
                 except ValidationError as error:
                     status = str(error)
-            due = self.service.store.rows(
-                "SELECT MIN(due_at) AS due FROM promotion_schedule WHERE policy_revision=?",
-                (data["revision"],),
-            )[0]["due"]
-            next_check = (
-                local_time(datetime.fromtimestamp(due, UTC).isoformat())
-                if due
-                else "при следующем цикле фоновой задачи"
-            )
-            text = (
-                "🚀 <b>Автопродвижение</b>\n"
-                + escaped(status, 200)
-                + f"\nВыбрано товаров: {len(targets)}"
-                + ("; действует общее правило магазина" if data["selection"] == "all" else "")
-                + "\n"
-                + buying_conditions(PromotionPolicy(**values))
-                + "\nСледующая проверка: "
-                + next_check
-            )
             from app.services.premium_review import blocking_expenses
 
             pending_money = blocking_expenses(self.service.store)
+            if values["enabled"] and pending_money:
+                status = "На паузе"
+            elif status == "Включено для подтверждённых товаров":
+                status = "Включено"
+            text = (
+                "🚀 <b>Автопродвижение</b>\n"
+                + escaped(status, 160)
+                + (
+                    "\nУчастники: все товары"
+                    if data["selection"] == "all"
+                    else f"\nВыбрано товаров: {len(targets)}"
+                )
+                + "\n"
+                + buying_conditions(PromotionPolicy(**values))
+            )
             if pending_money:
                 expense = pending_money[0]
                 saved = json.loads(expense["payload"] or "{}")
+                name = saved.get("name") or item_label(self.service.store, expense["item_id"])
                 text += (
-                    "\n⛔ Новые покупки ожидают сверки прежнего расхода: "
-                    + escaped(saved.get("name") or "Товар", 90)
-                    + f" · {expense['amount']} ₽ · {local_time(expense['created_at'])}"
+                    f"\n⛔ Покупки заблокированы: не подтверждён платёж {expense['amount']} ₽ · "
+                    + escaped(name, 75)
                 )
-            evaluated = 0
+                if len(pending_money) > 1:
+                    text += f" (+{len(pending_money) - 1})"
             for target in targets[:10]:
                 ident = target["item_id"]
                 latest = self.service.store.rows(
@@ -186,44 +181,17 @@ class PromotionsPanel:
                 )
                 approval = self.service.store.setting("promotions:approved:" + ident, {})
                 observation = json.loads(latest[0]["result"]) if latest else {}
-                name = observation.get("item_name") or approval.get("name") or ident
-                scheduled = self.service.store.rows(
-                    "SELECT error_code FROM promotion_schedule WHERE item_id=?", (ident,)
+                name = (
+                    observation.get("item_name")
+                    or approval.get("name")
+                    or item_label(self.service.store, ident)
                 )
-                if pending_money:
-                    reason = "ожидает сверки расхода"
-                elif not paid.has_authority(ident, data["revision"]) or not approval:
-                    reason = "нужно разрешить тариф и повторные расходы"
-                elif scheduled and scheduled[0]["error_code"]:
-                    reason = "не удалось проверить Playerok, бот повторит автоматически"
-                elif observation:
-                    reason = "; ".join(observation.get("reasons", [])) or "условия покупки выполнены"
-                    evaluated += 1
-                else:
-                    reason = "проверяем условия"
-                text += "\n• " + escaped(name, 70) + " — " + escaped(reason, 220)
-            if values["enabled"] and (scoped or global_authority):
-                description = (
-                    "Проверяем условия товаров"
-                    if not evaluated
-                    else "Работает автоматически по условиям ниже"
-                )
-                if pending_money:
-                    description = "Новые покупки приостановлены до сверки расхода"
-                text = text.replace("Включено для подтверждённых товаров", description)
+                position = observation.get("position")
+                text += "\n• " + escaped(name, 75)
+                if type(position) is int:
+                    text += f" · Позиция в категории: {position}"
             if len(targets) > 10:
-                text += f"\nОстальные товары: {len(targets) - 10}."
-            health = self.service.store.setting("promotions:health", {})
-            if (
-                values["enabled"]
-                and health.get("revision") == data["revision"]
-                and health.get("status") == "DEGRADED"
-            ):
-                text += f"\n⚠️ Ошибки проверки товаров: {health.get('failed_items', 0)}"
-                if health.get("discovery_error"):
-                    text += "\nНе удалось обновить список товаров."
-                if health.get("last_success"):
-                    text += "\nПоследняя успешная проверка: " + local_time(health["last_success"])
+                text += f"\nЕщё товаров: {len(targets) - 10}."
             rows = [
                 [("⛔ Остановить автоподнятие", "promo:stop")]
                 if values["enabled"] and (scoped or global_authority)

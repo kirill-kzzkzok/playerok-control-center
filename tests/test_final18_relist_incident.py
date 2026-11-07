@@ -37,7 +37,7 @@ async def test_relist_critical_conflict_retains_exact_candidate_and_notification
         m
         for m in r.session.calls
         if "параметры" in (getattr(m, "text", "") or "")
-        and "Проверьте постоянный код" in (getattr(m, "text", "") or "")
+        and "Проверьте привязку товара" in (getattr(m, "text", "") or "")
     ]
     assert notices and "item:candidate" in buttons(notices[-1])
     assert "lp:item:lot" not in buttons(notices[-1])
@@ -51,7 +51,7 @@ async def test_unknown_candidate_opens_existing_product_links_not_arbitrary_alia
     product = LogicalProducts(r.store, r.api).listing("lot")
     LogicalProductWorker(r.store, r.api).problem(product, "RELIST_CONFIRMATION_REQUIRED")
     await Notifications(r.store, r.bot).once()
-    notices = [m for m in r.session.calls if "Проверьте постоянный код" in (getattr(m, "text", "") or "")]
+    notices = [m for m in r.session.calls if "Проверьте привязку товара" in (getattr(m, "text", "") or "")]
     route = "lp:product:" + product["id"]
     assert route in buttons(notices[-1]) and "Кандидат неизвестен" in notices[-1].text
     r.api.calls.clear()
@@ -100,7 +100,7 @@ async def test_obsolete_candidate_and_resolved_incident_are_not_sent_after_resta
     worker.problem(product, "RELIST_BINDING_CONFLICT", candidate_id="current-candidate")
     for _ in range(2):
         await Notifications(r.store, r.bot).once()
-    notices = [m for m in r.session.calls if "Проверьте постоянный код" in (getattr(m, "text", "") or "")]
+    notices = [m for m in r.session.calls if "Проверьте привязку товара" in (getattr(m, "text", "") or "")]
     assert len(notices) == 1 and "item:current-candidate" in buttons(notices[0])
     assert r.store.rows("SELECT status FROM notifications WHERE event_key LIKE '%old-candidate'") == [
         {"status": "SKIPPED"}
@@ -109,7 +109,8 @@ async def test_obsolete_candidate_and_resolved_incident_are_not_sent_after_resta
     r.store.execute("UPDATE logical_products SET error_code=NULL WHERE id=?", (product["id"],))
     await Notifications(r.store, r.bot).once()
     assert (
-        len([m for m in r.session.calls if "Проверьте постоянный код" in (getattr(m, "text", "") or "")]) == 1
+        len([m for m in r.session.calls if "Проверьте привязку товара" in (getattr(m, "text", "") or "")])
+        == 1
     )
     assert not r.api.messages and not r.api.remote.payments
 

@@ -39,6 +39,7 @@ class RelistConflict(Conflict):
 
 
 HANDLERS = frozenset({"telegram_gifts", "unique_stock", "fixed_text", "manual"})
+MODERATION_STATUSES = frozenset({"PENDING_APPROVAL", "PENDING_MODERATION"})
 
 
 def digest(value):
@@ -1368,7 +1369,12 @@ class LogicalProducts:
             and {k: v for k, v in critical(item).items() if k != "price"}
             != {k: v for k, v in json.loads(product["baseline"]).items() if k != "price"}
             or marker(item.get("name")) != product["code"]
-            or item.get("status") not in ({"APPROVED", "SOLD"} if paid_order else {"APPROVED"})
+            or item.get("status")
+            not in (
+                {"APPROVED", "SOLD"}
+                if paid_order
+                else {"APPROVED"} | (MODERATION_STATUSES if existing else set())
+            )
             or item.get("deleted_at")
         ):
             raise RelistConflict("RELIST_CRITICAL_FIELDS_CHANGED")

@@ -21,6 +21,15 @@ class PlatformPanel:
             text += "✅ Сохранено для будущих покупок.\n"
         elif data.get("configured") and not data.get("active"):
             text += "⏸ Выполнение остановлено. Сохранённые настройки показаны ниже.\n"
+        if not saved:
+            _, policy = self.service.policies.get(data["id"])
+            if (
+                data["reply"] != (policy.mode == "playerok" and policy.paid_reply)
+                or data["fulfill"] != (policy.mode == "playerok" and policy.mark_sent)
+                or data["saved_text"] is not None
+                and data["text"] != data["saved_text"]
+            ):
+                text += "✏️ Не сохранено. Нажмите «Сохранить», чтобы применить изменения.\n"
         product = self.service.logical.listing(data["id"])
         if product and product["state"] == "VERIFIED":
             text += "✅ Привязка подтверждена\n🔐 Постоянный код: " + escaped(product["code"], 20) + "\n"

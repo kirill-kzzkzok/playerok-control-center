@@ -24,13 +24,30 @@ async def test_diagnostics_has_short_service_states_not_raw_dicts(ux):
     assert "Playerok:" in r.session.last_panel.text
 
 
-async def test_status_uses_main_product_catalog(ux):
+async def test_status_is_standalone_with_close_and_keeps_open_panel(ux):
     r = ux
     r.store.set_setting("playerok:account_id", r.api.account.id)
+    await r.ui.click("settings")
+    before = r.store.setting("navigation:123:7")
+    before_state = await r.state.get_data()
+    count = len(r.session.calls)
     await r.ui.message("/status")
-    assert "item:lot" in buttons(r.session.last_panel)
-    assert not any(key.startswith("status:view:") for key in buttons(r.session.last_panel))
-    assert not (await r.state.get_data()).get("status_cursors")
+    report = r.session.last_panel
+    assert report.__api_method__ == "sendMessage"
+    assert buttons(report) == {"status:close": "Закрыть"}
+    assert "Активные товары" in report.text
+    assert "Завершение:" in report.text and "Сообщение:" in report.text
+    assert any(
+        c.__api_method__ == "deleteMessage" and c.message_id == r.ui.counter for c in r.session.calls[count:]
+    )
+    report_id = len(r.session.calls)
+    before_close = len(r.session.calls)
+    await r.ui.click("status:close", message_id=report_id, reply_markup=report.reply_markup)
+    assert [c.message_id for c in r.session.calls[before_close:] if c.__api_method__ == "deleteMessage"] == [
+        report_id
+    ]
+    assert r.store.setting("navigation:123:7") == before
+    assert await r.state.get_data() == before_state
 
 
 async def test_wizard_save_exit_links_to_exact_saved_draft(ux):

@@ -6,7 +6,7 @@ from dataclasses import asdict, replace
 from app.database.store import Conflict, encode, now, server_time
 from app.playerok.adapter import APIError
 from app.services.automation import Automation, DeliveryPolicy, future_order, message_text
-from app.services.logical_products import LogicalProducts
+from app.services.logical_products import MODERATION_STATUSES, PROBLEMS, LogicalProducts
 from app.services.order_management import deal_details, sale
 from app.services.products import ValidationError
 
@@ -74,6 +74,28 @@ class PlatformOrders:
         if current != revision:
             raise Conflict("Настройки изменились. Откройте товар заново")
         product = self.logical.listing(item_id)
+        if (
+            product
+            and product["error_code"] == "RELIST_CRITICAL_FIELDS_CHANGED"
+            and item.get("status") in MODERATION_STATUSES | {"APPROVED"}
+            and json.loads(product["config"]).get("platform_only") is True
+        ):
+            evidence = self.store.setting("logical:problem:" + product["id"], {})
+            if (
+                evidence.get("candidate_id") == item_id
+                and evidence.get("revision") == product["revision"]
+                and evidence.get("control_revision") == product["control_revision"]
+            ):
+                from app.workers.logical_products import LogicalProductWorker
+
+                self.logical.verify_listing(product, item)
+                await LogicalProductWorker(self.store, self.api).scan(product_id=product["id"])
+                current_product = self.logical.listing(item_id)
+                if not current_product or any(
+                    current_product[key] != product[key] for key in ("id", "revision", "control_revision")
+                ):
+                    raise Conflict("Настройки товара изменились. Откройте их заново")
+                product = current_product
         if (
             product
             and json.loads(product["config"]).get("platform_only")
@@ -319,11 +341,12 @@ def commit_platform_settings(
         or product["state"] != "VERIFIED"
         or product["revision"] != product["config_revision"]
         or not product["verified_at"]
-        or product["error_code"] is not None
         or product["owner_id"] != owner
         or product["account_id"] != policy.account_id
     ):
         raise Conflict("Сначала подтвердите постоянную привязку товара")
+    if product["error_code"] is not None:
+        raise Conflict(PROBLEMS.get(product["error_code"], "Сверка привязки товара ещё не завершена"))
     ids = [
         r[0] for r in db.execute("SELECT item_id FROM logical_listings WHERE product_id=?", (product["id"],))
     ]

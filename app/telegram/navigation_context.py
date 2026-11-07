@@ -77,6 +77,9 @@ class MessageNavigation(BaseMiddleware):
         owner, bot = event.from_user.id, message.bot
         if message.chat.type != "private" or message.chat.id != owner:
             return None
+        command = (message.text or "").split(" ", 1)[0].split("@")[0] if not callback else None
+        if command == "/status" or callback and event.data == "status:close":
+            return await handler(event, data)
         if callback and not hasattr(message, "reply_markup"):
             return await bot.send_message(
                 owner,
@@ -113,7 +116,7 @@ class MessageNavigation(BaseMiddleware):
                         "context": {},
                     },
                 )
-        elif (message.text or "").split(" ", 1)[0].split("@")[0] in {"/start", "/status", "/panel_reset"}:
+        elif command in {"/start", "/panel_reset"}:
             key = primary
         elif (message.text or "").split(" ", 1)[0].split("@")[0] != "/cancel":
             # The last click is not proof of the intended recipient of plain

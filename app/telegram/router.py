@@ -7,7 +7,7 @@ from html import escape
 from pathlib import Path
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import BufferedInputFile
 
@@ -185,16 +185,17 @@ def create_router(store, api, products, synchronizer):
     @router.message(Command("status"))
     async def status_command(message, state):
         automation_panel.service.orders.owner(message.from_user.id)
-        await state.clear()
-        message, _ = await navigator.enter(message, message.from_user.id, state, "status:view:0")
         try:
-            text, markup = await quick_shop.status(message.from_user.id, state)
-        except (APIError, ValidationError, Conflict):
-            text, markup = (
-                "⚪ Не удалось подтвердить активные товары. Проверьте подключение и обновите статус.",
-                keyboard([[("🔄 Проверить снова", "status:view:0")]]),
-            )
-        await message.answer(text, reply_markup=markup)
+            async with asyncio.timeout(3):
+                await message.delete()
+        except (TelegramAPIError, TimeoutError):
+            pass
+        try:
+            async with asyncio.timeout(8):
+                text = await quick_shop.status(message.from_user.id)
+        except (APIError, ValidationError, Conflict, TimeoutError):
+            text = "⚪ Не удалось получить список активных товаров."
+        await message.answer(text, reply_markup=keyboard([[("Закрыть", "status:close")]], home=False))
 
     @router.message(Command("cancel"))
     async def cancel_chat_reply(message, state):
@@ -238,6 +239,25 @@ def create_router(store, api, products, synchronizer):
         owner = query.from_user.id
         message = query.message
         if message is None or not hasattr(message, "answer"):
+            return
+        if action == "status:close":
+            rows = message.reply_markup.inline_keyboard if message.reply_markup else []
+            if (
+                message.chat.type == "private"
+                and message.chat.id == owner
+                and message.from_user
+                and message.from_user.id == message.bot.id
+                and len(rows) == 1
+                and len(rows[0]) == 1
+                and rows[0][0].callback_data == action
+                and rows[0][0].text == "Закрыть"
+                and store.rows("SELECT 1 FROM administrators WHERE user_id=?", (owner,))
+            ):
+                try:
+                    async with asyncio.timeout(3):
+                        await message.delete()
+                except (TelegramAPIError, TimeoutError):
+                    pass
             return
         if action.startswith("cc:"):
             cards = ChatCards(store, message.bot)
@@ -404,7 +424,7 @@ def create_router(store, api, products, synchronizer):
             elif action.startswith("relist:"):
                 text, markup = await quick_shop.relist(action, owner, state)
             elif action.startswith("status:view:"):
-                text, markup = await quick_shop.status(owner, state, int(action.split(":")[-1]))
+                text, markup = await listings_panel.show("items", state)
             elif action.startswith("platform:"):
                 text, markup = await platform_panel.callback(action, owner, state)
             elif action == "automation" or action.startswith(("auto:", "ap:")):

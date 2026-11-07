@@ -95,7 +95,7 @@ async def test_status_reuses_recent_verified_details_without_extra_item_reads(sh
     ]
     from tests.test_ux_redesign import buttons
 
-    assert "item:lot" in buttons(r.session.last_panel)
+    assert set(buttons(r.session.last_panel)) == {"status:close"}
     assert "описания и параметров" not in text
     assert not r.api.calls
     await r.ui.click("item:lot")

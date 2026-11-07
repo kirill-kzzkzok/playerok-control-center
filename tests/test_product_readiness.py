@@ -84,8 +84,8 @@ async def test_status_opens_same_card_and_saved_diagnostic_callback_is_readonly(
     await configure(r)
     mutations = len(r.api.mutations)
     await r.ui.message("/status")
-    assert "item:lot" in buttons(r.session.last_panel)
-    await click(r, action="item:lot")
+    assert set(buttons(r.session.last_panel)) == {"status:close"}
+    await r.ui.click("item:lot")
     assert "iv:delivery:lot" in buttons(r.session.last_panel)
     await r.ui.click("rd:check:lot")  # Compatibility with an already-sent diagnostic button.
     assert "Проверка готовности" in r.session.last_panel.text
@@ -164,8 +164,8 @@ async def test_every_mode_navigation_refresh_restart_and_no_duplicate_side_effec
         assert not r.session.last_panel.text.startswith("❗")
     r.ui.dp = production_dispatcher(r.store, r.api)
     await r.ui.message("/status")
-    assert "item:lot" in buttons(r.session.last_panel)
-    await click(r, action="item:lot")
+    assert set(buttons(r.session.last_panel)) == {"status:close"}
+    await r.ui.click("item:lot")
     assert value is None or value not in r.session.last_panel.text
     assert r.store.rows("SELECT id,status FROM outbox") == before
     assert not r.api.messages and not r.api.remote.payments
@@ -228,15 +228,18 @@ async def test_api_failure_and_rapid_rechecks_are_read_only(shop):
     assert not r.api.messages and not r.api.remote.payments
 
 
-async def test_repeated_identical_status_does_not_attempt_same_message_edit(shop):
+async def test_repeated_status_sends_new_reports_without_editing_primary_card(shop):
     r = await shop()
     await configure(r)
-    await r.ui.message("/status")
-    before = sum(c.__api_method__ in {"editMessageText", "sendMessage"} for c in r.session.calls)
+    panel = r.store.setting("navigation:123:7")
+    before = len(r.session.calls)
     for _ in range(3):
-        await r.ui.click("status:view:0")
-    after = sum(c.__api_method__ in {"editMessageText", "sendMessage"} for c in r.session.calls)
-    assert after == before
+        await r.ui.message("/status")
+    calls = r.session.calls[before:]
+    assert sum(c.__api_method__ == "sendMessage" for c in calls) == 3
+    assert sum(c.__api_method__ == "deleteMessage" for c in calls) == 3
+    assert not any(c.__api_method__ == "editMessageText" for c in calls)
+    assert r.store.setting("navigation:123:7") == panel
 
 
 async def test_partial_catalog_card_is_unknown_not_changed_description(shop):

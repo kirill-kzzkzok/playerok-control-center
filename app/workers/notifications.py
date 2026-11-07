@@ -371,7 +371,11 @@ class Notifications:
                 from app.services.logical_products import PROBLEMS
 
                 text = (
-                    "⚠️ <b>Проверьте постоянный код товара</b>\n"
+                    (
+                        "⚠️ <b>Проверьте постоянный код товара</b>\n"
+                        if payload["code"] in {"CATALOG_MARKER_INVALID", "DUPLICATE_ACTIVE_MARKER"}
+                        else "⚠️ <b>Проверьте привязку товара</b>\n"
+                    )
                     + escaped(rows[0]["code"], 20)
                     + "\n"
                     + escaped(
