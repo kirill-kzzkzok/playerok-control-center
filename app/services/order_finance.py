@@ -69,7 +69,7 @@ class OrderFinance:
         item = order.get("item") or {}
         created = parsed_time(order.get("created_at"))
         if (
-            order.get("status") != "PAID"
+            order.get("status") not in {"PAID", "CONFIRMED", "CONFIRMED_AUTOMATICALLY"}
             or order.get("_created_at_conflict")
             or not created
             or not self.account_id
@@ -87,29 +87,40 @@ class OrderFinance:
             owners = [owner for owner in owners if owner == product["owner_id"]]
         declarations = []
         for owner in owners:
-            basis = self.store.setting(f"finance:{owner}:cost_basis:{scope}")
-            if not isinstance(basis, dict) or basis.get("account") != self.account_id:
-                continue
-            declared = parsed_time(basis.get("declared_at"))
-            cost = amount_or_none(basis.get("cost"))
-            if (
-                declared
-                and declared <= created <= datetime.now(UTC) + timedelta(minutes=5)
-                and cost is not None
-                and cost <= 1_000_000_000
+            cost = None
+            basis = self.store.setting(f"finance:{owner}:cost_basis:{scope}", {}) or {}
+            if basis.get("account") == self.account_id:
+                declared = parsed_time(basis.get("declared_at"))
+                value = amount_or_none(basis.get("cost"))
+                if declared and declared <= created and value is not None and value <= 1_000_000_000:
+                    cost = str(value)
+            zero = self.store.setting(f"finance:{owner}:other_basis:{scope}", {})
+            zero_at = parsed_time(zero.get("declared_at"))
+            other = (
+                "0.00" if zero.get("account") == self.account_id and zero_at and zero_at <= created else None
+            )
+            if (cost is not None or other is not None) and created <= datetime.now(UTC) + timedelta(
+                minutes=5
             ):
-                declarations.append((owner, str(cost)))
+                declarations.append(
+                    (owner, cost, other, zero.get("declared_at") if other is not None else None)
+                )
         if len(declarations) != 1:
             return
-        owner, cost = declarations[0]
+        owner, cost, other, zero_at = declarations[0]
         inserted = db.execute(
             "INSERT OR IGNORE INTO order_costs VALUES(?,?,?,?,?,?,?,?)",
-            (order["id"], self.account_id, cost, None, 1, None, owner, now()),
+            (order["id"], self.account_id, cost, other, 1, None, owner, now()),
         ).rowcount
         if inserted:
             db.execute(
-                "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'SNAPSHOT_PRODUCT_COST',?,'DECLARED_COST_ONLY',?)",
-                (owner, order["id"], now()),
+                "INSERT INTO audit_log(actor,action,target,outcome,created_at) VALUES(?,'SNAPSHOT_PRODUCT_COST',?,?,?)",
+                (
+                    owner,
+                    order["id"],
+                    "DECLARED_COST_ONLY" if zero_at is None else "DECLARED_OTHER_ZERO:" + zero_at,
+                    now(),
+                ),
             )
 
     def context(self, db, actor, order_id):

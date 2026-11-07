@@ -56,3 +56,36 @@ async def test_product_cost_snapshots_only_future_orders_and_survives_change_and
     Orders(r.store).ingest(r.api.order("relisted-sale", item_id="second-listing"))
     assert r.store.rows("SELECT cost FROM order_costs WHERE order_id='relisted-sale'") == [{"cost": "30.00"}]
     assert not r.api.messages and not r.api.remote.payments
+
+
+async def test_completed_sales_use_only_dated_owner_declarations(shop):
+    from tests.test_ux_redesign import buttons
+
+    r = await shop()
+    await setup_ui(r, "unique_stock")
+    original = r.api.call
+    boundary = FinancialAPI()
+    boundary.item = {**deepcopy(r.api.item), "fee_multiplier": "0.1", "raw_price": 100}
+    r.api.call = boundary.call
+    await r.ui.click("fin:cost:lot")
+    await r.ui.message("25")
+    before_zero = r.api.order("before-zero", status="CONFIRMED")
+    await r.ui.click("fin:options:lot")
+    assert "fin:otherzero:lot" in buttons(r.session.last_panel)
+    await r.ui.click("fin:otherzero:lot")
+    Orders(r.store).ingest(before_zero)
+    for i in range(100):
+        if i == 50:
+            await r.ui.click("fin:cost:lot")
+            await r.ui.message("30")
+        order = r.api.order(f"sale-{i:03}", status="CONFIRMED")
+        Orders(r.store).ingest(order)
+        Orders(r.store).ingest(order)
+    rows = r.store.rows("SELECT cost,other_expenses FROM order_costs ORDER BY order_id")
+    assert rows == (
+        [{"cost": "25.00", "other_expenses": None}]
+        + [{"cost": "25.00", "other_expenses": "0.00"}] * 50
+        + [{"cost": "30.00", "other_expenses": "0.00"}] * 50
+    )
+    r.api.call = original
+    assert not r.api.messages and not r.api.remote.payments

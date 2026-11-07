@@ -255,16 +255,46 @@ class FinancePanel:
     async def callback(self, action, owner, state):
         if action.startswith("fin:details:"):
             return await self.item(owner, action.split(":", 2)[2], details=True)
+        if action.startswith(("fin:otherzero:", "fin:otherunknown:")):
+            _, choice, ident = action.split(":", 2)
+            await self.read_owned(ident)
+            from app.services.logical_products import LogicalProducts
+
+            product = LogicalProducts(self.store, self.api).listing(ident)
+            account = self.api.account.id
+            if product and (product["owner_id"] != owner or product["account_id"] != account):
+                raise ValueError("Принадлежность настроек товара не подтверждена")
+            scope = product["id"] if product else ident
+            key = f"finance:{owner}:other_basis:{scope}"
+            with self.store.transaction():
+                if choice == "otherzero":
+                    saved = self.store.setting(key, {}) or {}
+                    if saved.get("account") != account:
+                        self.store.set_setting(key, {"account": account, "declared_at": now()})
+                        self.store.audit(owner, "PRODUCT_OTHER_EXPENSES", scope, "FUTURE_ZERO")
+                else:
+                    self.store.execute("DELETE FROM settings WHERE key=?", (key,))
+                    self.store.audit(owner, "PRODUCT_OTHER_EXPENSES", scope, "FUTURE_UNKNOWN")
+            return await self.callback("fin:options:" + ident, owner, state)
         if action.startswith("fin:options:"):
             ident = action.split(":", 2)[2]
             await self.read_owned(ident)
             await state.update_data(finance_origin=ident)
+            from app.services.logical_products import LogicalProducts
+
+            product = LogicalProducts(self.store, self.api).listing(ident)
+            scope = product["id"] if product else ident
+            other = self.store.setting(f"finance:{owner}:other_basis:{scope}", {}) or {}
+            zero = other.get("account") == self.api.account.id
             return (
                 "⚙️ <b>Параметры прогноза</b>\nСебестоимость и распределение расходов задаются для этого товара. Способ получения денег общий для магазина. Исторические продажи не пересчитываются.",
                 keyboard(
                     [
                         [("💳 Способ получения денег", "providers")],
                         [("✏️ Себестоимость", "fin:cost:" + ident)],
+                        [("Снять ноль прочих расходов", "fin:otherunknown:" + ident)]
+                        if zero
+                        else [("Других расходов нет · 0 ₽", "fin:otherzero:" + ident)],
                         [("Распределить расходы размещения", "fin:allocation:" + ident)],
                         [("Очистить себестоимость", "fin:clearcost:" + ident)],
                         [("⭐ Цена нового размещения", "fin:placement:" + ident)],
