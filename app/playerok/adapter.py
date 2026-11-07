@@ -625,14 +625,23 @@ class Playerok:
             error.method = method
             chat_error = None
             connection = getattr(self, "connection", None)
-            if connection and (
-                method == "get"
-                or error.code
-                in {
-                    "SESSION_EXPIRED",
-                    "UNAUTHORIZED_OR_CHALLENGE",
-                    "ACCOUNT_UNAVAILABLE",
-                }
+            # The scheduled verifier already owns classification and fail-closed
+            # state for this viewer call. Independent reads still revoke immediately.
+            managed_viewer = (
+                method == "get" and getattr(connection, "viewer_task", None) is asyncio.current_task()
+            )
+            if (
+                connection
+                and not managed_viewer
+                and (
+                    method == "get"
+                    or error.code
+                    in {
+                        "SESSION_EXPIRED",
+                        "UNAUTHORIZED_OR_CHALLENGE",
+                        "ACCOUNT_UNAVAILABLE",
+                    }
+                )
             ):
                 connection.invalidate(error.code, error.diagnostics)
                 if (

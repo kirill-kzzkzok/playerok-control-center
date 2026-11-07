@@ -46,6 +46,7 @@ class PlayerokConnection:
         self.last_started = None
         self.viewer = None
         self.invalidation_generation = 0
+        self.viewer_task = None
         self.read_account_id = None
         self.desired_writes = bool(getattr(api.account, "writes_enabled", False))
         self.desired_automation = bool(getattr(api.account, "automation_enabled", False))
@@ -111,8 +112,12 @@ class PlayerokConnection:
             self.store.set_setting("playerok:verification", self.state)
             event("CHECK", "Проверка Playerok...", level=10)
             try:
-                async with asyncio.timeout(25):
-                    viewer = await self.api.call("get")
+                self.viewer_task = asyncio.current_task()
+                try:
+                    async with asyncio.timeout(25):
+                        viewer = await self.api.call("get")
+                finally:
+                    self.viewer_task = None
                 if generation != self.invalidation_generation:
                     return dict(self.state)
                 ident = viewer.get("id")
