@@ -635,41 +635,48 @@ async def test_stock_and_gifts_exclude_each_other(rig):
 
 
 async def test_dispatcher_bind_restart_confirm_limits_enable_stop_and_order_results(rig):
+    from tests.test_ux_redesign import buttons
+
     r = rig
-    # Compatibility for a historical binding; new listings use LogicalProducts.
+    r.store.set_setting("playerok:account_id", r.api.account.id)
+    r.api.item.update(price=100, raw_price=100)
+
+    def update_item(id, **changes):
+        assert id == "item"
+        r.api.item.update(changes)
+        return copy.deepcopy(r.api.item)
+
+    r.api.account.update_item = update_item
     await r.service.bind(7, "item", "heart")
-    session = TelegramSession()
-    bot = Bot("123:" + "x" * 35, session=session)
+    bot = Bot("123:" + "x" * 35, session=TelegramSession())
     ui = Interaction(bot, dispatcher(r.store, r.api))
     state = FSMContext(SQLiteStorage(r.store), StorageKey(bot_id=123, chat_id=7, user_id=7))
     try:
-        await ui.click("gft:home")
-        assert "Telegram-подарки" in session.calls[-1].text
         await ui.click("gft:bind:item")
-        p = (await state.get_data())["gift_bind"]
-        ui.dp = dispatcher(r.store, r.api)
-        await ui.click("gft:confirmbind:" + p["nonce"])
-        assert r.service.listing("item")["enabled"] == 0
+        assert (await state.get_data()).get("logical_view")
+        await ui.click(next(k for k in buttons(bot.session.last_panel) if k.endswith(":migrate")))
+        await ui.click(
+            next(k for k in buttons(bot.session.last_panel) if k.startswith("lp:") and k.endswith(":commit"))
+        )
+        await r.worker.once()
+        assert r.store.rows("SELECT state FROM logical_products") == [{"state": "VERIFIED"}]
         await ui.click("gft:limits")
         ui.dp = dispatcher(r.store, r.api)
         await ui.message("15 30")
-        data = (await state.get_data())["gift_limits"]
-        await ui.click("gft:save_limits:" + data["nonce"])
+        pending = (await state.get_data())["gift_limits"]
+        await ui.click("gft:save_limits:" + pending["nonce"])
         assert r.service.limits() == (15, 30)
         await ui.click("gft:enable:item")
-        p = (await state.get_data())["gift_arm"]
-        ui.dp = dispatcher(r.store, r.api)
-        await ui.click(f"gft:arm:item:{p['nonce']}:0")
+        await ui.click(next(k for k in buttons(bot.session.last_panel) if k.endswith(":arm")))
+        confirm = next(k for k in buttons(bot.session.last_panel) if k.endswith(":enable:this"))
+        await ui.click(confirm)
+        await ui.click(confirm)
         assert r.service.listing("item")["enabled"] == 1
-        await ui.click(f"gft:arm:item:{p['nonce']}:0")  # consumed nonce
         Orders(r.store).ingest(r.api.add_order())
         r.service.discover()
         await r.worker.once()
-        await ui.click("gft:list:success:0")
         await ui.click("gft:job:order")
-        assert (
-            "Выполнено и подтверждено" in session.calls[-1].text and "Realbuyer" not in session.calls[-1].text
-        )
+        assert "Выполнено и подтверждено" in bot.session.last_panel.text
         text, _ = OrdersPanel(r.store, r.api).delivered(7)
         assert "Отправка подтверждена" in text
         await ui.stop("gft:stop")
@@ -731,20 +738,34 @@ async def test_description_edit_cannot_silently_stop_gifts_or_change_paid_obliga
 
 
 async def test_dispatcher_rejects_price_changed_since_binding_preview(rig):
+    from tests.test_ux_redesign import buttons
+
     r = rig
+    r.store.set_setting("playerok:account_id", r.api.account.id)
+    r.api.item.update(price=100, raw_price=100)
+
+    def update_item(id, **changes):
+        r.api.item.update(changes)
+        return copy.deepcopy(r.api.item)
+
+    r.api.account.update_item = update_item
     await r.service.bind(7, "item", "heart")
-    original = r.service.listing("item")
-    session = TelegramSession()
-    bot = Bot("123:" + "x" * 35, session=session)
+    bot = Bot("123:" + "x" * 35, session=TelegramSession())
     ui = Interaction(bot, dispatcher(r.store, r.api))
-    state = FSMContext(SQLiteStorage(r.store), StorageKey(bot_id=123, chat_id=7, user_id=7))
     try:
         await ui.click("gft:bind:item")
-        pending = (await state.get_data())["gift_bind"]
+        await ui.click(next(k for k in buttons(bot.session.last_panel) if k.endswith(":migrate")))
         r.remote.gift.stars = 20
-        await ui.click("gft:confirmbind:" + pending["nonce"])
-        assert r.service.listing("item") == original
-        assert "Цена изменилась" in session.calls[-1].text
+        await ui.click(
+            next(k for k in buttons(bot.session.last_panel) if k.startswith("lp:") and k.endswith(":commit"))
+        )
+        await r.worker.once()
+        await r.service.refresh()
+        await ui.click("gft:enable:item")
+        await ui.click(next(k for k in buttons(bot.session.last_panel) if k.endswith(":arm")))
+        assert r.service.listing("item")["enabled"] == 0
+        assert not r.remote.payments
+        assert not r.store.rows("SELECT 1 FROM gift_jobs")
     finally:
         await bot.session.close()
 

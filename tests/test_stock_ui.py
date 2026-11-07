@@ -210,7 +210,7 @@ async def test_item_order_and_policy_share_actual_readiness(rig, condition, expe
             }[condition]
             assert order_expected.lower() in text.lower()
         else:
-            assert (compact if action.startswith("item:") else expected).lower() in text.lower()
+            assert compact.lower() in text.lower()
         assert "Автодействия: выключены" not in text
         if action.startswith("order:"):
             assert "Требует внимания:" not in text

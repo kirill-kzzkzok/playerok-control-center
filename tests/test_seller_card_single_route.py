@@ -145,15 +145,16 @@ async def test_gift_main_card_has_single_settings_and_readiness_route(shop):
     assert "Полная проверка:" not in shown.text and "Себестоимость:" not in shown.text
     await r.ui.click("iv:delivery:lot")
     visible = buttons(r.session.last_panel)
-    assert any(key.endswith(":configure") for key in visible)
+    assert "lp:method:lot" in visible
     assert any(key.endswith(":editafter") for key in visible)
     assert "lp:method:lot" in visible
     assert "lp:details:lot" in visible
     assert not any(key.startswith("rd:balance:") for key in visible)
     assert "Состав, сообщения и лимиты" not in visible.values()
     await click(r, suffix=":stop")
+    await click(r, suffix=":stop_confirm")
     await r.ui.click("iv:delivery:lot")
-    await click(r, suffix=":configure")
+    await click(r, action="lp:method:lot")
     await click(r, suffix=":mode:telegram_gifts")
     assert any(key.endswith(":giftclear") for key in buttons(r.session.last_panel))
     assert r.store.rows("SELECT * FROM outbox") == before

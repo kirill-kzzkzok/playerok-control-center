@@ -104,6 +104,7 @@ CONTEXT = {
     "gift_picker",
     "promotion_picker",
     "automation_draft",
+    "logical_draft",
 }
 
 
@@ -336,6 +337,7 @@ class Navigation:
         photo=None,
         caption=None,
         proposal=None,
+        expected=None,
         reply_markup=None,
         **kwargs,
     ):
@@ -346,6 +348,8 @@ class Navigation:
         async with lock:
             record("navigation_lock", time.perf_counter() - waiting)
             panel = self.store.setting(key, {})
+            if expected is not None and panel != expected:
+                return message
             if panel.get("sending"):
                 event(
                     "WARNING",
@@ -363,6 +367,18 @@ class Navigation:
                 view["context"]["automation_draft"] = {
                     "account": editing.get("account"),
                     **{key: editing[key] for key in ("id", "revision", "values")},
+                }
+            draft = await state.get_data()
+            if draft.get("logical_setup") and draft.get("logical_view"):
+                logical = draft["logical_view"]
+                view["context"]["logical_draft"] = {
+                    "item": logical["item"],
+                    "owner": owner,
+                    "account": self.store.setting("playerok:account_id"),
+                    "product": logical.get("product"),
+                    "revision": logical["revision"],
+                    "setup": draft["logical_setup"],
+                    "legacy_revision": draft.get("logical_legacy_revision"),
                 }
             # Incoming Telegram models carry a private mounted Bot. Copying
             # that object traverses its live session/middleware (including locks).
@@ -484,6 +500,10 @@ class Navigation:
                     self.store.set_setting(key, panel)
                     raise
             if result is None:
+                if expected is not None:
+                    panel.update(closed=True, editing=False)
+                    self.store.set_setting(key, panel)
+                    return message
                 if ident:
                     # Deactivate before replacing. A timeout here must not send a replacement.
                     try:

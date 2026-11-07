@@ -42,6 +42,7 @@ async def test_price_change_stop_restart_and_worker_agree(shop):
     await click(r, action=next(key for key in buttons(r.session.last_panel) if key.startswith("nav:back:")))
     await r.ui.click("lp:item:lot")
     await click(r, suffix=":stop")
+    await click(r, suffix=":stop_confirm")
     assert not logical.listing("lot")["enabled"]
     assert not GiftService(r.store, r.api, r.api.gift_settings, r.api.gift_sender).listing("lot")["enabled"]
     await click(r, action="lp:item:lot")
@@ -127,6 +128,7 @@ async def test_critical_error_offers_actual_configuration_action(shop):
     await setup_ui(r, "telegram_gifts", "gift: heart")
     await r.ui.click("lp:item:lot")
     await click(r, suffix=":stop")
+    await click(r, suffix=":stop_confirm")
     r.api.item["attributes"] = {"delivery-critical": "changed"}
     await click(r, action="lp:item:lot")
     await click(r, suffix=":arm")
@@ -183,6 +185,7 @@ async def test_active_changed_product_error_has_direct_stop_then_configuration(s
     await r.ui.click("lp:ready:lot")
     assert "Запуск пока невозможен" in r.session.last_panel.text
     await click(r, suffix=":stop")
+    await click(r, suffix=":stop_confirm")
     await click(r, action="lp:item:lot")
     await click(r, suffix=":configure")
     assert any(k.endswith(":mode:telegram_gifts") for k in buttons(r.session.last_panel))

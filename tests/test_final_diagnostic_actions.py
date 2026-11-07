@@ -55,6 +55,7 @@ async def test_individual_stars_limit_recovery_keeps_item_context(shop):
     assert data["logical_view"]["item"] == "lot"
     assert any(key.endswith(":stop") for key in buttons(r.session.last_panel))
     await r.ui.click(next(key for key in buttons(r.session.last_panel) if key.endswith(":stop")))
+    await r.ui.click(next(key for key in buttons(r.session.last_panel) if key.endswith(":stop_confirm")))
     await r.ui.click("lp:limits:lot")
     assert any(key.endswith(":input:order") for key in buttons(r.session.last_panel))
     assert any(key.endswith(":input:day") for key in buttons(r.session.last_panel))

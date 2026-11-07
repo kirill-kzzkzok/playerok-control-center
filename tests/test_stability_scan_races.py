@@ -51,6 +51,7 @@ async def test_error_from_scan_before_owner_stop_is_discarded(shop):
     service = LogicalProducts(r.store, r.api)
     old = dict(service.product(service.listing("lot")["id"]))
     await click(r, suffix=":stop")
+    await click(r, suffix=":stop_confirm")
     assert service.product(old["id"])["control_revision"] != old["control_revision"]
     LogicalProductWorker(r.store, r.api).problem(old, "RELIST_CONFIRMATION_REQUIRED")
     assert service.product(old["id"])["error_code"] is None
@@ -75,6 +76,7 @@ async def test_scan_success_before_stop_cannot_refresh_listing_confirmation(shop
     scanning = asyncio.create_task(LogicalProductWorker(r.store, r.api).once())
     await asyncio.wait_for(entered.wait(), 5)
     await click(r, suffix=":stop")
+    await click(r, suffix=":stop_confirm")
     release.set()
     await scanning
     current = service.listing("lot")

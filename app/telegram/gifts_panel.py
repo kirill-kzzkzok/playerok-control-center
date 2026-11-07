@@ -102,20 +102,24 @@ class GiftsPanel:
             ident = pending.get("item") if command == "confirmbind" else parts[2]
             logical = LogicalProducts(self.store, s.api)
             product = logical.listing(ident) if ident else None
-            if product:
-                if command == "off":
-                    logical.stop(owner, product["id"])
-                return await LogicalProductsPanel(self.store, s.api).card(owner, ident, state)
-            if command in {"item", "bind"} and ident and not s.listing(ident):
+            if ident and not product and s.listing(ident):
+                logical.authority(owner)
+                if s.listing(ident)["owner_id"] != owner:
+                    raise Conflict("Настройки принадлежат другому владельцу")
+                await LogicalProductsPanel(self.store, s.api).card(owner, ident, state)
+                logical.migrate_legacy(ident)
+                product = logical.listing(ident)
+            if ident:
                 panel = LogicalProductsPanel(self.store, s.api)
-                await panel.card(owner, ident, state)
-                view = (await state.get_data())["logical_view"]
-                return await panel.callback("lp:" + view["nonce"] + ":mode:telegram_gifts", owner, state)
-            if command == "confirmbind" and not s.listing(ident):
-                await state.clear()
-                raise Conflict(
-                    "Старое подтверждение больше не действует. Выберите товар в разделе подарков и подтвердите постоянную привязку"
-                )
+                result = await panel.card(owner, ident, state)
+                if command == "off" and product:
+                    view = (await state.get_data())["logical_view"]
+                    return await panel.callback("lp:" + view["nonce"] + ":stop", owner, state)
+                if not product and command in {"item", "bind"}:
+                    view = (await state.get_data())["logical_view"]
+                    return await panel.callback("lp:" + view["nonce"] + ":mode:telegram_gifts", owner, state)
+                return result
+            raise Conflict("Старая кнопка утратила контекст. Откройте товар и его выдачу")
         if command == "home":
             await state.clear()
             v = self.store.setting("gifts:connection", {})
@@ -295,7 +299,9 @@ class GiftsPanel:
             await state.set_data({"gift_picker": True})
             return await ListingsPanel(s.api, self.store).show("items", state)
         if command in {"limits", "description"}:
+            back = "settings" if len(parts) > 2 and parts[2] == "settings" else "gft:settings"
             await state.clear()
+            await state.update_data(gift_limits_return=back)
             await state.set_state("gifts:" + command)
             return (
                 "Введите лимиты Stars за заказ и за сутки через пробел, например «15 300». "
@@ -303,14 +309,19 @@ class GiftsPanel:
                 "(15 — ваш лимит на заказ)."
                 if command == "limits"
                 else "Пришлите описание: проверю единственную последнюю строку gift: code. Само описание не будет повторено в ответе."
-            ), keyboard([[("Отмена", "gft:home")]])
+            ), keyboard([[("Отмена", back)]])
         if command == "save_limits":
             data = (await state.get_data()).get("gift_limits")
             if not data or data["nonce"] != parts[2]:
                 raise Conflict("Подтверждение устарело")
             s.set_limits(owner, data["order"], data["day"])
+            back = data.get("return", "gft:settings")
             await state.clear()
-            return await self.callback("gft:home", owner, state)
+            if back == "settings":
+                from app.telegram.settings_panel import SettingsPanel
+
+                return SettingsPanel(self.store, self.service.api).handle("settings", owner)
+            return await self.callback("gft:settings", owner, state)
         if command == "list":
             group, page = parts[2], int(parts[3])
             predicates = {
@@ -460,29 +471,9 @@ class GiftsPanel:
                 ]
             return text, keyboard(rows, back=("⬅️ История подарков", "gft:history"))
 
-        if command == "confirmbind":
-            p = (await state.get_data()).get("gift_bind")
-            if not p or p["nonce"] != parts[2]:
-                raise Conflict("Подтверждение устарело")
-            data = await s.inspect_item(owner, p["item"])
-            if data["hash"] != p["hash"]:
-                raise Conflict("Описание изменилось; выберите код заново")
-            await s.bind(
-                owner,
-                p["item"],
-                p["code"],
-                expected_stars=p["stars"],
-                expected_revision=p["revision"],
-                expected_bundle=p.get("bundle"),
-            )
-            await state.clear()
-            return (
-                "Привязка и актуальная цена сохранены. Платные отправки остаются выключенными для лота.",
-                keyboard([[("К привязке", "gft:item:" + p["item"])]]),
-            )
         if command in {"retrycheck", "confirmretry"}:
             ident = parts[2]
-            j = s.job(ident)
+            s.job(ident)
             if command == "retrycheck":
                 nonce = secrets.token_hex(5)
                 await state.clear()
@@ -503,99 +494,6 @@ class GiftsPanel:
             await state.clear()
             return "Безопасная проверка поставлена в очередь. Отправка пока не выполнена.", keyboard(
                 [[("Заказ", "gft:job:" + ident)]]
-            )
-        ident = parts[2]
-        if command == "item":
-            data = await s.inspect_item(owner, ident)
-            l = s.listing(ident)
-            text = self.summary(ident) + f"\nМетка описания корректна: gift: {escape(data['code'])}\n"
-            text += (
-                "Поле на Playerok обязательное."
-                if data["required"]
-                else "⚠️ На Playerok поле необязательное. Приложение запрещает отправку без его значения."
-            )
-            if l:
-                text += "\n" + self.bundle_text(json.loads(l["bundle"]))
-            text += "\nСписок и актуальная цена подтверждаются при привязке."
-            rows = [[("Подтвердить код / обновить привязку", "gft:bind:" + ident)]]
-            if l:
-                rows += (
-                    [[("Остановить лот", "gft:off:" + ident)]]
-                    if l["enabled"]
-                    else [[("Включить для будущих заказов", "gft:enable:" + ident)]]
-                )
-            return text, keyboard(rows + [[("К лоту", "item:" + ident), ("К подаркам", "gft:home")]])
-        if command == "bind":
-            data = await s.inspect_item(owner, ident)
-            await s.refresh()
-            bundle = s.catalog_bundle(data["code"])
-            total = sum(g["stars"] for g in bundle)
-            nonce = secrets.token_hex(5)
-            await state.clear()
-            await state.set_data(
-                {
-                    "gift_bind": {
-                        "item": ident,
-                        "code": data["code"],
-                        "hash": data["hash"],
-                        "nonce": nonce,
-                        "stars": total,
-                        "bundle": bundle,
-                        "revision": (s.listing(ident) or {}).get("revision", 0),
-                    }
-                }
-            )
-            return (
-                self.bundle_text(bundle) + "\nАвтовыдача останется выключена.",
-                keyboard(
-                    [
-                        [("Подтвердить пакет", "gft:confirmbind:" + nonce)],
-                        [("Отмена", "gft:item:" + ident)],
-                    ]
-                ),
-            )
-        if command == "off":
-            s.disarm(owner, ident)
-            return "Новые покупки лота остановлены. Выполненный запрос отменить нельзя.", keyboard(
-                [[("Назад", "gft:item:" + ident)]]
-            )
-        if command == "enable":
-            l = s.listing(ident)
-            if not l:
-                raise GiftValidationError("Сначала подтвердите код подарка")
-            nonce = secrets.token_hex(5)
-            await state.clear()
-            await state.set_data({"gift_arm": {"item": ident, "revision": l["revision"], "nonce": nonce}})
-            return (
-                (
-                    self.bundle_text(json.loads(l["bundle"]))
-                    + "\n\n⚠️ Разрешить реальные платные отправки этого пакета по новым оплаченным заказам?\n"
-                    "Лимиты и проверки получателя обязательны. Неизвестный результат платежа блокирует новые покупки.\n"
-                    "При отдельном допуске автовозврата подтверждённый несуществующий Telegram username отменит подходящий оплаченный заказ; иначе — ручное решение.\n"
-                    "Автоматическая отметка выполнения доступна только после подтверждённой доставки, если Playerok не требует отчёт. Заполнение отчёта остаётся ручным."
-                ),
-                keyboard(
-                    [
-                        [("Разрешаю подарки; завершать вручную", f"gft:arm:{ident}:{nonce}:0")],
-                        [("Разрешаю подарки и допустимое автозавершение", f"gft:arm:{ident}:{nonce}:1")],
-                        [("Отмена", "gft:item:" + ident)],
-                    ]
-                ),
-            )
-        if command == "arm":
-            p = (await state.get_data()).get("gift_arm")
-            if (
-                len(parts) != 5
-                or not p
-                or p["item"] != ident
-                or p["nonce"] != parts[3]
-                or parts[4] not in {"0", "1"}
-            ):
-                raise Conflict("Подтверждение устарело")
-            await s.arm(owner, ident, p["revision"], auto_fulfill=parts[4] == "1")
-            await state.clear()
-            return "Подарки включены только для будущих оплаченных заказов этого лота.", keyboard(
-                [[("К лоту", "gft:item:" + ident)]]
             )
         raise GiftValidationError("Неизвестная кнопка подарков")
 
@@ -621,8 +519,11 @@ class GiftsPanel:
         day = None if unlimited else int(numbers[1])
         nonce = secrets.token_hex(5)
         await state.set_state(None)
-        await state.set_data({"gift_limits": {"order": order, "day": day, "nonce": nonce}})
+        back = (await state.get_data()).get("gift_limits_return", "gft:settings")
+        if back not in {"settings", "gft:settings"}:
+            back = "gft:settings"
+        await state.set_data({"gift_limits": {"order": order, "day": day, "nonce": nonce, "return": back}})
         daily_label = f"{day} ⭐ за сутки UTC" if day is not None else "отключить суточные потолки всех лотов"
         return f"Сохранить {order} ⭐ за заказ / {daily_label}?", keyboard(
-            [[("Сохранить", "gft:save_limits:" + nonce)], [("Отмена", "gft:home")]]
+            [[("Сохранить", "gft:save_limits:" + nonce)], [("Отмена", back)]]
         )

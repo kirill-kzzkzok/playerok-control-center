@@ -7,23 +7,22 @@ ux = ux_fixture
 
 async def test_unsaved_delivery_values_survive_stock_and_back_without_authority(ux):
     r = ux
+    r.store.set_setting("playerok:account_id", r.api.account.id)
     await existing_legacy_delivery_draft(r.state, r.api.account.id, "lot")
     await r.ui.click("auto:item:lot")
-    nonce = (await r.state.get_data())["automation"]["nonce"]
-    await r.ui.click(f"ap:{nonce}:mode:stock")
-    nonce = (await r.state.get_data())["automation"]["nonce"]
-    await r.ui.click(f"ap:{nonce}:advanced")
-    nonce = (await r.state.get_data())["automation"]["nonce"]
-    await r.ui.click(f"ap:{nonce}:edit:greeting")
+    nonce = (await r.state.get_data())["logical_view"]["nonce"]
+    await r.ui.click(f"lp:{nonce}:mode:unique_stock")
+    await r.ui.click(f"lp:{nonce}:input:greeting")
     await r.ui.message("Unsaved greeting")
-    before = (await r.state.get_data())["automation"]
-    assert before["values"]["greeting"] == "Unsaved greeting"
+    before = (await r.state.get_data())["logical_setup"]
+    assert before["config"]["greeting"] == "Unsaved greeting"
+    old_nonce = (await r.state.get_data())["logical_view"]["nonce"]
     await r.ui.click("stock:view:lot")
     back = next(k for k in buttons(r.session.last_panel) if k.startswith("nav:back:"))
     await r.ui.click(back)
-    after = (await r.state.get_data())["automation"]
-    assert after["values"] == before["values"]
-    assert after["nonce"] != before["nonce"] and not after.get("arm_pending")
+    assert (await r.state.get_data())["logical_setup"] == before
+    assert (await r.state.get_data())["logical_view"]["nonce"] != old_nonce
+    assert not (await r.state.get_data()).get("logical_prepared")
     assert not r.store.rows("SELECT * FROM delivery_policies")
     assert not r.store.rows("SELECT * FROM outbox")
 

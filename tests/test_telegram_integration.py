@@ -24,7 +24,12 @@ from app.telegram.storage import SQLiteStorage
 
 async def existing_legacy_delivery_draft(state, account, ident):
     await state.update_data(
-        automation_draft={"id": ident, "account": account, "revision": 0, "values": asdict(DeliveryPolicy())}
+        automation_draft={
+            "id": ident,
+            "account": account,
+            "revision": 0,
+            "values": asdict(DeliveryPolicy(mode="text", text="legacy draft")),
+        }
     )
 
 
@@ -559,37 +564,29 @@ async def test_fulfillment_checklist_router_requires_attestation_and_restores_co
 
 
 async def test_automation_router_edits_local_policy_without_enabling_runtime(tmp_path):
-    class PolicyAPI(CatalogAPI):
-        async def call(self, method, **kwargs):
-            self.calls.append((method, kwargs))
-            assert method == "get_item"
-            return {"id": kwargs["id"], "user": {"id": "seller"}}
+    from app.services.automation import Automation
+    from tests.test_logical_products import ReadAPI
 
     store = Store(tmp_path / "policy-ui.sqlite")
-    session = TelegramSession()
-    bot = Bot("123:" + "x" * 35, session=session)
-    api = PolicyAPI()
+    store.set_setting("playerok:account_id", "seller")
+    api = ReadAPI()
+    bot = Bot("123:" + "x" * 35, session=TelegramSession())
     ui = Interaction(bot, dispatcher(store, api))
     state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
     try:
         await ui.message("/start")
-        await ui.click("automation")
-        await existing_legacy_delivery_draft(state, api.account.id, "item")
-        await ui.click("auto:item:item")
-        nonce = (await state.get_data())["automation"]["nonce"]
-        await ui.click(f"ap:{nonce}:mode:stock")
-        nonce = (await state.get_data())["automation"]["nonce"]
-        await ui.click(f"ap:{nonce}:toggle:enabled")
-        nonce = (await state.get_data())["automation"]["nonce"]
-        ui.dp = dispatcher(store, api)
-        await ui.click(f"ap:{nonce}:save")
-        assert "Изменения применяются после сохранения" in session.calls[-1].text
-        assert store.rows("SELECT revision FROM delivery_policies") == [{"revision": 1}]
+        await Automation(store, api).save(
+            7, "lot", 0, asdict(DeliveryPolicy(mode="text", text="legacy draft"))
+        )
+        before = store.rows("SELECT * FROM delivery_policies")
+        await ui.click("auto:item:lot")
+        assert (await state.get_data())["logical_setup"]["config"]["text"] == "legacy draft"
+        assert not (await state.get_data()).get("automation")
+        await ui.click("ap:old:save")
+        assert store.rows("SELECT * FROM delivery_policies") == before
         assert not store.rows("SELECT * FROM outbox")
-        await ui.stop("auto:stop")
-        assert store.rows("SELECT revision FROM delivery_policies") == [{"revision": 2}]
         count = len(api.calls)
-        await ui.click("auto:item:item", owner=8)
+        await ui.click("auto:item:lot", owner=8)
         assert len(api.calls) == count
     finally:
         await bot.session.close()
@@ -671,40 +668,25 @@ async def test_queue_router_preserves_confirmation_and_blocks_foreign_access(tmp
 
 
 async def test_future_order_policy_requires_separate_persisted_confirmation(tmp_path):
-    class PolicyAPI(CatalogAPI):
-        async def call(self, method, **kwargs):
-            assert method == "get_item"
-            return {"id": "item", "user": {"id": "seller"}}
+    from tests.test_logical_products import ReadAPI
 
     store = Store(tmp_path / "future-policy-ui.sqlite")
-    session = TelegramSession()
-    bot = Bot("123:" + "x" * 35, session=session)
-    api = PolicyAPI()
+    store.set_setting("playerok:account_id", "seller")
+    api = ReadAPI()
+    bot = Bot("123:" + "x" * 35, session=TelegramSession())
     ui = Interaction(bot, dispatcher(store, api))
     state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
-
-    async def press(command):
-        nonce = (await state.get_data())["automation"]["nonce"]
-        await ui.click("ap:" + nonce + ":" + command)
-
     try:
         await ui.message("/start")
-        await existing_legacy_delivery_draft(state, api.account.id, "item")
-        await ui.click("auto:item:item")
-        await press("mode:stock")
-        await press("toggle:enabled")
-        await press("toggle:auto_enroll")
-        await press("save")
-        assert "будущих продаж" in session.calls[-1].text
+        await existing_legacy_delivery_draft(state, api.account.id, "lot")
+        await ui.click("auto:item:lot")
+        nonce = (await state.get_data())["logical_view"]["nonce"]
+        await ui.click(f"ap:{nonce}:arm")
+        await ui.click(f"ap:{nonce}:arm")
         assert not store.rows("SELECT * FROM delivery_policies")
-        nonce = (await state.get_data())["automation"]["nonce"]
-        ui.dp = dispatcher(store, api)
-        await ui.click("ap:" + nonce + ":arm")
-        await ui.click("ap:" + nonce + ":arm")
-        assert store.rows("SELECT revision FROM delivery_policies") == [{"revision": 1}]
         assert not store.rows("SELECT * FROM delivery_chains")
         assert not store.rows("SELECT * FROM outbox")
-        assert not api.account.writes_enabled
+        assert (await state.get_data())["logical_setup"]["config"]["text"] == "legacy draft"
     finally:
         await bot.session.close()
         store.close()

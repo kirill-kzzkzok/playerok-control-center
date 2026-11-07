@@ -196,7 +196,12 @@ async def test_explicit_enable_stop_and_confirmed_detach_preserve_listing(panel)
     )
     product = r.store.rows("SELECT * FROM logical_products")[0]
     assert product["enabled"] == 1 and product["inherit_enabled"] == 1
-    await r.panel.callback(next(key for key in callbacks(markup) if key.endswith(":stop")), 7, r.state)
+    _, markup = await r.panel.callback(
+        next(key for key in callbacks(markup) if key.endswith(":stop")), 7, r.state
+    )
+    await r.panel.callback(
+        next(key for key in callbacks(markup) if key.endswith(":stop_confirm")), 7, r.state
+    )
     _, markup = await r.panel.callback("lp:details:lot", 7, r.state)
     _, markup = await r.panel.callback(
         next(key for key in callbacks(markup) if key.endswith(":detach")), 7, r.state

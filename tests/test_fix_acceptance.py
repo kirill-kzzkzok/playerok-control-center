@@ -133,7 +133,11 @@ async def test_fresh_ack_waiting_for_fsm_does_not_expire_valid_send_confirmation
 
 
 async def test_owner_recovery_of_proven_preflight_stop_uses_same_operation_and_reserve(case):
+    from dataclasses import asdict
+    from app.services.automation import Automation, DeliveryPolicy
+
     r = case
+    await Automation(r.store, r.api).save(7, "lot", 0, asdict(DeliveryPolicy(mode="stock")))
     r.api.order("stock")
     await r.ui.click("order:stock")
     await r.ui.click("od:stock:stock")

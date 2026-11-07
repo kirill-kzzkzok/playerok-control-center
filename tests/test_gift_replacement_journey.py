@@ -20,6 +20,7 @@ async def test_replacement_edit_and_new_catalog_selection_preserve_identity_and_
     history = r.store.rows("SELECT * FROM orders")
     await r.ui.click("lp:item:lot")
     await click(r, suffix=":stop")
+    await click(r, suffix=":stop_confirm")
     del r.api.remote.catalog["zombie_bear"]
 
     def update(id, **changes):

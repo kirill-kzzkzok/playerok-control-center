@@ -121,6 +121,7 @@ async def test_automatic_metadata_refresh_never_lifts_explicit_owner_stop(shop):
     await setup_ui(r, "telegram_gifts", "gift: heart")
     await r.ui.click("lp:item:lot")
     await click(r, suffix=":stop")
+    await click(r, suffix=":stop_confirm")
     r.api.item["name"] = "Новое имя " + r.api.item["name"]
     await r.ui.click("item:lot")
     assert not LogicalProducts(r.store, r.api).listing("lot")["enabled"]

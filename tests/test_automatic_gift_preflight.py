@@ -259,6 +259,7 @@ async def test_old_proven_unstarted_resource_failure_recovers_without_manual_ret
     if block == "stop":
         await r.ui.click("lp:item:lot")
         await click(r, suffix=":stop")
+        await click(r, suffix=":stop_confirm")
     elif block == "closed":
         r.api.orders["waiting-new-order"]["status"] = "SENT"
     elif block == "uncertain":

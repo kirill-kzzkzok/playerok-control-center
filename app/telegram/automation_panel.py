@@ -2,13 +2,13 @@ import secrets
 from dataclasses import asdict
 
 from app.database.store import Conflict
-from app.services.automation import Automation, DeliveryPolicy, message_text
+from app.services.automation import Automation, message_text
 from app.services.delivery_chains import DeliveryChains
 from app.services.logical_products import LogicalProducts
 from app.services.products import ValidationError
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
-from app.telegram.presentation import automation_summary, item_label, order_label
+from app.telegram.presentation import item_label, order_label
 
 FIELDS = {"text": "Данные постоянной выдачи", "greeting": "Приветствие", "after": "Сообщение после выдачи"}
 
@@ -41,76 +41,6 @@ class AutomationPanel:
             + "\nВыберите товар. Проверка без отправки доступна в его настройках.",
             keyboard(buttons, back=("⬅️ Обслуживание выдачи", "tools:delivery")),
         )
-
-    async def show(self, data, state):
-        data.pop("arm_pending", None)
-        data["account"] = self.service.api.account.id
-        nonce = secrets.token_hex(6)
-        data["nonce"] = nonce
-        await state.set_state(None)
-        await state.set_data({"automation": data})
-        values = data["values"]
-        modes = {"manual": "Ручной", "text": "Постоянный текст", "stock": "Уникальный запас"}
-        text = f"⚡ <b>Политика выдачи · v{data['revision']}</b>\nТовар: {escaped(data['id'], 100)}\nРежим: {modes[values['mode']]}\nЖелаемое включение: {'да' if values['enabled'] else 'нет'}\nОтметка SENT после выдачи: {'запрошена' if values['mark_sent'] else 'нет'}\n\nСохранение политики не запускает отправки. Запуск выбранного заказа подтверждается отдельно. Изменения применяются только после «Сохранить»."
-        if values.get("auto_enroll") and values["enabled"]:
-            text = text.replace(
-                "Сохранение политики не запускает отправки. Запуск выбранного заказа подтверждается отдельно.",
-                "После отдельного подтверждения будущие продажи могут запускаться автоматически при разрешённых глобальных флагах.",
-            )
-        for field, label in FIELDS.items():
-            text += f"\n{label}: {'задано' if values[field] else 'пусто'}"
-        text += "\n\nСохранённое состояние (правки выше ещё не применены):\n" + escaped(
-            automation_summary(self.store, self.service.api, data["id"]), 1600
-        )
-        text += "\nАвтоматически включать будущие продажи: " + ("да" if values.get("auto_enroll") else "нет")
-        text += "\nПри отдельном включении будущих продаж и двух разрешающих флагах новые заказы могут отправляться без подтверждения каждого. Старые заказы не включаются; смена версии политики начинает новый временной отсчёт."
-        rows = [
-            [
-                ("Ручной", f"ap:{nonce}:mode:manual"),
-                ("Текст", f"ap:{nonce}:mode:text"),
-                ("Запас", f"ap:{nonce}:mode:stock"),
-            ],
-            [("Переключить желаемое включение", f"ap:{nonce}:toggle:enabled")],
-        ]
-        rows.extend(
-            [
-                [(label, f"ap:{nonce}:edit:{field}"), ("Очистить", f"ap:{nonce}:clear:{field}")]
-                for field, label in FIELDS.items()
-            ]
-        )
-        rows.extend(
-            [
-                [("Ожидать подтверждения владельца после выдачи", f"ap:{nonce}:toggle:mark_sent")],
-                [("📚 Склад", "stock:view:" + data["id"])],
-                [("Будущие заказы автоматически", f"ap:{nonce}:toggle:auto_enroll")],
-                [("💾 Сохранить политику", f"ap:{nonce}:save")],
-                [("🔎 Проверка без отправки оплаченных заказов", f"ap:{nonce}:orders")],
-            ]
-        )
-        if not data.get("advanced"):
-            text = "⚡ <b>Настройка выдачи</b>\n" + automation_summary(
-                self.store, self.service.api, data["id"]
-            )
-            text += (
-                "\nВыбрано: "
-                + modes[values["mode"]]
-                + (" · включение запрошено" if values["enabled"] else " · выключено")
-            )
-            text += "\nИзменения применяются после сохранения."
-            _, saved = self.service.get(data["id"])
-            if asdict(saved) != values:
-                text += " Есть несохранённые изменения."
-            rows = [
-                rows[0],
-                rows[1],
-                [("📚 Склад", "stock:view:" + data["id"])],
-                [("Дополнительные параметры", f"ap:{nonce}:advanced")],
-                [("💾 Сохранить", f"ap:{nonce}:save")],
-                [("🔎 Проверить без отправки", f"ap:{nonce}:orders")],
-            ]
-        else:
-            rows.append([("⬅️ Основные настройки", f"ap:{nonce}:basic")])
-        return text, keyboard(rows, back=("⬅️ К выдаче товара", "iv:delivery:" + data["id"]))
 
     async def callback(self, action, owner, state):
         self.service.orders.owner(owner)
@@ -155,21 +85,9 @@ class AutomationPanel:
                 return await PlatformPanel(self.store, self.service.api).callback(
                     "platform:item:" + ident, owner, state
                 )
-            context = await state.get_data()
-            draft = context.get("automation_draft") or context.get("automation") or {}
-            has_draft = (
-                draft.get("id") == ident
-                and draft.get("revision") == revision
-                and draft.get("account") == self.service.api.account.id
-                and not draft.get("logical_check")
-            )
-            if LogicalProducts(self.store, self.service.api).listing(ident) or not (revision or has_draft):
-                from app.telegram.logical_products_panel import LogicalProductsPanel
+            from app.telegram.logical_products_panel import LogicalProductsPanel
 
-                return await LogicalProductsPanel(self.store, self.service.api).card(owner, ident, state)
-            await self.service.item(owner, ident)
-            values = draft["values"] if has_draft else asdict(policy)
-            return await self.show({"id": ident, "revision": revision, "values": values}, state)
+            return await LogicalProductsPanel(self.store, self.service.api).card(owner, ident, state)
         data = (await state.get_data()).get("automation", {})
         if (
             data.get("id")
@@ -183,46 +101,14 @@ class AutomationPanel:
             from app.telegram.logical_products_panel import LogicalProductsPanel
 
             return await LogicalProductsPanel(self.store, self.service.api).card(owner, data["id"], state)
+        if data.get("id") and not data.get("logical_check"):
+            from app.telegram.logical_products_panel import LogicalProductsPanel
+
+            return await LogicalProductsPanel(self.store, self.service.api).card(owner, data["id"], state)
         if len(parts) not in {3, 4} or parts[1] != data.get("nonce"):
             raise Conflict("Настройки устарели. Откройте товар заново")
         command, values = parts[2], data["values"]
-        if command in {"advanced", "basic"}:
-            data["advanced"] = command == "advanced"
-        elif command == "mode" and len(parts) == 4 and parts[3] in {"manual", "text", "stock"}:
-            values["mode"] = parts[3]
-            if parts[3] == "manual":
-                values["enabled"] = False
-        elif command == "toggle" and len(parts) == 4 and parts[3] in {"enabled", "mark_sent", "auto_enroll"}:
-            values[parts[3]] = not values[parts[3]]
-        elif command in {"edit", "clear"} and len(parts) == 4 and parts[3] in FIELDS:
-            if command == "clear":
-                values[parts[3]] = ""
-            else:
-                data["field"] = parts[3]
-                await state.update_data(automation=data)
-                await state.set_state("automation:text")
-                return (
-                    FIELDS[parts[3]]
-                    + ": пришлите текст до 3500 символов. Значение сохранится локально и не будет отправлено покупателю. Для отмены откройте главное меню.",
-                    keyboard([]),
-                )
-        elif command == "save":
-            DeliveryPolicy(**values)
-            if values["enabled"] and values.get("auto_enroll"):
-                data["nonce"] = secrets.token_hex(6)
-                data["arm_pending"] = True
-                await state.update_data(automation=data)
-                return (
-                    "Включить выдачу для будущих продаж этого товара? При PLAYEROK_WRITES_ENABLED и PLAYEROK_AUTOMATION_ENABLED новые оплаченные заказы будут обрабатываться без отдельного подтверждения. Заказы, созданные до сохранения этой версии, не включаются. Новая версия отменяет ранее активные цепочки по прежним правилам. Данные будут отправляться покупателю; проверьте их до включения.",
-                    keyboard([[("✅ Сохранить и включить будущие продажи", f"ap:{data['nonce']}:arm")]]),
-                )
-            data["revision"] = await self.service.save(owner, data["id"], data["revision"], values)
-        elif command == "arm" and data.get("arm_pending"):
-            data["revision"] = await self.service.save(
-                owner, data["id"], data["revision"], values, future_confirmed=True
-            )
-            data.pop("arm_pending", None)
-        elif command == "orders":
+        if command == "orders":
             revision, policy = self.service.get(data["id"])
             if revision != data["revision"] or asdict(policy) != values:
                 raise ValidationError("Сначала сохраните изменения или откройте политику заново")
@@ -296,7 +182,6 @@ class AutomationPanel:
             )
         else:
             raise ValidationError("Действие настройки недоступно")
-        return await self.show(data, state)
 
     async def message(self, message, state):
         self.service.orders.owner(message.from_user.id)
@@ -312,4 +197,9 @@ class AutomationPanel:
             raise ValidationError("Шаг ввода устарел")
         data["values"][field] = message_text(message.text or "", required=True)
         data.pop("field", None)
-        return await self.show(data, state)
+        await state.update_data(automation=data)
+        from app.telegram.logical_products_panel import LogicalProductsPanel
+
+        return await LogicalProductsPanel(self.store, self.service.api).card(
+            message.from_user.id, data["id"], state
+        )

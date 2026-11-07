@@ -2,6 +2,7 @@
 
 import json
 import secrets
+import time
 from collections import Counter
 
 from app.database.store import Conflict
@@ -57,14 +58,67 @@ class LogicalProductsPanel:
             "product": product["id"] if product else None,
             "revision": product["revision"] if product else 0,
         }
+        legacy = None
+        legacy_revision = None
+        if not product:
+            from app.services.automation import Automation, DeliveryPolicy
+
+            revision, policy = Automation(self.store, self.api).get(item_id)
+            data = await state.get_data()
+            candidate = data.get("automation_draft") or data.get("automation") or {}
+            values = None
+            if (
+                candidate.get("id") == item_id
+                and candidate.get("account") == account
+                and candidate.get("revision") == revision
+                and not candidate.get("logical_check")
+            ):
+                values = candidate.get("values")
+            elif revision and policy.account_id in {"", account}:
+                from dataclasses import asdict
+
+                values = asdict(policy)
+            if values:
+                policy = DeliveryPolicy(**values)
+                if policy.mode in {"text", "stock"}:
+                    legacy = {
+                        "handler": "fixed_text" if policy.mode == "text" else "unique_stock",
+                        "config": {
+                            key: getattr(policy, key)
+                            for key in ("text", "greeting", "after", "mark_sent", "automatic_completion")
+                        },
+                    }
+                    legacy_revision = revision
+        draft_context = (await state.get_data()).get("logical_draft", {})
+        if (
+            draft_context.get("item") == item_id
+            and draft_context.get("owner") == owner
+            and draft_context.get("account") == account
+            and draft_context.get("product") == view["product"]
+            and draft_context.get("revision") == view["revision"]
+            and not (product and product["enabled"])
+            and draft_context.get("setup", {}).get("handler") in MODES
+        ):
+            legacy = draft_context["setup"]
+            legacy_revision = draft_context.get("legacy_revision")
         await state.set_state(None)
-        await state.set_data({"logical_view": view})
+        await state.set_data(
+            {
+                "logical_view": view,
+                **({"logical_setup": legacy, "logical_legacy_revision": legacy_revision} if legacy else {}),
+            }
+        )
         prefix = "lp:" + view["nonce"] + ":"
         text = "⚡ <b>Автовыдача товара</b>\n" + escaped(view["title"], 120)
         if item.get("_ui_cached"):
             text += "\n🕒 Сохранённые данные: " + local_time(item.get("_ui_observed_at"))
             if item.get("_ui_stale"):
                 text += " · обновляются в фоне"
+        from app.services.product_readiness import ProductReadiness
+        from app.telegram.product_presentation import STATES
+
+        readiness = ProductReadiness(self.store, self.api).snapshot(item_id, item=item)
+        text += "\n" + STATES[readiness["state"]]
         rows = []
         if product:
             config = json.loads(product["config"])
@@ -73,7 +127,7 @@ class LogicalProductsPanel:
                 escaped(product["code"], 3) if len(product["code"]) == 3 else "требуется перенос"
             )
             text += "\nСпособ: " + ("📦 Выдаёт Playerok" if platform else MODES[product["handler"]])
-            text += "\nРазрешение выдачи: " + ("включено" if product["enabled"] else "выключено")
+            text += "\nСохранённое разрешение: " + ("включено" if product["enabled"] else "выключено")
             if platform:
                 text += "\nБот не отправляет товар повторно."
             elif product["handler"] == "telegram_gifts":
@@ -129,7 +183,7 @@ class LogicalProductsPanel:
             )
             if product["enabled"] or active_projection:
                 rows.append([("⛔ Остановить выдачу товара", prefix + "stop")])
-            if (
+            elif (
                 (not product["enabled"] or not active_projection)
                 and product["state"] == "VERIFIED"
                 and product["handler"] != "manual"
@@ -137,7 +191,6 @@ class LogicalProductsPanel:
             ):
                 rows.append([("▶️ Включить выдачу", prefix + "arm")])
             rows += [
-                [("Изменить настройки", "platform:item:" + item_id if platform else prefix + "configure")],
                 [("Связанные объявления", prefix + "links"), ("История заказов", prefix + "orders:0")],
                 [("🔄 Проверить перевыставление", prefix + "check")],
                 [("Отвязать товар", prefix + "detach")],
@@ -162,10 +215,12 @@ class LogicalProductsPanel:
                 rows.insert(0, [("Последняя подтверждённая выдача", "order:" + delivered[0]["id"])])
         else:
             text += "\nНастройте выдачу один раз и подтвердите постоянный код [XXX] в названии."
-            rows.append([("Настроить выдачу", prefix + "configure")])
+
         if product and product["handler"] == "unique_stock":
             rows.insert(0, [("📚 Склад", "stock:view:" + item_id)])
-        rows.append([("🔄 Изменить способ выдачи", "lp:method:" + item_id)])
+        rows.append(
+            [("🔄 Изменить способ выдачи" if product else "Настроить выдачу", "lp:method:" + item_id)]
+        )
         if (
             product
             and product["handler"] in {"unique_stock", "fixed_text"}
@@ -178,7 +233,6 @@ class LogicalProductsPanel:
         readiness_service = ProductReadiness(self.store, self.api)
         readiness_service.remember_item(item)
         readiness = readiness_service.snapshot(item_id, item=item)
-        text += "\n" + STATES[readiness["state"]]
         if readiness["problems"]:
             text += "\n" + "\n".join("• " + escaped(p["text"], 180) for p in readiness["problems"][:6])
         rows.append([("Подробности готовности", "rd:check:" + item_id)])
@@ -202,20 +256,30 @@ class LogicalProductsPanel:
                 [
                     (label, route)
                     for label, route in row
-                    if route.split(":")[-1] in keep or route.startswith("stock:view:")
+                    if route.split(":")[-1] in keep or route.startswith(("stock:view:", "lp:method:"))
                 ]
                 for row in rows
             ]
             rows = [row for row in rows if row]
             if not product:
                 rows = []
-            rows.append(
-                [("🔄 Изменить способ выдачи" if product else "Настроить выдачу", "lp:method:" + item_id)]
-            )
+            if not any(route == "lp:method:" + item_id for row in rows for _label, route in row):
+                rows.append(
+                    [("🔄 Изменить способ выдачи" if product else "Настроить выдачу", "lp:method:" + item_id)]
+                )
             problem = next((p for p in readiness["problems"] if p["terminal"]), None)
             if problem and problem["action"][1] not in {"lp:item:" + item_id, "iv:delivery:" + item_id}:
                 rows.insert(0, [tuple(problem["action"])])
             rows.append([("Подробности и история", "lp:details:" + item_id)])
+        if legacy:
+            return await self.setup_screen(state)
+        if product and product.get("operation_id"):
+            sources = self.store.rows(
+                "SELECT id FROM drafts WHERE owner_id=? AND state='DRAFT' AND json_extract(payload,'$.launch_target')=? AND json_extract(payload,'$.gift_binding_operation')=? ORDER BY created_at DESC,id DESC LIMIT 1",
+                (owner, item_id, product["operation_id"]),
+            )
+            if sources:
+                rows.append([("Продолжить подготовку публикации", "launch:open:" + sources[0]["id"])])
         return text, keyboard(rows, back=("⬅️ К товару", "item:" + item_id))
 
     async def view(self, owner, state, nonce):
@@ -384,10 +448,7 @@ class LogicalProductsPanel:
             await ProductReadiness(self.store, self.api).check(owner, view["item"], for_arm=True)
             return await self.card(owner, view["item"], state)
         if command == "stopconfigure":
-            if not product:
-                raise Conflict("Сначала откройте актуальную настройку товара")
-            self.service.stop(owner, product["id"])
-            return await self.callback(prefix + "configure", owner, state)
+            return await self.callback(prefix + "stop:configure", owner, state)
         if command == "rebind":
             if not product or product["enabled"]:
                 return await self.callback(prefix + "configure", owner, state)
@@ -516,7 +577,7 @@ class LogicalProductsPanel:
             await state.update_data(logical_gift_selection=selected)
             return await self.gift_picker(state, prefix)
         if command == "setup":
-            await state.update_data(logical_prepared=None, logical_stock_pending=None)
+            await state.update_data(logical_prepared=None, logical_stock_pending=None, stock_pending=None)
             await state.set_state(None)
             return await self.setup_screen(state)
         if command == "input":
@@ -549,22 +610,18 @@ class LogicalProductsPanel:
             setup = (await state.get_data()).get("logical_setup", {})
             if setup.get("handler") != "unique_stock":
                 raise Conflict("Выберите складскую выдачу")
-            await state.set_state("logical:stock")
-            return (
-                "📚 Отправьте уникальные данные по одной единице на строку.\nСначала покажем только количество; содержимое не выводится.",
-                keyboard([], back=("Отмена", prefix + "setup")),
-            )
+            from app.telegram.stock_panel import StockPanel
+
+            return await StockPanel(self.store, self.api).callback("stock:add:" + view["item"], owner, state)
         if command == "stock_commit":
-            pending = (await state.get_data()).get("logical_stock_pending")
-            if not pending or pending["nonce"] != view["nonce"] or pending["item"] != view["item"]:
-                raise Conflict("Подтверждение запаса устарело. Подготовьте загрузку заново")
-            await Inventory(self.store, self.api).import_values(
-                owner, view["item"], pending["text"], pending["preview"], pending["status"]
+            from app.telegram.stock_panel import StockPanel
+
+            pending = (await state.get_data()).get("stock_pending")
+            if not pending or pending["id"] != view["item"]:
+                raise Conflict("Подтверждение запаса устарело")
+            return await StockPanel(self.store, self.api).callback(
+                "stock:commit:" + pending["nonce"], owner, state
             )
-            view["nonce"] = secrets.token_hex(6)
-            await state.update_data(logical_view=view, logical_stock_pending=None)
-            await state.set_state(None)
-            return await self.setup_screen(state)
         if command == "completion":
             setup = (await state.get_data()).get("logical_setup")
             if not setup:
@@ -584,6 +641,13 @@ class LogicalProductsPanel:
             options["refund"] = not options.get("refund", False)
             await state.update_data(logical_setup=setup)
             return await self.setup_screen(state)
+        if command in {"preview", "commit"}:
+            legacy_revision = (await state.get_data()).get("logical_legacy_revision")
+            if legacy_revision is not None:
+                from app.services.automation import Automation
+
+                if Automation(self.store, self.api).get(view["item"])[0] != legacy_revision:
+                    raise Conflict("Старая настройка изменилась. Откройте товар заново")
         if command == "preview":
             setup = (await state.get_data()).get("logical_setup")
             if not setup:
@@ -597,13 +661,31 @@ class LogicalProductsPanel:
             prepared = (await state.get_data()).get("logical_prepared")
             if not prepared or prepared["item_id"] != view["item"]:
                 raise Conflict("Превью устарело. Проверьте настройки заново")
-            self.service.commit(owner, prepared)
+            launch_id = (await state.get_data()).get("logical_launch_id")
+            with self.store.transaction():
+                result = self.service.commit(owner, prepared)
+                if launch_id:
+                    from app.services.listing_launch import ListingLaunch
+
+                    source = ListingLaunch(self.store, self.api, self.service.gift_service()).load(
+                        owner, launch_id
+                    )
+                    if (
+                        source["state"] != "DRAFT"
+                        or source["payload"]["launch_target"] != prepared["item_id"]
+                    ):
+                        raise Conflict("Черновик запуска изменился")
+                    payload = source["payload"]
+                    payload["gift_binding_operation"] = result["operation_id"]
+                    self.store.update_draft(launch_id, owner, source["revision"], payload)
             await state.set_state(None)
             await state.set_data({})
             return (
                 "⏳ Изменение описания поставлено в очередь. Выдача пока не включена.\nУспех будет показан после подтверждения Playerok.",
                 keyboard(
-                    [[("🔄 Проверить результат", "lp:item:" + prepared["item_id"])]],
+                    [[("Продолжить подготовку публикации", "launch:open:" + launch_id)]]
+                    if launch_id
+                    else [[("🔄 Проверить результат", "lp:item:" + prepared["item_id"])]],
                     back=("К товару", "item:" + prepared["item_id"]),
                 ),
             )
@@ -650,8 +732,53 @@ class LogicalProductsPanel:
                 owner, product["id"], view["revision"], inherit=value == "inherit", item_id=view["item"]
             )
             return await self.card(owner, view["item"], state)
-        if command == "stop":
-            self.service.stop(owner, product["id"])
+        if command in {"stop", "stop_confirm"}:
+            links = self.store.rows(
+                "SELECT item_id FROM logical_listings WHERE product_id=? ORDER BY item_id", (product["id"],)
+            )
+            snapshot = {
+                "links": links,
+                "revision": product["revision"],
+                "control": product["control_revision"],
+            }
+            if command == "stop":
+                view.update(
+                    nonce=secrets.token_hex(6),
+                    confirm="stop",
+                    stop_snapshot=snapshot,
+                    stop_at=time.time(),
+                    stop_next=value,
+                )
+                await state.update_data(logical_view=view)
+                return (
+                    f"Остановить выдачу? Затронуто объявлений: {len(links)}.\nУже начатые операции и неизвестные результаты сохранятся.",
+                    keyboard(
+                        [[("⛔ Подтвердить остановку", "lp:" + view["nonce"] + ":stop_confirm")]],
+                        back=("Отмена", "lp:item:" + view["item"]),
+                    ),
+                )
+            with self.store.transaction():
+                current = self.service.product(product["id"], owner)
+                current_links = self.store.rows(
+                    "SELECT item_id FROM logical_listings WHERE product_id=? ORDER BY item_id",
+                    (product["id"],),
+                )
+                if (
+                    view.get("confirm") != "stop"
+                    or view.get("stop_snapshot")
+                    != {
+                        "links": current_links,
+                        "revision": current["revision"],
+                        "control": current["control_revision"],
+                    }
+                    or not 0 <= time.time() - view.get("stop_at", 0) <= 300
+                ):
+                    raise Conflict("Состояние товара изменилось. Откройте остановку заново")
+                self.service.stop(owner, product["id"])
+            if view.get("stop_next") == "configure":
+                view.pop("confirm", None)
+                await state.update_data(logical_view=view)
+                return await self.callback(prefix + "configure", owner, state)
             await state.clear()
             return (
                 "⛔ Новые выдачи товара остановлены. Результаты уже отправленных запросов сохраняются; неизвестные операции не повторяются.",
@@ -750,6 +877,15 @@ class LogicalProductsPanel:
         handler, config = setup["handler"], setup["config"]
         prefix = "lp:" + view["nonce"] + ":"
         text = "⚙️ <b>Настройки выдачи</b>\nСпособ: " + MODES[handler]
+        if data.get("logical_legacy_revision") is not None:
+            from app.services.product_readiness import ProductReadiness
+            from app.telegram.product_presentation import brief
+
+            text += "\n" + brief(ProductReadiness(self.store, self.api).snapshot(view["item"]))
+            text += (
+                "\nСохранённые настройки перенесены в форму. Запуск потребует подтверждённой привязки кода."
+            )
+
         rows = []
         if handler == "telegram_gifts":
             text += "\nПодарки: " + escaped(
@@ -846,6 +982,13 @@ class LogicalProductsPanel:
         )
 
     async def message(self, message, state):
+        if await state.get_state() in {"stock:input", "logical:stock"}:
+            from app.telegram.stock_panel import StockPanel
+
+            view = (await state.get_data()).get("logical_view", {})
+            await self.view(message.from_user.id, state, view.get("nonce"))
+            await state.update_data(stock_item=view["item"], stock_return_setup=True)
+            return await StockPanel(self.store, self.api).message(message, state)
         current = await state.get_state()
         data = await state.get_data()
         if current == "logical:notice":
@@ -883,29 +1026,6 @@ class LogicalProductsPanel:
             raise Conflict("Ввод устарел. Откройте настройку выдачи заново")
         await self.view(message.from_user.id, state, view["nonce"])
         value = message.text
-        if current == "logical:stock":
-            inventory = Inventory(self.store, self.api)
-            item = await inventory.item(message.from_user.id, view["item"])
-            preview = inventory.preview(view["item"], value)
-            view["nonce"] = secrets.token_hex(6)
-            await state.update_data(
-                logical_view=view,
-                logical_stock_pending={
-                    "nonce": view["nonce"],
-                    "item": view["item"],
-                    "text": value,
-                    "preview": preview,
-                    "status": item["status"],
-                },
-            )
-            await state.set_state("logical:stockconfirm")
-            return (
-                f"📚 Сохранить запас?\nНовых единиц: {preview['new']}\nПустых строк: {preview['empty']} · повторов в сообщении: {preview['duplicates']}\nУже известны складу: {preview['known']}\nСодержимое скрыто.",
-                keyboard(
-                    [[("✅ Сохранить запас", "lp:" + view["nonce"] + ":stock_commit")]],
-                    back=("Отмена", "lp:" + view["nonce"] + ":setup"),
-                ),
-            )
         if current in {"logical:order", "logical:day"}:
             if (
                 not isinstance(value, str)

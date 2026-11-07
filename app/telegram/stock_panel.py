@@ -17,7 +17,9 @@ class StockPanel:
         item = await ProductReadiness(self.store, self.service.automation.api).ui_item(owner, ident)
         counts = self.service.counts(ident)
         rows = [[("➕ Загрузить запас", "stock:add:" + ident)]]
-        rows += [[(f"{LABELS[s]}: {n}", f"stock:list:{ident}:{s}:0")] for s, n in counts.items() if n]
+        if any(counts.values()):
+            selected = next(status for status, count in counts.items() if count)
+            rows.append([("История склада", f"stock:list:{ident}:{selected}:0")])
         for draft in self.service.prepared(owner, ident):
             rows.append([("📥 Добавить подготовленный запас", "stock:transfer:" + draft)])
         guard = self.store.setting(f"delivery:{ident}:enabled")
@@ -32,7 +34,12 @@ class StockPanel:
             "📚 <b>Склад · "
             + escaped(item.get("name") or ident, 150)
             + "</b>\n"
-            + ("\n".join(f"{LABELS[s]}: {n}" for s, n in counts.items() if n) or "📦 Склад пуст")
+            + "\n".join(
+                f"{LABELS[s]}: {n}"
+                for s, n in counts.items()
+                if n or s in {"AVAILABLE", "RESERVED", "DELIVERED"}
+            )
+            + ("\n📦 Склад пуст" if not any(counts.values()) else "")
             + "\nСодержимое единиц скрыто. Выданные и карантинные значения повторно не используются."
             + note,
             keyboard(rows),
@@ -43,26 +50,27 @@ class StockPanel:
         preview = self.service.preview(ident, text)
         nonce = secrets.token_hex(8)
         await state.set_state("stock:confirm")
-        await state.set_data(
-            {
-                "stock_pending": {
-                    "id": ident,
-                    "text": text,
-                    "preview": preview,
-                    "status": item["status"],
-                    "draft": draft_id,
-                    "nonce": nonce,
-                }
+        await state.update_data(
+            stock_pending={
+                "id": ident,
+                "text": text,
+                "preview": preview,
+                "status": item["status"],
+                "draft": draft_id,
+                "nonce": nonce,
             }
         )
+        data = await state.get_data()
+        view = data.get("logical_view", {})
+        returning = data.get("stock_return_setup") and view.get("item") == ident
+        back = "lp:" + view["nonce"] + ":setup" if returning else "stock:view:" + ident
+        commit = "lp:" + view["nonce"] + ":stock_commit" if returning else "stock:commit:" + nonce
         return (
             f"📥 Добавить новых единиц: {preview['new']}\nПустых строк: {preview['empty']}\nДубликатов внутри сообщения: {preview['duplicates']}\nУже известных складу: {preview['known']}"
             + "\n\nПривязка: <code>"
             + escaped(ident, 100)
             + "</code>\nИзвестные значения пропускаются независимо от их статуса. Отправки и включения автоматики не будет.",
-            keyboard(
-                [[("✅ Сохранить в склад", "stock:commit:" + nonce)], [("Отмена", "stock:view:" + ident)]]
-            ),
+            keyboard([[("✅ Сохранить в склад", commit)], [("Отмена", back)]]),
         )
 
     async def callback(self, action, owner, state):
@@ -74,11 +82,19 @@ class StockPanel:
             return await self.card(owner, ident)
         if command == "add":
             await self.service.item(owner, ident)
+            data = await state.get_data()
+            view = data.get("logical_view", {})
+            returning = (
+                view.get("item") == ident and data.get("logical_setup", {}).get("handler") == "unique_stock"
+            )
+            if not returning:
+                await state.clear()
             await state.set_state("stock:input")
-            await state.set_data({"stock_item": ident})
+            await state.update_data(stock_item=ident, stock_return_setup=bool(returning), stock_pending=None)
+            back = "lp:" + view["nonce"] + ":setup" if returning else "stock:view:" + ident
             return (
                 "Пришлите запас одним сообщением: одна единица на строку, до 10000 символов. Перед сохранением будет показано количество, без содержимого.",
-                keyboard([[("Отмена", "stock:view:" + ident)]]),
+                keyboard([[("Отмена", back)]]),
             )
         if command == "transfer":
             draft = self.store.get_draft(ident, owner)
@@ -95,6 +111,13 @@ class StockPanel:
             count = await self.service.import_values(
                 owner, pending["id"], pending["text"], pending["preview"], pending["status"], pending["draft"]
             )
+            data = await state.get_data()
+            await state.update_data(stock_pending=None)
+            if data.get("stock_return_setup"):
+                from app.telegram.logical_products_panel import LogicalProductsPanel
+
+                await state.set_state(None)
+                return await LogicalProductsPanel(self.store, self.service.automation.api).setup_screen(state)
             await state.clear()
             text, markup = await self.card(owner, pending["id"])
             return f"✅ Добавлено: {count}. Автоматизация не включалась.\n\n" + text, markup
@@ -121,6 +144,11 @@ class StockPanel:
                 [("Заказ единицы №" + str(row["id"]), "order:" + row["order_id"])]
                 for row in rows[:10]
                 if row["order_id"]
+            ]
+            buttons += [
+                [(f"{LABELS[status]}: {count}", f"stock:list:{ident}:{status}:0")]
+                for status, count in self.service.counts(ident).items()
+                if count and status != selected
             ]
             nav = []
             if page:

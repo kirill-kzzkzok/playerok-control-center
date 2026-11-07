@@ -29,6 +29,7 @@ def state(r):
 async def stop(r):
     await r.ui.click("lp:item:lot")
     await click(r, suffix=":stop")
+    await click(r, suffix=":stop_confirm")
 
 
 @pytest.mark.parametrize("route", ["gft:item:lot", "gft:bind:lot", "gft:enable:lot", "auto:item:lot"])
@@ -74,6 +75,7 @@ async def test_old_stop_disables_the_product_and_all_relisted_gift_projections(s
     await LogicalProductWorker(r.store, r.api).once()
     assert len(r.store.rows("SELECT 1 FROM gift_listings WHERE enabled=1")) == 2
     await r.ui.click("gft:off:lot")
+    await click(r, suffix=":stop_confirm")
     assert r.store.rows("SELECT enabled FROM logical_products") == [{"enabled": 0}]
     assert not r.store.rows("SELECT 1 FROM gift_listings WHERE enabled=1")
     assert not r.api.remote.payments
@@ -99,7 +101,7 @@ async def test_item_delivery_has_one_configuration_entry_and_truthful_stopped_st
     assert "остановлена" in r.session.last_panel.text.lower()
     await r.ui.click("iv:delivery:lot")
     visible = buttons(r.session.last_panel)
-    assert any(key.endswith(":configure") for key in visible)
+    assert "lp:method:lot" in visible
     assert "gft:item:lot" not in visible and "auto:item:lot" not in visible
     assert not r.api.remote.payments
 

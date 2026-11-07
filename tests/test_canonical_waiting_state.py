@@ -58,6 +58,7 @@ async def test_stopped_item_keeps_its_paid_pending_order_visible_without_telegra
     await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
     await r.ui.click("lp:item:lot")
     await click(r, suffix=":stop")
+    await click(r, suffix=":stop_confirm")
     issues = HomePanel(r.store, r.api).paid_issues()
     assert len(issues) == 1 and issues[0]["id"] == "paid-before-stop"
     assert "выключена" in HomePanel.paid_reason(issues[0])

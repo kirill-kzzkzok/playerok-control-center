@@ -167,6 +167,7 @@ async def test_owner_stop_during_wait_blocks_send_but_keeps_paid_obligation_visi
     r, ident = await prepare(shop, "unique_stock")
     await r.ui.click("lp:item:lot")
     await click(r, suffix=":stop")
+    await click(r, suffix=":stop_confirm")
     await r.worker.once()
     ChainWorker(r.store, r.api).once()
     assert not r.api.messages

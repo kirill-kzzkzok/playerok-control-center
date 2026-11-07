@@ -298,17 +298,15 @@ async def test_gifts_stop_visible_and_no_implicit_enable(ux):
 
 async def test_nested_local_settings_survive_restart_and_rotate_nonce(ux):
     r = ux
+    r.store.set_setting("playerok:account_id", r.api.account.id)
     await existing_legacy_delivery_draft(r.state, r.api.account.id, "lot")
     await r.ui.click("auto:item:lot")
-    first = (await r.state.get_data())["automation"]["nonce"]
-    await r.ui.click(f"ap:{first}:advanced")
-    assert "Будущие заказы автоматически" in buttons(r.session.calls[-1]).values()
+    first = (await r.state.get_data())["logical_view"]["nonce"]
+    assert (await r.state.get_data())["logical_setup"]["config"]["text"] == "legacy draft"
     r.ui.dp = dispatcher(r.store, r.api)
-    data = (await r.state.get_data())["automation"]
-    await r.ui.click(f"ap:{data['nonce']}:basic")
-    assert "Дополнительные параметры" in buttons(r.session.calls[-1]).values()
+    await r.ui.click("auto:item:lot")
+    assert (await r.state.get_data())["logical_view"]["nonce"] != first
     await r.ui.click(f"ap:{first}:save")
-    assert "устарели" in r.session.calls[-1].text
     assert not r.store.rows("SELECT * FROM delivery_policies")
     assert not r.store.rows("SELECT * FROM outbox")
 
@@ -352,8 +350,8 @@ async def test_order_compact_card_details_retain_all_actions(ux):
         "od:note:paid",
         "od:problem:paid",
         "pf:card:paid",
-        "od:stock:paid",
     } <= buttons(r.session.calls[-1]).keys()
+    assert "od:stock:paid" not in buttons(r.session.calls[-1])
     assert any(
         b.url == "https://playerok.com/deal/paid"
         for row in r.session.calls[-1].reply_markup.inline_keyboard

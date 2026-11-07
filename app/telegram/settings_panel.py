@@ -46,7 +46,7 @@ class SettingsPanel:
                     [
                         [("🔌 Подключения", "sp:connections")],
                         [("💳 Вывод средств", "providers")],
-                        [("⭐ Лимиты Stars", "gft:limits")],
+                        [("⭐ Лимиты Stars", "gft:limits:settings")],
                         [("🔔 Уведомления", "sp:notifications")],
                         [("💬 Глобальные ответы на фразы", "ar:menu")],
                         [("Диагностика и обслуживание", "tools")],

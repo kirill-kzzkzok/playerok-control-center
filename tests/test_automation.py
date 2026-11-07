@@ -1,5 +1,4 @@
 import asyncio
-import json
 from dataclasses import asdict
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -145,26 +144,24 @@ async def test_dry_run_reports_empty_stock_local_problem_and_prior_delivery(setu
 
 
 async def test_policy_form_survives_restart_and_rejects_stale_buttons(setup):
+    from app.telegram.logical_products_panel import LogicalProductsPanel
+
     store, api, _, service = setup
+    store.set_setting("playerok:account_id", api.account.id)
     state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=1, chat_id=1, user_id=1))
-    panel = AutomationPanel(store, api)
     await existing_legacy_delivery_draft(state, api.account.id, "item")
-    await panel.callback("auto:item:item", 1, state)
-    nonce = (await state.get_data())["automation"]["nonce"]
-    await panel.callback(f"ap:{nonce}:mode:text", 1, state)
-    with pytest.raises(Conflict):
-        await panel.callback(f"ap:{nonce}:toggle:enabled", 1, state)
-    nonce = (await state.get_data())["automation"]["nonce"]
-    await panel.callback(f"ap:{nonce}:edit:text", 1, state)
+    await AutomationPanel(store, api).callback("auto:item:item", 1, state)
+    canonical = LogicalProductsPanel(store, api)
+    view = (await state.get_data())["logical_view"]
+    assert (await state.get_data())["logical_setup"]["config"]["text"] == "legacy draft"
+    await canonical.callback(f"lp:{view['nonce']}:input:after", 1, state)
     state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=1, chat_id=1, user_id=1))
-    panel = AutomationPanel(store, api)
-    preview, _ = await panel.message(
-        SimpleNamespace(text="private delivery data", from_user=SimpleNamespace(id=1)), state
+    text, _ = await canonical.message(
+        SimpleNamespace(text="private notice", from_user=SimpleNamespace(id=1)), state
     )
-    assert "private delivery data" not in preview
+    assert "private notice" not in text
+    assert (await state.get_data())["logical_setup"]["config"]["after"] == "private notice"
+    with pytest.raises(Conflict):
+        await AutomationPanel(store, api).callback("ap:old:save", 1, state)
     assert service.get("item")[0] == 0
-    nonce = (await state.get_data())["automation"]["nonce"]
-    await panel.callback(f"ap:{nonce}:save", 1, state)
-    assert service.get("item")[1].text == "private delivery data"
     assert not store.rows("SELECT * FROM outbox")
-    assert json.loads(store.rows("SELECT payload FROM delivery_policies")[0]["payload"])["enabled"] is False

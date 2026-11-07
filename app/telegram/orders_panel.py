@@ -89,7 +89,7 @@ class OrdersPanel:
         )
         return text, keyboard(rows, back=("⬅️ Мой магазин", "home"))
 
-    async def card(self, owner, ident, *, details=False):
+    async def card(self, owner, ident, *, details=False, refresh=True):
         self.service.owner(owner)
         account = getattr(self.service.api.account, "id", None)
         bound = self.store.setting("playerok:account_id")
@@ -121,7 +121,11 @@ class OrdersPanel:
                 raise Conflict("Принадлежность сохранённого заказа текущему аккаунту не подтверждена")
             from app.workers.sync import request_sync
 
-            request_sync(self.store, "deal", ident)
+            pending = self.store.rows(
+                "SELECT revision,completed_revision FROM sync_requests WHERE key=?", ("deal:" + ident,)
+            )
+            if refresh and not (pending and pending[0]["revision"] > pending[0]["completed_revision"]):
+                request_sync(self.store, "deal", ident)
         else:
             order = await self.service.fresh(owner, ident)
         observed = order.get("_observed_at")
@@ -180,7 +184,13 @@ class OrdersPanel:
                 pass
             if can_deliver and not operation and not gifts and not gift_listing:
                 rows.append([("📦 Выдать из запаса", "od:prepare:" + ident)])
-            if not gifts and not gift_listing:
+            from app.services.automation import Automation
+            from app.services.logical_products import LogicalProducts
+
+            product = LogicalProducts(self.store, self.service.api).listing(item["id"])
+            _, policy = Automation(self.store, self.service.api).get(item["id"])
+            stock_mode = product["handler"] == "unique_stock" if product else policy.mode == "stock"
+            if not gifts and not gift_listing and stock_mode:
                 rows.append([("➕ Пополнить склад товара", "od:stock:" + ident)])
         if gifts:
             rows.append([("🎁 Подарок / сверка / возврат", "gft:job:" + ident)])
@@ -214,7 +224,11 @@ class OrdersPanel:
                 text += (
                     "\nСохранённые данные. Обновлено: "
                     + local_time(observed)
-                    + "\nБот обновляет статус автоматически."
+                    + (
+                        "\nОбновление запрошено. Бот обновляет статус автоматически."
+                        if refresh
+                        else "\nСтатус обновлён по данным Playerok."
+                    )
                 )
             followup = self.store.rows(
                 "SELECT s.kind,o.status,o.error_code FROM delivery_chains c JOIN delivery_chain_steps s ON s.order_id=c.order_id LEFT JOIN outbox o ON o.id=s.operation_id WHERE c.order_id=? AND json_extract(c.policy,'$.mode')='playerok' ORDER BY s.position",
@@ -527,6 +541,12 @@ class OrdersPanel:
             rows = self.store.rows("SELECT item_id FROM orders WHERE id=?", (ident,))
             if not rows:
                 raise Conflict("Сначала откройте карточку заказа")
+            from app.services.logical_products import LogicalProducts
+
+            product = LogicalProducts(self.store, self.service.api).listing(rows[0]["item_id"])
+            _, policy = Automation(self.store, self.service.api).get(rows[0]["item_id"])
+            if product["handler"] != "unique_stock" if product else policy.mode != "stock":
+                raise Conflict("Этот заказ не относится к складской выдаче")
             return await StockPanel(self.store, self.service.api).callback(
                 "stock:add:" + rows[0]["item_id"], owner, state
             )

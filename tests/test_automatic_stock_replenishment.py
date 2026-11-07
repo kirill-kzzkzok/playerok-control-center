@@ -30,6 +30,7 @@ async def test_paid_stock_waiter_continues_after_upload_without_resume_but_never
     if owner_stop:
         await r.ui.click("lp:item:lot")
         await click(r, suffix=":stop")
+        await click(r, suffix=":stop_confirm")
     await r.ui.click("stock:add:lot")
     await r.ui.message("unique-after-top-up")
     await click(r, action=next(k for k in buttons(r.session.last_panel) if k.startswith("stock:commit:")))

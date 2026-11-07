@@ -319,7 +319,7 @@ class LogicalProducts:
         self.verify_listing(listing, item)
         return json.loads(listing["config"])["code"]
 
-    def migrate_legacy(self):
+    def migrate_legacy(self, item_id=None):
         """Local projection only: leave old bindings/intents/permissions unchanged."""
         account = self.store.setting("playerok:account_id")
         if not account:
@@ -328,7 +328,8 @@ class LogicalProducts:
         with self.store.transaction() as db:
             rows = db.execute(
                 "SELECT g.* FROM gift_listings g WHERE NOT EXISTS "
-                "(SELECT 1 FROM logical_listings l WHERE l.item_id=g.item_id)"
+                "(SELECT 1 FROM logical_listings l WHERE l.item_id=g.item_id) AND (? IS NULL OR g.item_id=?)",
+                (item_id, item_id),
             ).fetchall()
             for row in rows:
                 options = self.store.setting("gifts:listing_options:" + row["item_id"], {})
