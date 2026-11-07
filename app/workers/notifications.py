@@ -507,6 +507,7 @@ class Notifications:
                         (payload["operation_id"], user),
                     )
                     or event["kind"] == "promotion_guard"
+                    and not payload.get("paid_schedule_block")
                     and self.store.rows(
                         "SELECT 1 FROM promotion_policy p JOIN promotion_evaluations e ON e.policy_revision=p.revision "
                         "WHERE p.actor=? AND e.item_id=? LIMIT 1",

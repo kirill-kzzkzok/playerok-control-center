@@ -146,7 +146,13 @@ async def test_budget_guard_notification_is_durable_and_not_baselined(setup):
     await Notifications(store, bot).once()
     await Notifications(store, bot).once()
     assert bot.send_message.await_count == 1
-    assert "списаний не было" in bot.send_message.call_args.args[1]
+    summary = bot.send_message.call_args.args[1]
+    assert "Автоподнятие" in summary
+    guard = store.rows("SELECT payload FROM inbox WHERE kind='promotion_guard'")[0]
+    import json
+
+    for reason in json.loads(guard["payload"])["reasons"]:
+        assert reason in summary
     assert not store.rows("SELECT * FROM promotion_expenses")
 
 

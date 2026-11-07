@@ -126,7 +126,8 @@ async def test_startup_unverified_account_retains_local_panel_without_write_perm
     monkeypatch.setattr("app.__main__.Playerok", lambda account: api)
     monkeypatch.setattr("app.__main__.AiohttpSession", lambda **k: session)
     monkeypatch.setattr("app.__main__.Bot", lambda *a, **k: bot)
-    monkeypatch.setattr("app.__main__.Supervisor.start", lambda *a: asyncio.create_task(asyncio.sleep(3600)))
+    start_worker = Mock(side_effect=lambda *args: asyncio.create_task(asyncio.sleep(3600)))
+    monkeypatch.setattr("app.__main__.Supervisor.start", start_worker)
     polling = AsyncMock()
 
     async def requested_shutdown(dispatcher, *args, **kwargs):
@@ -152,7 +153,8 @@ async def test_startup_unverified_account_retains_local_panel_without_write_perm
     assert account.automation_enabled is False
     assert store.setting("playerok:account_id") == "old"
     assert store.setting("playerok:bound_account_id") is None
-    backup.assert_called_once()
+    backup.assert_not_called()
+    assert any(call.args[0] == "upload-cleanup" for call in start_worker.call_args_list)
     api.call.assert_awaited_once_with("get")
     session.close.assert_awaited_once()
     account.close.assert_called_once()

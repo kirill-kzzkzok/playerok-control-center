@@ -458,10 +458,11 @@ class OperationResults:
                     label = "повтор закрыт; исход платежа неизвестен"
                 else:
                     label = "покупка не отправлена; условия изменились"
-            elif type(position) is int:
+            elif evaluation:
                 seen = True
                 reasons = evaluation.get("reasons") or []
-                label = f"позиция {position} · " + (
+                prefix = f"позиция {position} · " if type(position) is int else ""
+                label = prefix + (
                     "поднятие не требуется"
                     if any(reason.startswith("Позиция в категории:") for reason in reasons)
                     else "; ".join(reasons) or "ожидает покупки"
