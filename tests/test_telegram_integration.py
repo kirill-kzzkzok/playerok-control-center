@@ -1,5 +1,6 @@
 """Exercise aiogram's real dispatcher, FSM, routers and middleware without network."""
 
+from dataclasses import asdict
 from datetime import UTC, datetime
 from io import BytesIO
 from types import SimpleNamespace
@@ -15,9 +16,16 @@ from PIL import Image
 from app.database.store import Store
 from app.security.access import OwnerMiddleware
 from app.services.attachments import Attachments
+from app.services.automation import DeliveryPolicy
 from app.services.products import Products
 from app.telegram.router import create_router
 from app.telegram.storage import SQLiteStorage
+
+
+async def existing_legacy_delivery_draft(state, account, ident):
+    await state.update_data(
+        automation_draft={"id": ident, "account": account, "revision": 0, "values": asdict(DeliveryPolicy())}
+    )
 
 
 class TelegramSession(BaseSession):
@@ -566,6 +574,7 @@ async def test_automation_router_edits_local_policy_without_enabling_runtime(tmp
     try:
         await ui.message("/start")
         await ui.click("automation")
+        await existing_legacy_delivery_draft(state, api.account.id, "item")
         await ui.click("auto:item:item")
         nonce = (await state.get_data())["automation"]["nonce"]
         await ui.click(f"ap:{nonce}:mode:stock")
@@ -680,6 +689,7 @@ async def test_future_order_policy_requires_separate_persisted_confirmation(tmp_
 
     try:
         await ui.message("/start")
+        await existing_legacy_delivery_draft(state, api.account.id, "item")
         await ui.click("auto:item:item")
         await press("mode:stock")
         await press("toggle:enabled")

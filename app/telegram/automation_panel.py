@@ -147,28 +147,29 @@ class AutomationPanel:
             await state.set_data({"automation": data})
             return await self.callback(f"ap:{data['nonce']}:orders", owner, state)
         if len(parts) == 3 and parts[:2] == ["auto", "item"]:
-            if self.service.get(parts[2])[1].mode == "playerok":
+            ident = parts[2]
+            revision, policy = self.service.get(ident)
+            if policy.mode == "playerok":
                 from app.telegram.platform_panel import PlatformPanel
 
                 return await PlatformPanel(self.store, self.service.api).callback(
-                    "platform:item:" + parts[2], owner, state
+                    "platform:item:" + ident, owner, state
                 )
-            if LogicalProducts(self.store, self.service.api).listing(parts[2]):
-                from app.telegram.logical_products_panel import LogicalProductsPanel
-
-                return await LogicalProductsPanel(self.store, self.service.api).card(owner, parts[2], state)
-            await self.service.item(owner, parts[2])
-            revision, policy = self.service.get(parts[2])
-            draft = (await state.get_data()).get("automation_draft") or {}
-            if (
-                draft.get("id") == parts[2]
+            context = await state.get_data()
+            draft = context.get("automation_draft") or context.get("automation") or {}
+            has_draft = (
+                draft.get("id") == ident
                 and draft.get("revision") == revision
                 and draft.get("account") == self.service.api.account.id
-            ):
-                return await self.show(
-                    {"id": parts[2], "revision": revision, "values": draft["values"]}, state
-                )
-            return await self.show({"id": parts[2], "revision": revision, "values": asdict(policy)}, state)
+                and not draft.get("logical_check")
+            )
+            if LogicalProducts(self.store, self.service.api).listing(ident) or not (revision or has_draft):
+                from app.telegram.logical_products_panel import LogicalProductsPanel
+
+                return await LogicalProductsPanel(self.store, self.service.api).card(owner, ident, state)
+            await self.service.item(owner, ident)
+            values = draft["values"] if has_draft else asdict(policy)
+            return await self.show({"id": ident, "revision": revision, "values": values}, state)
         data = (await state.get_data()).get("automation", {})
         if (
             data.get("id")

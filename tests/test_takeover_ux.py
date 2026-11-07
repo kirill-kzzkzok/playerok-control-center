@@ -204,6 +204,7 @@ async def test_render_production_screen_cards_offline(ux, tmp_path):
     r.api.call = call
     r.api.value["raw_price"] = 100
     r.api.value["fee_multiplier"] = "0.1"
+    r.store.set_setting("playerok:account_id", r.api.account.id)
     routes = [
         ("01_home", "home"),
         ("02_order", "order:paid"),

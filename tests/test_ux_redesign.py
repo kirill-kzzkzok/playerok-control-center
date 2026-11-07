@@ -16,7 +16,13 @@ from app.telegram.keyboards import main_menu
 from app.telegram.presentation import status
 from app.telegram.storage import SQLiteStorage
 from tests.test_item_panel import item
-from tests.test_telegram_integration import CatalogAPI, Interaction, TelegramSession, dispatcher
+from tests.test_telegram_integration import (
+    CatalogAPI,
+    Interaction,
+    TelegramSession,
+    dispatcher,
+    existing_legacy_delivery_draft,
+)
 
 
 class ShopAPI(CatalogAPI):
@@ -292,6 +298,7 @@ async def test_gifts_stop_visible_and_no_implicit_enable(ux):
 
 async def test_nested_local_settings_survive_restart_and_rotate_nonce(ux):
     r = ux
+    await existing_legacy_delivery_draft(r.state, r.api.account.id, "lot")
     await r.ui.click("auto:item:lot")
     first = (await r.state.get_data())["automation"]["nonce"]
     await r.ui.click(f"ap:{first}:advanced")

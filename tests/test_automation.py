@@ -14,6 +14,7 @@ from app.services.orders import Orders
 from app.services.products import ValidationError
 from app.telegram.automation_panel import AutomationPanel
 from app.telegram.storage import SQLiteStorage
+from tests.test_telegram_integration import existing_legacy_delivery_draft
 
 
 @pytest.fixture
@@ -147,6 +148,7 @@ async def test_policy_form_survives_restart_and_rejects_stale_buttons(setup):
     store, api, _, service = setup
     state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=1, chat_id=1, user_id=1))
     panel = AutomationPanel(store, api)
+    await existing_legacy_delivery_draft(state, api.account.id, "item")
     await panel.callback("auto:item:item", 1, state)
     nonce = (await state.get_data())["automation"]["nonce"]
     await panel.callback(f"ap:{nonce}:mode:text", 1, state)
