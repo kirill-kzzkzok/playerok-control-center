@@ -348,6 +348,8 @@ class Synchronizer(PageScanner):
                             cycle["error_code"] = self.health.get("errors", {}).get(
                                 "orders", "ORDER_SYNC_FAILED"
                             )
+                            if cycle["error_code"] == "CONNECTION_NOT_VERIFIED":
+                                cycle["retry_delay"] = 30
                         cycle["retry_delay"] = max(
                             cycle["retry_delay"], self.health.get("orders_retry_after", 0)
                         )
@@ -355,11 +357,12 @@ class Synchronizer(PageScanner):
                     if failures:
                         next_full = (
                             time.monotonic()
-                            + max(
-                                min(900, 60 * 2 ** min(failures, 4)),
-                                self.health.get("orders_retry_after", 0),
+                            + cycle["retry_delay"]
+                            + (
+                                0
+                                if cycle.get("error_code") == "CONNECTION_NOT_VERIFIED"
+                                else random.uniform(0, 5)
                             )
-                            + random.uniform(0, 5)
                         )
                     else:
                         # Include read time in the healthy cadence. Positive

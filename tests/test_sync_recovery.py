@@ -1,4 +1,5 @@
 import json
+from itertools import pairwise
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -145,3 +146,61 @@ async def test_cursor_survives_database_close_and_reopen(tmp_path):
         assert len(store.rows("SELECT * FROM inbox")) == 2
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("failure", ["CONNECTION_NOT_VERIFIED", "RATE_LIMITED"])
+async def test_order_polling_recovers_from_identity_gate_without_losing_server_backoff(
+    store, monkeypatch, failure
+):
+    import asyncio
+
+    from app.database.store import now
+
+    clock = [0.0]
+    attempts = []
+    stop = asyncio.Event()
+    monkeypatch.setattr(
+        "app.workers.sync.time",
+        SimpleNamespace(monotonic=lambda: clock[0], time=lambda: clock[0]),
+    )
+
+    async def call(method, **kwargs):
+        if method == "get_deals":
+            attempts.append(clock[0])
+            if len(attempts) < 4:
+                raise APIError(failure, retry_after=120 if failure == "RATE_LIMITED" else None)
+            stop.set()
+            return {
+                "deals": [
+                    {
+                        "id": "paid-during-outage",
+                        "status": "PAID",
+                        "direction": "OUT",
+                        "created_at": now(),
+                        "has_problem": False,
+                        "is_automated": False,
+                        "item": {"id": "item", "price": 90},
+                        "chat": {"id": "chat"},
+                    }
+                ],
+                "page_info": {"has_next_page": False},
+            }
+        assert method == "get_chats"
+        return {"chats": [], "page_info": {"has_next_page": False}}
+
+    async def advance(tasks, *, timeout, return_when):
+        clock[0] += timeout
+        await asyncio.sleep(0)
+        return set(), set(tasks)
+
+    monkeypatch.setattr("app.workers.sync.asyncio.wait", advance)
+    sync = Synchronizer(store, SimpleNamespace(call=call), Orders(store))
+    await sync._run(stop)
+    assert len(attempts) == 4
+    intervals = [b - a for a, b in pairwise(attempts)]
+    if failure == "CONNECTION_NOT_VERIFIED":
+        assert max(intervals) <= 30
+    else:
+        assert min(intervals) >= 120
+    assert store.rows("SELECT status FROM orders WHERE id='paid-during-outage'") == [{"status": "PAID"}]
+    assert not store.rows("SELECT * FROM outbox")
