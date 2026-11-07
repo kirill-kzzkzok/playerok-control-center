@@ -100,13 +100,13 @@ class PlayerokConnection:
         ):
             return {**self.state, "busy": True}
         async with self.lock:
-            previous = (self.state["status"], self.state.get("reason"))
+            previous = self.store.setting("playerok:verification", {})
             self.last_started = time.monotonic()
             self.disable()
             self.viewer = None
             self.state.update(status="UNKNOWN", last_attempt=now(), reason="CHECK_IN_PROGRESS")
             self.store.set_setting("playerok:verification", self.state)
-            event("CHECK", "Проверка Playerok...")
+            event("CHECK", "Проверка Playerok...", level=10)
             try:
                 async with asyncio.timeout(25):
                     viewer = await self.api.call("get")
@@ -161,21 +161,30 @@ class PlayerokConnection:
                 self.api.account.verified_account_id = ident
                 self.api.account.writes_enabled = self.desired_writes
                 self.api.account.automation_enabled = self.desired_automation
+            reason = self.state.get("reason")
+            connected = self.state["status"] == "CONNECTED"
+            level = 10
+            if reason in TEMPORARY_READ_FAILURES:
+                failures = min(3, previous.get("temporary_failures", 0) + 1)
+                warned = bool(previous.get("temporary_warned"))
+                level = 30 if failures == 3 and not warned else 10
+                self.state.update(temporary_failures=failures, temporary_warned=warned or level == 30)
+            else:
+                self.state.pop("temporary_failures", None)
+                self.state.pop("temporary_warned", None)
+                if connected:
+                    level = 20 if previous.get("temporary_warned") else 10
+                elif reason != previous.get("reason"):
+                    level = 30
             self.store.set_setting("playerok:verification", self.state)
             self.last_started = time.monotonic()
-            self.store.set_setting(
-                "playerok:connection", "OK" if self.state["status"] == "CONNECTED" else self.state["reason"]
-            )
+            self.store.set_setting("playerok:connection", "OK" if connected else reason)
             event(
-                "SUCCESS" if self.state["status"] == "CONNECTED" else "WARNING",
-                "Playerok подключён · " + self.state.get("username", "") + "; ID аккаунта подтверждён"
-                if self.state["status"] == "CONNECTED"
-                else REASONS.get(self.state["reason"], REASONS["CHECK_FAILED"]),
-                level=10
-                if previous == (self.state["status"], self.state.get("reason"))
-                else 20
-                if self.state["status"] == "CONNECTED"
-                else 30,
+                "SUCCESS" if connected else "WARNING",
+                "Связь с Playerok восстановлена"
+                if connected
+                else REASONS.get(reason, REASONS["CHECK_FAILED"]),
+                level=level,
             )
             return dict(self.state)
 

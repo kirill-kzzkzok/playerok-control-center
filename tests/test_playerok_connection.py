@@ -291,3 +291,24 @@ async def test_server_blocked_account_is_disconnected_not_a_network_failure(rig)
     result = await PlayerokConnection(store, api).check()
     assert result["status"] == "DISCONNECTED" and result["reason"] == "ACCOUNT_UNAVAILABLE"
     assert not api.account.writes_enabled and not store.setting("playerok:bound_account_id")
+
+
+async def test_temporary_viewer_outage_logs_one_warning_and_one_recovery(rig, caplog):
+    import logging
+
+    store, api = rig
+    with caplog.at_level(logging.DEBUG, logger="pcc.shop"):
+        conn = PlayerokConnection(store, api)
+        await conn.check(cooldown=0)
+        caplog.clear()
+        for code in ("NETWORK_ERROR", "HTTP_503", "NETWORK_ERROR", "HTTP_504"):
+            api.error = APIError(code)
+            await conn.check(cooldown=0)
+        assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+        conn = PlayerokConnection(store, api)
+        await conn.check(cooldown=0)
+        assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+        api.error = None
+        await conn.check(cooldown=0)
+        await conn.check(cooldown=0)
+        assert len([r for r in caplog.records if r.levelno == logging.INFO]) == 1
