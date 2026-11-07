@@ -148,6 +148,8 @@ def error_text(error):
         }
         return escaped(reasons.get(error.code, gift_reason(error.code)), 800)
     if isinstance(error, APIError):
+        if error.code == "ITEM_READ_SUPERSEDED":
+            return "Товар изменился, пока Playerok отвечал. Бот обновит данные автоматически; устаревший ответ не применён."
         if getattr(error, "read_only", False) and error.code in {
             "NETWORK_ERROR",
             "HTTP_500",

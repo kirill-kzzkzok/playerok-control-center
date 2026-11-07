@@ -19,6 +19,10 @@ class ItemPanel:
         self.attachments = Attachments()
 
     async def owned(self, ident):
+        from app.services.product_readiness import ProductReadiness
+
+        readiness = ProductReadiness(self.store, self.api) if self.store else None
+        version = readiness.item_version(ident) if readiness else None
         item = await self.api.call("get_item", id=ident)
         if (
             not self.api.account.id
@@ -26,11 +30,13 @@ class ItemPanel:
             or (item.get("user") or {}).get("id") != self.api.account.id
         ):
             raise ValidationError("Владение лотом не подтверждено")
-        if self.store:
-            from app.services.product_readiness import ProductReadiness
-
+        if readiness:
+            if readiness.item_version(ident) != version:
+                raise readiness.superseded_read(ident)
             await LogicalProducts(self.store, self.api).refresh_title(item)
-            ProductReadiness(self.store, self.api).remember_item(item)
+            if readiness.remember_item(item, version=version) is False:
+                raise readiness.superseded_read(ident)
+            item = {**item, "_ui_read_version": version}
         return item
 
     def images(self, item):

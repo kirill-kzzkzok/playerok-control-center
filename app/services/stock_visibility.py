@@ -200,6 +200,10 @@ async def execute(executor, action):
         "republish_item" if resume else "discontinue_item",
         id=ident,
     )
+    from app.services.product_readiness import ProductReadiness
+
+    readiness = ProductReadiness(store, api)
+    read_version = readiness.item_version(ident)
     try:
         fresh = await executor.owned_item(ident)
         state_after = await api.call("get_item_visibility", id=ident)
@@ -215,9 +219,7 @@ async def execute(executor, action):
             raise ValueError
     except (APIError, ValueError, Conflict):
         raise APIError("VISIBILITY_RESULT_UNKNOWN", uncertain=True) from None
-    from app.services.product_readiness import ProductReadiness
-
-    ProductReadiness(store, api).remember_item(fresh)
+    readiness.remember_item(fresh, version=read_version)
     return {
         "remote_id": ident,
         "bot_paused": not resume,

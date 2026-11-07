@@ -127,11 +127,13 @@ class ProductReadiness:
                 "_ui_observed_at": product["verified_at"],
             }
         else:
+            read_version = self.item_version(ident)
             item = await self.api.call("get_item", id=ident)
             if item.get("id") != ident or (item.get("user") or {}).get("id") != account:
                 raise Conflict("Владелец объявления не подтверждён")
-            self.remember_item(item)
-            return item
+            if self.remember_item(item, version=read_version) is False:
+                raise self.superseded_read(ident, owner=owner)
+            return {**item, "_ui_read_version": read_version}
         if changed or not fresh(stamp, 30):
             prior = self.store.setting("readiness:" + ident, {})
             self.store.set_setting(
@@ -149,10 +151,22 @@ class ProductReadiness:
         )
         return hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
 
+    def superseded_read(self, ident, *, owner=None):
+        prior = self.store.setting("readiness:" + ident, {})
+        requested = {**prior, "ui_requested": True}
+        if owner is not None:
+            requested.update(ui_owner=owner, ui_account=self.api.account.id)
+        self.store.set_setting("readiness:" + ident, requested)
+        error = APIError("ITEM_READ_SUPERSEDED")
+        error.read_only, error.method = True, "get_item"
+        return error
+
     def remember_item(self, item, *, version=None):
         """Record a freshly owner-checked read for consistent UI projections."""
         if item.get("_ui_cached"):
             return  # Displaying stale data cannot renew its observation clock.
+        if version is None:
+            version = item.get("_ui_read_version")
         current_version = self.item_version(item["id"])
         if version is not None and version != current_version:
             return False
@@ -739,7 +753,9 @@ class ProductReadiness:
             try:
                 async with asyncio.timeout(30):
                     item = await self.automation.item(owner, ident)
-                    self.remember_item(item, version=version)
+                    if self.remember_item(item, version=version) is False:
+                        item = {**item, "_ui_cached": True, "_ui_stale": True}
+                        raise self.superseded_read(ident, owner=owner)
                     product = self.logical.listing(ident)
                     if product and product["error_code"] == "RELIST_CONFIRMATION_REQUIRED":
                         stage = "binding_scan"
@@ -798,6 +814,8 @@ class ProductReadiness:
                         "сервер или подключение не подтвердили данные. Сохранённые замеры не считаются свежим подтверждением.",
                     )
                 )
+                if code == "ITEM_READ_SUPERSEDED":
+                    error = "Товар изменился во время чтения. Бот повторит безопасную проверку автоматически."
                 if code in TEMPORARY_READ_FAILURES or code in {
                     "PROXY_UNAVAILABLE",
                     "MTPROTO_TIMEOUT",
