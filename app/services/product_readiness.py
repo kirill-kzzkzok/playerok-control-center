@@ -116,7 +116,14 @@ class ProductReadiness:
                             {k: request[k] for k in ("name", "description", "price") if k in request}
                         )
                     item.update(proven)
-            if product and product["state"] == "VERIFIED" and product["title_snapshot"]:
+            # A binding snapshot can carry a newer verified rename. It must
+            # never overwrite a more recent read showing a missing code.
+            if (
+                product
+                and product["state"] == "VERIFIED"
+                and product["title_snapshot"]
+                and (current is None or (product["verified_at"] or "") > (stamp or ""))
+            ):
                 item["name"] = product["title_snapshot"]
             item.update(_ui_cached=True, _ui_stale=changed or current is None, _ui_observed_at=stamp)
         elif product:
@@ -362,7 +369,12 @@ class ProductReadiness:
         if migrating:
             add(
                 "CODE_MIGRATION",
-                "Требуется подтверждённый перенос кода в название. Новая выдача остановлена.",
+                "Требуется подтверждённый перенос кода в название. "
+                + (
+                    "Действия бота после оплаты приостановлены."
+                    if mode == "playerok"
+                    else "Новая выдача остановлена."
+                ),
                 "🔐 Подтвердить новый код" if legacy else "🔄 Перенос кодов товаров",
                 "lp:item:" + ident if legacy else "codes:home",
             )

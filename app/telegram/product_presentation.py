@@ -18,10 +18,19 @@ STATES = {
     "OFF": "🔴 Выключено владельцем — выдача остановлена",
     "STOPPED": "⛔ Остановлено — требуется решение",
 }
+PLATFORM_STATES = {
+    "READY": "✅ Действия бота после оплаты готовы",
+    "OFF": "⏸ Действия бота после оплаты выключены",
+    "UNKNOWN": "🔄 Проверяем действия бота после оплаты",
+    "BLOCKED": "⚠️ Действия бота после оплаты ожидают устранения проблемы",
+    "STOPPED": "⛔ Действия бота после оплаты приостановлены",
+}
 
 
 def summary(result, *, compact=False):
     text = "Способ выдачи: " + MODES[result["mode"]] + "\n" + STATES[result["state"]]
+    if result["mode"] == "playerok":
+        text = "📦 Товар выдаёт Playerok\n" + PLATFORM_STATES[result["state"]]
     if result["mode"] == "manual":
         text = "Выдача: вручную\nАвтоматическая выдача не настроена."
     problems = result["problems"]
@@ -63,7 +72,10 @@ def summary(result, *, compact=False):
         text += "\nПолная проверка: " + (
             local_time(result["checked_at"]) if result["checked_at"] else "ещё не выполнялась"
         )
-        text += "\nПолучатель и текущий заказ проверяются отдельно перед каждой выдачей."
+        if result["mode"] == "playerok":
+            text += "\nБот проверяет заказ перед автоответом или отметкой выполнения."
+        else:
+            text += "\nПолучатель и текущий заказ проверяются отдельно перед каждой выдачей."
     return text
 
 
@@ -75,17 +87,17 @@ def brief(result):
     if mode == "playerok":
         text = "📦 Товар выдаёт Playerok"
         if state == "OFF":
-            return text + "\nСопровождающие действия бота выключены"
+            return text + "\n" + PLATFORM_STATES[state]
     else:
         text = "Выдача: " + MODES[mode]
     labels = {
-        "READY": "✅ Автовыдача работает" if mode != "playerok" else "✅ Сопровождение готово",
+        "READY": "✅ Автовыдача работает",
         "OFF": "⏸ Автовыдача выключена — отправка остановлена",
         "UNKNOWN": "🔄 Проверяем готовность",
         "BLOCKED": "⚠️ Автовыдача ожидает устранения проблемы",
         "STOPPED": "⛔ Автовыдача приостановлена",
     }
-    text += "\n" + labels[state]
+    text += "\n" + (PLATFORM_STATES if mode == "playerok" else labels)[state]
     problems = result["problems"]
     if any(p["code"] == "GIFT_IN_PROGRESS" for p in problems) and state == "UNKNOWN":
         text = "Выдача: " + MODES[mode] + "\n⏳ Отправляем подарок, следующие покупки ожидают"

@@ -882,6 +882,11 @@ class LogicalProducts:
         link = self.listing(item.get("id"))
         actual = critical(item)
         baseline = json.loads(product["baseline"])
+        code = marker(item["name"])
+        if code is None:
+            raise Conflict(f"В конце названия отсутствует код [{product['code']}]. Верните его в название.")
+        if code != product["code"]:
+            raise Conflict(f"В конце названия указан другой код. Верните [{product['code']}].")
         # For an already verified public Playerok-delivered listing, these
         # fields describe goods managed by Playerok. The bot only follows up
         # after a separately verified automated sale. Keep the original
@@ -918,12 +923,11 @@ class LogicalProducts:
             or link["id"] != product["id"]
             or not link["verified_at"]
             or link["config_revision"] != product["revision"]
-            or marker(item.get("name")) != product["code"]
             or marked_title(item["name"], product["code"]) != link["title_snapshot"]
             or check_description
             and digest(item["description"]) != link["description_sha256"]
         ):
-            raise Conflict("Код, описание или критичные параметры товара не подтверждены")
+            raise Conflict("Сохранённая привязка объявления не подтверждена для текущих настроек")
 
     def verify_title_change(self, product, item):
         """Narrow exception for an explicitly confirmed title, never delivery authority."""

@@ -121,6 +121,68 @@ async def test_platform_field_exception_does_not_adopt_conflicting_listing(shop,
     assert len(r.api.mutations) == 1 and not r.api.messages and not r.api.remote.payments
 
 
+async def test_platform_card_names_only_bot_pause_and_keeps_binding_reason(shop):
+    r = await shop()
+    await save(r)
+    await click(r, suffix=":bind")
+    await r.worker.once()
+    product = LogicalProducts(r.store, r.api).listing("lot")
+    LogicalProductWorker(r.store, r.api).problem(product, "RELIST_BINDING_CONFLICT", candidate_id="lot")
+    await r.ui.click("item:lot")
+    text = r.session.last_panel.text
+    assert "Товар выдаёт Playerok" in text
+    assert "Действия бота после оплаты приостановлены" in text
+    assert "Серверные данные объявления противоречат сохранённой привязке" in text
+    assert "конфликт постоянного кода" not in text
+    assert not r.api.messages and not r.api.remote.payments
+    await r.ui.click("lp:details:lot")
+    assert "Действия бота после оплаты приостановлены" in r.session.last_panel.text
+    await click(r, suffix=":stop")
+    assert "Остановить действия бота после оплаты?" in r.session.last_panel.text
+    await click(r, suffix=":stop_confirm")
+    assert "Действия бота после оплаты остановлены" in r.session.last_panel.text
+    assert len(r.api.mutations) == 1
+
+
+async def test_platform_card_names_missing_code_after_fresh_read(shop):
+    from app.services.product_readiness import ProductReadiness
+
+    r = await shop()
+    await save(r)
+    await click(r, suffix=":bind")
+    await r.worker.once()
+    product = LogicalProducts(r.store, r.api).listing("lot")
+    r.api.item["name"] = r.api.item["name"].rsplit(" [", 1)[0]
+    item = await r.api.call("get_item", id="lot")
+    ProductReadiness(r.store, r.api).remember_item(item)
+    await r.ui.click("item:lot")
+    assert f"В конце названия отсутствует код [{product['code']}]" in r.session.last_panel.text
+    assert not r.api.messages and not r.api.remote.payments
+
+
+async def test_unrelated_description_does_not_create_a_code_conflict(shop):
+    r = await shop()
+    await save(r)
+    await click(r, suffix=":bind")
+    await r.worker.once()
+    logical = LogicalProducts(r.store, r.api)
+    product = logical.listing("lot")
+    r.api.items["other"] = {
+        **deepcopy(r.api.item),
+        "id": "other",
+        "name": "Unrelated listing [malformed]",
+        "description": f"Reference number {product['code']}",
+    }
+    await LogicalProductWorker(r.store, r.api).once()
+    assert logical.listing("lot")["error_code"] is None
+    assert not logical.listing("other")
+    r.api.items["other"]["name"] = f"Other listing [{product['code']}] with a misplaced marker"
+    await LogicalProductWorker(r.store, r.api).once()
+    assert logical.listing("lot")["error_code"] == "CATALOG_MARKER_INVALID"
+    assert not logical.listing("other")
+    assert len(r.api.mutations) == 1 and not r.api.remote.payments
+
+
 async def test_edit_permission_revoked_after_confirmation_never_arms(shop):
     r = await shop()
     await save(r)

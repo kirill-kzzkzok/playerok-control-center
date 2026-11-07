@@ -17,12 +17,19 @@ from playerokapi.enums import ItemStatuses
 
 
 def require_listing_details(item):
-    try:
-        critical(item)
-        if not isinstance(item.get("description"), str):
-            raise TypeError
-    except (ValueError, KeyError, TypeError):
-        raise APIError("LOGICAL_CATALOG_ITEM_INCOMPLETE") from None
+    # The catalog classifies malformed markers per product after hydration.
+    # A full title with a malformed marker is still a complete server response.
+    if (
+        not isinstance(item.get("name"), str)
+        or not item["name"].strip()
+        or not isinstance(item.get("description"), str)
+        or item.get("price") is None
+        or any(
+            not isinstance(item.get(key), dict) or not item[key].get("id")
+            for key in ("user", "category", "obtaining_type")
+        )
+    ):
+        raise APIError("LOGICAL_CATALOG_ITEM_INCOMPLETE")
 
 
 class LogicalProductWorker:
@@ -194,6 +201,7 @@ class LogicalProductWorker:
         adopted = 0
         for product in products:
             candidates = []
+            valid_snapshot = []
             malformed = False
             for item in snapshot:
                 try:
@@ -201,12 +209,13 @@ class LogicalProductWorker:
                 except ValueError:
                     linked = self.service.listing(item["id"])
                     if (
-                        product["code"] in (item.get("description") or "")
+                        f"[{product['code']}]" in item["name"].upper()
                         or linked
                         and linked["id"] == product["id"]
                     ):
                         malformed = True
                     continue
+                valid_snapshot.append(item)
                 if code == product["code"]:
                     candidates.append(item)
             # A malformed code of this product can hide a duplicate marker.
@@ -253,7 +262,7 @@ class LogicalProductWorker:
                         product["owner_id"],
                         product["id"],
                         fresh,
-                        snapshot,
+                        valid_snapshot,
                         paid_order=paid_items.get(item["id"]),
                         source_order_id=source_order,
                         snapshot_item_ids=frozenset(snapshot_orders),

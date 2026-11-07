@@ -142,10 +142,10 @@ class LogicalProductsPanel:
             if item.get("_ui_stale"):
                 text += " · обновляются в фоне"
         from app.services.product_readiness import ProductReadiness
-        from app.telegram.product_presentation import STATES
+        from app.telegram.product_presentation import PLATFORM_STATES, STATES
 
         readiness = ProductReadiness(self.store, self.api).snapshot(item_id, item=item)
-        text += "\n" + STATES[readiness["state"]]
+        text += "\n" + (PLATFORM_STATES if readiness["mode"] == "playerok" else STATES)[readiness["state"]]
         rows = []
         if product:
             config = json.loads(product["config"])
@@ -216,7 +216,8 @@ class LogicalProductsPanel:
                 else bool(active_projections)
             )
             if product["enabled"] or active_projections:
-                rows.append([("⛔ Остановить выдачу товара", prefix + "stop")])
+                label = "⛔ Остановить действия бота" if platform else "⛔ Остановить выдачу товара"
+                rows.append([(label, prefix + "stop")])
             elif product["state"] == "VERIFIED" and product["handler"] != "manual" and not platform:
                 rows.append([("▶️ Включить выдачу", prefix + "arm")])
             rows += [
@@ -769,6 +770,7 @@ class LogicalProductsPanel:
             )
             return await self.card(owner, view["item"], state)
         if command in {"stop", "stop_confirm"}:
+            platform = json.loads(product["config"]).get("platform_only") is True
             links = self.store.rows(
                 "SELECT item_id FROM logical_listings WHERE product_id=? ORDER BY item_id", (product["id"],)
             )
@@ -787,7 +789,8 @@ class LogicalProductsPanel:
                 )
                 await state.update_data(logical_view=view)
                 return (
-                    f"Остановить выдачу? Затронуто объявлений: {len(links)}.\nУже начатые операции и неизвестные результаты сохранятся.",
+                    ("Остановить действия бота после оплаты?" if platform else "Остановить выдачу?")
+                    + f" Затронуто объявлений: {len(links)}.\nУже начатые операции и неизвестные результаты сохранятся.",
                     keyboard(
                         [[("⛔ Подтвердить остановку", "lp:" + view["nonce"] + ":stop_confirm")]],
                         back=("Отмена", "lp:item:" + view["item"]),
@@ -817,7 +820,12 @@ class LogicalProductsPanel:
                 return await self.callback(prefix + "configure", owner, state)
             await state.clear()
             return (
-                "⛔ Новые выдачи товара остановлены. Результаты уже отправленных запросов сохраняются; неизвестные операции не повторяются.",
+                (
+                    "⛔ Действия бота после оплаты остановлены."
+                    if platform
+                    else "⛔ Новые выдачи товара остановлены."
+                )
+                + " Результаты уже отправленных запросов сохраняются; неизвестные операции не повторяются.",
                 keyboard([[("К настройке товара", "lp:item:" + view["item"])]]),
             )
         if command == "detach":
