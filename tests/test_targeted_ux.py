@@ -259,7 +259,10 @@ async def test_legacy_server_change_after_preview_prevents_description_write(leg
 
 
 async def test_premium_history_is_distinct_from_new_quote_and_not_charged_per_sale(financial):
+    from app.services.financial_quotes import refresh_due_quote
+
     r = financial
+    r.store.set_setting("playerok:account_id", r.api.account.id)
     # Historical server receipt fixture, materialized through the same Store outcome
     # writer. This test exercises UI accounting, not payment execution.
     for key, status in [("confirmed-premium", "SUCCEEDED"), ("unknown-premium", "UNCERTAIN")]:
@@ -288,6 +291,10 @@ async def test_premium_history_is_distinct_from_new_quote_and_not_charged_per_sa
         return value
 
     r.api.call = changed
+    await r.ui.click("fin:itemrefresh:item")
+    assert "Снимок расчёта" in r.session.last_panel.text
+    assert "37.00 ₽" in r.session.last_panel.text
+    await refresh_due_quote(r.store, r.api)
     await r.ui.click("finance:item")
     assert "новый тариф: 41.00 ₽" in r.session.last_panel.text
     assert "39.00 ₽ разово" in r.session.last_panel.text

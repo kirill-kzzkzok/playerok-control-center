@@ -924,9 +924,10 @@ class ProductReadiness:
         while not stop.is_set():
             with worker_cycle(self.store, "readiness", 30, max_seconds=90) as cycle:
                 cycle["processed"] = await self.refresh_due()
-                await asyncio.gather(
-                    refresh_due_quote(self.store, self.api), refresh_due_catalog(self.store, self.api)
-                )
+                if not stop.is_set():
+                    await asyncio.gather(
+                        refresh_due_quote(self.store, self.api), refresh_due_catalog(self.store, self.api)
+                    )
             try:
                 await asyncio.wait_for(stop.wait(), 15)
             except TimeoutError:

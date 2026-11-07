@@ -27,7 +27,10 @@ def test_panel_protection_uses_covering_indexes(tmp_path):
 
 
 async def test_catalog_search_is_bounded_and_can_continue(tmp_path):
+    from app.services.item_filters import refresh_due_catalog
+
     store = Store(tmp_path / "search.sqlite")
+    store.set_setting("playerok:account_id", "seller")
     state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
     reads = []
 
@@ -35,15 +38,21 @@ async def test_catalog_search_is_bounded_and_can_continue(tmp_path):
         reads.append(kwargs)
         return {
             "items": [{"id": str(len(reads)), "name": "match", "status": "APPROVED", "price": 10}],
-            "page_info": {"has_next_page": True, "end_cursor": str(len(reads))},
+            "page_info": {"has_next_page": len(reads) < 4, "end_cursor": str(len(reads))},
         }
 
     api = SimpleNamespace(account=SimpleNamespace(id="seller"), call=AsyncMock(side_effect=call))
     _page, cache, count = await ListingsPanel(api, store).search_page({"search": "match"}, state, None)
-    assert len(reads) <= 3
-    assert not cache["complete"] and count == len(reads)
+    assert len(reads) == 1
+    assert not cache["complete"] and count == 1
     await ListingsPanel(api, store).search_page({"search": "match"}, state, None)
-    assert 3 < len(reads) <= 6
+    assert len(reads) == 1
+    for expected_reads in (2, 3, 4):
+        await refresh_due_catalog(store, api)
+        assert len(reads) == expected_reads
+    _page, cache, count = await ListingsPanel(api, store).search_page({"search": "match"}, state, None)
+    assert cache["complete"] and count == 4
+    assert [read["after_cursor"] for read in reads] == [None, "1", "2", "3"]
     assert not store.rows("SELECT * FROM outbox")
     store.close()
 

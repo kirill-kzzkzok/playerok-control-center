@@ -1,4 +1,5 @@
 import re
+from uuid import uuid4
 
 from app.services.finance import money
 from app.services.products import ValidationError
@@ -138,9 +139,9 @@ async def refresh_due_catalog(store, api):
         with store.transaction():
             if cache["complete"]:
                 previous = store.setting(key, {})
-                if previous.get("at") and previous["at"] != cache["at"]:
+                if previous.get("at"):
                     store.set_setting(key + ":previous", previous)
-                store.set_setting(key, {**cache, "background": True})
+                store.set_setting(key, {**cache, "background": True, "generation": uuid4().hex})
                 store.execute("DELETE FROM settings WHERE key=?", (pending_key,))
             else:
                 store.set_setting(pending_key, {"scan": cache, "due": 0})

@@ -89,15 +89,15 @@ class OrderFinance:
         for owner in owners:
             cost = None
             basis = self.store.setting(f"finance:{owner}:cost_basis:{scope}", {}) or {}
-            if basis.get("account") == self.account_id:
+            if isinstance(basis, dict) and basis.get("account") == self.account_id:
                 declared = parsed_time(basis.get("declared_at"))
                 value = amount_or_none(basis.get("cost"))
                 if declared and declared <= created and value is not None and value <= 1_000_000_000:
                     cost = str(value)
             zero = self.store.setting(f"finance:{owner}:other_basis:{scope}", {})
-            zero_at = parsed_time(zero.get("declared_at"))
+            zero_at = parsed_time(zero.get("declared_at")) if isinstance(zero, dict) else None
             other = (
-                "0.00" if zero.get("account") == self.account_id and zero_at and zero_at <= created else None
+                "0.00" if zero_at and zero.get("account") == self.account_id and zero_at <= created else None
             )
             if (cost is not None or other is not None) and created <= datetime.now(UTC) + timedelta(
                 minutes=5

@@ -18,7 +18,7 @@ class ListingsPanel:
         self.category_picker = ItemCategoryPicker(api)
 
     def request_catalog(self, account, *, scan=None):
-        if self.store and self.store.setting("playerok:account_id") == account:
+        if account and self.store and self.store.setting("playerok:account_id") == account:
             key = "ui:catalog:" + account + ":pending"
             if not self.store.setting(key):
                 self.store.set_setting(key, {"scan": scan or {}, "due": 0})
@@ -30,9 +30,9 @@ class ListingsPanel:
         key = "ui:catalog:" + account
         cache = self.store.setting(key, {}) if self.store else {}
         data = await state.get_data()
-        if cursor and data.get("list_catalog_at") != cache.get("at"):
+        if cursor and data.get("list_catalog_at") != cache.get("generation", cache.get("at")):
             previous = self.store.setting(key + ":previous", {}) if self.store else {}
-            if previous.get("at") != data.get("list_catalog_at"):
+            if previous.get("generation", previous.get("at")) != data.get("list_catalog_at"):
                 raise ValidationError("Снимок каталога обновился. Откройте список заново")
             cache = previous
         if not cache:
@@ -77,7 +77,7 @@ class ListingsPanel:
                 if (not filters.get("delivery") or item["id"] in delivery)
                 and (not filters.get("problems") or item["id"] in problems)
             ]
-        await state.update_data(list_catalog_at=cache["at"])
+        await state.update_data(list_catalog_at=cache.get("generation", cache["at"]))
         next_cursor = f"catalog:{offset + 10}" if len(matches) > offset + 10 else None
         return (
             {
@@ -117,7 +117,7 @@ class ListingsPanel:
             status = filters.get("status")
             extra = {"category_id": filters["category_id"]} if filters.get("category_id") else {}
             search = bool(filters.get("search") or filters.get("delivery") or filters.get("problems"))
-            account = getattr(self.api.account, "id", None)
+            account = getattr(getattr(self.api, "account", None), "id", None)
             bound = self.store.setting("playerok:account_id") if self.store else None
             if bound and account != bound:
                 raise ValidationError("Аккаунт Playerok изменился")
@@ -126,6 +126,7 @@ class ListingsPanel:
                 str(cursor).startswith("catalog:") if cursor else bool(snapshot.get("background"))
             )
             page_stamp = None
+            page_from_server = False
             if use_catalog:
                 page, search_cache, found = await self.search_page(filters, state, cursor)
             else:
@@ -149,6 +150,7 @@ class ListingsPanel:
                         ),
                         **extra,
                     )
+                    page_from_server = True
                     if page_key:
                         if (
                             self.api.account.id != account
@@ -181,8 +183,7 @@ class ListingsPanel:
             if (
                 self.store
                 and not cursor
-                and not page_stamp
-                and not use_catalog
+                and page_from_server
                 and filters.get("status") == "APPROVED"
                 and not any(value for key, value in filters.items() if key != "status")
             ):
