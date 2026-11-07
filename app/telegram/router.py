@@ -829,7 +829,16 @@ def create_router(store, api, products, synchronizer):
                 raise ValidationError("Кнопка устарела. Откройте главное меню.")
             await display(message, text, markup, not preserve)
         except (APIError, ValidationError, Conflict, ValueError) as error:
-            if isinstance(error, APIError) and getattr(error, "read_only", False):
+            if isinstance(error, APIError) and (
+                getattr(error, "read_only", False) or error.code == "CONNECTION_NOT_VERIFIED"
+            ):
+                if getattr(message, "proposed", None) is not None:
+                    committed = store.setting(navigator.key(message.bot, owner), {})
+                    if committed.get("route"):
+                        message.proposed = {
+                            key: committed.get(key) for key in ("route", "history", "context")
+                        }
+                        message.action = committed["route"]
                 await display(
                     message,
                     "❗ " + error_text(error) + "\n\n" + (message.html_text or "")[:2800],

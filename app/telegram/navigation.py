@@ -83,6 +83,7 @@ def safe_route(action):
             "ops:show:",
             "result:show:",
             "draft:",
+            "launch:open:",
             "tools:",
             "od:details:",
             "pf:card:",
@@ -399,7 +400,29 @@ class Navigation:
                 for button in row:
                     if button.callback_data == "nav:close":
                         button.callback_data = "nav:close:" + token
-            if view.get("history") and safe_route(action) and not action.startswith(("chat:", "chatpage:")):
+            draft_card = action.startswith("item:") and any(
+                (button.callback_data or "").startswith("launch:item:")
+                for row in markup.inline_keyboard
+                for button in row
+            )
+            has_return = any(
+                len(row) == 1
+                and (
+                    row[0].text == "⬅️ Вернуться"
+                    or (row[0].callback_data or "").startswith("nav:back:")
+                    or draft_card
+                    and row[0].callback_data == "items"
+                    or action.startswith("launch:open:")
+                    and row[0].text.startswith("⬅️ К товару")
+                )
+                for row in markup.inline_keyboard
+            )
+            if (
+                view.get("history")
+                and safe_route(action)
+                and not has_return
+                and not action.startswith(("chat:", "chatpage:"))
+            ):
                 # Dynamic parent follows the actual origin; explicit destination buttons remain explicit.
                 parent = view["history"][-1]["route"]
                 markup.inline_keyboard = [

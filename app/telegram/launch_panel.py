@@ -55,7 +55,17 @@ class LaunchPanel:
                 ),
             )
         preparation_error = None
-        if not self.api.account.writes_enabled:
+        connection = getattr(self.api, "connection", None)
+        verifying = (
+            connection is not None
+            and getattr(connection, "desired_writes", False)
+            and not getattr(self.api.account, "connection_verified", False)
+        )
+        if verifying:
+            preparation_error = (
+                "Бот перепроверяет Playerok. Публикация станет доступна после подтверждения аккаунта."
+            )
+        elif not self.api.account.writes_enabled:
             preparation_error = "Записи Playerok выключены. Публикация недоступна."
         elif self.service.wants_automation(value) and not self.api.account.automation_enabled:
             preparation_error = "Автоматизация выключена в подключении. Запуск выдачи недоступен."
@@ -63,7 +73,7 @@ class LaunchPanel:
             preparation_error = (
                 "Подарочная выдача остановлена владельцем. Возобновите её в настройках Telegram-подарков."
             )
-        if preparation_error and value.pop("ready", None):
+        if preparation_error and not verifying and value.pop("ready", None):
             self.store.update_draft(ident, owner, draft["revision"], value)
             draft = self.service.load(owner, ident)
         nonce = secrets.token_hex(6)
@@ -78,6 +88,51 @@ class LaunchPanel:
         can_launch = (
             not preparation_error and not needs_choice and (bool(ready) or value["publication"] == "DEFAULT")
         )
+        from app.services.inventory import Inventory
+        from app.services.logical_products import LogicalProducts
+
+        product = LogicalProducts(self.store, self.api).listing(item["id"])
+        stock = (
+            Inventory(self.store, self.api).counts(item["id"])["AVAILABLE"]
+            if value["mode"] == "stock"
+            else None
+        )
+        configured = (
+            product
+            and product["state"] == "VERIFIED"
+            and self.service.source_configuration(owner, item["id"]).get("delivery") == value["mode"]
+            and value["mode"] != "manual"
+            and (stock is None or stock > 0)
+        )
+        if configured:
+            placement = "Бесплатно" if value["publication"] == "DEFAULT" else "PREMIUM"
+            if ready and value["publication"] == "PREMIUM":
+                placement += f" · {ready['quote']['price']} ₽"
+            text = (
+                "🚦 <b>Запуск продаж</b>\n"
+                + escaped(item.get("name") or "Товар", 160)
+                + "\nВыдача: "
+                + MODES[value["mode"]]
+                + (f" · в наличии {stock} шт." if stock is not None else "")
+                + ("\nВыдача подготовлена." if ready else "\nНастройки выдачи сохранены.")
+                + " До публикации заказы не обрабатываются."
+            )
+            if preparation_error:
+                text += "\n⚠️ " + preparation_error
+            if advanced and value["publication"] == "PREMIUM":
+                return text, keyboard(
+                    [
+                        [("Автоподнятие: " + ("вкл" if value["promotion"] else "выкл"), p + "promotion")],
+                        [("Лимиты продвижения магазина", p + "shop")],
+                    ],
+                    back=("⬅️ К запуску", p + "basic"),
+                )
+            rows = [[("⭐ Размещение: " + placement, p + "quotes")]]
+            if value["publication"] == "PREMIUM":
+                rows.append([("Настройки автоподнятия", p + "advanced")])
+            if can_launch:
+                rows.append([("🚀 Опубликовать и запустить", p + "commit")])
+            return text, keyboard(rows, back=("⬅️ К товару", "item:" + value["launch_target"]))
         text = (
             "🚦 <b>Подготовка к публикации</b>\n"
             + escaped(item.get("name") or "Товар", 200)
@@ -108,7 +163,7 @@ class LaunchPanel:
             if value["mode"] == "stock" and value["data"]:
                 values, empty, duplicates = stock_values(value["data"])
                 text += f" · {len(values)} ед.; пустых строк {empty}, повторов {duplicates}"
-        if value["mode"] in {"text", "stock"}:
+        if value["mode"] in {"text", "stock"} and value["greeting"]:
             text += "\nПриветствие: " + ("задано" if value["greeting"] else "выключено")
         if value["mode"] in {"text", "stock", "gifts"}:
             text += "\nПосле выдачи: " + (
@@ -153,11 +208,7 @@ class LaunchPanel:
                 text += f"\nВсего: {sum(g['stars'] for g in ready['bundle'])} ⭐; аккаунт и поле получения проверены"
             if ready.get("units") is not None:
                 text += f"\nБудет доступно: {ready['units']} единиц"
-        rows = [
-            [("⚡ Способ выдачи", p + "modes")],
-            [("⭐ Тип публикации и тариф", p + "quotes")],
-            [("🔍 Обновить проверку запуска", p + "check")],
-        ]
+        rows = []
         if self.store.rows("SELECT 1 FROM logical_listings WHERE item_id=?", (item["id"],)):
             text += "\nПосле перевыставления: " + (
                 "настройки наследуют проверенные перевыставления с тем же кодом. Отдельные денежные разрешения и ограничения сохраняются."
@@ -175,7 +226,7 @@ class LaunchPanel:
                 ],
             )
         if value["mode"] in {"text", "stock"}:
-            rows.insert(1, [("🔐 Данные выдачи", p + "edit:data"), ("Приветствие", p + "edit:greeting")])
+            rows.insert(1, [("🔐 Данные выдачи", p + "edit:data")])
         if value["mode"] == "playerok":
             text += "\nСообщение после оплаты: " + (
                 "включено" if value.get("platform_reply") else "выключено"
@@ -213,8 +264,6 @@ class LaunchPanel:
                 [("🌍 Продвижение всего магазина", p + "shop")],
             )
             rows.insert(2, [("Платное автоподнятие: переключить", p + "promotion")])
-        if can_launch:
-            rows.append([("🚀 Опубликовать и запустить", p + "commit")])
         if needs_choice:
             text += "\n⚠️ Ранее выбрана автовыдача. Выберите способ выдачи заново; прежний ручной режим не подтверждён."
         if preparation_error:
@@ -228,9 +277,8 @@ class LaunchPanel:
             rows.append([("Дополнительные параметры", p + "advanced")])
             if can_launch:
                 rows.append([("🚀 Опубликовать и запустить", p + "commit")])
-        else:
-            rows.append([("⬅️ К запуску", p + "basic")])
-        return text, keyboard(rows, back=("⬅️ К товару", "item:" + value["launch_target"]))
+        back = ("⬅️ К запуску", p + "basic") if advanced else ("⬅️ К товару", "item:" + value["launch_target"])
+        return text, keyboard(rows, back=back)
 
     async def shop_settings(self, state, ident, *, group="general"):
         from app.telegram.promotions_panel import PromotionsPanel
@@ -253,6 +301,24 @@ class LaunchPanel:
                 ident = await self.service.open(owner, binding[0]["remote_id"], source["payload"])
             elif command == "item":
                 ident = await self.service.open(owner, ident)
+            elif command == "prepare":
+                ident = await self.service.open(owner, ident)
+                draft = self.service.load(owner, ident)
+                value = draft["payload"]
+                if draft["state"] != "DRAFT" or not self.service.wants_automation(value):
+                    raise Conflict("Сначала настройте выдачу для черновика")
+                if value["publication"] != "DEFAULT":
+                    return await self.show(owner, state, ident)
+                from app.services.sync_health import orders_sync_ready
+
+                if not (
+                    self.api.account.writes_enabled
+                    and self.api.account.automation_enabled
+                    and orders_sync_ready(self.store)
+                ):
+                    return await self.show(owner, state, ident)
+                value["ready"] = await self.service.check(owner, value)
+                self.store.update_draft(ident, owner, draft["revision"], value)
             elif command == "policy":
                 draft = self.service.load(owner, ident)
                 if draft["state"] == "DRAFT":

@@ -24,11 +24,14 @@ async def test_expired_action_returns_to_its_existing_safe_context(rig, context)
         await ui.click("pp:expired:save")
         assert "❗" in bot.session.last_panel.text
         assert context in buttons(bot.session.last_panel)
+        assert not any(key.startswith("nav:back:") for key in buttons(bot.session.last_panel))
         assert not any(
             k.startswith(("payp:commit:", "payp:approve:", "payp:confirmarm:"))
             for k in buttons(bot.session.last_panel)
         )
         assert not r.api.charges and not r.store.rows("SELECT * FROM outbox")
+        await ui.click(context)
+        assert "❗" not in bot.session.last_panel.text
     finally:
         await bot.session.close()
 

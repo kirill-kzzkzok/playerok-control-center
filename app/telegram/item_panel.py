@@ -180,7 +180,7 @@ class ItemPanel:
         title = "📦 <b>" + escaped(item.get("name") or "Товар", 200) + "</b>"
         if section == "card":
             from app.services.product_readiness import ProductReadiness
-            from app.telegram.product_presentation import brief
+            from app.telegram.product_presentation import MODES, brief
 
             readiness = ProductReadiness(self.store, self.api).snapshot(ident, item=item)
             text = (
@@ -188,7 +188,16 @@ class ItemPanel:
                 + f"\nЦена: {escaped(item.get('price'), 40)} ₽\nСтатус: "
                 + status(item.get("status"), "item")
             )
-            text += "\n" + brief(readiness)
+            if (
+                item.get("status") == "DRAFT"
+                and product
+                and product["state"] == "VERIFIED"
+                and readiness["mode"] not in {"manual", "unconfigured"}
+            ):
+                text += "\nВыдача: " + MODES[readiness["mode"]]
+                text += "\nНастройки сохранены. Заказы начнут обрабатываться после публикации и запуска."
+            else:
+                text += "\n" + brief(readiness)
             if product and readiness["mode"] == "telegram_gifts":
                 import json
 

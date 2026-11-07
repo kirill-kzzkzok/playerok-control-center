@@ -219,7 +219,13 @@ class LogicalProductsPanel:
                 label = "⛔ Остановить действия бота" if platform else "⛔ Остановить выдачу товара"
                 rows.append([(label, prefix + "stop")])
             elif product["state"] == "VERIFIED" and product["handler"] != "manual" and not platform:
-                rows.append([("▶️ Включить выдачу", prefix + "arm")])
+                rows.append(
+                    [
+                        ("▶️ Подготовить выдачу", "launch:prepare:" + item_id)
+                        if item.get("status") == "DRAFT"
+                        else ("▶️ Включить выдачу", prefix + "arm")
+                    ]
+                )
             rows += [
                 [("Связанные объявления", prefix + "links"), ("История заказов", prefix + "orders:0")],
                 [("🔄 Проверить перевыставление", prefix + "check")],
@@ -293,7 +299,8 @@ class LogicalProductsPanel:
                 [
                     (label, route)
                     for label, route in row
-                    if route.split(":")[-1] in keep or route.startswith(("stock:view:", "lp:method:"))
+                    if route.split(":")[-1] in keep
+                    or route.startswith(("stock:view:", "lp:method:", "launch:prepare:"))
                 ]
                 for row in rows
             ]
