@@ -43,7 +43,7 @@ async def test_replacement_edit_and_new_catalog_selection_preserve_identity_and_
     assert not product["enabled"] and product["verified_at"] is None
     assert r.api.item["name"].endswith("[" + old["code"] + "]")
     await r.ui.click("lp:item:lot")
-    await click(r, suffix=":configure")
+    await click(r, action="lp:method:lot")
     await click(r, suffix=":mode:telegram_gifts")
     await click(r, suffix=":giftclear")
     await click(r, suffix=":giftpick:bear")

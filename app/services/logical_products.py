@@ -319,6 +319,17 @@ class LogicalProducts:
         self.verify_listing(listing, item)
         return json.loads(listing["config"])["code"]
 
+    def legacy_pending(self, owner, item_id):
+        rows = self.store.rows(
+            "SELECT o.id AS order_id,j.state FROM orders o JOIN gift_listings g ON g.item_id=o.item_id "
+            "LEFT JOIN gift_jobs j ON j.order_id=o.id WHERE g.owner_id=? AND g.item_id=? "
+            "AND ((o.status='PAID' AND j.state IS NULL) OR (j.state IS NOT NULL AND NOT(j.state='SUCCEEDED' AND j.receipt IS NOT NULL))) "
+            "AND NOT(COALESCE(j.refund_state,'')='CONFIRMED' AND j.spent_at IS NULL) "
+            "ORDER BY o.created_at,o.id LIMIT 1",
+            (owner, item_id),
+        )
+        return rows[0] if rows else None
+
     def migrate_legacy(self, item_id=None):
         """Local projection only: leave old bindings/intents/permissions unchanged."""
         account = self.store.setting("playerok:account_id")

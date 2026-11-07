@@ -462,6 +462,9 @@ async def test_order_notes_search_stock_and_guarded_delivery_ui(tmp_path):
     state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=123, chat_id=7, user_id=7))
     try:
         await ui.message("/start")
+        from app.services.automation import Automation
+
+        await Automation(store, api).save(7, "item", 0, asdict(DeliveryPolicy(mode="stock")))
         await ui.click("order:order")
         await ui.click("od:problem:order")
         await ui.message("Local <note> for owner")

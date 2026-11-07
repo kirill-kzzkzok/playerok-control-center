@@ -74,14 +74,20 @@ async def test_status_only_verified_active_and_unknown_not_green(shop):
     h = shop
     h.api.item.update(status="APPROVED", priority="DEFAULT")
     await h.ui.message("/status")
-    assert "АКТИВНЫЕ ТОВАРЫ" in h.session.last_panel.text
-    assert "Telegram Heart" in h.session.last_panel.text
-    assert "не настроена" in h.session.last_panel.text.lower()
+    assert "Мои товары" in h.session.last_panel.text
+    assert "item:" + h.api.item["id"] in buttons(h.session.last_panel)
+    await h.ui.click("item:" + h.api.item["id"])
+    assert "Автовыдача работает" not in h.session.last_panel.text
     assert not h.store.rows("SELECT * FROM outbox")
     before = len([c for c in h.session.calls if c.__api_method__ == "sendMessage"])
     await h.ui.click("status:view:0")
     assert len([c for c in h.session.calls if c.__api_method__ == "sendMessage"]) == before
     h.api.item["status"] = "SOLD"
+    from app.services.item_filters import refresh_due_catalog
+    from app.telegram.listings_panel import ListingsPanel
+
+    ListingsPanel(h.api, h.store).request_catalog(h.api.account.id)
+    await refresh_due_catalog(h.store, h.api)
     await h.ui.click("status:view:0")
     assert "Telegram Heart" not in h.session.last_panel.text
 
@@ -142,8 +148,9 @@ async def test_status_blocked_stock_is_not_green_and_owner_only(shop):
         future_confirmed=True,
     )
     await h.ui.message("/status")
-    assert "Автовыдача ожидает устранения проблемы" in h.session.last_panel.text
     assert "item:" + h.api.item["id"] in buttons(h.session.last_panel)
+    await h.ui.click("item:" + h.api.item["id"])
+    assert "Автовыдача ожидает устранения проблемы" in h.session.last_panel.text
     assert "🟢 готово" not in h.session.last_panel.text
     count = len(h.session.calls)
     await h.ui.message("/status", owner=99)
@@ -161,7 +168,14 @@ async def test_status_pages_only_fetch_requested_page(shop):
         if method == "get_my_items":
             seen.append(kwargs.get("after_cursor"))
             return {
-                "items": [{"id": "page-2" if kwargs.get("after_cursor") else "page-1"}],
+                "items": [
+                    {
+                        **deepcopy(h.api.item),
+                        "id": "page-2" if kwargs.get("after_cursor") else "page-1",
+                        "name": "page-2" if kwargs.get("after_cursor") else "page-1",
+                        "status": "APPROVED",
+                    }
+                ],
                 "page_info": {
                     "has_next_page": not kwargs.get("after_cursor"),
                     "end_cursor": "next" if not kwargs.get("after_cursor") else None,
@@ -173,7 +187,9 @@ async def test_status_pages_only_fetch_requested_page(shop):
 
     h.api.call = call
     await h.ui.message("/status")
-    assert "status:view:1" in buttons(h.session.last_panel)
-    await h.ui.click("status:view:1")
-    assert "page-2" in h.session.last_panel.text and "page-1" not in h.session.last_panel.text
+    following = next(k for k in buttons(h.session.last_panel) if k.startswith("listnext:items:"))
+    await h.ui.click(following)
+    assert "item:page-2" in buttons(h.session.last_panel) and "item:page-1" not in buttons(
+        h.session.last_panel
+    )
     assert seen == [None, "next"]

@@ -37,8 +37,35 @@ class LogicalProductsPanel:
         if not self.store.rows("SELECT 1 FROM administrators WHERE user_id=?", (owner,)):
             raise Conflict("Доступ закрыт")
 
+    async def legacy_recovery(self, owner, item_id, state):
+        self.owner(owner)
+        product = self.service.listing(item_id)
+        if product:
+            return None
+        pending = self.service.legacy_pending(owner, item_id)
+        if not pending:
+            return None
+        gift = self.store.rows(
+            "SELECT bundle FROM gift_listings WHERE item_id=? AND owner_id=?", (item_id, owner)
+        )
+        bundle = json.loads(gift[0]["bundle"])
+        await state.clear()
+        return (
+            "🎁 Сохранённый пакет: "
+            + escaped(gift_summary(bundle), 300)
+            + f" · {sum(g['stars'] for g in bundle)} Stars."
+            + "\nЕсть незавершённый оплаченный заказ. Его сохранённая выдача и платёжные результаты не меняются. Перенос привязки доступен после завершения или сверки этого заказа.",
+            keyboard(
+                [[("Открыть незавершённый заказ", "order:" + pending["order_id"])]],
+                back=("К товару", "item:" + item_id),
+            ),
+        )
+
     async def card(self, owner, item_id, state, *, details=False):
         self.owner(owner)
+        recovery = await self.legacy_recovery(owner, item_id, state)
+        if recovery:
+            return recovery
         from app.services.product_readiness import ProductReadiness
 
         item = await ProductReadiness(self.store, self.api).ui_item(owner, item_id)
@@ -181,7 +208,7 @@ class LogicalProductsPanel:
                 "SELECT 1 FROM delivery_policies WHERE item_id=? AND json_extract(payload,'$.enabled')=1 LIMIT 1",
                 (item_id, item_id),
             )
-            if product["enabled"] or active_projection:
+            if product["enabled"] and active_projection:
                 rows.append([("⛔ Остановить выдачу товара", prefix + "stop")])
             elif (
                 (not product["enabled"] or not active_projection)
@@ -367,7 +394,7 @@ class LogicalProductsPanel:
                 rows = [[(label, prefix + "mode:" + handler)] for handler, label in MODES.items()]
                 rows.append([("📦 Выдаёт Playerok", "platform:item:" + parts[2])])
                 if product and product["enabled"]:
-                    rows.insert(0, [("⛔ Остановить текущую выдачу", prefix + "stop")])
+                    rows.insert(0, [("⛔ Остановить и сменить выдачу", prefix + "stop:configure")])
                 return (
                     "🔄 <b>Способ выдачи</b>\nДля изменения активной выдачи сначала остановите её. Смена на Playerok проверяется отдельно при сохранении.",
                     keyboard(rows, back=("⬅️ К товару", "item:" + parts[2])),

@@ -187,7 +187,7 @@ async def test_active_changed_product_error_has_direct_stop_then_configuration(s
     await click(r, suffix=":stop")
     await click(r, suffix=":stop_confirm")
     await click(r, action="lp:item:lot")
-    await click(r, suffix=":configure")
+    await click(r, action="lp:method:lot")
     assert any(k.endswith(":mode:telegram_gifts") for k in buttons(r.session.last_panel))
     assert not r.api.remote.payments and not r.api.messages
 

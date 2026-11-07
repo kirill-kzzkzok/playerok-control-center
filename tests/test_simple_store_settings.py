@@ -12,7 +12,7 @@ async def test_settings_has_six_clear_groups_and_technical_features_are_preserve
     reads = len(r.api.calls)
     await r.ui.click("settings")
     visible = buttons(r.session.last_panel)
-    expected = {"sp:connections", "providers", "gft:limits", "sp:notifications", "ar:menu", "tools"}
+    expected = {"sp:connections", "providers", "gft:limits:settings", "sp:notifications", "ar:menu", "tools"}
     assert {key for key in visible if not key.startswith("nav:") and key != "home"} == expected
     assert "Глобальные" in visible["ar:menu"]
     await r.ui.click("sp:connections")

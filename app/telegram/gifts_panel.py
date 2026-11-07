@@ -102,7 +102,13 @@ class GiftsPanel:
             ident = pending.get("item") if command == "confirmbind" else parts[2]
             logical = LogicalProducts(self.store, s.api)
             product = logical.listing(ident) if ident else None
+            if command == "confirmbind" and not product and not s.listing(ident):
+                await state.update_data(gift_bind=None)
+                raise Conflict("Старое подтверждение больше не действует. Откройте товар и его выдачу")
             if ident and not product and s.listing(ident):
+                recovery = await LogicalProductsPanel(self.store, s.api).legacy_recovery(owner, ident, state)
+                if recovery:
+                    return recovery
                 logical.authority(owner)
                 if s.listing(ident)["owner_id"] != owner:
                     raise Conflict("Настройки принадлежат другому владельцу")

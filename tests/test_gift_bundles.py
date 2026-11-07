@@ -67,6 +67,32 @@ async def setup(r, codes="bear, bear, rose", *, auto=False):
     return transport
 
 
+async def migrate_bundle_ui(r, ui):
+    from tests.test_ux_redesign import buttons
+
+    r.store.set_setting("playerok:account_id", r.api.account.id)
+    r.api.item.update(price=100, raw_price=100)
+
+    def update_item(id, **changes):
+        assert id == "item"
+        r.api.item.update(changes)
+        import copy
+
+        return copy.deepcopy(r.api.item)
+
+    r.api.account.update_item = update_item
+    await ui.click("gft:bind:item")
+    await ui.click(next(k for k in buttons(ui.bot.session.last_panel) if k.endswith(":migrate")))
+    preview = ui.bot.session.last_panel.text
+    await ui.click(
+        next(k for k in buttons(ui.bot.session.last_panel) if k.startswith("lp:") and k.endswith(":commit"))
+    )
+    await r.worker.once()
+    assert r.store.rows("SELECT state FROM logical_products") == [{"state": "VERIFIED"}]
+    assert not r.remote.payments
+    return preview
+
+
 @pytest.mark.parametrize(
     "codes", ["heart", "bear, bear", "bear, rose", "heart, bear, rose", "rose, rose, rose"]
 )
@@ -242,14 +268,15 @@ async def test_bundle_dispatcher_preview_restart_progress_and_partial_retry(rig)
     ui = Interaction(bot, dispatcher(r.store, r.api))
     state = FSMContext(SQLiteStorage(r.store), StorageKey(bot_id=123, chat_id=7, user_id=7))
     try:
-        await ui.click("gft:bind:item")
-        assert "Медведь ×2 — 30 Stars" in session.calls[-1].text and "55 Stars" in session.calls[-1].text
-        p = (await state.get_data())["gift_bind"]
+        from tests.test_ux_redesign import buttons
+
+        r.remote = t
+        preview = await migrate_bundle_ui(r, ui)
+        assert "Медведь ×2" in preview and "55" in preview
         ui.dp = dispatcher(r.store, r.api)
-        await ui.click("gft:confirmbind:" + p["nonce"])
         await ui.click("gft:enable:item")
-        p = (await state.get_data())["gift_arm"]
-        await ui.click(f"gft:arm:item:{p['nonce']}:0")
+        await ui.click(next(k for k in buttons(session.last_panel) if k.endswith(":arm")))
+        await ui.click(next(k for k in buttons(session.last_panel) if k.endswith(":enable:this")))
         Orders(r.store).ingest(r.api.add_order())
         r.service.discover()
         await r.worker.once()
@@ -509,15 +536,24 @@ async def test_binding_preview_rejects_changed_individual_prices_even_same_total
     session = TelegramSession()
     bot = Bot("123:" + "x" * 35, session=session)
     ui = Interaction(bot, dispatcher(r.store, r.api))
-    state = FSMContext(SQLiteStorage(r.store), StorageKey(bot_id=123, chat_id=7, user_id=7))
     try:
-        await ui.click("gft:bind:item")
-        pending = (await state.get_data())["gift_bind"]
+        from tests.test_ux_redesign import buttons
+
+        r.remote = t
+        preview = await migrate_bundle_ui(r, ui)
+        assert "40" in preview
+        original = r.service.listing("item")
         t.catalog["bear"].stars = 20
         t.catalog["rose"].stars = 20
-        await ui.click("gft:confirmbind:" + pending["nonce"])
+        await r.service.refresh()
+        await ui.click("gft:enable:item")
+        await ui.click(next(k for k in buttons(session.last_panel) if k.endswith(":arm")))
+        if any(k.endswith(":enable:this") for k in buttons(session.last_panel)):
+            await ui.click(next(k for k in buttons(session.last_panel) if k.endswith(":enable:this")))
         assert r.service.listing("item") == original
-        assert "Цена отдельного подарка изменилась" in session.calls[-1].text
+        assert not r.service.listing("item")["enabled"]
+        assert not t.payments
+        assert any(word in session.last_panel.text.lower() for word in ("цен", "стоим"))
     finally:
         await bot.session.close()
 
@@ -532,3 +568,45 @@ def test_repeated_codes_are_quantity():
 def test_bad_bundle_tags(tag):
     with pytest.raises(GiftValidationError):
         gift_code_from_description("Product\ngift: " + tag)
+
+
+@pytest.mark.parametrize("uncertain", [False, True])
+async def test_opening_legacy_settings_and_migration_preserve_a_live_paid_package(rig, uncertain):
+    from app.services.logical_products import LogicalProducts
+
+    r = rig
+    transport = await setup(r, "bear, rose")
+    r.store.set_setting("playerok:account_id", r.api.account.id)
+    if uncertain:
+        transport.fail_at = 0
+        await r.worker.once()
+        transport.pay_error = None
+        assert r.service.job("order")["state"] == "UNCERTAIN"
+    original = r.store.rows("SELECT * FROM gift_listings")
+    job = dict(r.service.job("order"))
+    bot = Bot("123:" + "x" * 35, session=TelegramSession())
+    ui = Interaction(bot, dispatcher(r.store, r.api))
+    try:
+        await ui.click("gft:bind:item")
+        assert not r.store.rows("SELECT * FROM logical_products")
+        assert "незаверш" in bot.session.last_panel.text.lower()
+        assert r.store.rows("SELECT * FROM gift_listings") == original
+        assert dict(r.service.job("order")) == job
+        await r.worker.once()
+        await r.worker.once()
+        assert r.service.job("order")["state"] == ("UNCERTAIN" if uncertain else "SUCCEEDED")
+        assert len(transport.payments) == (1 if uncertain else 2)
+        path = r.store.path
+        r.store.close()
+        r.store = Store(path)
+        r.service = GiftService(r.store, r.api, r.api.gift_settings, r.api.gift_sender)
+        r.worker = OutboxWorker(r.store, Executor(r.store, r.api, Products(r.store, r.api)))
+        assert LogicalProducts(r.store, r.api).migrate_legacy() == 1
+        assert LogicalProducts(r.store, r.api).migrate_legacy() == 0
+        await r.worker.once()
+        await r.worker.once()
+        assert r.service.job("order")["state"] == ("UNCERTAIN" if uncertain else "SUCCEEDED")
+        assert len(transport.payments) == (1 if uncertain else 2)
+        assert not await r.worker.once()
+    finally:
+        await bot.session.close()

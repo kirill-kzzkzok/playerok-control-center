@@ -93,9 +93,11 @@ async def test_status_reuses_recent_verified_details_without_extra_item_reads(sh
     assert [p["code"] for p in ProductReadiness(r.store, r.api).snapshot("lot")["problems"]] == [
         "STARS_LIMIT"
     ]
-    assert "Лимит Stars" in text
+    from tests.test_ux_redesign import buttons
+
+    assert "item:lot" in buttons(r.session.last_panel)
     assert "описания и параметров" not in text
-    assert [method for method, _ in r.api.calls] == ["get_my_items"]
+    assert not r.api.calls
     await r.ui.click("item:lot")
     assert "Лимит Stars" in r.session.last_panel.text
     assert not r.api.remote.payments and not r.api.messages

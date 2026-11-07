@@ -73,9 +73,9 @@ async def test_configure_blocked_enabled_product_offers_stop_and_continue(shop):
     r = await renamed(shop)
     original = LogicalProducts(r.store, r.api).listing("lot")
     await r.ui.click("lp:item:lot")
-    await click(r, suffix=":configure")
+    await click(r, action="lp:method:lot")
     assert not r.session.last_panel.text.startswith("❗")
-    await click(r, suffix=":stopconfigure")
+    await click(r, suffix=":stop:configure")
     await click(r, suffix=":stop_confirm")
     assert "Способ выдачи" in r.session.last_panel.text
     assert not LogicalProducts(r.store, r.api).listing("lot")["enabled"]

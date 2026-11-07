@@ -19,7 +19,7 @@ async def test_confirm_already_present_binding_never_rewrites_live_listing(shop,
     await stop(r)
     r.api.item["description"] = "Updated public description for the approved bear"
     await r.ui.click("lp:item:lot")
-    await click(r, suffix=":configure")
+    await click(r, action="lp:method:lot")
     await click(r, suffix=":mode:telegram_gifts")
     await click(r, suffix=":giftpick:bear")
     await click(r, suffix=":giftdone")

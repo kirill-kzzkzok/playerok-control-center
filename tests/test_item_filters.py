@@ -71,6 +71,10 @@ async def test_dispatcher_filters_compose_persist_restart_validate_and_reset(tmp
 
     async def call(method, **kwargs):
         calls.append((method, kwargs))
+        if method == "get_games":
+            return {"games": [{"id": "catalog-game", "name": "Game"}], "page_info": {"has_next_page": False}}
+        if method == "get_game":
+            return {"id": "catalog-game", "categories": [{"id": "category-id", "name": "Category"}]}
         selected = {s.name for s in kwargs.get("statuses") or []}
         return {
             "items": [item for item in items if not selected or item["status"] in selected],
@@ -109,6 +113,16 @@ async def test_dispatcher_filters_compose_persist_restart_validate_and_reset(tmp
         reads = len(calls)
         await ui.click("il:category")
         await ui.message("category-id")
+        for _ in range(2):
+            pick = next(
+                b.callback_data
+                for row in session.last_panel.reply_markup.inline_keyboard
+                for b in row
+                if b.callback_data.startswith("icp:") and ":pick:" in b.callback_data
+            )
+            await ui.click(pick)
+        assert [method for method, _ in calls[reads:]] == ["get_games", "get_game", "get_game"]
+        reads += 3
         assert item_buttons() == {"item:match", "item:draft-match"}
         assert len(calls) == reads
         await ui.click("itemfilter:DRAFT")
@@ -157,9 +171,9 @@ async def test_invalid_filter_input_preserves_active_state(tmp_path):
         await panel.filter_action("il:category", state)
         before = await state.get_data()
         with pytest.raises(ValidationError):
-            await panel.filter_message(SimpleNamespace(text="not valid"), state)
+            await panel.filter_message(SimpleNamespace(text=""), state)
         assert await state.get_data() == before
-        assert await state.get_state() == "itemlist:category"
+        assert await state.get_state() == "itemlist:category_search"
     finally:
         store.close()
 

@@ -200,7 +200,7 @@ async def test_visible_routes_execute_real_dispatcher_and_context_back(ux, tmp_p
         (["chats", "chat:chat"], "Переписка"),
         (["orders", "order:paid"], "Оплачен"),
         (["settings", "sp:connections", "gft:settings"], "Настройки подарков"),
-        (["settings", "gft:limits"], "лимит"),
+        (["settings", "gft:limits:settings"], "лимит"),
         (["settings", "sp:connections", "profile"], "Профиль"),
         (["settings", "providers"], "Способы вывода"),
         (["settings"], "Настройки"),

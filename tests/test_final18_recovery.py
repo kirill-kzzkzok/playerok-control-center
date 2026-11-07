@@ -48,6 +48,9 @@ async def test_sqlite_save_failure_preserves_input_policy_and_safe_parent(rig, m
 
         monkeypatch.setattr(PromotionSettings, "save", fail)
         await ui.message("50")
+        assert r.settings.get() == before
+        save = next(k for k in buttons(bot.session.last_panel) if k.endswith(":save"))
+        await ui.click(save)
         assert "Не удалось сохранить" in bot.session.last_panel.text
         assert "promotions" in buttons(bot.session.last_panel)
         assert r.settings.get() == before
