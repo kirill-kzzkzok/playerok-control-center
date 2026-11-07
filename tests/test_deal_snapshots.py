@@ -412,3 +412,32 @@ async def test_new_paid_private_snapshot_wakes_idle_binding_worker(case):
     finally:
         stop.set()
         await asyncio.wait_for(task, 3)
+
+
+@pytest.mark.parametrize("case", [False], indirect=True)
+async def test_paid_private_snapshot_missing_list_timestamp_reads_server_date(case):
+    r = case
+    r.partial["created_at"] = None
+    Orders(r.store).ingest(r.partial)
+    await LogicalProductWorker(r.store, r.api).once()
+    link = LogicalProducts(r.store, r.api).listing("deal-item-copy")
+    assert link and link["source_order_id"] == "snapshot-paid"
+    await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+    await r.worker.once()
+    await r.worker.once()
+    assert len(r.api.remote.payments) == 2
+
+
+@pytest.mark.parametrize("case", [False], indirect=True)
+async def test_paid_snapshot_timestamp_enrichment_wakes_once_without_new_paid_event(case):
+    r = case
+    worker = LogicalProductWorker(r.store, r.api)
+    r.partial["created_at"] = None
+    orders = Orders(r.store)
+    assert orders.ingest(r.partial)
+    worker.paid_wake.clear()
+    assert not orders.ingest(r.full)
+    assert worker.paid_wake.is_set()
+    worker.paid_wake.clear()
+    assert not orders.ingest(r.full)
+    assert not worker.paid_wake.is_set()

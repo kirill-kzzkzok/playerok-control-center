@@ -58,7 +58,7 @@ def order_event(order, stage):
     )
 
 
-def order_notice(order, stage, review=None):
+def order_notice(order, stage, review=None, *, delivered_before_refund=None):
     name = short_title((order.get("item") or {}).get("name"))
     if review:
         icon, title, detail = "⭐", f"Новый отзыв · {review['rating']}/5", str(review.get("text") or "")[:700]
@@ -71,6 +71,12 @@ def order_notice(order, stage, review=None):
         lines.append(escape(detail))
     if stage == "CONFIRMED" and amount(order):
         lines.append("💰 Сумма: " + amount(order))
+    if stage == "ROLLED_BACK" and delivered_before_refund is not None:
+        lines.append(
+            "🎁 Подарок был отправлен до возврата."
+            if delivered_before_refund
+            else "📦 Товар был выдан до возврата."
+        )
     return with_order_link("\n".join(lines), order["id"])
 
 

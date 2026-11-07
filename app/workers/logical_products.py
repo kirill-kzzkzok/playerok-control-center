@@ -5,7 +5,7 @@ import json
 import uuid
 from datetime import UTC, datetime
 
-from app.database.store import Conflict, encode, now
+from app.database.store import Conflict, encode, now, server_time
 from app.playerok.adapter import APIError
 from app.security.logging import event
 from app.services.automation import future_order
@@ -165,11 +165,16 @@ class LogicalProductWorker:
         for row in pending_orders:
             self.store.set_setting(key + ":paid_cursor", row["id"])
             local = json.loads(row["payload"])
-            if not any(future_order(local.get("created_at"), p["armed_at"]) for p in products):
+            observed_date = server_time(local.get("created_at"))
+            if observed_date and not any(future_order(observed_date, p["armed_at"]) for p in products):
                 continue
             try:
-                deal = await deal_details(self.api, row["id"], full_item=True)
+                deal = await deal_details(self.api, row["id"], full_item=True, need_created=True)
                 validate_candidate_order(deal, row["id"])
+                if not server_time(deal.get("created_at")):
+                    raise APIError("DELIVERY_SNAPSHOT_NOT_YET_AVAILABLE")
+                if not any(future_order(deal["created_at"], p["armed_at"]) for p in products):
+                    continue
                 if (deal.get("item") or {}).get("id") != row["item_id"]:
                     raise Conflict("Предмет сделки изменился")
                 try:
@@ -430,6 +435,8 @@ class LogicalProductWorker:
                     except APIError as error:
                         if error.code == "CONNECTION_NOT_VERIFIED":
                             cycle["retry_delay"] = 30
+                        if str(error.retry_after or "").isdigit():
+                            cycle["retry_delay"] = max(cycle["retry_delay"], int(error.retry_after))
                         raise
                 if prior.get("consecutive_failures", 0) >= 3:
                     event("INFO", "Сверка перевыставлений восстановлена", level=10)

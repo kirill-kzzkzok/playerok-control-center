@@ -178,8 +178,9 @@ class Orders:
             if added and status in STAGES and (status == "PAID" or previous):
                 order_event(order, status)
             wake = getattr(self.store, "logical_paid_wake", None)
+            date_confirmed = not previous_created and bool(observed_created)
             if (
-                added
+                (added or date_confirmed)
                 and status == "PAID"
                 and wake is not None
                 and not db.execute("SELECT 1 FROM logical_listings WHERE item_id=?", (item["id"],)).fetchone()

@@ -189,3 +189,13 @@ async def test_confirmed_delivery_updates_card_and_unknown_never_announces_succe
         if "Неопределённый результат операции" in (getattr(c, "text", "") or "")
     ]
     assert len(uncertain) == 1 and "/deal/unknown" in uncertain[0]
+    order = r.api.orders["success"]
+    order["status"] = "ROLLED_BACK"
+    local.ingest(order)
+    await notice.once()
+    refund = [c.text for c in r.session.calls if "Возврат подтверждён" in (getattr(c, "text", "") or "")]
+    assert len(refund) == 1 and "/deal/success" in refund[0]
+    expected = (
+        "Подарок был отправлен до возврата" if mode == "telegram_gifts" else "Товар был выдан до возврата"
+    )
+    assert expected in refund[0]

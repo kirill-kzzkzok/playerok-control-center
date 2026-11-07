@@ -203,7 +203,7 @@ class Notifications:
             "WHEN i.kind IN ('message','order','review','order_delivered','stock_empty','stock_low','promotion_error') THEN 2 ELSE 3 END"
         )
         events = self.store.rows(
-            "WITH eligible AS (SELECT i.*, "
+            "WITH eligible AS (SELECT i.*, i.rowid AS sequence, "
             + priority
             + " priority FROM inbox i WHERE i.processed_at IS NOT NULL "
             "AND EXISTS (SELECT 1 FROM administrators a WHERE NOT EXISTS "
@@ -297,7 +297,21 @@ class Notifications:
                 ):
                     self.close_pending(event["key"], "SKIPPED")
                     continue
-                text, markup = order_notice(json.loads(rows[0]["payload"]), stage, review), None
+                delivery = None
+                if stage == "ROLLED_BACK":
+                    proof = self.store.rows(
+                        "SELECT json_extract(payload,'$.gift') AS gift FROM inbox "
+                        "WHERE key=? AND kind='order_delivered' AND rowid<?",
+                        ("order-delivered:" + payload["id"], event["sequence"]),
+                    )
+                    if proof:
+                        delivery = bool(proof[0]["gift"])
+                text, markup = (
+                    order_notice(
+                        json.loads(rows[0]["payload"]), stage, review, delivered_before_refund=delivery
+                    ),
+                    None,
+                )
             elif event["kind"] == "worker_failed":
                 from app.workers.supervisor import CYCLE_LABELS
 
