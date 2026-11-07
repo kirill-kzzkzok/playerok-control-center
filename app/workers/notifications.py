@@ -53,6 +53,15 @@ class Notifications:
             await asyncio.gather(task, return_exceptions=True)
             self.store.chat_card_flush_task = None
 
+    def close_pending(self, event_key, status):
+        self.store.execute(
+            "INSERT INTO notifications(event_key,owner_id,status) "
+            "SELECT ?,user_id,? FROM administrators WHERE 1 "
+            "ON CONFLICT(event_key,owner_id) DO UPDATE SET status=excluded.status "
+            "WHERE notifications.status='PENDING'",
+            (event_key, status),
+        )
+
     async def once(self):
         if not self.store.rows("SELECT user_id FROM administrators LIMIT 1"):
             return
@@ -125,11 +134,7 @@ class Notifications:
                     or payload.get("deleted_at")
                     or (account_id and author.get("id") == account_id)
                 ):
-                    self.store.execute(
-                        "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) "
-                        "SELECT ?,user_id,'SKIPPED' FROM administrators",
-                        (event["key"],),
-                    )
+                    self.close_pending(event["key"], "SKIPPED")
                     continue
                 rows = self.store.rows("SELECT chat_id FROM chat_messages WHERE id=?", (payload["id"],))
                 chat_id = rows[0]["chat_id"] if rows else None
@@ -144,10 +149,7 @@ class Notifications:
                     )
                     and payload.get("text") != "{{DEAL_HAS_PROBLEM}}"
                 ):
-                    self.store.execute(
-                        "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT ?,user_id,'SKIPPED' FROM administrators",
-                        (event["key"],),
-                    )
+                    self.close_pending(event["key"], "SKIPPED")
                     continue
                 text, markup = message_notice(payload, chat_id)
                 if not event_label and chat_id:
@@ -176,10 +178,7 @@ class Notifications:
             elif event["kind"] == "order":
                 current = self.store.rows("SELECT status FROM orders WHERE id=?", (payload["id"],))
                 if not current or current[0]["status"] != payload["status"]:
-                    self.store.execute(
-                        "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT ?,user_id,'SKIPPED' FROM administrators",
-                        (event["key"],),
-                    )
+                    self.close_pending(event["key"], "SKIPPED")
                     continue
                 item = payload.get("item") or {}
                 text = f"🛒 <b>Заказ</b>\n{escape(item.get('name') or payload['id'])}\nСтатус: {escape(human_status(payload['status'], 'order'))}\nСумма: {item.get('price', '?')} ₽"
@@ -192,11 +191,7 @@ class Notifications:
                     if current.get("consecutive_failures", 0) < 3 or current.get("incident") != payload.get(
                         "incident"
                     ):
-                        self.store.execute(
-                            "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) "
-                            "SELECT ?,user_id,'RESOLVED' FROM administrators",
-                            (event["key"],),
-                        )
+                        self.close_pending(event["key"], "RESOLVED")
                         continue
                 text = (
                     (
@@ -225,10 +220,7 @@ class Notifications:
             elif event["kind"] == "promotion_error":
                 health = self.store.setting("promotions:health", {})
                 if health.get("status") != "DEGRADED" or health.get("incident") != payload.get("incident"):
-                    self.store.execute(
-                        "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT ?,user_id,'RESOLVED' FROM administrators",
-                        (event["key"],),
-                    )
+                    self.close_pending(event["key"], "RESOLVED")
                     continue
                 text = (
                     "⚠️ <b>Проверки автопродвижения повторно завершаются ошибкой</b>\n"
@@ -254,11 +246,7 @@ class Notifications:
                 if payload.get("snapshot_wait"):
                     ident = payload.get("order_id")
                     if ident and self.store.rows("SELECT 1 FROM orders WHERE id=?", (ident,)):
-                        self.store.execute(
-                            "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) "
-                            "SELECT ?,user_id,'RESOLVED' FROM administrators",
-                            (event["key"],),
-                        )
+                        self.close_pending(event["key"], "RESOLVED")
                         continue
                     text = (
                         "⏳ Playerok вернул неполные данные сделки. Бот повторит чтение автоматически. "
@@ -298,10 +286,7 @@ class Notifications:
                         for field in ("code", "candidate_id", "revision", "control_revision")
                     )
                 ):
-                    self.store.execute(
-                        "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT ?,user_id,'SKIPPED' FROM administrators",
-                        (event["key"],),
-                    )
+                    self.close_pending(event["key"], "SKIPPED")
                     continue
                 from app.services.logical_products import PROBLEMS
 
@@ -345,10 +330,7 @@ class Notifications:
                     or available != (1 if event["kind"] == "stock_low" else 0)
                     or (event["kind"] == "stock_low" and payload.get("generation") != generation)
                 ):
-                    self.store.execute(
-                        "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT ?,user_id,'SKIPPED' FROM administrators",
-                        (event["key"],),
-                    )
+                    self.close_pending(event["key"], "SKIPPED")
                     continue
                 if pause_operation:
                     text = (
@@ -368,10 +350,7 @@ class Notifications:
                     "SELECT 1 FROM orders WHERE id=? AND json_extract(payload,'$.has_problem')=1",
                     (payload["order_id"],),
                 ):
-                    self.store.execute(
-                        "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT ?,user_id,'SKIPPED' FROM administrators",
-                        (event["key"],),
-                    )
+                    self.close_pending(event["key"], "SKIPPED")
                     continue
                 text = "❗ <b>Проблема в сделке Playerok</b>\n" + escaped(payload["item_name"], 300)
                 markup = keyboard([[("Открыть заказ", "order:" + payload["order_id"])]])
@@ -384,10 +363,7 @@ class Notifications:
                             "UPDATE settings SET value='{}' WHERE key='gifts:preflight_incident' AND json_extract(value,'$.id')=?",
                             (payload.get("incident"),),
                         )
-                    self.store.execute(
-                        "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT ?,user_id,'SKIPPED' FROM administrators",
-                        (event["key"],),
-                    )
+                    self.close_pending(event["key"], "SKIPPED")
                     continue
                 text = (
                     "⚠️ <b>Выдача ожидает восстановления</b>\n"
@@ -400,10 +376,7 @@ class Notifications:
                 ident = payload["operation_id"]
                 current = self.store.rows("SELECT status FROM outbox WHERE id=?", (ident,))
                 if not current or current[0]["status"] != "UNCERTAIN":
-                    self.store.execute(
-                        "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) SELECT ?,user_id,'SKIPPED' FROM administrators",
-                        (event["key"],),
-                    )
+                    self.close_pending(event["key"], "SKIPPED")
                     continue
                 text = (
                     "⚠️ <b>Неопределённый результат операции</b>\n"
@@ -415,11 +388,7 @@ class Notifications:
                 )
                 markup = keyboard([[("🔎 Проверить операцию", "ops:show:" + ident)]])
             else:
-                self.store.execute(
-                    "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) "
-                    "SELECT ?,user_id,'SKIPPED' FROM administrators",
-                    (event["key"],),
-                )
+                self.close_pending(event["key"], "SKIPPED")
                 continue
             for owner in owners:
                 user = owner["user_id"]

@@ -95,6 +95,8 @@ async def test_obsolete_candidate_and_resolved_incident_are_not_sent_after_resta
     product = LogicalProducts(r.store, r.api).listing("lot")
     worker = LogicalProductWorker(r.store, r.api)
     worker.problem(product, "RELIST_BINDING_CONFLICT", candidate_id="old-candidate")
+    stale = r.store.rows("SELECT key FROM inbox WHERE kind='logical_product_blocked'")[0]["key"]
+    r.store.execute("INSERT INTO notifications(event_key,owner_id,status) VALUES(?,7,'PENDING')", (stale,))
     worker.problem(product, "RELIST_BINDING_CONFLICT", candidate_id="current-candidate")
     for _ in range(2):
         await Notifications(r.store, r.bot).once()
