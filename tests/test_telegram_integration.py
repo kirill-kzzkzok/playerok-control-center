@@ -146,14 +146,14 @@ class Interaction:
         )
         return await self.dp.feed_update(self.bot, Update(update_id=self.counter, message=message))
 
-    async def click(self, action, owner=7, *, message_id=None, reply_markup=None):
+    async def click(self, action, owner=7, *, message_id=None, reply_markup=None, text="Menu"):
         self.counter += 1
         panel = self.dp.storage.store.setting(f"navigation:{self.bot.id}:{owner}", {})
         message = Message(
             message_id=message_id or panel.get("id") or 1,
             date=datetime.now(UTC),
             chat=Chat(id=owner, type="private"),
-            text="Menu",
+            text=text,
             reply_markup=reply_markup,
             from_user=User(id=self.bot.id, first_name="Bot", is_bot=True),
         )

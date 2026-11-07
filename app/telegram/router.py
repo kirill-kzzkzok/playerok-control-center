@@ -169,15 +169,27 @@ def create_router(store, api, products, synchronizer):
     agreements_panel = AgreementsPanel(store, api, products)
 
     @router.message(CommandStart())
+    @router.message(Command("panel_reset"))
     async def start(message, state):
         data = await state.get_data()
         for key in ("order_search", "order_filter"):
             if key in data:
                 store.set_setting(f"ui:{message.from_user.id}:{key}", data[key])
         await state.clear()
-        panel = store.setting(navigator.key(message.bot, message.from_user.id), {})
+        key = navigator.key(message.bot, message.from_user.id)
+        panel = store.setting(key, {})
         if panel.get("sending") or panel.get("editing"):
             return await navigator.recovery_prompt(message, message.from_user.id)
+        if panel.get("id"):
+            store.set_setting(
+                key,
+                {
+                    "route": None,
+                    "history": [],
+                    "abandoned_id": panel["id"],
+                    "ui_retry_at": panel.get("ui_retry_at", 0),
+                },
+            )
         message, _ = await navigator.enter(message, message.from_user.id, state, "home")
         text, markup = home_panel.home(owner=message.from_user.id)
         await message.answer(text, reply_markup=markup)
@@ -216,19 +228,6 @@ def create_router(store, api, products, synchronizer):
             await ChatCards(store, message.bot).refresh(message.from_user.id, data.get("chat_card"))
             return
         await state.clear()
-
-    @router.message(Command("panel_reset"))
-    async def reset_navigation(message, state):
-        key = navigator.key(message.bot, message.from_user.id)
-        panel = store.setting(key, {})
-        await state.clear()  # Never restore a confirmation from the abandoned UI.
-        if panel.get("sending") or panel.get("editing"):
-            return await navigator.recovery_prompt(message, message.from_user.id)
-        if panel.get("id"):
-            store.set_setting(key, {"route": None, "history": [], "abandoned_id": panel["id"]})
-        message, _ = await navigator.enter(message, message.from_user.id, state, "home")
-        text, markup = home_panel.home(owner=message.from_user.id)
-        await message.answer(text, reply_markup=markup)
 
     @router.callback_query()
     async def callback(query, state, callback_ack=None):
@@ -839,9 +838,12 @@ def create_router(store, api, products, synchronizer):
                             key: committed.get(key) for key in ("route", "history", "context")
                         }
                         message.action = committed["route"]
+                original = message.html_text or ""
+                while original.startswith("❗ ") and "\n\n" in original:
+                    original = original.partition("\n\n")[2]
                 await display(
                     message,
-                    "❗ " + error_text(error) + "\n\n" + (message.html_text or "")[:2800],
+                    "❗ " + error_text(error) + "\n\n" + original[:2800],
                     message.reply_markup,
                     not preserve,
                 )

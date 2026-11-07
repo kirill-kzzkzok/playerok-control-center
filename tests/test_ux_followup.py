@@ -73,6 +73,38 @@ async def test_start_exposes_explicit_menu_recovery_after_unknown_send(ux):
     assert not ux.store.rows("SELECT * FROM outbox")
 
 
+async def test_start_recovers_visible_menu_even_when_home_text_has_not_changed(ux):
+    before = ux.store.setting("navigation:123:7")["id"]
+    sends = sum(call.__api_method__ == "sendMessage" for call in ux.session.calls)
+    await ux.ui.message("/start")
+    assert ux.store.setting("navigation:123:7")["id"] != before
+    assert sum(call.__api_method__ == "sendMessage" for call in ux.session.calls) == sends + 1
+    assert not ux.store.rows("SELECT * FROM outbox")
+
+
+async def test_repeated_failed_placement_read_keeps_one_error_banner(ux, monkeypatch):
+    from app.playerok.adapter import APIError
+    from app.telegram.launch_panel import LaunchPanel
+
+    async def failed_read(*args):
+        error = APIError("CONNECTION_NOT_VERIFIED")
+        error.read_only = True
+        raise error
+
+    monkeypatch.setattr(LaunchPanel, "callback", failed_read)
+    text = "Запуск продаж"
+    markup = ux.session.last_panel.reply_markup
+    for _ in range(3):
+        await ux.ui.click("launch:item:lot", reply_markup=markup, text=text)
+        text = ux.session.last_panel.text
+    assert text.count("Бот перепроверяет подключение Playerok") == 1
+    assert "Запуск продаж" in text
+    assert buttons(ux.session.last_panel) == {
+        button.callback_data: button.text for row in markup.inline_keyboard for button in row
+    }
+    assert not ux.store.rows("SELECT * FROM outbox")
+
+
 async def test_rank_proposes_related_offers_without_entering_numbers(ux):
     from app.database.store import now
     from app.services.orders import Orders
