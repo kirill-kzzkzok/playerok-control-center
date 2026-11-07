@@ -50,6 +50,18 @@ class Notifications:
         await ChatCards(self.store, self.bot).flush()
         await self.refresh_order_cards()
 
+    async def flush_receipts(self):
+        task = getattr(self.store, "operation_receipt_flush_task", None)
+        if task is None or task.done():
+            if task is not None:
+                self.store.operation_receipt_flush_task = None
+                await task
+            task = asyncio.create_task(
+                OperationResults(self.store).notify(self.bot), name="operation-receipts"
+            )
+            self.store.operation_receipt_flush_task = task
+        await asyncio.wait_for(asyncio.shield(task), timeout=2)
+
     async def refresh_order_cards(self):
         import hashlib
         from datetime import UTC, datetime
@@ -132,6 +144,11 @@ class Notifications:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             self.store.chat_card_flush_task = None
+        task = getattr(self.store, "operation_receipt_flush_task", None)
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            self.store.operation_receipt_flush_task = None
 
     def close_pending(self, event_key, status):
         self.store.execute(
@@ -482,6 +499,25 @@ class Notifications:
                 continue
             for owner in owners:
                 user = owner["user_id"]
+                if (
+                    event["kind"] == "operation_uncertain"
+                    and self.store.rows(
+                        "SELECT 1 FROM outbox o JOIN operation_receipts r ON r.operation_id=o.id "
+                        "WHERE o.id=? AND r.owner_id=? AND o.kind='premium_bump' AND json_extract(o.payload,'$.automatic')=1",
+                        (payload["operation_id"], user),
+                    )
+                    or event["kind"] == "promotion_guard"
+                    and self.store.rows(
+                        "SELECT 1 FROM promotion_policy p JOIN promotion_evaluations e ON e.policy_revision=p.revision "
+                        "WHERE p.actor=? AND e.item_id=? LIMIT 1",
+                        (user, payload.get("item_id")),
+                    )
+                ):
+                    self.store.execute(
+                        "INSERT OR IGNORE INTO notifications(event_key,owner_id,status) VALUES(?,?,'SUPPRESSED')",
+                        (event["key"], user),
+                    )
+                    continue
                 with self.store.transaction() as db:
                     invalid = False
                     try:
@@ -543,7 +579,7 @@ class Notifications:
         # existing PROCESSING -> UNCERTAIN contract; no business action repeats.
         for name, callback in (
             ("chats", self.flush_chats),
-            ("receipts", lambda: OperationResults(self.store).notify(self.bot)),
+            ("receipts", self.flush_receipts),
             ("edits", self.refresh_actions),
         ):
             try:
@@ -792,6 +828,14 @@ class Notifications:
         self.store.execute(
             "UPDATE operation_receipts SET notice_status='UNCERTAIN' WHERE notice_status='PROCESSING'"
         )
+        for row in self.store.rows(
+            "SELECT key,value FROM settings WHERE key LIKE 'notifications:promotion-summary:%'"
+        ):
+            value = json.loads(row["value"])
+            if value.get("status") == "PROCESSING":
+                self.store.set_setting(
+                    row["key"], {**value, "status": "SENT" if value.get("message_id") else "UNCERTAIN"}
+                )
         try:
             while not stop.is_set():
                 with worker_cycle(self.store, "notifications", 5):

@@ -1168,8 +1168,21 @@ class OutboxWorker:
             repeated_wait = outcome["status"] == "RETRYABLE_FAILED" and outcome["error_code"] == action.get(
                 "error_code"
             )
+            intent = self.store.setting("promotions:intent:" + action["id"], {})
+            checking_receipt = (
+                action["kind"] == "premium_bump"
+                and action["payload"].get("automatic")
+                and outcome["status"] == "UNCERTAIN"
+                and intent.get("automatic_receipt_check")
+                and (intent.get("mutation_returned") or "candidate_id" in intent)
+            )
             if outcome["status"] == "UNCERTAIN":
-                message = "⛔ Результат операции неизвестен. Повтор запрещён до сверки."
+                message = (
+                    "⏳ Проверяем результат поднятия — "
+                    + str(action.get("display_name") or action["target"])[:150]
+                    if checking_receipt
+                    else "⛔ Результат операции неизвестен. Повтор запрещён до сверки."
+                )
             elif action["kind"] == "stock_pause" and outcome["error_code"] == "VISIBILITY_NOT_AVAILABLE":
                 message = "📦 Пустой склад: Playerok не разрешил снять лот с продажи. Проверка продолжится автоматически."
             elif action["kind"].startswith("gift_"):
@@ -1190,11 +1203,11 @@ class OutboxWorker:
                 level=10,
             )
             event(
-                "WARNING",
+                "INFO" if checking_receipt else "WARNING",
                 message,
                 order=order_target,
                 operation=action["id"],
-                level=10 if repeated_wait else 30,
+                level=10 if repeated_wait else 20 if checking_receipt else 30,
             )
         elif action["kind"] == "fulfill":
             event(

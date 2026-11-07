@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from app.database.store import encode, now
 from app.playerok.adapter import APIError, validate_page
+from app.security.logging import event
 from app.services.products import ValidationError, priority_price_basis
 from app.services.promotion_settings import PromotionSettings
 
@@ -145,6 +146,15 @@ class PromotionWorker:
                         if len(choices) != 1:
                             raise ValidationError("Однозначная стоимость текущего типа размещения недоступна")
                         result = await self.settings.evaluate(actor, ident, choices[0]["id"])
+                        event(
+                            "INFO",
+                            f"🔍 Автоподнятие — {str(item.get('name') or ident)[:150]} — позиция {result['position'] or 'не подтверждена'}"
+                            + (
+                                " — условия выполнены"
+                                if result["would_allow"]
+                                else " — " + "; ".join(result["reasons"])
+                            ),
+                        )
                         from app.services.paid_promotions import PaidPromotions
 
                         paid = PaidPromotions(self.store, self.api)
@@ -165,7 +175,20 @@ class PromotionWorker:
                             interval = policy.night_interval_seconds if night else policy.interval_seconds
             except (APIError, ValueError, KeyError, TypeError) as caught:
                 error = caught.code if isinstance(caught, APIError) else "PROMOTION_CHECK_UNAVAILABLE"
-                if paid_attempt:
+                if paid_attempt and not (
+                    isinstance(caught, APIError)
+                    and not caught.uncertain
+                    and caught.code
+                    in {
+                        "NETWORK_ERROR",
+                        "HTTP_500",
+                        "HTTP_502",
+                        "HTTP_503",
+                        "HTTP_504",
+                        "RATE_LIMITED",
+                        "CONNECTION_NOT_VERIFIED",
+                    }
+                ):
                     self.store.execute(
                         "INSERT OR IGNORE INTO inbox(key,kind,payload,received_at,processed_at) VALUES(?,'promotion_guard',?,?,?)",
                         (
@@ -291,6 +314,6 @@ class PromotionWorker:
                     },
                 )
             try:
-                await asyncio.wait_for(stop.wait(), max(1, 30 - (time.monotonic() - started)))
+                await asyncio.wait_for(stop.wait(), max(1, 5 - (time.monotonic() - started)))
             except TimeoutError:
                 pass

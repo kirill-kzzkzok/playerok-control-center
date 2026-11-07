@@ -471,6 +471,11 @@ class Store:
             position = self.rows("SELECT position FROM gift_steps WHERE operation_id=?", (action["id"],))
             if not position or position[0]["position"] == 0:
                 event("ORDER", "⏳ Начал выдачу заказа", order=action["target"], operation=action["id"])
+        if first and first[0] is None and action.get("kind") == "premium_bump":
+            from app.security.logging import event
+
+            name = action.get("display_name") or action["target"]
+            event("INFO", f"🚀 Поднимаю лот — {str(name)[:150]}", operation=action["id"])
 
     def finish(self, ident, token, status, result=None, error=None, retry_after=None):
         if status not in {"SUCCEEDED", "RETRYABLE_FAILED", "UNCERTAIN", "PERMANENT_FAILED"}:

@@ -58,6 +58,8 @@ class PaidPromotions:
         if not a.id or (account_id and account_id != a.id):
             raise ValidationError("Аккаунт Playerok изменился; платная операция заблокирована")
         if not getattr(a, "writes_enabled", False):
+            if getattr(getattr(self.api, "connection", None), "awaiting_verification", False):
+                raise APIError("CONNECTION_NOT_VERIFIED")
             raise ValidationError("Записи Playerok выключены или аккаунт не подтверждён")
         if (
             getattr(a, "connection_verified", True) is not True
@@ -657,6 +659,7 @@ class PaidPromotions:
                 },
             )
         stage = "MUTATION_RESPONSE"
+        action["display_name"] = latest.get("name")
         try:
             self.diagnostic(action["id"], "MUTATION_RESPONSE")
             result = await executor.mutate(
@@ -812,7 +815,7 @@ class PaidPromotions:
 
             value = json.loads(action["payload"])
             try:
-                await Reconciliation(self.store, self.api).resolve(
+                result = await Reconciliation(self.store, self.api).resolve(
                     value["actor"],
                     action["id"],
                     signature(action),
@@ -823,9 +826,20 @@ class PaidPromotions:
             except (APIError, Conflict, ValueError, KeyError, TypeError) as error:
                 intent = self.store.setting(intent_key(action["id"]), {})
                 failures = intent.get("receipt_failures", 0) + 1
+                delay = min(300, 5 * 2 ** min(failures, 6))
+                if str(getattr(error, "retry_after", None) or "").isdigit():
+                    delay = max(delay, int(error.retry_after))
                 self.update_intent(
                     action["id"],
                     receipt_failures=failures,
-                    receipt_retry_at=time.time() + min(300, 30 * 2 ** min(failures, 4)),
+                    receipt_retry_at=time.time() + delay,
                 )
                 self.diagnostic(action["id"], "READBACK", error=error, candidate=intent.get("candidate_id"))
+            else:
+                from app.security.logging import event
+
+                event(
+                    "SUCCESS",
+                    f"🚀 Лот {str(result.get('name') or 'Товар')[:150]} успешно поднят — {result['paid_rub']} ₽",
+                    operation=action["id"],
+                )

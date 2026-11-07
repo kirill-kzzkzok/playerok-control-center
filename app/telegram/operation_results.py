@@ -3,7 +3,9 @@
 import asyncio
 import json
 import time
+from datetime import datetime
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import InlineKeyboardButton
@@ -358,12 +360,237 @@ class OperationResults:
             },
         )
 
+    def promotion_report(self, owner):
+        from app.services.premium_review import release_ids
+
+        released = release_ids(self.store)
+        policy_rows = self.store.rows(
+            "SELECT actor,revision,selection,payload FROM promotion_policy WHERE id=1"
+        )
+        operations = self.store.rows(
+            "SELECT * FROM (SELECT o.*,r.notice_status,row_number() OVER(PARTITION BY o.target ORDER BY o.created_at DESC,o.id DESC) AS latest "
+            "FROM outbox o JOIN operation_receipts r ON r.operation_id=o.id "
+            "WHERE r.owner_id=? AND o.kind='premium_bump' AND json_extract(o.payload,'$.automatic')=1 "
+            ") WHERE latest=1 ORDER BY created_at DESC,id DESC",
+            (owner,),
+        )
+        policy = policy_rows[0] if policy_rows and policy_rows[0]["actor"] == owner else None
+        selected = (
+            self.store.rows(
+                "SELECT s.item_id FROM promotion_schedule s LEFT JOIN promotion_targets t ON t.item_id=s.item_id "
+                "WHERE t.disposition='include' OR (?='all' AND coalesce(t.disposition,'default')!='exclude')",
+                (policy["selection"] if policy else "selected",),
+            )
+            if policy
+            else []
+        )
+        latest = {}
+        for row in operations:
+            latest.setdefault(row["target"], row)
+        targets = dict.fromkeys([row["item_id"] for row in selected])
+        for row in operations:
+            if (
+                row["notice_status"] == "PENDING"
+                or row["status"] == "UNCERTAIN"
+                and row["id"] not in released
+                or row["status"] == "PERMANENT_FAILED"
+                and row["started_at"] is not None
+            ):
+                targets.setdefault(row["target"], None)
+        if not targets:
+            return None
+        lines = ["🚀 <b>Автоподнятие</b>"]
+        if policy and not json.loads(policy["payload"])["enabled"]:
+            lines.append("Выключено")
+        links = []
+        times = []
+        seen = False
+        for target in targets:
+            evaluations = self.store.rows(
+                "SELECT result,checked_at FROM promotion_evaluations WHERE item_id=? AND policy_revision=? ORDER BY id DESC LIMIT 1",
+                (target, policy["revision"] if policy else -1),
+            )
+            evaluation = json.loads(evaluations[0]["result"]) if evaluations else {}
+            row = latest.get(target)
+            if row:
+                times.append(row["created_at"])
+            if evaluations:
+                times.append(evaluations[0]["checked_at"])
+            result = json.loads(row["result"] or "null") or {} if row else {}
+            name = evaluation.get("item_name") or result.get("name") or target
+            position = evaluation.get("position")
+            if (
+                row
+                and (
+                    row["status"] == "SUCCEEDED"
+                    or row["status"] == "PERMANENT_FAILED"
+                    and row["started_at"] is None
+                )
+                and row["notice_status"] != "PENDING"
+                and evaluations
+                and datetime.fromisoformat(evaluations[0]["checked_at"])
+                > datetime.fromisoformat(row["created_at"])
+            ):
+                row = None  # A later check reports current conditions, not an old purchase as a new one.
+            if row:
+                seen = True
+                if row["status"] == "SUCCEEDED":
+                    label = "✅ успешно · " + str(result.get("paid_rub", "?")) + " ₽"
+                elif row["status"] == "UNCERTAIN":
+                    intent = self.store.setting("promotions:intent:" + row["id"], {})
+                    acknowledged = intent.get("mutation_returned") or "candidate_id" in intent
+                    age = (
+                        time.time()
+                        - datetime.fromisoformat(row["started_at"] or row["created_at"]).timestamp()
+                    )
+                    label = (
+                        "⏳ проверяем списание"
+                        if acknowledged and age < 120
+                        else "⚠️ расход не подтверждён; повтор заблокирован"
+                    )
+                    if row["id"] in released:
+                        label = "расход учтён; исход неизвестен"
+                    elif not acknowledged or age >= 120:
+                        links.append([("Проверить платёж", "ops:show:" + row["id"])])
+                elif row["status"] in {"PENDING", "PROCESSING", "RETRYABLE_FAILED"}:
+                    label = "⏳ ожидает обработки"
+                elif row["started_at"] is not None:
+                    label = "повтор закрыт; исход платежа неизвестен"
+                else:
+                    label = "покупка не отправлена; условия изменились"
+            elif type(position) is int:
+                seen = True
+                reasons = evaluation.get("reasons") or []
+                label = f"позиция {position} · " + (
+                    "поднятие не требуется"
+                    if any(reason.startswith("Позиция в категории:") for reason in reasons)
+                    else "; ".join(reasons) or "ожидает покупки"
+                )
+            else:
+                label = "ожидает проверки"
+            schedule = self.store.rows(
+                "SELECT error_code,failures,checked_at FROM promotion_schedule WHERE item_id=?", (target,)
+            )
+            if (
+                schedule
+                and schedule[0]["error_code"]
+                and (
+                    row is None
+                    or row["status"] == "SUCCEEDED"
+                    and row["notice_status"] != "PENDING"
+                    and schedule[0]["checked_at"]
+                    and schedule[0]["checked_at"] > row["created_at"]
+                )
+            ):
+                seen = True
+                label = (
+                    "⚠️ проверка недоступна; бот повторит"
+                    if schedule[0]["failures"] >= 3
+                    else "проверка повторится автоматически"
+                )
+            line = escaped(name, 170) + " — " + escaped(label, 260)
+            if len(("\n".join(lines) + "\n" + line).encode("utf-16-le")) > 7200:
+                lines.append("Остальные товары — в автоподнятии магазина.")
+                break
+            lines.append(line)
+        if times:
+            at = max(datetime.fromisoformat(value) for value in times)
+            lines[0] += " · " + at.astimezone(ZoneInfo("Europe/Moscow")).strftime("%H:%M")
+        return ("\n".join(lines), keyboard(links, home=False), operations) if seen else None
+
+    async def notify_promotions(self, bot):
+        import hashlib
+
+        from app.services.notification_preferences import NotificationPreferences
+
+        for admin in self.store.rows("SELECT user_id FROM administrators"):
+            owner = admin["user_id"]
+            report = self.promotion_report(owner)
+            if report is None:
+                continue
+            text, markup, operations = report
+            critical = any(
+                row["status"] == "UNCERTAIN"
+                or row["status"] == "PERMANENT_FAILED"
+                and row["started_at"] is not None
+                for row in operations
+            )
+            if not critical:
+                try:
+                    if not NotificationPreferences(self.store).enabled(owner, "promotion_guard"):
+                        continue
+                except ValueError:
+                    continue
+            fingerprint = hashlib.sha256(
+                (
+                    text + markup.model_dump_json() + str([(row["id"], row["status"]) for row in operations])
+                ).encode()
+            ).hexdigest()
+            key = f"notifications:promotion-summary:{owner}"
+            with self.store.transaction():
+                state = self.store.setting(key, {})
+                if state.get("status") == "PROCESSING" or state.get("after", 0) > time.time():
+                    continue
+                if state.get("status") == "UNCERTAIN" and not state.get("message_id"):
+                    continue  # The first send might have arrived. Never send it again blindly.
+                if state.get("fingerprint") == fingerprint:
+                    continue
+                state = {**state, "status": "PROCESSING"}
+                self.store.set_setting(key, state)
+            try:
+                if state.get("message_id"):
+                    message_id = state["message_id"]
+                    from app.telegram.navigation_context import panel_key
+
+                    if not hasattr(self.store, "navigation_locks"):
+                        self.store.navigation_locks = {}
+                    key_panel = panel_key(self.store, bot.id, owner, message_id)
+                    lock = self.store.navigation_locks.setdefault((bot.id, owner, key_panel), asyncio.Lock())
+                    async with lock:
+                        panel = self.store.setting(panel_key(self.store, bot.id, owner, message_id), {})
+                        if panel.get("route") is not None or panel.get("closed"):
+                            self.store.set_setting(key, {"status": "SENT", "fingerprint": fingerprint})
+                            continue  # The owner turned this notice into an interactive card.
+                        await bot.edit_message_text(
+                            text, chat_id=owner, message_id=message_id, reply_markup=markup
+                        )
+                else:
+                    message = await bot.send_message(owner, text, reply_markup=markup)
+                    message_id = message.message_id
+            except asyncio.CancelledError:
+                self.store.set_setting(key, {**state, "status": "UNCERTAIN"})
+                raise
+            except Exception as error:  # noqa: BLE001 -- retain durable Telegram outcome without raw RPC data
+                code = telegram_error(error)
+                if state.get("message_id") and code == "MESSAGE_NOT_MODIFIED":
+                    message_id = state["message_id"]
+                else:
+                    outcome, _, delay = send_failure(error)
+                    if state.get("message_id") and code in TERMINAL_EDIT:
+                        state = {}  # Telegram proved this old message cannot be edited.
+                    self.store.set_setting(
+                        key, {**state, "status": outcome, "after": time.time() + max(delay, 5)}
+                    )
+                    continue
+            with self.store.transaction():
+                self.store.set_setting(
+                    key, {"status": "SENT", "message_id": message_id, "fingerprint": fingerprint}
+                )
+                for row in operations:
+                    self.store.execute(
+                        "UPDATE operation_receipts SET notice_status='SENT',telegram_message_id=? "
+                        "WHERE operation_id=? AND owner_id=? AND notice_status='PENDING'",
+                        (message_id, row["id"], owner),
+                    )
+
     async def notify(self, bot):
+        await self.notify_promotions(bot)
         rows = self.store.rows(
             "WITH eligible AS (SELECT r.operation_id,r.owner_id,r.view_message_id,r.view_token,o.created_at,"
             "CASE o.status WHEN 'UNCERTAIN' THEN 1 ELSE 2 END priority FROM operation_receipts r "
             "JOIN outbox o ON o.id=r.operation_id WHERE r.notice_status='PENDING' AND r.send_retry_at<=? "
             "AND NOT (o.status='SUCCEEDED' AND o.operation_key LIKE 'chat-card-reply:%') "
+            "AND NOT (o.kind='premium_bump' AND json_extract(o.payload,'$.automatic')=1) "
             "AND NOT EXISTS(SELECT 1 FROM notification_actions a WHERE a.operation_id=o.id) "
             "AND o.status IN ('SUCCEEDED','UNCERTAIN','PERMANENT_FAILED')), ranked AS "
             "(SELECT *,row_number() OVER(PARTITION BY priority ORDER BY created_at,operation_id,owner_id) position FROM eligible) "
