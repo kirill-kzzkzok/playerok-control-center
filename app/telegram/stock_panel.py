@@ -27,7 +27,7 @@ class StockPanel:
             note = "\n⛔ Выдача остановлена. Пополнение её не возобновляет."
             if counts["AVAILABLE"] and policy.enabled and policy.mode == "stock":
                 rows.append([("Подготовить возобновление", "stock:resume:" + ident)])
-        rows += [[("⚡ Настроить выдачу", "auto:item:" + ident)], [("📦 К товару", "item:" + ident)]]
+        rows += [[("⚡ Настроить выдачу", "iv:delivery:" + ident)], [("📦 К товару", "item:" + ident)]]
         return (
             "📚 <b>Склад · "
             + escaped(item.get("name") or ident, 150)
