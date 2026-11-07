@@ -1,6 +1,7 @@
 import re
 from uuid import uuid4
 
+from app.database.store import now
 from app.services.finance import money
 from app.services.products import ValidationError
 from playerokapi.enums import ItemStatuses
@@ -92,7 +93,6 @@ def catalog_item(value, account):
 
 
 async def catalog_page(api, account, cache):
-    from app.database.store import now
     from app.playerok.adapter import APIError, validate_page
 
     page = await api.call("get_my_items", count=24, after_cursor=cache.get("cursor"), statuses=None)
@@ -137,6 +137,14 @@ async def refresh_due_catalog(store, api):
         store.set_setting(pending_key, {**request, "failures": failures, "due": time.time() + delay})
     else:
         with store.transaction():
+            count = (
+                sum(
+                    item.get("status") == "APPROVED" and not item.get("deleted_at") for item in cache["items"]
+                )
+                if cache["complete"]
+                else None
+            )
+            store.set_setting("shop:active:" + account, {"count": count, "at": now()})
             if cache["complete"]:
                 previous = store.setting(key, {})
                 if previous.get("at"):

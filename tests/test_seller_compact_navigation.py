@@ -33,6 +33,8 @@ async def test_complete_active_list_updates_home_count_without_another_request(s
 
 
 async def test_partial_new_catalog_does_not_leave_an_old_total_on_home(shop):
+    from app.services.item_filters import refresh_due_catalog
+
     r = await shop()
     await r.ui.click("items")
     original = r.api.call
@@ -44,7 +46,10 @@ async def test_partial_new_catalog_does_not_leave_an_old_total_on_home(shop):
         return value
 
     r.api.call = partial
+    before = len(r.api.calls)
     await r.ui.click("items")
+    assert len(r.api.calls) == before
+    await refresh_due_catalog(r.store, r.api)
     reads = len(r.api.calls)
     await r.ui.click("home")
     assert "Активные товары: обновляем данные" in r.session.last_panel.text
@@ -52,6 +57,8 @@ async def test_partial_new_catalog_does_not_leave_an_old_total_on_home(shop):
 
 
 async def test_background_catalog_completion_restores_total_after_partial_ui_read(shop):
+    from app.services.item_filters import refresh_due_catalog
+
     r = await shop(gift=True)
     await setup_ui(r, "telegram_gifts", "gift: heart")
     original = r.api.call
@@ -63,7 +70,10 @@ async def test_background_catalog_completion_restores_total_after_partial_ui_rea
         return value
 
     r.api.call = partial
+    before = len(r.api.calls)
     await r.ui.click("items")
+    assert len(r.api.calls) == before
+    await refresh_due_catalog(r.store, r.api)
     await r.ui.click("home")
     assert "Активные товары: обновляем данные" in r.session.last_panel.text
     r.api.call = original
