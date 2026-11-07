@@ -532,6 +532,26 @@ class LogicalProductsPanel:
             return "⚡ <b>Способ выдачи</b>\nВыберите, что получит покупатель.", keyboard(
                 rows, back=("К товару", "lp:item:" + view["item"])
             )
+        if command == "toggleafter":
+            data = await state.get_data()
+            expected = data.get("logical_message_edit")
+            if (
+                not product
+                or product["handler"] not in {"unique_stock", "fixed_text"}
+                or await state.get_state() != "logical:notice"
+                or data.get("logical_message_field") != "after"
+                or not expected
+            ):
+                raise Conflict("Откройте сообщение после выдачи заново")
+            enabled = not json.loads(expected["config"]).get("after")
+            self.service.update_after(owner, view["item"], expected, "Спасибо за покупку!" if enabled else "")
+            text, markup = await self.card(owner, view["item"], state)
+            return (
+                ("✅ Сообщение включено" if enabled else "✅ Сообщение выключено")
+                + " для будущих покупок.\n\n"
+                + text,
+                markup,
+            )
         if command in {"editafter", "editgreeting"}:
             if not product or product["handler"] == "manual":
                 raise Conflict("Сначала подтвердите автоматический способ выдачи")
@@ -544,6 +564,17 @@ class LogicalProductsPanel:
                 logical_message_field="greeting" if command == "editgreeting" else "after",
             )
             await state.set_state("logical:notice")
+            rows = []
+            if command == "editafter" and product["handler"] in {"unique_stock", "fixed_text"}:
+                label = (
+                    "Выключить сообщение"
+                    if json.loads(product["config"]).get("after")
+                    else "Включить стандартное сообщение"
+                )
+                rows = [
+                    [(label, prefix + "toggleafter")],
+                    [("Приветствие перед выдачей", prefix + "editgreeting")],
+                ]
             return (
                 (
                     "Введите приветствие перед выдачей"
@@ -557,9 +588,7 @@ class LogicalProductsPanel:
                     else "Чтобы убрать сообщение, отправьте один дефис: —"
                 ),
                 keyboard(
-                    [[("Приветствие перед выдачей", prefix + "editgreeting")]]
-                    if command == "editafter" and product["handler"] in {"unique_stock", "fixed_text"}
-                    else [],
+                    rows,
                     back=("Отмена", "lp:item:" + view["item"]),
                 ),
             )

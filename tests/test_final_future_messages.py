@@ -248,3 +248,80 @@ async def test_after_update_cannot_restart_unknown_star_payment_after_restart(sh
     assert r.store.rows("SELECT revision,enabled,armed_at,bundle FROM gift_listings") == budget
     assert len(r.api.remote.payments) == 1
     assert not r.api.messages
+
+
+async def test_platform_reply_toggle_applies_to_future_orders_without_stopping_existing_chain(shop):
+    r = await shop()
+    await configure(r, reply=True, fulfill=False, text="Спасибо за оплату")
+    for ident in ("queued", "observed"):
+        order = r.api.order(ident)
+        order["is_automated"] = True
+        Orders(r.store).ingest(order)
+        if ident == "queued":
+            await EnrollmentWorker(r.store, r.api).once()
+            ChainWorker(r.store, r.api).once()
+
+    logical = LogicalProducts(r.store, r.api)
+    before = logical.listing("lot")
+    await r.ui.click("platform:item:lot")
+    await click(r, suffix=":reply")
+    await click(r, suffix=":save")
+    assert "Сохранено" in r.session.last_panel.text
+    after = logical.listing("lot")
+    assert all(after[key] == before[key] for key in ("enabled", "armed_at", "control_revision", "revision"))
+    order = r.api.order("new")
+    order["is_automated"] = True
+    Orders(r.store).ingest(order)
+    await EnrollmentWorker(r.store, r.api).once()
+    for _ in range(9):
+        ChainWorker(r.store, r.api).once()
+        await r.worker.once()
+    assert {m["chat_id"] for m in r.api.messages} == {"chat-queued", "chat-observed"}
+    await r.ui.click("platform:item:lot")
+    await click(r, suffix=":reply")
+    await click(r, suffix=":save")
+    assert "Сохранено" in r.session.last_panel.text
+    order = r.api.order("enabled-again")
+    order["is_automated"] = True
+    Orders(r.store).ingest(order)
+    await EnrollmentWorker(r.store, r.api).once()
+    for _ in range(5):
+        ChainWorker(r.store, r.api).once()
+        await r.worker.once()
+    assert [m["chat_id"] for m in r.api.messages].count("chat-enabled-again") == 1
+    assert len(r.api.messages) == 3
+    assert not r.api.remote.payments
+
+
+async def test_stock_message_can_be_disabled_and_reenabled_without_stopping_delivery(shop):
+    r = await shop()
+    await setup_ui(r, "unique_stock")
+    Orders(r.store).ingest(r.api.order("old"))
+    await EnrollmentWorker(r.store, r.api).once()
+    reserve = r.store.rows("SELECT * FROM reservations")
+    logical = LogicalProducts(r.store, r.api)
+    before = logical.listing("lot")
+
+    await r.ui.click("lp:messages:lot")
+    await click(r, suffix=":toggleafter")
+    assert json.loads(logical.listing("lot")["config"])["after"] == ""
+    assert r.store.rows("SELECT * FROM reservations") == reserve
+    Orders(r.store).ingest(r.api.order("off"))
+    await r.ui.click("lp:messages:lot")
+    await click(r, suffix=":toggleafter")
+    after = logical.listing("lot")
+    assert json.loads(after["config"])["after"] == "Спасибо за покупку!"
+    assert all(after[key] == before[key] for key in ("enabled", "armed_at", "control_revision", "revision"))
+    Orders(r.store).ingest(r.api.order("on"))
+    await EnrollmentWorker(r.store, r.api).once()
+    for _ in range(15):
+        ChainWorker(r.store, r.api).once()
+        await r.worker.once()
+    messages = {
+        name: [m["text"] for m in r.api.messages if m["chat_id"] == f"chat-{name}"]
+        for name in ("old", "off", "on")
+    }
+    assert len(messages["old"]) == len(messages["on"]) == 2
+    assert messages["old"][-1] == messages["on"][-1] == "Спасибо за покупку!"
+    assert len(messages["off"]) == 1 and "Спасибо за покупку!" not in messages["off"]
+    assert not r.api.remote.payments

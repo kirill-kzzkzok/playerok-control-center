@@ -87,6 +87,8 @@ def without_messages(config, *, completion=False):
     """Future messages/completion may vary; delivery content and STOP cannot."""
     value = json.loads(config) if isinstance(config, str) else config
     ignored = {"greeting", "after"}
+    if value.get("platform_only") is True:
+        ignored.add("paid_reply")
     if completion:
         ignored |= {"auto_fulfill", "mark_sent", "automatic_completion"}
     return {key: selected for key, selected in value.items() if key not in ignored}
@@ -96,13 +98,15 @@ class LogicalProducts:
     def __init__(self, store, api=None):
         self.store, self.api = store, api
 
-    def update_after(self, owner, item_id, expected, text, *, field="after"):
+    def update_after(self, owner, item_id, expected, text, *, field="after", paid_reply=None):
         """Local future-message edit; never arm, send, or rewrite an order snapshot."""
         from app.services.delivery_chains import DeliveryChains
 
         completion = field == "completion"
         text = text if completion and type(text) is bool else message_text(text)
-        if field not in {"greeting", "after", "completion"}:
+        if field not in {"greeting", "after", "completion"} or (
+            paid_reply is not None and (field != "greeting" or type(paid_reply) is not bool)
+        ):
             raise Conflict("Поле сообщения недоступно")
         with self.store.transaction() as db:
             product = self.listing(item_id)
@@ -119,6 +123,8 @@ class LogicalProducts:
                 product["state"] != "VERIFIED"
                 or not product["verified_at"]
                 or product["handler"] == "manual"
+                and not platform
+                or paid_reply is not None
                 and not platform
                 or platform
                 and field not in {"greeting", "completion"}
@@ -152,9 +158,21 @@ class LogicalProducts:
                             )
                             if platform:
                                 db.execute(
-                                    "UPDATE logical_order_scopes SET config=json_set(config,'$.greeting',?,'$.mark_sent',json(?)) WHERE order_id=?",
-                                    (policy.greeting, encode(policy.mark_sent), order["id"]),
+                                    "UPDATE logical_order_scopes SET config=json_set(config,'$.greeting',?,'$.mark_sent',json(?),'$.paid_reply',json(?)) WHERE order_id=?",
+                                    (
+                                        policy.greeting,
+                                        encode(policy.mark_sent),
+                                        encode(policy.paid_reply),
+                                        order["id"],
+                                    ),
                                 )
+                if paid_reply is not None and policy.mode == "playerok":
+                    db.execute(
+                        "UPDATE logical_order_scopes SET config=json_insert(config,'$.paid_reply',json(?)) "
+                        "WHERE product_id=? AND item_id=? AND config_revision=? "
+                        "AND NOT EXISTS(SELECT 1 FROM delivery_chains c WHERE c.order_id=logical_order_scopes.order_id)",
+                        (encode(policy.paid_reply), product["id"], target, product["revision"]),
+                    )
                 if policy.mode in {"text", "stock", "playerok"}:
                     DeliveryChains(self.store, self.api).freeze_stock_resume(db, target, revision, policy)
                 if completion:
@@ -190,6 +208,8 @@ class LogicalProducts:
                             updated["automatic_completion"] = text
                     else:
                         updated[field] = text
+                        if paid_reply is not None:
+                            updated["paid_reply"] = paid_reply
                     db.execute(
                         "UPDATE delivery_policies SET payload=?,revision=revision+? WHERE item_id=? AND revision=?",
                         (encode(updated), int(policy.mode != "playerok"), target, revision),

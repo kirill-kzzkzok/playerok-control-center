@@ -55,7 +55,17 @@ class PlatformOrders:
         self.logical = LogicalProducts(store, api)
 
     async def save(
-        self, owner, item_id, revision, *, reply, fulfill, text, switch_confirmed=False, expected_text=None
+        self,
+        owner,
+        item_id,
+        revision,
+        *,
+        reply,
+        fulfill,
+        text,
+        switch_confirmed=False,
+        expected_text=None,
+        expected_reply=None,
     ):
         account = self.logical.authority(owner)
         item = await self.policies.item(owner, item_id)
@@ -71,7 +81,7 @@ class PlatformOrders:
             account_id=account,
         )
         current, old_policy = self.policies.get(item_id)
-        if current != revision:
+        if current != revision or (expected_reply is not None and old_policy.paid_reply != expected_reply):
             raise Conflict("Настройки изменились. Откройте товар заново")
         product = self.logical.listing(item_id)
         if (
@@ -117,8 +127,19 @@ class PlatformOrders:
             product
             and json.loads(product["config"]).get("platform_only")
             and old_policy.mode == "playerok"
-            and {k: v for k, v in asdict(old_policy).items() if k != "greeting"}
-            == {k: v for k, v in asdict(policy).items() if k != "greeting"}
+            and (
+                old_policy == replace(policy, greeting=old_policy.greeting)
+                or product["enabled"]
+                and old_policy.enabled
+                and old_policy
+                == replace(
+                    policy,
+                    greeting=old_policy.greeting,
+                    paid_reply=old_policy.paid_reply,
+                    enabled=old_policy.enabled,
+                    auto_enroll=old_policy.auto_enroll,
+                )
+            )
         ):
             self.logical.verify_listing(product, item)
             with self.store.transaction():
@@ -130,7 +151,14 @@ class PlatformOrders:
                     and old_policy.greeting != expected_text
                 ):
                     raise Conflict("Сообщение изменилось во время ввода. Откройте настройки заново")
-                self.logical.update_after(owner, item_id, product, policy.greeting, field="greeting")
+                self.logical.update_after(
+                    owner,
+                    item_id,
+                    product,
+                    policy.greeting,
+                    field="greeting",
+                    paid_reply=policy.paid_reply if old_policy.paid_reply != policy.paid_reply else None,
+                )
             return {"saved": True}
         gift = self.store.rows("SELECT enabled FROM gift_listings WHERE item_id=?", (item_id,))
         replacing = bool(gift and gift[0]["enabled"]) or bool(
@@ -223,7 +251,7 @@ class PlatformOrders:
         if product and product["source_order_id"] and product["source_order_id"] != ident:
             raise Conflict("Купленный снимок товара относится к другому заказу")
         with self.store.transaction() as db:
-            self.authority(item, revision)
+            policy = self.authority(item, revision)
             row = db.execute("SELECT updated_at FROM delivery_policies WHERE item_id=?", (item,)).fetchone()
             if not future_order(order.get("created_at"), row[0]):
                 raise Conflict("Автоматизация разрешена только новым покупкам после сохранения")
@@ -238,6 +266,7 @@ class PlatformOrders:
                 policy = replace(
                     policy,
                     greeting=saved.get("greeting", policy.greeting),
+                    paid_reply=saved.get("paid_reply", policy.paid_reply),
                     mark_sent=saved.get("mark_sent", policy.mark_sent),
                 )
             if (
