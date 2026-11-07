@@ -318,7 +318,13 @@ class ListingsPanel:
             filters.update({key: not filters.get(key, False), "status": None, "archive": False})
             await state.update_data(item_filters=filters)
             return await self.show("items", state)
-        if action == "il:pickcategory":
+        if action == "il:clearcategory":
+            data = await state.get_data()
+            filters = checked_filters(data.get("item_filters", {}))
+            filters["category_id"] = None
+            await state.update_data(item_filters=filters)
+            return await self.category_picker.start(state)
+        if action in {"il:pickcategory", "il:category"}:
             return await self.category_picker.start(state)
         data = await state.get_data()
         if action == "il:remember":

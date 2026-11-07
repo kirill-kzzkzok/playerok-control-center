@@ -1,16 +1,13 @@
 """Small owner tools; all remote writes stay in the existing wizard/Outbox."""
 
-import asyncio
 import secrets
 
 from app.database.store import Conflict
-from app.playerok.adapter import validate_page
 from app.services.automation import Automation
 from app.services.logical_products import LogicalProducts
 from app.services.products import ValidationError, priority_price_basis
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
-from playerokapi.enums import ItemStatuses
 
 
 class QuickShopPanel:
@@ -113,69 +110,9 @@ class QuickShopPanel:
         return brief(ProductReadiness(self.store, self.api).snapshot(ident))
 
     async def status(self, owner, state, page=0):
-        LogicalProducts(self.store, self.api).authority(owner)
-        data = await state.get_data()
-        cursors = data.get("status_cursors", [None]) if page else [None]
-        if not 0 <= page < len(cursors):
-            raise ValidationError("Страница устарела. Отправьте /status заново")
-        result = await self.api.call(
-            "get_my_items", statuses=[ItemStatuses.APPROVED], count=5, after_cursor=cursors[page]
-        )
-        values, next_cursor = validate_page(result, "items", [c for c in cursors[:page] if c])
-        from app.services.product_readiness import ProductReadiness
-        from app.telegram.product_presentation import brief
+        from app.telegram.listings_panel import ListingsPanel
 
-        readiness = ProductReadiness(self.store, self.api)
-        lines, item_rows = [], []
-
-        async def complete(value):
-            if all(key in value for key in ("status", "name", "price", "user")):
-                return value
-            return await Automation(self.store, self.api).item(owner, value["id"])
-
-        items = await asyncio.gather(*(complete(v) for v in values[:5]))
-        for item in items:
-            if (item.get("user") or {}).get("id") != self.api.account.id:
-                continue
-            if item.get("status") != "APPROVED" or item.get("deleted_at"):
-                continue
-            priority = item.get("priority")
-            if isinstance(priority, dict):
-                priority = priority.get("type")
-            premium = "🟢" if priority == "PREMIUM" else "🔴" if priority == "DEFAULT" else "⚪ неизвестно"
-            lines.append(
-                str(len(lines) + 1)
-                + ". 📦 <b>"
-                + escaped(item.get("name"), 65)
-                + "</b> — "
-                + escaped(item.get("price"), 20)
-                + " ₽\n"
-                + brief(readiness.snapshot(item["id"], item=item))
-                + "\n⭐ PREMIUM: "
-                + premium
-            )
-            number = len(lines)
-            item_rows.append(
-                [
-                    (f"⚙️ {number}. Открыть товар", "item:" + item["id"]),
-                ]
-            )
-        title = (
-            "📊 <b>МОИ АКТИВНЫЕ ТОВАРЫ"
-            + (f" — {len(lines)}" if not next_cursor and page == 0 else f" · страница {page + 1}")
-            + "</b>"
-        )
-        if next_cursor:
-            cursors = cursors[: page + 1] + [next_cursor]
-        await state.update_data(status_cursors=cursors)
-        rows = []
-        if page:
-            rows.append(("← Назад", f"status:view:{page - 1}"))
-        if next_cursor:
-            rows.append(("Далее →", f"status:view:{page + 1}"))
-        return title + "\n\n" + (
-            "\n\n".join(lines) or "Подтверждённых активных товаров на этой странице нет."
-        ), keyboard(
-            item_rows + ([rows] if rows else []) + [[("🔄 Обновить", "status:view:0")]],
-            back=("⬅️ Мой магазин", "home"),
-        )
+        Automation(self.store, self.api).orders.owner(owner)
+        await state.clear()
+        await state.set_data({"item_filters": {"status": "APPROVED"}})
+        return await ListingsPanel(self.api, self.store).show("items", state)

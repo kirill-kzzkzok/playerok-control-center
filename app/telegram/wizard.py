@@ -510,7 +510,7 @@ class Wizard:
             text += "\nСохранённое значение: " + escaped(payload[step], 2300)
         if payload.get("return_preview") and step != "preview":
             rows.append([("Вернуться к превью", f"w:{nonce}:preview_return")])
-        rows.append([("💾 Сохранить и выйти", "home"), ("❌ Отмена", "cancel_wizard")])
+        rows.append([("💾 Сохранить и выйти", f"w:{nonce}:saveclose"), ("❌ Отмена", "cancel_wizard")])
         return text, keyboard(rows)
 
     async def callback(self, owner, state, callback, message=None):
@@ -521,6 +521,15 @@ class Wizard:
         draft = self.store.get_draft(data["draft_id"], owner)
         payload, action = draft["payload"], parts[2]
         step = payload["step"]
+        if action == "saveclose":
+            await state.clear()
+            return (
+                "💾 Черновик сохранён. Продолжить можно здесь или в разделе «Товары → Черновики».",
+                keyboard(
+                    [[("Продолжить создание", "draft:" + draft["id"])]],
+                    back=("К товарам", "itemfilter:DRAFT"),
+                ),
+            )
         removed_photo = None
         if (
             action == "conditions_done"

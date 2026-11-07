@@ -12,7 +12,6 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import BufferedInputFile
 
 from app.database.store import Conflict
-from app.localvpn import active_proxy
 from app.playerok.adapter import APIError
 from app.services.discounts import discount_plan
 from app.services.logical_products import LogicalProducts
@@ -470,7 +469,6 @@ def create_router(store, api, products, synchronizer):
                 rows.extend(
                     [
                         [("Название", "il:search"), ("Цена", "il:price"), ("Категория", "il:pickcategory")],
-                        [("Категория · ввод ID / снять", "il:category")],
                         [("PREMIUM", "il:PREMIUM"), ("Обычные", "il:DEFAULT"), ("Любой приоритет", "il:ALL")],
                         [("С настроенной выдачей", "il:delivery"), ("С проблемами", "il:problems")],
                         [("Сбросить фильтры", "il:reset"), ("К списку", "il:back")],
@@ -759,65 +757,40 @@ def create_router(store, api, products, synchronizer):
                 text += "\nЭто состояние обработчиков, а не разрешение выдачи или подтверждение отправки."
                 markup = keyboard([], back=("К вопросам", "attention"))
             elif action == "diagnostics":
-                health = store.setting("sync:health", {"status": "NOT_STARTED"})
-                actions = store.rows(
-                    "SELECT kind,status,error_code,created_at FROM outbox ORDER BY created_at DESC LIMIT 10"
-                )
-                text = (
-                    "🩺 <b>Диагностика</b>\nСверка: "
-                    + escape(str(health))
-                    + "\nWebSocket: "
-                    + escaped(store.setting("realtime:health", {"status": "NOT_STARTED"}), 400)
-                    + "\nАдресная сверка: "
-                    + escaped(store.setting("realtime:reconciliation", {}), 200)
-                    + "\nПланировщик продвижения: "
-                    + escaped(store.setting("promotions:health", {"status": "NOT_STARTED"}), 300)
-                    + "\nАвтоматическая регистрация заказов: "
-                    + escaped(store.setting("enrollment:health", {"status": "NOT_STARTED"}), 300)
-                    + "\nТранзакции: "
-                    + escaped(store.setting("transactions:health", {"status": "NOT_STARTED"}), 300)
-                    + "\nАвтоответы: "
-                    + escaped(store.setting("auto_replies:health", {"status": "NOT_STARTED"}), 200)
-                    + "\nНастройки уведомлений: "
-                    + escaped(store.setting(f"notifications:{owner}:preferences_error", "OK"), 100)
-                    + "\nХранение резервных копий: "
-                    + escaped(store.setting("backups:retention", {"status": "NOT_STARTED"}), 250)
-                    + "\n\n"
-                    + "\n".join(
-                        escape(f"{a['kind']}: {a['status']} · {a['error_code'] or ''}") for a in actions
-                    )
-                )
-                proxy = active_proxy.get()
-                if proxy is not None:
-                    status = proxy.state
-                    text += "\n\nPlayerok Proxy · SOCKS5 127.0.0.1:1080\n" + escaped(
-                        {
-                            key: status.get(key)
-                            for key in ("state", "serverId", "lastCheck", "error", "telegramAvailable")
-                        },
-                        700,
-                    )
-                workers = store.rows(
-                    "SELECT key,value FROM settings WHERE key LIKE 'runtime:worker:%' ORDER BY key"
-                )
-                if workers:
-                    text += "\n\nФоновые задачи — последние сохранённые состояния (не проверка API):"
-                    for worker in workers:
-                        value = json.loads(worker["value"])
-                        text += "\n" + escaped(
-                            worker["key"].removeprefix("runtime:worker:")
-                            + ": "
-                            + str(value.get("state"))
-                            + " · "
-                            + local_time(value.get("updated_at"))
-                            + " · сбоев: "
-                            + str(value.get("failures_total", 0)),
-                            180,
+                from app.telegram.presentation import connection_summary
+
+                text = "🩺 <b>Диагностика</b>\nPlayerok: " + connection_summary(api)
+                for label, key in (
+                    ("Сообщения", "realtime:health"),
+                    ("Заказы", "sync:health"),
+                    ("Выдача", "enrollment:health"),
+                    ("Продвижение", "promotions:health"),
+                ):
+                    health = store.setting(key, {})
+                    code = health.get("status") if isinstance(health, dict) else None
+                    description = "проверяются"
+                    if code in {"OK", "RUNNING", "CONNECTED"}:
+                        description = "работают"
+                    elif code in {"ERROR", "DEGRADED", "FAILED", "BLOCKED"}:
+                        description = "есть проблема, восстановление выполняется автоматически"
+                    if label == "Выдача":
+                        description = (
+                            "остановлена"
+                            if not api.account.automation_enabled
+                            else "проверки новых заказов: " + description
                         )
-                text += "\n\nUNCERTAIN не повторяется автоматически. Для разрешения сверяйте результат на Playerok."
+                    text += "\n" + label + ": " + description
+                workers = store.rows("SELECT value FROM settings WHERE key LIKE 'runtime:worker:%'")
+                failed = any(
+                    json.loads(row["value"]).get("state") in {"ERROR", "FAILED", "BACKOFF"} for row in workers
+                )
+                text += "\nФоновые задачи: " + (
+                    "есть проблема" if failed else "проверяются" if not workers else "работают"
+                )
                 markup = keyboard(
                     [
                         [("🔄 Сверить API", "sync")],
+                        [("Фоновые задачи", "diagnostics:workers")],
                         [("📄 Условия продавца · просмотр", "agv:list:0")],
                         [("⚠️ Неопределённые операции", "ops:list:UNCERTAIN:0")],
                         [("🧾 История операций", "ops:list:ALL:0")],

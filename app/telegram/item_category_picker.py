@@ -21,7 +21,12 @@ class ItemCategoryPicker:
         )
         await state.set_state("itemlist:category_search")
         return "📂 Введите название игры для поиска категории Playerok.", keyboard(
-            [[("Отмена", "itemfilters")]]
+            (
+                [[("Снять фильтр категории", "il:clearcategory")]]
+                if data.get("item_filters", {}).get("category_id")
+                else []
+            )
+            + [[("Отмена", "itemfilters")]]
         )
 
     async def search(self, text, state, *, view=None):
