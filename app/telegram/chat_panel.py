@@ -1,10 +1,11 @@
+import json
 import secrets
 
 from app.database.store import encode
 from app.playerok.adapter import validate_page
 from app.services.attachments import Attachments
 from app.services.products import ValidationError
-from app.telegram.formatting import escaped
+from app.telegram.formatting import escaped, html_pages
 from app.telegram.keyboards import keyboard
 from app.telegram.presentation import local_time
 
@@ -29,14 +30,62 @@ class ChatPanel:
                 index = view["index"] + 1
                 view["cursors"] = view["cursors"][:index] + [view["next"]]
                 view["index"] = index
+            elif parts[2] in {"textnext", "textprev"}:
+                view["text_page"] = view.get("text_page", 0) + (1 if parts[2] == "textnext" else -1)
             elif parts[2] == "newer" and view["index"] > 0:
                 view["index"] -= 1
             else:
                 raise ValidationError("Недоступная страница диалога")
+            if parts[2] in {"older", "newer"}:
+                view["text_page"] = 0
             ident = view["id"]
         cursor = view["cursors"][view["index"]]
-        page = await self.api.call("get_chat_messages", chat_id=ident, count=8, after_cursor=cursor)
-        messages, following = validate_page(page, "messages", view["cursors"][: view["index"] + 1])
+        account = getattr(getattr(self.api, "account", None), "id", None)
+        owner = state.key.user_id
+        local = bool(
+            account
+            and self.store.setting("playerok:account_id") == account
+            and (
+                view.get("local") is True
+                and view.get("account") == account
+                or self.store.rows(
+                    "SELECT 1 FROM chat_cards WHERE chat_id=? AND owner_id=? AND account_id=?",
+                    (ident, owner, account),
+                )
+                or self.store.rows(
+                    "SELECT 1 FROM orders WHERE json_extract(payload,'$.chat.id')=? AND json_extract(payload,'$.item.user.id')=?",
+                    (ident, account),
+                )
+            )
+        )
+        if "local" in view:
+            local = (
+                view["local"]
+                and view.get("account") == account
+                and self.store.setting("playerok:account_id") == account
+            )
+        view["local"] = bool(local)
+        if local:
+            if "anchor" not in view:
+                latest = self.store.rows(
+                    "SELECT COALESCE(created_at,'') AS at,id FROM chat_messages WHERE chat_id=? ORDER BY COALESCE(created_at,'') DESC,id DESC LIMIT 1",
+                    (ident,),
+                )
+                view["anchor"] = [latest[0]["at"], latest[0]["id"]] if latest else ["", ""]
+            saved = self.store.rows(
+                "SELECT payload FROM chat_messages WHERE chat_id=? AND (COALESCE(created_at,''),id)<=(?,?) ORDER BY COALESCE(created_at,'') DESC,id DESC LIMIT 9 OFFSET ?",
+                (ident, *view["anchor"], view["index"] * 8),
+            )
+            messages = [json.loads(row["payload"]) for row in saved[:8]]
+            following = str(view["index"] + 1) if len(saved) > 8 else None
+            from app.workers.sync import request_sync
+
+            request_sync(self.store, "chat", ident)
+        else:
+            page = await self.api.call("get_chat_messages", chat_id=ident, count=8, after_cursor=cursor)
+            messages, following = validate_page(page, "messages", view["cursors"][: view["index"] + 1])
+        if account:
+            view["account"] = account
         for message in messages:
             # Browsing old history is not an incoming event and must not notify owners.
             self.store.execute(
@@ -66,7 +115,7 @@ class ChatPanel:
         blocks = []
         for message in reversed(messages):
             user = message.get("user") or {}
-            author = escaped(user.get("username") or "Событие", 60)
+            author = str(user.get("username") or "Событие")[:60]
             date = local_time(message.get("created_at"))
             from app.services.chat_events import system_event
 
@@ -77,7 +126,12 @@ class ChatPanel:
             )
             images = message.get("images") or []
             attachment = f"\n📷 Изображений: {len(images)}" if images else ""
-            blocks.append(f"<b>{author}</b> · {date}\n{escaped(text, 290)}{attachment}")
+            blocks.append(f"{author} · {date}\n{text}{attachment}")
+        pages = html_pages("\n\n".join(blocks) if blocks else "Сообщений нет.", 2800)
+        text_page = view.get("text_page", 0)
+        if not 0 <= text_page < len(pages):
+            raise ValidationError("Страница текста устарела. Откройте диалог заново")
+        await state.update_data(chat_view=view)
         rows = [[("✉️ Ответить", "compose:" + ident), ("✖️ Закрыть", "chatclose:" + ident)]]
         navigation = []
         if following:
@@ -86,11 +140,31 @@ class ChatPanel:
             navigation.append(("Новые сообщения", f"chatpage:{view['nonce']}:newer"))
         if navigation:
             rows.append(navigation)
+        if len(pages) > 1:
+            text_nav = []
+            if text_page:
+                text_nav.append(("← Текст", f"chatpage:{view['nonce']}:textprev"))
+            if text_page + 1 < len(pages):
+                text_nav.append(("Текст →", f"chatpage:{view['nonce']}:textnext"))
+            rows.append(text_nav)
         if media:
             rows.append([("📷 Открыть вложения", f"chatmedia:{view['nonce']}:0")])
+        freshness = ""
+        if local:
+            synced = self.store.rows("SELECT last_synced_at FROM sync_chats WHERE id=?", (ident,))
+            freshness = (
+                "Сохранённая история. Последняя сверка: "
+                + (
+                    local_time(synced[0]["last_synced_at"])
+                    if synced and synced[0]["last_synced_at"]
+                    else "ожидается"
+                )
+                + ". Обновляется в фоне.\n\n"
+            )
         return (
             f"💬 <b>Переписка с покупателем</b>\n👤 {escaped(peer_name, 80)}\nстраница {view['index'] + 1}\n\n"
-            + ("\n\n".join(blocks) if blocks else "Сообщений нет."),
+            + freshness
+            + pages[text_page],
             keyboard(rows, home=False),
         )
 

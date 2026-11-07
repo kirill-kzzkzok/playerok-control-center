@@ -202,7 +202,9 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
         dispatcher.callback_query.outer_middleware(middleware)
         dispatcher.include_router(create_router(store, api, products, sync))
         tasks.append(supervisor.start("upload-cleanup", lambda: UploadCleanup(store).run(stop), stop))
-        tasks.append(supervisor.start("notifications", lambda: Notifications(store, bot).run(stop), stop))
+        tasks.append(
+            supervisor.start("notifications", lambda: Notifications(store, bot, api).run(stop), stop)
+        )
         tasks.append(
             supervisor.start(
                 "account-transactions",

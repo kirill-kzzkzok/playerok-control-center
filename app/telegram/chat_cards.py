@@ -332,9 +332,9 @@ class ChatCards:
         from app.telegram.storage import replace_context
 
         row = await self.observe(token, owner, message_id)
-        chat = await api.call("get_chat", chat_id=row["chat_id"])
-        if chat.get("id") != row["chat_id"] or chat.get("is_texting_allowed") is not True:
-            raise Conflict("Playerok не разрешает ответ в этом диалоге")
+        if api.account.id != row["account_id"]:
+            raise Conflict("Подключённый аккаунт изменился")
+        chat = {"id": row["chat_id"]}
         previous = (await state.get_data()).get("chat_card")
         await replace_context(
             state,
@@ -367,9 +367,20 @@ class ChatCards:
             or api.account.id != self.account
         ):
             raise Conflict("Владелец или аккаунт переписки не подтверждён")
-        chat = await api.call("get_chat", chat_id=chat_id)
-        if chat.get("id") != chat_id or chat.get("is_texting_allowed") is not True:
-            raise Conflict("Playerok не разрешает ответ в этом диалоге")
+        known = self.store.rows(
+            "SELECT 1 FROM chat_cards WHERE chat_id=? AND owner_id=? AND account_id=?",
+            (chat_id, owner, self.account),
+        )
+        known_order = self.store.rows(
+            "SELECT 1 FROM orders WHERE json_extract(payload,'$.chat.id')=? AND json_extract(payload,'$.item.user.id')=?",
+            (chat_id, self.account),
+        )
+        if known or known_order:
+            chat = {"id": chat_id}
+        else:
+            chat = await api.call("get_chat", chat_id=chat_id)
+            if chat.get("id") != chat_id or chat.get("is_texting_allowed") is not True:
+                raise Conflict("Playerok не разрешает ответ в этом диалоге")
         await replace_context(
             state,
             "chatcard:reply",

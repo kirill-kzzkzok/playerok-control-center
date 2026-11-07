@@ -6,9 +6,9 @@ from datetime import datetime
 from enum import Enum
 from html import escape
 
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 
-from app.database.store import encode
+from app.database.store import Conflict, encode
 from app.gifts.outcomes import DELAYED_PREFLIGHT_SQL
 from app.services.chat_events import system_event
 from app.services.notification_preferences import NotificationPreferences, notification_baseline
@@ -30,8 +30,8 @@ class NoticeEdit(Enum):
 class Notifications:
     """One attempt per owner/event; uncertain Telegram sends require manual reconciliation."""
 
-    def __init__(self, store, bot):
-        self.store, self.bot = store, bot
+    def __init__(self, store, bot, api=None):
+        self.store, self.bot, self.api = store, bot, api
         self.preferences = NotificationPreferences(store)
         notification_baseline(store)
 
@@ -40,11 +40,91 @@ class Notifications:
         if task is None or task.done():
             if task is not None:
                 await task  # Retrieve a completed RPC failure before replacing it.
-            task = asyncio.create_task(ChatCards(self.store, self.bot).flush(), name="chat-card-flush")
+            task = asyncio.create_task(self.flush_cards(), name="chat-card-flush")
             self.store.chat_card_flush_task = task
         # Only stop waiting. The one owned task retains its lease and journals
         # the real RPC outcome, and the next cycle joins it instead of resending.
         await asyncio.wait_for(asyncio.shield(task), timeout=2)
+
+    async def flush_cards(self):
+        await ChatCards(self.store, self.bot).flush()
+        await self.refresh_order_cards()
+
+    async def refresh_order_cards(self):
+        import hashlib
+        from datetime import UTC, datetime
+
+        from aiogram.fsm.context import FSMContext
+        from aiogram.fsm.storage.base import StorageKey
+        from aiogram.types import Chat, Message, User
+
+        from app.telegram.navigation import Navigation
+        from app.telegram.navigation_context import source_panel
+        from app.telegram.orders_panel import OrdersPanel
+        from app.telegram.storage import SQLiteStorage
+
+        account = self.store.setting("playerok:account_id")
+        if not account or self.api is None:
+            return
+        processed = 0
+        for entry in self.store.rows(
+            "SELECT key,value FROM settings WHERE key GLOB ? AND json_extract(value,'$.route') LIKE 'order:%' AND COALESCE(json_extract(value,'$.closed'),0)=0",
+            (f"navigation:{self.bot.id}:*",),
+        ):
+            panel = json.loads(entry["value"])
+            owner = int(entry["key"].split(":")[2])
+            if not self.store.rows("SELECT 1 FROM administrators WHERE user_id=?", (owner,)):
+                continue
+            ident = panel["route"].split(":", 1)[1]
+            request = self.store.rows(
+                "SELECT revision,completed_revision FROM sync_requests WHERE key=?", ("deal:" + ident,)
+            )
+            order = self.store.rows("SELECT payload FROM orders WHERE id=?", (ident,))
+            if not order or not request or request[0]["revision"] > request[0]["completed_revision"]:
+                continue
+            fingerprint = hashlib.sha256(
+                (order[0]["payload"] + str(request[0]["completed_revision"])).encode()
+            ).hexdigest()
+            if (
+                panel.get("order_refresh_fingerprint") == fingerprint
+                or panel.get("editing")
+                or panel.get("sending")
+            ):
+                continue
+            state = FSMContext(
+                SQLiteStorage(self.store),
+                StorageKey(bot_id=self.bot.id, chat_id=owner, user_id=owner, destiny=entry["key"]),
+            )
+            if await state.get_state() is not None:
+                continue
+            try:
+                text, markup = await OrdersPanel(self.store, self.api).card(owner, ident, refresh=False)
+            except (Conflict, ValueError):
+                continue
+            message = Message(
+                message_id=panel["id"],
+                date=datetime.now(UTC),
+                chat=Chat(id=owner, type="private"),
+                from_user=User(id=owner, is_bot=False, first_name="Owner"),
+                text="",
+            ).as_(self.bot)
+            scope = source_panel.set((self.bot.id, owner, entry["key"]))
+            try:
+                await Navigation(self.store).render(
+                    message, owner, state, panel["route"], text=text, reply_markup=markup, expected=panel
+                )
+            except (TelegramAPIError, TimeoutError, ConnectionError) as error:
+                self.store.audit(owner, "ORDER_CARD_REFRESH", ident, telegram_error(error))
+                continue
+            finally:
+                source_panel.reset(scope)
+            current = self.store.setting(entry["key"], {})
+            if current.get("route") == panel["route"] and current.get("id") == panel["id"]:
+                current["order_refresh_fingerprint"] = fingerprint
+                self.store.set_setting(entry["key"], current)
+            processed += 1
+            if processed >= 8:
+                break
 
     async def close(self):
         task = getattr(self.store, "chat_card_flush_task", None)
