@@ -10,7 +10,7 @@ from app.services.automation import message_text
 from app.services.inventory import stock_values
 from app.services.listing_launch import ListingLaunch, launch_prefix
 from app.services.products import ValidationError, priority_price_basis
-from app.services.promotions import PromotionPolicy
+from app.services.promotion_settings import PromotionSettings
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 from app.telegram.storage import replace_context
@@ -27,8 +27,6 @@ FIELDS = {
     "greeting": "Приветствие перед текстовой/складской выдачей. «-» — без приветствия.",
     "after": "Сообщение после подтверждённой выдачи. «-» — стандартное сообщение или без дополнительного текста.",
     "limits": "Лимиты Stars: за заказ и за сутки через пробел. Они не могут превышать ограничения подключения. Дневной предел учитывает общие расходы магазина.",
-    "budget": "Общие лимиты продвижения Playerok: за операцию, сутки, месяц, количество операций на товар. Например: 50 100 1000 20. Сохранение не списывает деньги; применятся при итоговом запуске.",
-    "schedule": "Расписание автоподнятия: интервал и пауза между покупками, в секундах (минимум 600), например: 3600 600.",
 }
 
 
@@ -212,10 +210,7 @@ class LaunchPanel:
         if value["publication"] == "PREMIUM":
             rows.insert(
                 1,
-                [
-                    ("🌍 Лимиты всего магазина", p + "edit:budget"),
-                    ("🌍 Частота поднятий всего магазина", p + "edit:schedule"),
-                ],
+                [("🌍 Продвижение всего магазина", p + "shop")],
             )
             rows.insert(2, [("Платное автоподнятие: переключить", p + "promotion")])
         if can_launch:
@@ -237,6 +232,13 @@ class LaunchPanel:
             rows.append([("⬅️ К запуску", p + "basic")])
         return text, keyboard(rows, back=("⬅️ К товару", "item:" + value["launch_target"]))
 
+    async def shop_settings(self, state, ident, *, group="general"):
+        from app.telegram.promotions_panel import PromotionsPanel
+
+        return await PromotionsPanel(self.store, self.api).settings(
+            state, group=group, return_to="launch:policy:" + ident
+        )
+
     async def callback(self, action, owner, state):
         if action.startswith("launch:"):
             _, command, ident = action.split(":", 2)
@@ -251,53 +253,27 @@ class LaunchPanel:
                 ident = await self.service.open(owner, binding[0]["remote_id"], source["payload"])
             elif command == "item":
                 ident = await self.service.open(owner, ident)
+            elif command == "policy":
+                draft = self.service.load(owner, ident)
+                if draft["state"] == "DRAFT":
+                    payload = draft["payload"]
+                    _, policy, _ = PromotionSettings(self.store, self.api).get()
+                    if payload["promotion_policy"] != asdict(policy):
+                        payload["promotion_policy"] = asdict(policy)
+                        payload.pop("ready", None)
+                        self.store.update_draft(ident, owner, draft["revision"], payload)
+                return await self.show(owner, state, ident, advanced=True)
             elif command != "open":
                 raise Conflict("Экран запуска устарел")
             return await self.show(owner, state, ident)
         if action == "ln:policy:apply":
-            data = await state.get_data()
-            proposal = data.get("launch_policy_proposal")
+            proposal = (await state.get_data()).get("launch_policy_proposal")
             if not proposal:
-                raise Conflict("Предложение настройки устарело. Введите значения заново")
-            await state.update_data(launch_policy_proposal=None)
-            from app.services.promotion_settings import PromotionSettings
-
-            settings = PromotionSettings(self.store, self.api)
-            revision, _current, selection = settings.get()
-            if revision != proposal["revision"]:
-                # Never overwrite a newer concurrent policy change.
-                raise Conflict(
-                    "Общие настройки продвижения изменились в другом экране. "
-                    "Откройте лимиты заново и повторите ввод"
-                )
-            settings.save(owner, proposal["revision"], proposal["policy"], selection)
-            _, saved, _ = settings.get()
+                raise Conflict("Предложение настройки устарело. Откройте настройки продвижения заново")
             draft = self.service.load(owner, proposal["draft_id"])
-            if draft["state"] == "DRAFT":
-                payload = draft["payload"]
-                payload["promotion_policy"] = asdict(saved)
-                payload.pop("ready", None)
-                self.store.update_draft(draft["id"], owner, draft["revision"], payload)
-            return (
-                (
-                    "✅ Общие настройки продвижения сохранены. Черновик запуска синхронизирован.\n"
-                    + (
-                        "Денежные условия изменены — потребуется новое разрешение на автоподнятие."
-                        if any(
-                            asdict(_current)[key] != asdict(saved)[key]
-                            for key in (
-                                "enabled",
-                                "per_operation",
-                                "daily",
-                                "monthly",
-                                "max_operations_per_item",
-                            )
-                        )
-                        else "Действующие разрешения расходов сохранены. Остановленные покупки не возобновляются."
-                    )
-                ),
-                keyboard([[("Продолжить настройку", "launch:open:" + proposal["draft_id"])]]),
-            )
+            if draft["state"] != "DRAFT":
+                raise Conflict("Черновик запуска уже закрыт")
+            return await self.shop_settings(state, draft["id"])
         parts = action.split(":")
         view = (await state.get_data()).get("launch", {})
         if len(parts) < 3 or view.get("nonce") != parts[1]:
@@ -309,6 +285,11 @@ class LaunchPanel:
         p = f"ln:{parts[1]}:"
         if command in {"advanced", "basic"}:
             return await self.show(owner, state, draft["id"], advanced=command == "advanced")
+        if command == "shop":
+            return await self.shop_settings(state, draft["id"])
+        if command == "edit" and parts[3:] in (["budget"], ["schedule"]):
+            group = "budget" if parts[3] == "budget" else "time"
+            return await self.shop_settings(state, draft["id"], group=group)
         if command == "modes":
             return "⚡ Выберите выдачу до публикации.", keyboard(
                 [[(label, p + "mode:" + mode)] for mode, label in MODES.items()],
@@ -521,62 +502,6 @@ class LaunchPanel:
             if len(parts) != 2 or not all(p.isdigit() for p in parts):
                 raise ValidationError("Введите два целых положительных лимита Stars")
             value["order_limit"], value["day_limit"] = map(int, parts)
-        elif field in {"budget", "schedule"}:
-            parts = text.split()
-            if len(parts) != (4 if field == "budget" else 2):
-                raise ValidationError("Неверное количество параметров")
-            policy = dict(value["promotion_policy"])
-            if field == "budget":
-                policy.update(
-                    per_operation=parts[0],
-                    daily=parts[1],
-                    monthly=parts[2],
-                    max_operations_per_item=int(parts[3]),
-                )
-            else:
-                policy.update(mode="time", interval_seconds=int(parts[0]), cooldown_seconds=int(parts[1]))
-            PromotionPolicy(**policy)
-            # The budget and schedule are GLOBAL promotion settings shared by all
-            # lots. Stage the proposal in the FSM and require an explicit owner
-            # confirmation BEFORE the global policy is written; the draft payload
-            # stays untouched when the owner declines (no lost-update window).
-            from app.services.promotion_settings import PromotionSettings
-
-            settings = PromotionSettings(self.store, self.api)
-            revision, current, _selection = settings.get()
-            await state.set_state(None)
-            await state.update_data(
-                launch_policy_proposal={
-                    "draft_id": draft["id"],
-                    "revision": revision,
-                    "policy": policy,
-                    "field": field,
-                    "current": asdict(current),
-                }
-            )
-            current_dict = asdict(current)
-            diff_keys = [k for k in policy if policy[k] != current_dict.get(k)]
-            scope = (
-                "лимиты расходов: за операцию / сутки / месяц / операций на лот"
-                if field == "budget"
-                else "расписание автоподнятия"
-            )
-            return (
-                "🌍 <b>Изменение ОБЩИХ настроек продвижения</b>\n"
-                "Применяются ко всем товарам магазина. Меняются: "
-                + escaped(scope if diff_keys else "нет изменений", 300)
-                + "\nОбласть: "
-                + scope
-                + ".\n\nНовое разрешение на расходы потребуется только при изменении денежных условий. "
-                "Изменение одной частоты сохраняет действующие разрешения.\n\n"
-                "Данные выдачи и черновик запуска не затрагиваются.",
-                keyboard(
-                    [
-                        [("✅ Сохранить общие настройки", "ln:policy:apply")],
-                        [("Отмена", "launch:open:" + draft["id"])],
-                    ]
-                ),
-            )
         else:
             raise Conflict("Поле настройки устарело")
         value.pop("ready", None)

@@ -67,6 +67,20 @@ class PromotionsPanel:
     def __init__(self, store, api):
         self.service, self.api = PromotionSettings(store, api), api
 
+    async def settings(self, state, *, advanced=True, group="general", return_to=None):
+        revision, policy, selection = self.service.get()
+        return await self.show(
+            {
+                "revision": revision,
+                "values": asdict(policy),
+                "selection": selection,
+                "advanced": advanced,
+                "group": group,
+                "return_to": return_to,
+            },
+            state,
+        )
+
     async def show(self, data, state):
         data["nonce"] = secrets.token_hex(6)
         await state.set_state(None)
@@ -74,6 +88,7 @@ class PromotionsPanel:
         nonce, values = data["nonce"], data["values"]
         text = f"🚀 <b>Продвижение — проверка</b>\nПолитика: {'включена для проверки' if values['enabled'] else 'выключена'}\nРежим: {'по времени' if values['mode'] == 'time' else 'по позиции'}\nВыбор: {'все подходящие кроме исключённых' if data['selection'] == 'all' else 'только выбранные'}\nНочь: {'включена' if values['night_enabled'] else 'выключена'} · {values['night_start_hour']:02d}:00–{values['night_end_hour']:02d}:00 МСК\nСохранение и проверка ничего не покупают. Разрешение расходов — отдельным действием."
         if data.get("advanced"):
+            text += "\n🌍 Настройки всего магазина."
             text += (
                 "\nИзменения ниже остаются в форме до сохранения. Нажмите «Сохранить», чтобы применить их."
             )
@@ -238,8 +253,15 @@ class PromotionsPanel:
                     [(f"{EDIT[name]}: {values[name]}", f"pp:{nonce}:edit:{name}")] for name in groups[group]
                 ]
                 rows.append([("⬅️ К параметрам", f"pp:{nonce}:group:general")])
-            rows += [[("💾 Сохранить", f"pp:{nonce}:save")], [("⬅️ Основной экран", f"pp:{nonce}:basic")]]
-        return text, keyboard(rows, back=("⬅️ Мой магазин", "home"))
+            rows.append([("💾 Сохранить", f"pp:{nonce}:save")])
+            if not data.get("return_to"):
+                rows.append([("⬅️ Основной экран", f"pp:{nonce}:basic")])
+        back = (
+            ("⬅️ К черновику запуска", data["return_to"])
+            if data.get("return_to")
+            else ("⬅️ Мой магазин", "home")
+        )
+        return text, keyboard(rows, back=back)
 
     def item_view(self, view):
         nonce, ident = view["nonce"], view["id"]
@@ -344,16 +366,7 @@ class PromotionsPanel:
             await confirmation.confirm("promo", owner, state, action.split(":", 2)[2], self.service.stop)
             action = "promotions"
         if action in {"promotions", "promo:settings"}:
-            revision, policy, selection = self.service.get()
-            return await self.show(
-                {
-                    "revision": revision,
-                    "values": asdict(policy),
-                    "selection": selection,
-                    "advanced": action == "promo:settings",
-                },
-                state,
-            )
+            return await self.settings(state, advanced=action == "promo:settings")
         if len(parts) == 3 and parts[:2] == ["promo", "item"]:
             item = await self.service.access.item(owner, parts[2])
             quotes = await self.api.call(
@@ -417,7 +430,8 @@ class PromotionsPanel:
             view["field"] = parts[3]
             await state.update_data(promotion=view)
             await state.set_state("promotion:value")
-            return EDIT[parts[3]] + ". Введите значение; затем сохраните политику.", keyboard([])
+            back = ("⬅️ К параметрам", f"pp:{parts[1]}:group:{view.get('group', 'general')}")
+            return EDIT[parts[3]] + ". Введите значение; затем сохраните политику.", keyboard([], back=back)
         elif command == "save":
             view["revision"] = self.service.save(owner, view["revision"], values, view["selection"])
         else:

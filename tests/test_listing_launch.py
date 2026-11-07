@@ -644,22 +644,30 @@ async def test_dispatcher_premium_budget_schedule_saved_globally_before_launch(l
         premium_index = next(i for i, q in enumerate(r.quotes) if q["type"] == "PREMIUM")
         await ui.click(f"ln:{nonce}:quote:{premium_index}")
         nonce = (await state.get_data())["launch"]["nonce"]
+        draft_id = (await state.get_data())["launch"]["id"]
         await ui.click(f"ln:{nonce}:edit:budget")
         ui.dp = dispatcher(r.store, r.api)
-        await ui.message("50 100 1000 20")
-        # D5: the global change requires an explicit confirmation BEFORE saving.
-        assert "ОБЩИХ" in session.calls[-1].text
-        await ui.click("ln:policy:apply")
-        # The apply refreshed the draft (revision bump): re-open the launch screen,
-        # which issues a fresh nonce, then continue with the schedule.
-        await ui.click("launch:open:" + (await state.get_data())["launch"]["id"])
+        for field, value in (
+            ("per_operation", "50"),
+            ("daily", "100"),
+            ("monthly", "1000"),
+            ("max_operations_per_item", "20"),
+        ):
+            nonce = (await state.get_data())["promotion"]["nonce"]
+            await ui.click(f"pp:{nonce}:edit:{field}")
+            await ui.message(value)
+        nonce = (await state.get_data())["promotion"]["nonce"]
+        await ui.click(f"pp:{nonce}:save")
+        await ui.click("launch:policy:" + draft_id)
         nonce = (await state.get_data())["launch"]["nonce"]
         await ui.click(f"ln:{nonce}:edit:schedule")
-        ui.dp = dispatcher(r.store, r.api)
-        await ui.message("3600 600")
-        assert "ОБЩИХ" in session.calls[-1].text
-        await ui.click("ln:policy:apply")
-        await ui.click("launch:open:" + (await state.get_data())["launch"]["id"])
+        for field, value in (("interval_seconds", "3600"), ("cooldown_seconds", "600")):
+            nonce = (await state.get_data())["promotion"]["nonce"]
+            await ui.click(f"pp:{nonce}:edit:{field}")
+            await ui.message(value)
+        nonce = (await state.get_data())["promotion"]["nonce"]
+        await ui.click(f"pp:{nonce}:save")
+        await ui.click("launch:policy:" + draft_id)
         nonce = (await state.get_data())["launch"]["nonce"]
         await ui.click(f"ln:{nonce}:check")
         assert "готова" in session.calls[-1].text, session.calls[-1].text
@@ -708,13 +716,13 @@ async def test_global_budget_proposal_decline_leaves_policy_untouched(launch):
         premium_index = next(i for i, q in enumerate(r.quotes) if q["type"] == "PREMIUM")
         await ui.click(f"ln:{nonce}:quote:{premium_index}")
         nonce = (await state.get_data())["launch"]["nonce"]
-        await ui.click(f"ln:{nonce}:edit:schedule")
-        ui.dp = dispatcher(r.store, r.api)
-        await ui.message("7200 900")
-        assert "ОБЩИХ" in session.calls[-1].text
-        # Decline: the policy and the proposal are dropped; nothing is written.
         draft_id = (await state.get_data())["launch"]["id"]
-        await ui.click("launch:open:" + draft_id)
+        await ui.click(f"ln:{nonce}:edit:schedule")
+        nonce = (await state.get_data())["promotion"]["nonce"]
+        await ui.click(f"pp:{nonce}:edit:interval_seconds")
+        ui.dp = dispatcher(r.store, r.api)
+        await ui.message("7200")
+        await ui.click("launch:policy:" + draft_id)
         after = ps.get()[1]
         assert asdict(after) == asdict(policy_before)
         assert not (await state.get_data()).get("launch_policy_proposal")

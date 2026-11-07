@@ -43,18 +43,23 @@ async def test_launch_global_input_is_explicit_and_cancel_preserves_original_dra
         await ui.click("payp:item:item")
         await ui.click(next(k for k in buttons(bot.session.last_panel) if k.endswith(":advanced")))
         choices = buttons(bot.session.last_panel)
-        budget = next(k for k in choices if k.endswith(":edit:budget"))
-        assert "всего магазина" in choices[budget]
+        settings = next(k for k in choices if k.endswith(":shop"))
+        assert "всего магазина" in choices[settings]
+        assert not any(k.endswith((":edit:budget", ":edit:schedule")) for k in choices)
         state = FSMContext(ui.dp.storage, StorageKey(bot_id=123, chat_id=7, user_id=7))
         ident = (await state.get_data())["launch"]["id"]
         before = r.store.rows("SELECT payload FROM drafts WHERE id=?", (ident,))
         policy = r.settings.get()
-        await ui.click(budget)
+        await ui.click(settings)
         assert "всего магазина" in bot.session.last_panel.text
-        await ui.message("30 90 300 10")
-        assert "ко всем товарам" in bot.session.last_panel.text
+        group = next(k for k in buttons(bot.session.last_panel) if k.endswith(":group:budget"))
+        await ui.click(group)
+        edit = next(k for k in buttons(bot.session.last_panel) if k.endswith(":edit:daily"))
+        await ui.click(edit)
+        await ui.message("90")
         assert r.settings.get() == policy
-        await ui.click("launch:open:" + ident)
+        back = next(k for k in buttons(bot.session.last_panel) if k.startswith("launch:policy:"))
+        await ui.click(back)
         assert r.store.rows("SELECT payload FROM drafts WHERE id=?", (ident,)) == before
         assert r.settings.get() == policy
         assert not r.api.charges and not r.store.rows("SELECT * FROM outbox")
