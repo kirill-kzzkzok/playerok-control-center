@@ -167,7 +167,7 @@ async def test_wizard_entry_preserves_previous_fsm_on_data_write_failure(tmp_pat
     store.close()
 
 
-def test_warning_window_keeps_separate_causes_and_total_count(caplog, monkeypatch):
+def test_warning_window_groups_network_causes_and_keeps_total_count(caplog, monkeypatch):
     import logging
 
     from app.telegram.transport import TelegramNetworkSession
@@ -189,10 +189,9 @@ def test_warning_window_keeps_separate_causes_and_total_count(caplog, monkeypatc
         clock[0] = 31
         emit("NETWORK_ERROR")
         emit(None)
-    assert sum("Проблема Telegram сохраняется" in r.message for r in caplog.records) == 1
-    assert "3 повторов" in caplog.text
-    assert "3 неудачных" in caplog.text and "1 неудачных" in caplog.text
-    assert len(caplog.records) == 5
+    assert sum(r.levelno == logging.WARNING for r in caplog.records) == 1
+    assert "4 неудачных" in caplog.text
+    assert len(caplog.records) == 2
 
 
 async def test_unknown_notification_rejection_has_finite_refresh_budget(tmp_path):

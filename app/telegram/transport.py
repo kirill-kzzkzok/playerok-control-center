@@ -162,14 +162,15 @@ class TelegramNetworkSession(AiohttpSession):
         method = state["method"]
         if outcome in {"OK", "CANCELLED"} or code == "MESSAGE_NOT_MODIFIED":
             if outcome == "OK":
-                if self._connection_failures.pop(method, 0) >= 3:
-                    event("INFO", f"Связь Telegram восстановлена · {method}")
+                failures = self._connection_failures.pop(method, 0)
+                if failures >= 3:
+                    event("INFO", f"Telegram-соединение восстановлено · {failures} неудачных попыток")
                 for key in tuple(self._reported):
                     if key[0] == method:
                         self._reported.pop(key)
             return
         if code in {"NETWORK_ERROR", "TIMEOUT", "PROXY_UNAVAILABLE", "DNS_ERROR", "PROXY_ROUTE_CHANGED"}:
-            failures = min(4, self._connection_failures.get(method, 0) + 1)
+            failures = self._connection_failures.get(method, 0) + 1
             self._connection_failures[method] = failures
             if failures == 3:
                 event(
