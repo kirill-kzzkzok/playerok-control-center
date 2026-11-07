@@ -153,7 +153,6 @@ class GiftService:
         }
 
     async def refresh(self):
-        previous_balance = self.store.setting("gifts:balance", {})
         gifts = await self.sender.catalog()
         balance = await self.sender.balance()
         with self.store.transaction() as db:
@@ -198,16 +197,6 @@ class GiftService:
                 (encode({"status": "OK", "at": now()}),),
             )
         event("CHECK", f"Баланс личного Telegram: {balance} Stars; каталог обновлён")
-        if type(previous_balance.get("stars")) is int and previous_balance["stars"] != balance:
-            known_spend = self.store.rows(
-                "SELECT COALESCE(SUM(stars),0) n FROM gift_steps WHERE state='SUCCEEDED' AND spent_at>?",
-                (previous_balance.get("at", ""),),
-            )[0]["n"]
-            if previous_balance["stars"] - balance != known_spend:
-                event(
-                    "ORDER",
-                    f"⭐ Telegram Stars — баланс изменился: {previous_balance['stars']} → {balance} ⭐",
-                )
         return balance
 
     async def bind(
@@ -548,7 +537,7 @@ class GiftService:
                         ),
                     )
                 event(
-                    "ORDER",
+                    "CHECK",
                     "Пакет подарков поставлен в очередь: " + row["gift_code"],
                     order=row["id"],
                     operation=op,
@@ -781,7 +770,7 @@ class GiftService:
         )
         self.guard(action, spending=True)
         event(
-            "GIFT",
+            "CHECK",
             f"{step['code']} {step['position'] + 1}/{len(bundle)} — отправка",
             order=j["order_id"],
             operation=action["id"],
@@ -972,6 +961,9 @@ class GiftService:
                 raise Conflict("Состояние подарка изменилось")
             self.continue_bundle(order_id, db)
             if self.job(order_id)["state"] == "SUCCEEDED":
+                from app.services.shop_events import record_delivery
+
+                record_delivery(self.store, order_id, gift=True)
                 self.queue_notice(db, job, "DELIVERED")
         event("SUCCESS", "Доставка подтверждена сверкой", order=order_id, position=step["position"] + 1)
         return receipt

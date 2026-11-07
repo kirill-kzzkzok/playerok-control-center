@@ -11,6 +11,8 @@ LABELS = {
 KINDS = {
     "message": "messages",
     "order": "orders",
+    "order_delivered": "orders",
+    "review": "orders",
     "order_problem": "problems",
     "stock_empty": "stock",
     "stock_low": "stock",

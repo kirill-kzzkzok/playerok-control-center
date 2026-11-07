@@ -1,6 +1,5 @@
 import hashlib
 import json
-import re
 
 from app.database.store import Conflict, encode, now, server_time
 from app.security.logging import event
@@ -160,26 +159,24 @@ class Orders:
                             now(),
                         ),
                     )
-            if added and status == "PAID":
-                name = str(item.get("name") or "Товар")
-                from app.services.logical_products import marker
+            from app.services.review_thanks import ingest_review
+            from app.services.shop_events import STAGES, order_event
 
-                try:
-                    code = marker(name)
-                except ValueError:
-                    code = None
-                shown = name if len(name) <= 100 else name[:90] + "…" + (f" [{code}]" if code else "")
-                event(
-                    "ORDER",
-                    f"🛒 Новый оплаченный заказ — {shown} — {item.get('price', 'нет данных')} ₽",
-                    order=ident,
-                )
-            if added and status in {"ROLLED_BACK", "FAILED"}:
-                event(
-                    "ORDER",
-                    "↩️ Возврат подтверждён" if status == "ROLLED_BACK" else "↩️ Заказ отменён",
-                    order=ident,
-                )
+            review = order.get("review") or {}
+            old_review = old_payload.get("review") or {}
+            if (
+                isinstance(review, dict)
+                and review.get("id")
+                and review.get("id") != (old_review.get("id") if isinstance(old_review, dict) else None)
+                and not review.get("created_at")
+                and self.store.setting("reviews:thanks_since")
+            ):
+                from app.workers.sync import request_sync
+
+                request_sync(self.store, "deal", ident)
+            ingest_review(self.store, db, order)
+            if added and status in STAGES and (status == "PAID" or previous):
+                order_event(order, status)
             return bool(added)
 
     def annotate(self, order_id, actor, revision, problem, note):
@@ -373,23 +370,4 @@ class Orders:
                 (message["id"], chat_id, message.get("created_at"), encode(message)),
             )
             db.execute("UPDATE inbox SET processed_at=? WHERE key=?", (now(), key))
-            author = message.get("user") or {}
-            if added and author.get("id") not in (
-                None,
-                self.store.setting("playerok:account_id"),
-            ):
-                order = db.execute(
-                    "SELECT id FROM orders WHERE chat_id=? ORDER BY created_at DESC LIMIT 2", (chat_id,)
-                ).fetchall()
-                username = author.get("username")
-                label = (
-                    " " + username
-                    if isinstance(username, str) and re.fullmatch(r"[\w.-]{1,40}", username)
-                    else ""
-                )
-                event(
-                    "ORDER",
-                    "📩 Новое сообщение от покупателя" + label,
-                    order=order[0]["id"] if len(order) == 1 else None,
-                )
             return bool(added)

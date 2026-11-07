@@ -208,6 +208,10 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
                 "upload-cleanup", lambda: UploadCleanup(store).run(stop, startup_backup=True), stop
             )
         )
+        if not store.setting("reviews:thanks_since"):
+            from app.database.store import now
+
+            store.set_setting("reviews:thanks_since", now())
         tasks.append(
             supervisor.start("notifications", lambda: Notifications(store, bot, api).run(stop), stop)
         )

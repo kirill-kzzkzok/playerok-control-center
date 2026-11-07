@@ -112,9 +112,23 @@ class ConsoleFormatter(logging.Formatter):
             text += " · " + context
         elif getattr(record, "order_id", None):
             text += " · заказ #" + str(record.order_id)
+        if not self.technical:
+            label = {
+                "INFO": "ℹ️  МАГАЗИН",
+                "ORDER": "🛒 ЗАКАЗ",
+                "GIFT": "🎁 ПОДАРОК",
+                "SUCCESS": "✅ УСПЕХ",
+                "WARNING": "⚠️  ВНИМАНИЕ",
+                "ERROR": "⛔ ОШИБКА",
+                "CRITICAL": "⛔ ОШИБКА",
+            }.get(category, category)
+            text = f"{self.formatTime(record, self.datefmt)}  {label:<13} {record.getMessage()}"
+            text = re.sub(r"(?i)\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b|\b[0-9a-f]{32}\b", "—", text)
         color = {"SUCCESS": "32", "GIFT": "35", "CHECK": "34", "ORDER": "36"}.get(
             category, self.COLORS.get(record.levelno, "0")
         )
+        if not self.technical and getattr(record, "shop_success", False):
+            color = "32"
         return f"\033[{color}m{text}\033[0m" if self.color else text
 
 
@@ -136,13 +150,23 @@ def ansi_supported(stream):
         return False
 
 
-def event(category, message, *, order=None, operation=None, position=None, level=logging.INFO):
+def event(
+    category,
+    message,
+    *,
+    order=None,
+    operation=None,
+    position=None,
+    level=logging.INFO,
+    success=False,
+):
     try:
         logging.getLogger("pcc.shop").log(
             level,
             message,
             extra={
                 "event_type": category,
+                "shop_success": success,
                 "order_id": order,
                 "operation_id": operation,
                 "gift_position": position,

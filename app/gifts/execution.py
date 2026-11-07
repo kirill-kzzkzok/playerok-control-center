@@ -151,5 +151,5 @@ async def execute_followup(executor, action):
     result = await executor.mutate(action, "createChatMessage", "send_message", chat_id=chat_id, text=text)
     if not result.get("id"):
         raise APIError("GIFT_NOTICE_UNKNOWN", uncertain=True)
-    event("SUCCESS", "Уведомление покупателю отправлено", order=target, operation=action["id"])
+    event("CHECK", "Уведомление покупателю отправлено", order=target, operation=action["id"])
     return {"message_id": result["id"], "outcome": outcome}

@@ -82,7 +82,12 @@ async def test_uncertain_operation_alert_does_not_wait_for_initial_sync_or_repea
     await worker.once()
     assert bot.send_message.await_count == 1
     text = bot.send_message.call_args.args[1]
-    assert "Неопределённый" in text and ident in text
+    assert "Неопределённый" in text and ident not in text
+    assert any(
+        button.callback_data == "ops:show:" + ident
+        for row in bot.send_message.call_args.kwargs["reply_markup"].inline_keyboard
+        for button in row
+    )
     assert "private response" not in text and "old" not in text
     assert not store.setting("notifications:initialized", False)
     store.set_setting("sync:health", {"status": "OK"})

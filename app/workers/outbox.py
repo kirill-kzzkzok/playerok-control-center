@@ -127,6 +127,10 @@ class Executor:
             Products(self.store, self.api).require_critical_edit(action["target"], action["id"])
         if action["payload"].get("chain_id"):
             DeliveryChains(self.store, self.api).dispatchable(action)
+        if action["payload"].get("review_thanks"):
+            from app.services.review_thanks import guard
+
+            guard(self.store, self.api, action)
         if action["payload"].get("auto_reply"):
             AutoReplies(self.store, self.api).dispatchable(action)
         if action["kind"] in {"delivery", "delivery_text", "chain_message"} and not action["payload"].get(
@@ -857,7 +861,11 @@ class Executor:
                 raise APIError("READ_STATUS_NOT_CONFIRMED", uncertain=True)
             return {"chat_id": target, "unread_messages_counter": 0}
         if kind == "reply":
-            if payload.get("auto_reply"):
+            if payload.get("review_thanks"):
+                from app.services.review_thanks import verify
+
+                await verify(self.store, self.api, action)
+            elif payload.get("auto_reply"):
                 await AutoReplies(self.store, self.api).verify(action)
             else:
                 await self.api.call("get_chat", chat_id=target)
@@ -1150,18 +1158,6 @@ class OutboxWorker:
             self.store.rows("SELECT status FROM outbox WHERE id=?", (action["id"],))[0]["status"],
         )
         outcome = self.store.rows("SELECT status,error_code FROM outbox WHERE id=?", (action["id"],))[0]
-        if action["kind"] == "gift_send" and outcome["status"] == "SUCCEEDED":
-            service = self.executor.gifts()
-            step = service.step(action)
-            event(
-                "SUCCESS",
-                f"⭐ Telegram Stars — подтверждено списание {step['stars']} ⭐ · подарок {step['position'] + 1}/{len(service.steps(action['target']))}",
-                order=action["target"],
-                operation=action["id"],
-                position=step["position"] + 1,
-            )
-            if service.job(action["target"])["state"] == "SUCCEEDED":
-                event("ORDER", "✅ Товар успешно выдан", order=action["target"])
         if outcome["status"] != "SUCCEEDED":
             from app.gifts.core import gift_reason
 
@@ -1202,6 +1198,15 @@ class OutboxWorker:
                 operation=action["id"],
                 level=10,
             )
+            if order_target:
+                order = self.store.rows("SELECT payload FROM orders WHERE id=?", (order_target,))
+                if order:
+                    from app.services.shop_events import buyer, short_title
+
+                    value = json.loads(order[0]["payload"])
+                    message = (
+                        f"{buyer(value)} · {short_title((value.get('item') or {}).get('name'))} · {message}"
+                    )
             event(
                 "INFO" if checking_receipt else "WARNING",
                 message,
@@ -1209,21 +1214,14 @@ class OutboxWorker:
                 operation=action["id"],
                 level=10 if repeated_wait else 20 if checking_receipt else 30,
             )
-        elif action["kind"] == "fulfill":
+        elif action["kind"] in {"publish", "premium_publish"} and result.get("status") == "APPROVED":
+            from app.services.shop_events import short_title
+
             event(
-                "SUCCESS",
-                "🏁 Выполнение заказа подтверждено Playerok",
-                order=order_target,
+                "✅ ТОВАР",
+                short_title(result.get("name")) + " · опубликован",
                 operation=action["id"],
-            )
-        elif action["kind"] in {"delivery", "delivery_text", "chain_message", "reply"}:
-            event(
-                "SUCCESS",
-                "✅ Товар успешно выдан"
-                if action["kind"] in {"delivery", "delivery_text"}
-                else "💬 Сообщение покупателю отправлено",
-                order=order_target,
-                operation=action["id"],
+                success=True,
             )
         elif action["kind"] in {"stock_pause", "stock_resume"} and (
             result.get("bot_paused") or action["kind"] == "stock_resume" and not result.get("already_active")

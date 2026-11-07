@@ -465,12 +465,29 @@ class Store:
             ).rowcount
             if changed != 1:
                 raise Conflict("Операция остановлена до отправки")
-        if first and first[0] is None and action.get("kind") in {"delivery", "delivery_text", "gift_send"}:
-            from app.security.logging import event
+            if (
+                first
+                and first[0] is None
+                and action.get("kind") in {"delivery", "delivery_text", "gift_send"}
+            ):
+                from app.security.logging import event
 
-            position = self.rows("SELECT position FROM gift_steps WHERE operation_id=?", (action["id"],))
-            if not position or position[0]["position"] == 0:
-                event("ORDER", "⏳ Начал выдачу заказа", order=action["target"], operation=action["id"])
+                position = self.rows("SELECT position FROM gift_steps WHERE operation_id=?", (action["id"],))
+                if not position or position[0]["position"] == 0:
+                    from app.services.shop_events import buyer, short_title
+
+                    rows = self.rows("SELECT payload FROM orders WHERE id=?", (action["target"],))
+                    order = json.loads(rows[0]["payload"]) if rows else {}
+                    name = short_title((order.get("item") or {}).get("name"))
+                    detail = (
+                        "Начата отправка подарка" if action["kind"] == "gift_send" else "Началась автовыдача"
+                    )
+                    event(
+                        "⚙️ ВЫДАЧА",
+                        f"{buyer(order)} · {name} · {detail}",
+                        order=action["target"],
+                        operation=action["id"],
+                    )
         if first and first[0] is None and action.get("kind") == "premium_bump":
             from app.security.logging import event
 
@@ -664,6 +681,16 @@ class Store:
                         "INSERT INTO order_history(order_id,source,new_status,note,created_at) VALUES(?,'DELIVERY_RESULT',?,?,?)",
                         (order, current_order[0], status, now()),
                     )
+            if status == "SUCCEEDED" and (
+                row["kind"] in {"delivery", "delivery_text"}
+                or row["kind"] == "gift_send"
+                and db.execute(
+                    "SELECT 1 FROM gift_jobs WHERE order_id=? AND state='SUCCEEDED'", (row["target"],)
+                ).fetchone()
+            ):
+                from app.services.shop_events import record_delivery
+
+                record_delivery(self, row["target"], gift=row["kind"] == "gift_send")
             if status == "UNCERTAIN":
                 self.uncertain_event(db, ident)
             if row["kind"] == "fulfill":

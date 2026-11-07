@@ -4,7 +4,6 @@ import json
 import time
 from datetime import datetime
 from enum import Enum
-from html import escape
 
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 
@@ -18,7 +17,6 @@ from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 from app.telegram.message_notice import message_notice
 from app.telegram.operation_results import OperationResults
-from app.telegram.presentation import status as human_status
 
 
 class NoticeEdit(Enum):
@@ -167,7 +165,7 @@ class Notifications:
         boundary = notification_baseline(self.store)
         critical = (
             "(i.kind IN ('worker_failed','operation_uncertain','stock_empty','stock_low','order_problem','delivery_delayed',"
-            "'promotion_guard','promotion_error','enrollment_blocked','logical_product_blocked') OR "
+            "'promotion_guard','promotion_error','enrollment_blocked','logical_product_blocked','review') OR "
             "(i.kind='message' AND json_extract(i.payload,'$.user') IS NULL "
             "AND json_extract(i.payload,'$.text')='{{DEAL_HAS_PROBLEM}}'))"
         )
@@ -202,7 +200,7 @@ class Notifications:
             "'promotion_guard','enrollment_blocked','logical_product_blocked') "
             "OR (i.kind='order' AND json_extract(i.payload,'$.status')='PAID') "
             "OR (i.kind='message' AND json_extract(i.payload,'$.text')='{{DEAL_HAS_PROBLEM}}') THEN 1 "
-            "WHEN i.kind IN ('message','order','stock_empty','stock_low','promotion_error') THEN 2 ELSE 3 END"
+            "WHEN i.kind IN ('message','order','review','order_delivered','stock_empty','stock_low','promotion_error') THEN 2 ELSE 3 END"
         )
         events = self.store.rows(
             "WITH eligible AS (SELECT i.*, "
@@ -272,14 +270,34 @@ class Notifications:
                             if inserted and enabled:
                                 ChatCards(self.store, self.bot).touch(user, chat_id)
                     continue
-            elif event["kind"] == "order":
-                current = self.store.rows("SELECT status FROM orders WHERE id=?", (payload["id"],))
-                if not current or current[0]["status"] != payload["status"]:
+            elif event["kind"] in {"order", "review", "order_delivered"}:
+                from app.services.shop_events import STAGES, order_notice
+
+                rows = self.store.rows("SELECT status,payload FROM orders WHERE id=?", (payload["id"],))
+                stage = (
+                    payload.get("status")
+                    if event["kind"] == "order"
+                    else "GIFT_DELIVERED"
+                    if payload.get("gift")
+                    else "DELIVERED"
+                )
+                review = payload.get("review") if event["kind"] == "review" else None
+                if (
+                    not rows
+                    or not review
+                    and (
+                        stage not in STAGES
+                        or rows[0]["status"] != ("PAID" if event["kind"] == "order_delivered" else stage)
+                    )
+                ):
                     self.close_pending(event["key"], "SKIPPED")
                     continue
-                item = payload.get("item") or {}
-                text = f"🛒 <b>Заказ</b>\n{escape(item.get('name') or payload['id'])}\nСтатус: {escape(human_status(payload['status'], 'order'))}\nСумма: {item.get('price', '?')} ₽"
-                markup = keyboard([[("Открыть заказ", "order:" + payload["id"])]])
+                if stage == "PAID" and self.store.rows(
+                    "SELECT 1 FROM inbox WHERE key=?", ("order-delivered:" + payload["id"],)
+                ):
+                    self.close_pending(event["key"], "SKIPPED")
+                    continue
+                text, markup = order_notice(json.loads(rows[0]["payload"]), stage, review), None
             elif event["kind"] == "worker_failed":
                 from app.workers.supervisor import CYCLE_LABELS
 
@@ -290,10 +308,7 @@ class Notifications:
                     ):
                         self.close_pending(event["key"], "RESOLVED")
                         continue
-                    if (
-                        payload["worker"] == "logical-products"
-                        and current.get("error_code") == "CONNECTION_NOT_VERIFIED"
-                    ):
+                    if current.get("error_code") == "CONNECTION_NOT_VERIFIED":
                         self.close_pending(event["key"], "SUPPRESSED")
                         continue
                 text = (
@@ -453,14 +468,21 @@ class Notifications:
                     )
                 markup = keyboard([[("Пополнить склад", "stock:add:" + payload["item_id"])]])
             elif event["kind"] == "order_problem":
-                if not self.store.rows(
-                    "SELECT 1 FROM orders WHERE id=? AND json_extract(payload,'$.has_problem')=1",
+                order = self.store.rows(
+                    "SELECT payload FROM orders WHERE id=? AND json_extract(payload,'$.has_problem')=1",
                     (payload["order_id"],),
-                ):
+                )
+                if not order:
                     self.close_pending(event["key"], "SKIPPED")
                     continue
-                text = "❗ <b>Проблема в сделке Playerok</b>\n" + escaped(payload["item_name"], 300)
-                markup = keyboard([[("Открыть заказ", "order:" + payload["order_id"])]])
+                from app.services.shop_events import order_alert
+
+                text = order_alert(
+                    json.loads(order[0]["payload"]),
+                    "Покупатель открыл проблему",
+                    "Проверьте сделку на Playerok.",
+                )
+                markup = None
             elif event["kind"] == "delivery_delayed":
                 incident = self.store.setting("gifts:preflight_incident", {})
                 waiting = self.store.rows(DELAYED_PREFLIGHT_SQL)
@@ -481,19 +503,40 @@ class Notifications:
                 markup = keyboard([[("Оплаченные заказы", "orderpage:0:PAID")]])
             elif event["kind"] == "operation_uncertain":
                 ident = payload["operation_id"]
-                current = self.store.rows("SELECT status FROM outbox WHERE id=?", (ident,))
+                current = self.store.rows("SELECT status,kind,target FROM outbox WHERE id=?", (ident,))
                 if not current or current[0]["status"] != "UNCERTAIN":
                     self.close_pending(event["key"], "SKIPPED")
                     continue
-                text = (
-                    "⚠️ <b>Неопределённый результат операции</b>\n"
-                    + escaped(payload["kind"], 80)
-                    + "\nID: <code>"
-                    + escaped(ident, 100)
-                    + "</code>\n"
-                    + "Автоматического повтора нет. Откройте операцию и проверьте результат на Playerok."
-                )
-                markup = keyboard([[("🔎 Проверить операцию", "ops:show:" + ident)]])
+                operation = current[0]
+                order = self.store.rows("SELECT payload FROM orders WHERE id=?", (operation["target"],))
+                if order and operation["kind"] in {
+                    "gift_send",
+                    "gift_notice",
+                    "gift_refund",
+                    "delivery",
+                    "delivery_text",
+                    "chain_message",
+                    "fulfill",
+                }:
+                    from app.services.shop_events import order_alert
+                    from app.telegram.presentation import operation_name
+
+                    text = order_alert(
+                        json.loads(order[0]["payload"]),
+                        "Неопределённый результат операции",
+                        operation_name(operation["kind"])
+                        + ". Проверьте результат на Playerok. Повтора не будет.",
+                    )
+                    markup = None
+                else:
+                    from app.telegram.presentation import operation_name
+
+                    text = (
+                        "⚠️ <b>Неопределённый результат операции</b>\n"
+                        + escaped(operation_name(operation["kind"]), 80)
+                        + "\nПроверьте фактический результат. Повтора не будет."
+                    )
+                    markup = keyboard([[("🔎 Проверить операцию", "ops:show:" + ident)]], home=False)
             else:
                 self.close_pending(event["key"], "SKIPPED")
                 continue
@@ -546,8 +589,28 @@ class Notifications:
                     ).rowcount
                 if not inserted:
                     continue
+                previous_card = []
+                if event["kind"] in {"order", "order_delivered"}:
+                    previous_card = self.store.rows(
+                        "SELECT n.telegram_message_id FROM notifications n JOIN inbox i ON i.key=n.event_key "
+                        "WHERE n.owner_id=? AND n.status='SUCCEEDED' AND n.telegram_message_id IS NOT NULL "
+                        "AND n.rendered_payload LIKE 'shop:%' AND i.kind IN ('order','order_delivered') AND json_extract(i.payload,'$.id')=? "
+                        "ORDER BY i.rowid DESC LIMIT 1",
+                        (user, payload["id"]),
+                    )
                 try:
-                    message = await self.bot.send_message(user, text, reply_markup=markup)
+                    if previous_card:
+                        message_id = previous_card[0]["telegram_message_id"]
+                        try:
+                            await self.bot.edit_message_text(text, chat_id=user, message_id=message_id)
+                        except TelegramBadRequest as error:
+                            code = telegram_error(error)
+                            if code in {"MESSAGE_NOT_FOUND", "MESSAGE_NOT_EDITABLE"}:
+                                message_id = (await self.bot.send_message(user, text)).message_id
+                            elif code != "MESSAGE_NOT_MODIFIED":
+                                raise
+                    else:
+                        message_id = (await self.bot.send_message(user, text, reply_markup=markup)).message_id
                 except asyncio.CancelledError:
                     self.store.execute(
                         "UPDATE notifications SET status='UNCERTAIN' WHERE event_key=? AND owner_id=?",
@@ -565,8 +628,9 @@ class Notifications:
                     self.store.execute(
                         "UPDATE notifications SET status='SUCCEEDED',send_error=NULL,send_retry_at=0,telegram_message_id=?,rendered_payload=? WHERE event_key=? AND owner_id=?",
                         (
-                            message.message_id,
-                            hashlib.sha256(event["payload"].encode()).hexdigest(),
+                            message_id,
+                            ("shop:" if event["kind"] in {"order", "order_delivered"} else "")
+                            + hashlib.sha256(event["payload"].encode()).hexdigest(),
                             event["key"],
                             user,
                         ),

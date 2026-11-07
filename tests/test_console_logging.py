@@ -44,8 +44,8 @@ logging.shutdown()
     assert result.returncode == 0, result.stderr
     output = result.stdout
     assert output.count("Пакет 🧸 ×2, 🌹 ×1") == 1
-    assert "[ORDER" in output and "[SUCCESS" in output and "[DEBUG" not in output
-    assert "заказ #sale-1" in output
+    assert "🛒 ЗАКАЗ" in output and "✅ УСПЕХ" in output and "[DEBUG" not in output
+    assert "sale-1" not in output
     assert "operation_id=" not in output and "gift_position=" not in output
     assert "polling-noise" not in output and "\x1b" not in output
     logs = list((tmp_path / "logs").glob("control_center.log*"))
@@ -212,8 +212,13 @@ async def test_business_logs_follow_durable_delivery_once_after_restart(shop, ca
     messages = [
         record.getMessage() for record in caplog.records if getattr(record, "order_id", None) == "logged-sale"
     ]
-    for needle in ("Новый оплаченный заказ", "Начал выдачу заказа", "Товар успешно выдан"):
-        assert sum(needle in message for message in messages) == 1
+    kinds = [
+        getattr(record, "event_type", "")
+        for record in caplog.records
+        if getattr(record, "order_id", None) == "logged-sale"
+    ]
+    for kind in ("🛒 ПОКУПКА", "⚙️ ВЫДАЧА", "🎁 ВЫДАНО"):
+        assert kinds.count(kind) == 1
     assert not any(
         "private-delivery-secret" in message or "isolated-unit-" in message for message in messages
     )
