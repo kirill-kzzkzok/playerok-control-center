@@ -520,12 +520,37 @@ class Notifications:
                 markup = keyboard([[("Оплаченные заказы", "orderpage:0:PAID")]])
             elif event["kind"] == "operation_uncertain":
                 ident = payload["operation_id"]
-                current = self.store.rows("SELECT status,kind,target FROM outbox WHERE id=?", (ident,))
+                current = self.store.rows(
+                    "SELECT status,kind,target,payload FROM outbox WHERE id=?", (ident,)
+                )
                 if not current or current[0]["status"] != "UNCERTAIN":
                     self.close_pending(event["key"], "SKIPPED")
                     continue
                 operation = current[0]
-                order = self.store.rows("SELECT payload FROM orders WHERE id=?", (operation["target"],))
+                order = self.store.rows(
+                    "SELECT status,payload FROM orders WHERE id=?", (operation["target"],)
+                )
+                checking_completion = False
+                if order and operation["kind"] == "fulfill":
+                    from app.services.fulfillment import automatic_legacy_completion
+
+                    checking_completion = automatic_legacy_completion(
+                        json.loads(operation["payload"]), operation["target"]
+                    )
+                    if checking_completion and order[0]["status"] in {"ROLLED_BACK", "FAILED"}:
+                        self.close_pending(event["key"], "SKIPPED")
+                        continue
+                    if checking_completion:
+                        received = datetime.fromisoformat(event["received_at"]).timestamp()
+                        requests = self.store.rows(
+                            "SELECT not_before FROM sync_requests WHERE key=? AND revision>completed_revision",
+                            ("deal:" + operation["target"],),
+                        )
+                        deadline = received + 45
+                        if requests:
+                            deadline = min(received + 300, max(deadline, requests[0]["not_before"] + 10))
+                        if time.time() < deadline:
+                            continue
                 if order and operation["kind"] in {
                     "gift_send",
                     "gift_notice",
@@ -540,7 +565,9 @@ class Notifications:
 
                     text = order_alert(
                         json.loads(order[0]["payload"]),
-                        "Неопределённый результат операции",
+                        "Playerok ещё не подтвердил отметку «Выполнено»"
+                        if checking_completion
+                        else "Неопределённый результат операции",
                         operation_name(operation["kind"])
                         + ". Проверьте результат на Playerok. Повтора не будет.",
                     )

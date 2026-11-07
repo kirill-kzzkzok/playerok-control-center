@@ -693,6 +693,18 @@ class Store:
                 record_delivery(self, row["target"], gift=row["kind"] == "gift_send")
             if status == "UNCERTAIN":
                 self.uncertain_event(db, ident)
+                if row["kind"] == "fulfill" and row["started_at"] is not None:
+                    from app.services.fulfillment import automatic_legacy_completion
+
+                    if automatic_legacy_completion(json.loads(row["payload"]), row["target"]):
+                        from app.workers.sync import request_sync
+
+                        request_sync(self, "deal", row["target"])
+                        delay = int(retry_after) if str(retry_after or "").isdigit() else 5
+                        db.execute(
+                            "UPDATE sync_requests SET not_before=MAX(not_before,?) WHERE key=?",
+                            (time.time() + delay, "deal:" + row["target"]),
+                        )
             if row["kind"] == "fulfill":
                 db.execute(
                     "INSERT INTO order_history(order_id,source,new_status,note,created_at) SELECT id,'FULFILLMENT_RESULT',status,?,? FROM orders WHERE id=?",

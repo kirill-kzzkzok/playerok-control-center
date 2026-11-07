@@ -199,3 +199,48 @@ async def test_confirmed_delivery_updates_card_and_unknown_never_announces_succe
         "Подарок был отправлен до возврата" if mode == "telegram_gifts" else "Товар был выдан до возврата"
     )
     assert expected in refund[0]
+
+
+async def test_order_buyer_name_survives_compact_same_buyer_snapshot(shop):
+    r = await shop()
+    order = r.api.order("buyer-name")
+    order["user"]["username"] = "KnownBuyer"
+    local = Orders(r.store)
+    local.ingest(order)
+    compact = deepcopy(order)
+    compact["user"].pop("username")
+    local.ingest(compact)
+    assert (
+        r.store.rows("SELECT json_extract(payload,'$.user.username') AS name FROM orders")[0]["name"]
+        == "KnownBuyer"
+    )
+
+
+@pytest.mark.parametrize("status,expected", [("SENT", "SUCCEEDED"), ("ROLLED_BACK", "UNCERTAIN")])
+async def test_late_server_order_status_reconciles_only_automatic_legacy_completion(shop, status, expected):
+    r = await shop()
+    order = r.api.order("late-completion")
+    local = Orders(r.store)
+    local.ingest(order)
+    ident = r.store.enqueue(
+        "automatic-fulfill:test",
+        "fulfill",
+        order["id"],
+        {"mode": "legacy", "platform_followup": True, "chain_id": order["id"], "actor": 7},
+    )
+    claim = r.store.claim(operation_id=ident)
+    r.store.mark_started(claim)
+    import time
+
+    r.store.finish(ident, claim["lease_token"], "UNCERTAIN", error="RATE_LIMITED", retry_after="60")
+    request = r.store.rows("SELECT not_before FROM sync_requests WHERE key=?", ("deal:" + order["id"],))
+    assert request and request[0]["not_before"] > time.time() + 55
+    notices = Notifications(r.store, r.bot)
+    await notices.once()
+    assert not any("Неопределённый" in (getattr(call, "text", "") or "") for call in r.session.calls)
+    order["status"] = status
+    local.ingest(order)
+    assert r.store.rows("SELECT status FROM outbox WHERE id=?", (ident,)) == [{"status": expected}]
+    await notices.once()
+    assert not any("Неопределённый" in (getattr(call, "text", "") or "") for call in r.session.calls)
+    assert not r.api.messages and not r.api.remote.payments

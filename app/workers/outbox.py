@@ -362,9 +362,16 @@ class Executor:
             if report != payload.get("report"):
                 raise ValidationError("Снимок отчёта не соответствует подтверждению")
             if prepared["mode"] == "legacy":
-                await self.mutate(
+                acknowledgement = await self.mutate(
                     action, "updateDeal", "update_deal", deal_id=target, new_status=ItemDealStatuses.SENT
                 )
+                if isinstance(acknowledgement, dict):
+                    try:
+                        confirmed = await service.result(action, observed=acknowledgement)
+                    except (ValueError, TypeError):
+                        confirmed = None
+                    if confirmed:
+                        return confirmed
             else:
                 await self.mutate(
                     action, "submitFulfillmentReport", "submit_fulfillment", deal_id=target, report=report
@@ -376,7 +383,11 @@ class Executor:
                         return confirmed
                     if attempt < 9:
                         await asyncio.sleep(1)
-            except (APIError, ValueError, TypeError):
+            except APIError as error:
+                raise APIError(
+                    "FULFILLMENT_OUTCOME_UNKNOWN", uncertain=True, retry_after=error.retry_after
+                ) from None
+            except (ValueError, TypeError):
                 raise APIError("FULFILLMENT_OUTCOME_UNKNOWN", uncertain=True) from None
             raise APIError("FULFILLMENT_NOT_CONFIRMED", uncertain=True)
         if kind == "create":
@@ -1158,6 +1169,13 @@ class OutboxWorker:
             self.store.rows("SELECT status FROM outbox WHERE id=?", (action["id"],))[0]["status"],
         )
         outcome = self.store.rows("SELECT status,error_code FROM outbox WHERE id=?", (action["id"],))[0]
+        from app.services.fulfillment import automatic_legacy_completion
+
+        checking_completion = (
+            action["kind"] == "fulfill"
+            and outcome["status"] == "UNCERTAIN"
+            and automatic_legacy_completion(action["payload"], action["target"])
+        )
         if outcome["status"] != "SUCCEEDED":
             from app.gifts.core import gift_reason
 
@@ -1172,7 +1190,9 @@ class OutboxWorker:
                 and intent.get("automatic_receipt_check")
                 and (intent.get("mutation_returned") or "candidate_id" in intent)
             )
-            if outcome["status"] == "UNCERTAIN":
+            if checking_completion:
+                message = "Проверяем отметку «Выполнено» на Playerok"
+            elif outcome["status"] == "UNCERTAIN":
                 message = (
                     "⏳ Проверяем результат поднятия — "
                     + str(action.get("display_name") or action["target"])[:150]
@@ -1208,11 +1228,11 @@ class OutboxWorker:
                         f"{buyer(value)} · {short_title((value.get('item') or {}).get('name'))} · {message}"
                     )
             event(
-                "INFO" if checking_receipt else "WARNING",
+                "INFO" if checking_receipt or checking_completion else "WARNING",
                 message,
                 order=order_target,
                 operation=action["id"],
-                level=10 if repeated_wait else 20 if checking_receipt else 30,
+                level=10 if repeated_wait else 20 if checking_receipt or checking_completion else 30,
             )
         elif action["kind"] in {"publish", "premium_publish"} and result.get("status") == "APPROVED":
             from app.services.shop_events import short_title

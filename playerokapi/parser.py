@@ -541,14 +541,14 @@ def game_list(data: dict) -> "GameList":
     )
 
 
-def user_profile(data: dict) -> "UserProfile":
+def user_profile(data: dict, *, fallback_username="Поддержка") -> "UserProfile":
     from .types import UserProfile
     if not data:
         return None
     
     return UserProfile(
         id=data.get("id"),
-        username=data.get("username", "Поддержка"),
+        username=data.get("username", fallback_username),
         role=UserTypes.__members__.get(data.get("role"), data.get("role")),
         avatar_url=data.get("avatarURL"),
         is_online=data.get("isOnline"),
@@ -1037,7 +1037,7 @@ def item_deal(data: dict) -> "ItemDeal":
         created_at=data.get("createdAt"),
         logs=[item_log(log) for log in (data.get("logs") or [])],
         transaction=transaction(data.get("transaction")),
-        user=user_profile(data.get("user")),
+        user=user_profile(data.get("user"), fallback_username=None),
         chat=chat(data.get("chat")),
         item=item_by_typename(data.get("item")),
         review=review(data.get("testimonial")),

@@ -58,6 +58,15 @@ class Orders:
             # remain distinguishable in provenance. No status/problem flags merge.
             order, item = dict(order), dict(item)
             retained = {}
+            old_buyer, new_buyer = old_payload.get("user") or {}, order.get("user") or {}
+            if (
+                new_buyer.get("id")
+                and new_buyer.get("id") == old_buyer.get("id")
+                and not new_buyer.get("username")
+                and old_buyer.get("username")
+            ):
+                order["user"] = {**new_buyer, "username": old_buyer["username"]}
+                retained["user.username"] = "null" if "username" in new_buyer else "absent"
             for target, source, fields, prefix in (
                 (order, old_payload, ("obtaining_fields", "user"), ""),
                 (
@@ -175,6 +184,15 @@ class Orders:
 
                 request_sync(self.store, "deal", ident)
             ingest_review(self.store, db, order)
+            from app.services.fulfillment import reconcile_observed_completion
+
+            if previous and previous["status"] not in {"ROLLED_BACK", "FAILED"}:
+                reconcile_observed_completion(
+                    self.store,
+                    db,
+                    order,
+                    (item.get("user") or {}).get("id") if "item.user" not in retained else None,
+                )
             if added and status in STAGES and (status == "PAID" or previous):
                 order_event(order, status)
             wake = getattr(self.store, "logical_paid_wake", None)

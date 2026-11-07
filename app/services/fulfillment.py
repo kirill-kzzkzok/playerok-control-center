@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from decimal import Decimal
 
-from app.database.store import Conflict, encode
+from app.database.store import Conflict, encode, now
 from app.services.order_management import OrderManagement, deal_details, deliverable, order_snapshot
 from app.services.products import ValidationError
 
@@ -184,9 +184,11 @@ class Fulfillment:
             actor=owner,
         )
 
-    async def result(self, action):
+    async def result(self, action, *, observed=None):
         payload = json.loads(action["payload"]) if isinstance(action["payload"], str) else action["payload"]
-        current = await self.api.call("get_deal", deal_id=action["target"])
+        current = (
+            observed if observed is not None else await self.api.call("get_deal", deal_id=action["target"])
+        )
         owner = ((current.get("item") or {}).get("user") or {}).get("id")
         if (
             current.get("id") != action["target"]
@@ -219,3 +221,57 @@ class Fulfillment:
             "remote_status": current["status"],
             "report_state": entry["state"],
         }
+
+
+def automatic_legacy_completion(payload, target):
+    return payload.get("mode") == "legacy" and (
+        payload.get("gift_proof") == target
+        or payload.get("chain_id") == target
+        and (payload.get("platform_followup") is True or payload.get("delivery_proof") is True)
+    )
+
+
+def reconcile_observed_completion(store, db, order, seller):
+    # This observes the requested state, not which request caused it.
+    status, target = order["status"], order["id"]
+    if (
+        status not in {"SENT", "CONFIRMED", "CONFIRMED_AUTOMATICALLY"}
+        or not seller
+        or seller != store.setting("playerok:account_id")
+    ):
+        return
+    rows = db.execute(
+        "SELECT id,payload,status FROM outbox WHERE target=? AND kind='fulfill' AND started_at IS NOT NULL",
+        (target,),
+    ).fetchall()
+    if len(rows) != 1 or rows[0]["status"] != "UNCERTAIN":
+        return
+    action = rows[0]
+    payload = json.loads(action["payload"])
+    if (
+        not automatic_legacy_completion(payload, target)
+        or not db.execute("SELECT 1 FROM administrators WHERE user_id=?", (payload.get("actor"),)).fetchone()
+    ):
+        return
+    result = {
+        "remote_id": target,
+        "remote_status": status,
+        "report_state": "not_required",
+        "resolution_source": "SERVER_STATE",
+    }
+    db.execute(
+        "UPDATE outbox SET status='SUCCEEDED',result=?,error_code=NULL,lease_token=NULL,lease_until=NULL "
+        "WHERE id=? AND status='UNCERTAIN'",
+        (encode(result), action["id"]),
+    )
+    db.execute(
+        "UPDATE delivery_chains SET status='SUCCEEDED' WHERE order_id=? AND status='BLOCKED' "
+        "AND EXISTS(SELECT 1 FROM delivery_chain_steps WHERE order_id=? AND operation_id=? AND kind='fulfill') "
+        "AND NOT EXISTS(SELECT 1 FROM delivery_chain_steps s LEFT JOIN outbox o ON o.id=s.operation_id "
+        "WHERE s.order_id=? AND coalesce(o.status,'')<>'SUCCEEDED')",
+        (target, target, action["id"], target),
+    )
+    db.execute(
+        "INSERT INTO order_history(order_id,source,new_status,note,created_at) VALUES(?,'AUTO_FULFILLMENT_RESOLUTION',?,'SERVER_STATE',?)",
+        (target, status, now()),
+    )
