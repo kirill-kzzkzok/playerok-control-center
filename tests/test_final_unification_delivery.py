@@ -113,10 +113,11 @@ async def test_stop_confirmation_counts_unique_links_and_rejects_changed_control
 async def test_stale_order_stock_button_cannot_import_into_text_product(simulation):
     from app.services.orders import Orders
     from tests.test_universal_delivery_e2e import setup_ui
-    r=await simulation()
-    await setup_ui(r,"fixed_text","private-delivery")
+
+    r = await simulation()
+    await setup_ui(r, "fixed_text", "private-delivery")
     Orders(r.store).ingest(r.api.order("paid"))
     await r.ui.click("od:stock:paid")
-    state=FSMContext(r.ui.dp.storage,StorageKey(bot_id=r.bot.id,chat_id=7,user_id=7))
-    assert await state.get_state()!="stock:input"
+    state = FSMContext(r.ui.dp.storage, StorageKey(bot_id=r.bot.id, chat_id=7, user_id=7))
+    assert await state.get_state() != "stock:input"
     assert not r.store.rows("SELECT * FROM inventory")

@@ -8,6 +8,7 @@ from aiogram.fsm.storage.base import StorageKey
 from tests.test_paid_promotions import rig as rig_fixture
 from tests.test_telegram_integration import Interaction, TelegramSession
 from tests.test_telegram_transport import production_dispatcher
+from tests.test_ux_redesign import buttons
 
 rig = rig_fixture
 
@@ -58,6 +59,33 @@ async def test_cancel_promotion_enable_leaves_policy_and_authority_untouched(rig
         await ui.click("promotions")
         assert r.settings.get() == before
         assert r.store.setting("promotions:paid_authority") == authority
+        assert not r.api.charges and not r.store.rows("SELECT * FROM outbox")
+    finally:
+        await bot.session.close()
+
+
+@pytest.mark.parametrize("failure", ["permissions", "revision"])
+async def test_promotion_consent_failure_cannot_partially_enable_policy(rig, failure):
+    from dataclasses import asdict
+
+    r = rig
+    r.settings.stop(7)
+    bot = Bot("123:" + "x" * 35, session=TelegramSession())
+    ui = Interaction(bot, production_dispatcher(r.store, r.api))
+    try:
+        await ui.message("/start")
+        await ui.click("promo:enable")
+        confirm = next(k for k in buttons(bot.session.last_panel) if k.startswith("payp:confirmarm:"))
+        if failure == "permissions":
+            r.api.account.automation_enabled = False
+        else:
+            revision, policy, selection = r.settings.get()
+            r.settings.save(7, revision, {**asdict(policy), "daily": "55"}, selection)
+        before = r.settings.get()
+        await ui.click(confirm)
+        assert r.settings.get() == before
+        assert not r.settings.get()[1].enabled
+        assert not r.store.setting("promotions:paid_authority")
         assert not r.api.charges and not r.store.rows("SELECT * FROM outbox")
     finally:
         await bot.session.close()
