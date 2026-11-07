@@ -59,11 +59,12 @@ def test_legacy_paid_flag_never_blocks_or_enables_other_flags(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("case", CASES)
-async def test_real_startup_worker_selection_for_every_flag_combination(tmp_path, monkeypatch, case):
+async def test_real_startup_worker_selection_for_every_flag_combination(tmp_path, monkeypatch, caplog, case):
     from dataclasses import replace
 
     from app.__main__ import run_connected
 
+    caplog.set_level("INFO", logger="pcc.shop")
     config, gifts = configuration(tmp_path, monkeypatch, case)
     _, writes, automatic, payment, refund, agreements = case
     store = Store(tmp_path / "startup.sqlite")
@@ -103,6 +104,7 @@ async def test_real_startup_worker_selection_for_every_flag_combination(tmp_path
     monkeypatch.setattr("app.__main__.Dispatcher.start_polling", polling)
     try:
         await run_connected(replace(config, database_path=store.path, realtime_enabled=False))
+        assert "Playerok подключён. Аккаунт подтверждён" in caplog.messages
         assert ("outbox" in scheduled) is (writes or agreements)
         for name in ("auto-replies", "future-order-enrollment", "delivery-chains", "telegram-gifts"):
             assert (name in scheduled) is (writes and automatic)

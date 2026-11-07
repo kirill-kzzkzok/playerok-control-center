@@ -23,7 +23,7 @@ from app.security.instance import InstanceLock
 from app.security.logging import configure_logging, event
 from app.services.interface_cleanup import InterfaceCleanup
 from app.services.orders import Orders
-from app.services.playerok_connection import PlayerokConnection
+from app.services.playerok_connection import REASONS, PlayerokConnection
 from app.services.products import Products
 from app.telegram.callback_ack import install_callback_ack
 from app.telegram.panel_tracking import PanelTracking
@@ -180,7 +180,9 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
                 level=30,
             )
         connection = PlayerokConnection(store, api)
-        await connection.check(cooldown=0)
+        verification = await connection.check(cooldown=0)
+        if verification["status"] == "CONNECTED":
+            event("SUCCESS", "Playerok подключён. Аккаунт подтверждён")
         tasks.append(supervisor.start("playerok-connection-recovery", lambda: connection.run(stop), stop))
         from app.services.backup_retention import attempt_startup_backup
 
@@ -286,7 +288,8 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
             "INFO",
             "Бот готов к работе"
             if connection.state["status"] == "CONNECTED"
-            else "Telegram-панель доступна для диагностики; операции записи и автовыдача заблокированы",
+            else "Telegram-панель доступна для диагностики; операции записи и автовыдача заблокированы. "
+            + REASONS.get(connection.state.get("reason"), REASONS["CHECK_FAILED"]),
         )
         # Webhook is checked before polling; no deletion or dropping updates.
         if await wait_for_telegram(bot, stop, verified=telegram_verified, retry_at=telegram_retry_at):
