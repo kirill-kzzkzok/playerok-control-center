@@ -68,6 +68,9 @@ async def test_divergent_projection_can_be_repaired_through_ui(shop, logical_ena
     r.store.execute("UPDATE logical_products SET enabled=?", (logical_enabled,))
     r.store.execute("UPDATE gift_listings SET enabled=?", (gift_enabled,))
     await r.ui.click("lp:item:lot")
+    await click(r, suffix=":stop")
+    await click(r, suffix=":stop_confirm")
+    await click(r, action="lp:item:lot")
     await click(r, suffix=":arm")
     await click(r, suffix=":enable:inherit")
     assert LogicalProducts(r.store, r.api).listing("lot")["enabled"] == 1

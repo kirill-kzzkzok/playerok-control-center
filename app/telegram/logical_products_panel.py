@@ -203,19 +203,21 @@ class LogicalProductsPanel:
             )
             if product["error_code"]:
                 text += "\n⚠️ " + PROBLEMS.get(product["error_code"], "Сверка объявления требует проверки.")
-            active_projection = self.store.rows(
-                "SELECT 1 FROM gift_listings WHERE item_id=? AND enabled=1 UNION ALL "
-                "SELECT 1 FROM delivery_policies WHERE item_id=? AND json_extract(payload,'$.enabled')=1 LIMIT 1",
-                (item_id, item_id),
+            active_projections = self.store.rows(
+                "SELECT item_id FROM gift_listings WHERE enabled=1 AND item_id IN "
+                "(SELECT item_id FROM logical_listings WHERE product_id=?) UNION "
+                "SELECT item_id FROM delivery_policies WHERE json_extract(payload,'$.enabled')=1 AND item_id IN "
+                "(SELECT item_id FROM logical_listings WHERE product_id=?)",
+                (product["id"], product["id"]),
             )
-            if product["enabled"] and active_projection:
+            divergent = (
+                not any(row["item_id"] == item_id for row in active_projections)
+                if product["enabled"]
+                else bool(active_projections)
+            )
+            if product["enabled"] or active_projections:
                 rows.append([("⛔ Остановить выдачу товара", prefix + "stop")])
-            elif (
-                (not product["enabled"] or not active_projection)
-                and product["state"] == "VERIFIED"
-                and product["handler"] != "manual"
-                and not platform
-            ):
+            elif product["state"] == "VERIFIED" and product["handler"] != "manual" and not platform:
                 rows.append([("▶️ Включить выдачу", prefix + "arm")])
             rows += [
                 [("Связанные объявления", prefix + "links"), ("История заказов", prefix + "orders:0")],
@@ -260,6 +262,12 @@ class LogicalProductsPanel:
         readiness_service = ProductReadiness(self.store, self.api)
         readiness_service.remember_item(item)
         readiness = readiness_service.snapshot(item_id, item=item)
+        divergence_note = (
+            "\n⚠️ Разрешения выдачи не согласованы. Для безопасного восстановления остановите товар; затем его можно включить заново."
+            if product and divergent
+            else ""
+        )
+        text += divergence_note
         if readiness["problems"]:
             text += "\n" + "\n".join("• " + escaped(p["text"], 180) for p in readiness["problems"][:6])
         rows.append([("Подробности готовности", "rd:check:" + item_id)])
@@ -267,6 +275,7 @@ class LogicalProductsPanel:
             from app.telegram.product_presentation import brief
 
             text = "📦 <b>Выдача</b>\n" + escaped(view["title"], 120) + "\n" + brief(readiness)
+            text += divergence_note
             if product and product["handler"] == "telegram_gifts":
                 text += "\n🎁 " + escaped(gift_summary(config.get("bundle", [])), 220)
                 text += f" · {sum(g['stars'] for g in config.get('bundle', []))} ⭐"

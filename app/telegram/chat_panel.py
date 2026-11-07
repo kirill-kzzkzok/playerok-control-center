@@ -96,8 +96,14 @@ class ChatPanel:
         for message in reversed(messages):
             if not message.get("deleted_at"):
                 media.extend(
-                    {"message_id": message["id"], "image_index": index}
-                    for index, _ in enumerate(message.get("images") or [])
+                    {
+                        "message_id": message["id"],
+                        "image_index": index,
+                        "image": {"id": image.get("id"), "url": image.get("url")}
+                        if isinstance(image, dict)
+                        else None,
+                    }
+                    for index, image in enumerate(message.get("images") or [])
                 )
         view.update(next=following, nonce=secrets.token_hex(6), media=media)
         await state.update_data(chat_view=view)
@@ -180,11 +186,24 @@ class ChatPanel:
             selected = view["media"][index]
         except (ValueError, KeyError, IndexError):
             raise ValidationError("Фотография недоступна") from None
-        page = await self.api.call(
-            "get_chat_messages", chat_id=view["id"], count=8, after_cursor=view["cursors"][view["index"]]
+        account = getattr(getattr(self.api, "account", None), "id", None)
+        if (
+            not account
+            or view.get("account") != account
+            or self.store.setting("playerok:account_id") != account
+        ):
+            raise ValidationError("Аккаунт переписки изменился. Откройте диалог заново")
+        saved = self.store.rows(
+            "SELECT payload FROM chat_messages WHERE chat_id=? AND id=?",
+            (view["id"], selected["message_id"]),
         )
-        messages, _ = validate_page(page, "messages")
-        message = next((message for message in messages if message["id"] == selected["message_id"]), None)
+        message = json.loads(saved[0]["payload"]) if saved else None
+        if not message:
+            from app.workers.sync import request_sync
+
+            request_sync(self.store, "chat", view["id"])
+        if message and message.get("id") != selected["message_id"]:
+            raise ValidationError("Вложение изменилось. Обновите диалог")
         if not message or message.get("deleted_at"):
             raise ValidationError("Сообщение удалено или изменилось. Обновите диалог")
         images = message.get("images") or []
@@ -193,6 +212,11 @@ class ChatPanel:
         image = images[selected["image_index"]]
         if not isinstance(image, dict):
             raise ValidationError("API вернул неполное вложение")
+        if not selected.get("image") or selected["image"] != {
+            "id": image.get("id"),
+            "url": image.get("url"),
+        }:
+            raise ValidationError("Вложение изменилось. Обновите диалог")
         data = await self.attachments.remote(image.get("url"))
         rows = []
         if index:

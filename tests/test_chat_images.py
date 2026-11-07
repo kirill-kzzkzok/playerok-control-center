@@ -224,7 +224,8 @@ async def test_media_view_revalidates_message_and_rejects_deleted_and_negative_i
     state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=1, chat_id=2, user_id=2))
     message = {"id": "message", "images": [{"id": "file", "url": "https://cdn.playerok.com/a.jpg"}]}
     page = {"messages": [message], "page_info": {"has_next_page": False}}
-    api = SimpleNamespace(call=AsyncMock(return_value=page))
+    store.set_setting("playerok:account_id", "seller")
+    api = SimpleNamespace(account=SimpleNamespace(id="seller"), call=AsyncMock(return_value=page))
     panel = ChatPanel(store, api)
     panel.attachments.remote = AsyncMock(return_value=b"image")
     try:
@@ -235,6 +236,7 @@ async def test_media_view_revalidates_message_and_rejects_deleted_and_negative_i
         with pytest.raises(ValidationError):
             await panel.media(f"chatmedia:{nonce}:-1", state)
         message["deleted_at"] = "today"
+        store.execute("UPDATE chat_messages SET payload=? WHERE id=?", (json.dumps(message), "message"))
         with pytest.raises(ValidationError, match="удалено"):
             await panel.media(f"chatmedia:{nonce}:0", state)
         assert panel.attachments.remote.await_count == 1
