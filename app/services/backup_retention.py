@@ -26,6 +26,17 @@ def restorable(path):
         return False
 
 
+def kept_snapshots(entries):
+    ordered = sorted(entries, key=lambda entry: entry[0].name, reverse=True)
+    keep = {entry[0] for entry in ordered[:10]}
+    months = set()
+    for path, _, month in ordered:
+        if month not in months and len(months) < 3:
+            keep.add(path)
+            months.add(month)
+    return keep
+
+
 def prune_startup_backups(directory, *, protected=None):
     root = Path(directory).absolute()
     result = {"deleted": 0, "verified_kept": 0, "skipped": 0, "status": "OK"}
@@ -35,7 +46,7 @@ def prune_startup_backups(directory, *, protected=None):
     protected = Path(protected).absolute() if protected else None
     if protected and (protected.parent != root or linked(protected) or not restorable(protected)):
         return {**result, "status": "NEW_BACKUP_UNVERIFIED"}
-    good, untouched = [], []
+    entries, old = [], []
     for path in root.iterdir():
         match = AUTOMATIC.fullmatch(path.name)
         if not match or linked(path) or not path.is_file() or path.resolve().parent != resolved:
@@ -45,6 +56,19 @@ def prune_startup_backups(directory, *, protected=None):
         if Path(str(path) + "-wal").exists() or Path(str(path) + "-journal").exists():
             result["skipped"] += 1
             continue
+        entry = (path, stat, match.group(1)[:6])
+        entries.append(entry)
+        if path != protected and time.time() - stat.st_mtime >= 60:
+            old.append(entry)
+    # If metadata alone retains every file, deletion is impossible even if
+    # some old snapshots are corrupt. Only the new snapshot needs verification.
+    # Never reuse that shortcut once any deletion could be considered.
+    if len(kept_snapshots(old)) == len(old):
+        result["verified_kept"] = sum(path == protected for path, _, _ in entries)
+        result["skipped"] += len(entries) - result["verified_kept"]
+        return result
+    good, untouched = [], []
+    for path, stat, month in entries:
         if not restorable(path):
             result["skipped"] += 1
             continue
@@ -56,16 +80,8 @@ def prune_startup_backups(directory, *, protected=None):
         ):
             untouched.append(path)
         else:
-            good.append((path, stat, match.group(1)[:6]))
-    good.sort(key=lambda entry: entry[0].name, reverse=True)
-    keep = {entry[0] for entry in good[:10]}
-    # Retain one verified checkpoint for up to three months, without duplicating
-    # the recent set. Unknown/manual/corrupt snapshots are never pruned here.
-    months = set()
-    for path, _, month in good:
-        if month not in months and len(months) < 3:
-            keep.add(path)
-            months.add(month)
+            good.append((path, stat, month))
+    keep = kept_snapshots(good)
     result["verified_kept"] = len(keep) + len(untouched)
     for path, original, _ in good:
         if path in keep:

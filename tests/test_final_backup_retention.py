@@ -70,3 +70,32 @@ def test_unverified_new_copy_blocks_cleanup_and_startup_records_result(tmp_path)
     assert result["status"] == "OK" and store.setting("backups:retention")["at"]
     assert store.rows("PRAGMA quick_check") == [{"quick_check": "ok"}]
     store.close()
+
+
+def test_no_deletion_needed_checks_only_new_snapshot_and_preserves_old_files(tmp_path, monkeypatch):
+    from app.services import backup_retention
+
+    store = Store(tmp_path / "source.sqlite")
+    directory = tmp_path / "backups"
+    old = [directory / f"startup-20261101T1200{i:02}.sqlite3" for i in range(10)]
+    old += [directory / "startup-20261001T120000.sqlite3", directory / "startup-20260901T120000.sqlite3"]
+    for path in old:
+        store.backup(path)
+        os.utime(path, (time.time() - 120, time.time() - 120))
+    new = directory / "startup-20261103T120000.sqlite3"
+    store.backup(new)
+    original = backup_retention.restorable
+    checks = []
+
+    def check(path):
+        checks.append(path)
+        return original(path)
+
+    monkeypatch.setattr(backup_retention, "restorable", check)
+    try:
+        result = backup_retention.prune_startup_backups(directory, protected=new)
+        assert result["deleted"] == 0 and all(path.exists() for path in [*old, new])
+        assert checks == [new]
+        assert result["verified_kept"] == 1
+    finally:
+        store.close()
