@@ -68,6 +68,59 @@ async def test_forbidden_edit_never_creates_or_enables_new_policy(shop):
     assert not r.store.rows("SELECT * FROM delivery_policies")
 
 
+@pytest.mark.parametrize("previous_conflict", [False, True])
+async def test_platform_listing_data_change_keeps_binding_and_future_followup(shop, previous_conflict):
+    r = await shop()
+    r.api.item["data_fields"] = [{"id": "details", "value": "old fixture"}]
+    await save(r)
+    await click(r, suffix=":bind")
+    await r.worker.once()
+    logical = LogicalProducts(r.store, r.api)
+    before = logical.listing("lot")
+    r.api.item["data_fields"] = [{"id": "details", "value": "new fixture"}]
+    if previous_conflict:
+        LogicalProductWorker(r.store, r.api).problem(before, "RELIST_BINDING_CONFLICT", candidate_id="lot")
+
+    await LogicalProductWorker(r.store, r.api).once()
+    after = logical.listing("lot")
+    assert after["error_code"] is None
+    for key in ("id", "code", "revision", "control_revision", "enabled", "armed_at", "baseline", "config"):
+        assert after[key] == before[key]
+    assert len(r.api.mutations) == 1  # Only the original test binding edit.
+    purchase(r)
+    await drain(r)
+    assert len(r.api.messages) == 1 and r.api.orders["order"]["status"] == "SENT"
+    assert not r.api.remote.payments
+    assert not r.store.rows("SELECT 1 FROM outbox WHERE kind IN ('delivery','delivery_text','gift_send')")
+
+
+@pytest.mark.parametrize("conflict", ["obtaining", "relisted_fields", "duplicate"])
+async def test_platform_field_exception_does_not_adopt_conflicting_listing(shop, conflict):
+    r = await shop()
+    await save(r)
+    await click(r, suffix=":bind")
+    await r.worker.once()
+    if conflict == "obtaining":
+        r.api.item["obtaining_type"] = {"id": "different-method"}
+    else:
+        r.api.items["another"] = {**deepcopy(r.api.item), "id": "another"}
+        if conflict == "relisted_fields":
+            r.api.item["status"] = "SOLD"
+            r.api.items["another"]["data_fields"] = [{"id": "details", "value": "different fixture"}]
+    logical = LogicalProducts(r.store, r.api)
+    await LogicalProductWorker(r.store, r.api).once()
+    assert (
+        logical.listing("lot")["error_code"]
+        == {
+            "obtaining": "RELIST_BINDING_CONFLICT",
+            "relisted_fields": "RELIST_CRITICAL_FIELDS_CHANGED",
+            "duplicate": "DUPLICATE_ACTIVE_MARKER",
+        }[conflict]
+    )
+    assert not logical.listing("another")
+    assert len(r.api.mutations) == 1 and not r.api.messages and not r.api.remote.payments
+
+
 async def test_edit_permission_revoked_after_confirmation_never_arms(shop):
     r = await shop()
     await save(r)

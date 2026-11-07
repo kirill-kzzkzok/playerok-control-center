@@ -882,6 +882,18 @@ class LogicalProducts:
         link = self.listing(item.get("id"))
         actual = critical(item)
         baseline = json.loads(product["baseline"])
+        # For an already verified public Playerok-delivered listing, these
+        # fields describe goods managed by Playerok. The bot only follows up
+        # after a separately verified automated sale. Keep the original
+        # fingerprint for inheritance and private purchase snapshots.
+        platform_managed_fields = (
+            check_description
+            and product["handler"] == "manual"
+            and json.loads(product["config"]).get("platform_only") is True
+            and link
+            and link["id"] == product["id"]
+            and not link["source_order_id"]
+        )
         # RUB sale price is not delivery identity or the approved Stars cost.
         # Keep the original snapshot for audit; callers obtain fresh server data.
         for key, label in {
@@ -891,6 +903,8 @@ class LogicalProducts:
             "name": "постоянный код",
             "fields": "характеристики или поля получения",
         }.items():
+            if key == "fields" and platform_managed_fields:
+                continue
             if actual.get(key) != baseline.get(key):
                 raise Conflict("Изменились " + label + ". Проверьте настройки и подтвердите привязку заново")
         if link and marked_title(item["name"], product["code"]) != link["title_snapshot"]:

@@ -16,7 +16,7 @@ from app.security.logging import event
 from app.services.automation import Automation, DeliveryPolicy
 from app.services.edit_confirmation import is_ordinary_edit
 from app.services.inventory import Inventory
-from app.services.logical_products import LogicalProducts
+from app.services.logical_products import PROBLEMS, LogicalProducts
 from app.services.playerok_connection import REASONS, TEMPORARY_READ_FAILURES
 from app.services.products import ValidationError
 from app.services.sync_health import orders_sync_failed
@@ -390,7 +390,7 @@ class ProductReadiness:
             if product["error_code"] and not migrating:
                 add(
                     "BINDING_CONFLICT",
-                    "Обнаружен конфликт постоянного кода. Выдача остановлена.",
+                    PROBLEMS.get(product["error_code"], "Проверка привязки объявления не завершена."),
                     "Проверить привязку",
                     "lp:item:" + ident,
                     terminal=True,
