@@ -11,8 +11,14 @@ async def test_platform_launch_does_not_advertise_bot_delivery_messages(shop):
     await platform_draft(r)
     text = r.session.last_panel.text
     assert "Приветствие:" not in text and "После выдачи:" not in text
-    assert "Сообщение после оплаты: выключено" in text
-    assert "Бот не отправляет товар повторно" in text
+    assert "Выдаёт Playerok" in text
+    ident = (await r.state.get_data())["launch"]["id"]
+    value = r.store.get_draft(ident, 7)["payload"]
+    assert value["mode"] == "playerok" and value["platform_reply"] is False
+    assert not r.api.published and not r.remote.payments
+    assert not r.store.rows(
+        "SELECT 1 FROM outbox WHERE kind IN ('publish','premium_publish','delivery','delivery_text')"
+    )
 
 
 async def test_gift_launch_default_notification_is_explicit(shop):
@@ -21,5 +27,9 @@ async def test_gift_launch_default_notification_is_explicit(shop):
     await r.ui.click("launch:from:" + r.original_draft)
     text = r.session.last_panel.text
     assert "Приветствие:" not in text
-    assert "После выдачи: стандартное уведомление" in text
+    assert "Выдача: Telegram Gifts" in text
     assert "стандартное /" not in text
+    ident = (await r.state.get_data())["launch"]["id"]
+    value = r.store.get_draft(ident, 7)["payload"]
+    assert value["mode"] == "gifts" and value["after"] == ""
+    assert not r.api.published and not r.remote.payments

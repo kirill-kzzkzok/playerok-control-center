@@ -1,24 +1,26 @@
-"""The launch preview explains a conservative inheritance choice before committing it."""
+"""Old inheritance callbacks stage choices without arming the saved product."""
 
 from app.services.logical_products import LogicalProducts
 from tests.test_final_modern_gift_creation import shop as shop_fixture
+from tests.test_ux_redesign import buttons
 
 shop = shop_fixture
 
 
-async def test_launch_explains_both_inheritance_choices_without_implicitly_arming(shop):
+async def test_old_inheritance_callbacks_stage_both_choices_without_implicitly_arming(shop):
     r = shop
     await r.create_and_prepare()
-    assert "перевыставления с тем же кодом" in r.session.last_panel.text
+    assert "Запуск продаж" in r.session.last_panel.text
+    assert not any(key.endswith(":inherit") for key in buttons(r.session.last_panel))
+    assert r.store.get_draft(r.launch_id, 7)["payload"]["inherit"] is True
     product = LogicalProducts(r.store, r.api).listing("item")
     assert not product["inherit_enabled"] and not product["enabled"]
     await r.launch_action("advanced")
     await r.launch_action("inherit")
-    assert "каждое новое объявление проверяется отдельно" in r.session.last_panel.text
+    assert r.store.get_draft(r.launch_id, 7)["payload"]["inherit"] is False
     await r.launch_action("advanced")
     await r.launch_action("inherit")
-    assert "перевыставления с тем же кодом" in r.session.last_panel.text
-    assert "денежные разрешения" in r.session.last_panel.text
+    assert r.store.get_draft(r.launch_id, 7)["payload"]["inherit"] is True
     unchanged = LogicalProducts(r.store, r.api).listing("item")
     assert unchanged == product
     assert not r.api.published and not r.remote.payments
