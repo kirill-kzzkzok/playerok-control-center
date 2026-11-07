@@ -5,7 +5,7 @@ import secrets
 from dataclasses import asdict
 
 from app.database.store import Conflict
-from app.gifts.core import gift_name
+from app.gifts.core import gift_codes, gift_name
 from app.services.automation import message_text
 from app.services.inventory import stock_values
 from app.services.listing_launch import ListingLaunch, launch_prefix
@@ -404,37 +404,43 @@ class LaunchPanel:
                 value["ready"] = await self.service.check(owner, value)
                 self.store.update_draft(draft["id"], owner, draft["revision"], value)
                 return await self.show(owner, state, draft["id"])
-        elif command == "catalog":
-            await self.service.gifts.refresh()
-            entries = self.store.rows("SELECT code,stars FROM gift_catalog WHERE available=1 ORDER BY code")
-            await state.update_data(launch_gifts=[])
-            return (
-                "🎁 Выберите подарки по порядку. Повторное нажатие добавляет ещё один такой подарок. После выбора сохраните состав в серверный черновик.",
-                keyboard(
-                    [
-                        [(f"{gift_name(g['code'])} · {g['stars']} ⭐", p + "gift:" + g["code"])]
-                        for g in entries
-                    ],
-                    back=("Отмена", "launch:open:" + draft["id"]),
-                ),
+        elif command in {"catalog", "gift", "giftundo", "giftclear"}:
+            if command == "catalog" and not self.store.rows("SELECT 1 FROM gift_catalog LIMIT 1"):
+                await self.service.gifts.refresh()
+            chosen = list(
+                value.get("gift_selection", gift_codes(value["gift_code"]) if value.get("gift_code") else [])
             )
-        elif command == "gift":
-            chosen = (await state.get_data()).get("launch_gifts", [])
-            if (
-                not self.store.rows("SELECT 1 FROM gift_catalog WHERE code=? AND available=1", (parts[3],))
-                or len(chosen) >= self.service.gifts.settings.max_gifts
-            ):
-                raise ValidationError("Подарок недоступен или превышено допустимое количество")
-            chosen.append(parts[3])
-            await state.update_data(launch_gifts=chosen)
+            if command == "gift":
+                if (
+                    not self.store.rows(
+                        "SELECT 1 FROM gift_catalog WHERE code=? AND available=1", (parts[3],)
+                    )
+                    or len(chosen) >= self.service.gifts.settings.max_gifts
+                ):
+                    raise ValidationError("Подарок недоступен или превышено допустимое количество")
+                chosen.append(parts[3])
+            elif command == "giftundo":
+                chosen = chosen[:-1]
+            elif command == "giftclear":
+                chosen = []
+            value["gift_selection"] = chosen
+            self.store.update_draft(draft["id"], owner, draft["revision"], value)
+            draft = self.service.load(owner, draft["id"])
+            nonce = secrets.token_hex(6)
+            await state.update_data(launch={"id": draft["id"], "revision": draft["revision"], "nonce": nonce})
+            p = f"ln:{nonce}:"
             entries = self.store.rows("SELECT code,stars FROM gift_catalog WHERE available=1 ORDER BY code")
-            return "🎁 Выбрано: " + ", ".join(gift_name(code) for code in chosen), keyboard(
-                [[(f"{gift_name(g['code'])} · {g['stars']} ⭐", p + "gift:" + g["code"])] for g in entries]
-                + [[("Сохранить состав в черновик Playerok", p + "savegifts")]],
-                back=("Отмена", "launch:open:" + draft["id"]),
-            )
+            rows = [[(f"{gift_name(g['code'])} · {g['stars']} ⭐", p + "gift:" + g["code"])] for g in entries]
+            if chosen:
+                rows += [
+                    [("Убрать последний", p + "giftundo"), ("Очистить выбор", p + "giftclear")],
+                    [("Сохранить состав в черновик Playerok", p + "savegifts")],
+                ]
+            return "🎁 Выбрано: " + (
+                ", ".join(gift_name(code) for code in chosen) or "пока ничего"
+            ), keyboard(rows, back=("К запуску", "launch:open:" + draft["id"]))
         elif command == "savegifts":
-            chosen = (await state.get_data()).get("launch_gifts", [])
+            chosen = value.get("gift_selection", [])
             if not chosen:
                 raise ValidationError("Выберите хотя бы один подарок")
             item = await self.service.automation.item(owner, value["launch_target"])
@@ -456,7 +462,7 @@ class LaunchPanel:
             self.store.update_draft(draft["id"], owner, draft["revision"], value)
             await panel.card(owner, item["id"], state)
             view = (await state.get_data())["logical_view"]
-            await state.update_data(logical_prepared=prepared)
+            await state.update_data(logical_prepared=prepared, logical_launch_id=draft["id"])
             return panel.preview(prepared, view)
         elif command == "check":
             value["ready"] = await self.service.check(owner, value)

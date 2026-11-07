@@ -787,3 +787,69 @@ async def test_cancelled_launch_pointer_does_not_reopen_dead_configuration(launc
     reopened = await r.launch.open(7, "item")
     assert r.store.get_draft(reopened, 7)["state"] == "DRAFT"
     assert not r.store.rows("SELECT * FROM outbox")
+
+
+async def test_launch_gift_selection_can_undo_clear_and_reject_duplicate_callback(launch):
+    from tests.test_ux_redesign import buttons
+
+    r = launch
+    bot = Bot("123:" + "x" * 35, session=TelegramSession())
+    ui = Interaction(bot, dispatcher(r.store, r.api))
+    state = FSMContext(SQLiteStorage(r.store), StorageKey(bot_id=123, chat_id=7, user_id=7))
+    try:
+        await ui.click("launch:item:item")
+        nonce = (await state.get_data())["launch"]["nonce"]
+        await ui.click(f"ln:{nonce}:catalog")
+        pick = next(k for k in buttons(bot.session.last_panel) if ":gift:" in k)
+        await ui.click(pick)
+        assert any(k.endswith(":giftundo") for k in buttons(bot.session.last_panel))
+        ident = (await state.get_data())["launch"]["id"]
+        selected = r.store.get_draft(ident, 7)["payload"]["gift_selection"]
+        await ui.click(pick)
+        assert r.store.get_draft(ident, 7)["payload"]["gift_selection"] == selected
+        await ui.click("launch:open:" + ident)
+        nonce = (await state.get_data())["launch"]["nonce"]
+        await ui.click(f"ln:{nonce}:catalog")
+        await ui.click(next(k for k in buttons(bot.session.last_panel) if k.endswith(":giftundo")))
+        assert r.store.get_draft(ident, 7)["payload"]["gift_selection"] == []
+        assert not r.store.rows("SELECT * FROM outbox")
+    finally:
+        await bot.session.close()
+
+
+async def test_gift_binding_keeps_exact_launch_return_after_restart(launch):
+    from tests.test_ux_redesign import buttons
+
+    r = launch
+    r.store.set_setting("playerok:account_id", r.api.account.id)
+
+    def update_item(id, **changes):
+        assert id == "item"
+        r.api.item.update(changes)
+        return deepcopy(r.api.item)
+
+    r.api.account.update_item = update_item
+    bot = Bot("123:" + "x" * 35, session=TelegramSession())
+    ui = Interaction(bot, dispatcher(r.store, r.api))
+    state = FSMContext(SQLiteStorage(r.store), StorageKey(bot_id=123, chat_id=7, user_id=7))
+    try:
+        await ui.click("launch:item:item")
+        ident = (await state.get_data())["launch"]["id"]
+        nonce = (await state.get_data())["launch"]["nonce"]
+        await ui.click(f"ln:{nonce}:catalog")
+        await ui.click(next(k for k in buttons(bot.session.last_panel) if ":gift:" in k))
+        await ui.click(next(k for k in buttons(bot.session.last_panel) if k.endswith(":savegifts")))
+        await ui.click(
+            next(k for k in buttons(bot.session.last_panel) if k.startswith("lp:") and k.endswith(":commit"))
+        )
+        assert "launch:open:" + ident in buttons(bot.session.last_panel)
+        assert r.store.get_draft(ident, 7)["payload"].get("gift_binding_operation")
+        await r.worker.once()
+        ui.dp = dispatcher(r.store, r.api)
+        await ui.click("lp:item:item")
+        assert "launch:open:" + ident in buttons(bot.session.last_panel)
+        await ui.click("launch:open:" + ident)
+        assert r.store.get_draft(ident, 7)["payload"]["gift_code"]
+        assert not r.remote.payments and not r.publications
+    finally:
+        await bot.session.close()
