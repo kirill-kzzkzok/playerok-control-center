@@ -293,9 +293,10 @@ async def test_platform_reply_toggle_applies_to_future_orders_without_stopping_e
     assert not r.api.remote.payments
 
 
-async def test_stock_message_can_be_disabled_and_reenabled_without_stopping_delivery(shop):
+@pytest.mark.parametrize("mode", ["unique_stock", "fixed_text"])
+async def test_message_can_be_disabled_and_reenabled_without_stopping_delivery(shop, mode):
     r = await shop()
-    await setup_ui(r, "unique_stock")
+    await setup_ui(r, mode, "private-unit" if mode == "fixed_text" else None)
     Orders(r.store).ingest(r.api.order("old"))
     await EnrollmentWorker(r.store, r.api).once()
     reserve = r.store.rows("SELECT * FROM reservations")
@@ -325,3 +326,25 @@ async def test_stock_message_can_be_disabled_and_reenabled_without_stopping_deli
     assert messages["old"][-1] == messages["on"][-1] == "Спасибо за покупку!"
     assert len(messages["off"]) == 1 and "Спасибо за покупку!" not in messages["off"]
     assert not r.api.remote.payments
+
+
+async def test_gift_success_message_can_be_disabled_without_affecting_gift(shop):
+    r = await shop(gift=True)
+    await setup_ui(r, "telegram_gifts", "gift: heart")
+    gifts = GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender)
+    Orders(r.store).ingest(r.api.order("gift-old"))
+    await r.ui.click("lp:messages:lot")
+    await click(r, suffix=":toggleafter")
+    Orders(r.store).ingest(r.api.order("gift-off"))
+    for _ in range(12):
+        await gifts.once()
+        await r.worker.once()
+    await r.ui.click("lp:messages:lot")
+    await click(r, suffix=":toggleafter")
+    Orders(r.store).ingest(r.api.order("gift-on"))
+    for _ in range(8):
+        await gifts.once()
+        await r.worker.once()
+    assert len(r.api.remote.payments) == 3
+    assert [m["chat_id"] for m in r.api.messages] == ["chat-gift-old", "chat-gift-on"]
+    assert not r.store.rows("SELECT id FROM outbox WHERE kind='gift_notice' AND target='gift-off'")

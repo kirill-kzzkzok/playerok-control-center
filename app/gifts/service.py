@@ -903,6 +903,14 @@ class GiftService:
                 )
 
     def queue_notice(self, db, job, outcome):
+        if (
+            outcome == "DELIVERED"
+            and db.execute(
+                "SELECT 1 FROM logical_order_scopes WHERE order_id=? AND json_type(config,'$.gift_notice')='false'",
+                (job["order_id"],),
+            ).fetchone()
+        ):
+            return
         self.store.enqueue(
             "gift-notice:" + job["order_id"] + ":" + outcome,
             "gift_notice",

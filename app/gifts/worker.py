@@ -84,6 +84,8 @@ class GiftWorker:
             "SELECT g.* FROM gift_jobs g WHERE "
             "(state='SUCCEEDED' AND (completion_state='WAITING' OR NOT EXISTS "
             "(SELECT 1 FROM outbox o WHERE o.operation_key='gift-notice:'||g.order_id||':DELIVERED'))) "
+            "AND (completion_state='WAITING' OR NOT EXISTS (SELECT 1 FROM logical_order_scopes s "
+            "WHERE s.order_id=g.order_id AND json_type(s.config,'$.gift_notice')='false')) "
             "OR (state='INVALID_RECIPIENT' AND refund_state NOT IN ('QUEUED','SPENDING') AND NOT EXISTS "
             "(SELECT 1 FROM outbox o WHERE o.operation_key='gift-notice:'||g.order_id||':'||"
             "CASE WHEN g.refund_state='CONFIRMED' THEN 'REFUNDED' ELSE 'INVALID' END)) "

@@ -89,6 +89,7 @@ def without_messages(config, *, completion=False):
     ignored = {"greeting", "after"}
     if value.get("platform_only") is True:
         ignored.add("paid_reply")
+    ignored.add("gift_notice")
     if completion:
         ignored |= {"auto_fulfill", "mark_sent", "automatic_completion"}
     return {key: selected for key, selected in value.items() if key not in ignored}
@@ -103,8 +104,9 @@ class LogicalProducts:
         from app.services.delivery_chains import DeliveryChains
 
         completion = field == "completion"
-        text = text if completion and type(text) is bool else message_text(text)
-        if field not in {"greeting", "after", "completion"} or (
+        gift_notice = field == "gift_notice"
+        text = text if (completion or gift_notice) and type(text) is bool else message_text(text)
+        if field not in {"greeting", "after", "completion", "gift_notice"} or (
             paid_reply is not None and (field != "greeting" or type(paid_reply) is not bool)
         ):
             raise Conflict("Поле сообщения недоступно")
@@ -124,13 +126,15 @@ class LogicalProducts:
                 or not product["verified_at"]
                 or product["handler"] == "manual"
                 and not platform
+                or gift_notice
+                and (product["handler"] != "telegram_gifts" or type(text) is not bool)
                 or paid_reply is not None
                 and not platform
                 or platform
                 and field not in {"greeting", "completion"}
                 or not platform
                 and product["handler"] == "telegram_gifts"
-                and field not in {"after", "completion"}
+                and field not in {"after", "completion", "gift_notice"}
             ):
                 raise Conflict("Сообщение доступно после подтверждения автоматического способа выдачи")
             aliases = db.execute(
@@ -219,7 +223,7 @@ class LogicalProducts:
                         db.execute(
                             "UPDATE gift_listings SET auto_fulfill=? WHERE item_id=?", (int(text), target)
                         )
-                    else:
+                    elif not gift_notice:
                         self.store.set_setting(
                             "gifts:listing_options:" + target,
                             {**self.store.setting("gifts:listing_options:" + target, {}), "after": text},
@@ -950,17 +954,30 @@ class LogicalProducts:
         ):
             raise Conflict("Сохранённая привязка объявления не подтверждена для текущих настроек")
 
+    def binding_recheck_allowed(self, product):
+        if product["error_code"] == "RELIST_CONFIRMATION_REQUIRED":
+            return True
+        if product["error_code"] != "RELIST_BINDING_CONFLICT":
+            return False
+        evidence = self.store.setting("logical:problem:" + product["id"], {})
+        return (
+            evidence.get("code") == product["error_code"]
+            and evidence.get("candidate_id") == product["item_id"]
+            and evidence.get("revision") == product["revision"]
+            and evidence.get("control_revision") == product["control_revision"]
+        )
+
     def verify_title_change(self, product, item):
         """Narrow exception for an explicitly confirmed title, never delivery authority."""
         if (
             not product
             or product["source_order_id"]
-            or product["error_code"] not in {None, "RELIST_CONFIRMATION_REQUIRED"}
+            or (product["error_code"] is not None and not self.binding_recheck_allowed(product))
             or not product["title_snapshot"]
             or item.get("id") != product["item_id"]
             or marker(item.get("name")) != product["code"]
             or item.get("deleted_at")
-            or item.get("status") not in {"APPROVED", "DRAFT", "SOLD"}
+            or item.get("status") not in {"APPROVED", "DRAFT", "SOLD"} | MODERATION_STATUSES
         ):
             raise Conflict("Изменение не ограничивается названием подтверждённого товара")
         if self.store.rows(

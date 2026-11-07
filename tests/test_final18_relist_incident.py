@@ -189,3 +189,42 @@ async def test_temporary_candidate_read_is_not_a_binding_conflict(shop, fault):
     await LogicalProductWorker(r.store, r.api).once()
     assert LogicalProducts(r.store, r.api).listing("lot")["error_code"] is None
     assert not r.api.messages and not r.api.remote.payments
+
+
+async def test_stock_rename_recovers_matching_binding_conflict_through_readiness_button(shop):
+    r = await shop()
+    await setup_ui(r, "unique_stock")
+    logical = LogicalProducts(r.store, r.api)
+    before = logical.listing("lot")
+    r.api.item["name"] = "Новое название [" + before["code"] + "]"
+    worker = LogicalProductWorker(r.store, r.api)
+    worker.problem(before, "RELIST_BINDING_CONFLICT", candidate_id="lot")
+    await r.ui.click("item:lot")
+    assert "rd:check:lot" in buttons(r.session.last_panel)
+    await r.ui.click("rd:check:lot")
+    after = logical.listing("lot")
+    assert after["title_snapshot"] == r.api.item["name"] and after["error_code"] is None
+    assert all(after[k] == before[k] for k in ("enabled", "armed_at", "revision", "control_revision"))
+    assert not r.api.messages and not r.api.remote.payments
+
+
+async def test_stock_rename_during_moderation_refreshes_title_without_blocking(shop):
+    r = await shop()
+    await setup_ui(r, "unique_stock")
+    logical = LogicalProducts(r.store, r.api)
+    before = logical.listing("lot")
+    r.api.item.update(name="Новое название [" + before["code"] + "]", status="PENDING_MODERATION")
+    r.api.call = _catalog_including_moderation(r.api.call, r.api.item)
+    await LogicalProductWorker(r.store, r.api).once()
+    after = logical.listing("lot")
+    assert after["title_snapshot"] == r.api.item["name"] and after["error_code"] is None
+    assert after["enabled"] == before["enabled"] == 1
+
+
+def _catalog_including_moderation(original, item):
+    async def call(method, **kwargs):
+        if method == "get_my_items":
+            return {"items": [deepcopy(item)], "page_info": {"has_next_page": False}}
+        return await original(method, **kwargs)
+
+    return call

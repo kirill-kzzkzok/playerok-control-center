@@ -537,14 +537,21 @@ class LogicalProductsPanel:
             expected = data.get("logical_message_edit")
             if (
                 not product
-                or product["handler"] not in {"unique_stock", "fixed_text"}
+                or product["handler"] not in {"unique_stock", "fixed_text", "telegram_gifts"}
                 or await state.get_state() != "logical:notice"
                 or data.get("logical_message_field") != "after"
                 or not expected
             ):
                 raise Conflict("Откройте сообщение после выдачи заново")
-            enabled = not json.loads(expected["config"]).get("after")
-            self.service.update_after(owner, view["item"], expected, "Спасибо за покупку!" if enabled else "")
+            config = json.loads(expected["config"])
+            if product["handler"] == "telegram_gifts":
+                enabled = config.get("gift_notice") is False
+                self.service.update_after(owner, view["item"], expected, enabled, field="gift_notice")
+            else:
+                enabled = not config.get("after")
+                self.service.update_after(
+                    owner, view["item"], expected, "Спасибо за покупку!" if enabled else ""
+                )
             text, markup = await self.card(owner, view["item"], state)
             return (
                 ("✅ Сообщение включено" if enabled else "✅ Сообщение выключено")
@@ -565,6 +572,13 @@ class LogicalProductsPanel:
             )
             await state.set_state("logical:notice")
             rows = []
+            if command == "editafter" and product["handler"] == "telegram_gifts":
+                label = (
+                    "Включить сообщение"
+                    if json.loads(product["config"]).get("gift_notice") is False
+                    else "Выключить сообщение"
+                )
+                rows = [[(label, prefix + "toggleafter")]]
             if command == "editafter" and product["handler"] in {"unique_stock", "fixed_text"}:
                 label = (
                     "Выключить сообщение"

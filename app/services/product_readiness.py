@@ -404,7 +404,7 @@ class ProductReadiness:
                     "BINDING_CONFLICT",
                     PROBLEMS.get(product["error_code"], "Проверка привязки объявления не завершена."),
                     "Проверить привязку",
-                    "lp:item:" + ident,
+                    "rd:check:" + ident,
                     terminal=True,
                 )
             complete_item = (
@@ -433,7 +433,7 @@ class ProductReadiness:
                         "ITEM_CHANGED",
                         str(exc),
                         "Подтвердить новое название" if title_only else "Проверить объявление",
-                        ("lp:title:" if title_only else "lp:item:") + ident,
+                        ("lp:title:" if title_only else "rd:check:") + ident,
                     )
             if not for_arm and owner_enabled != projection_enabled:
                 add(
@@ -682,6 +682,8 @@ class ProductReadiness:
                 if after
                 else "Стандартное уведомление после подтверждённой доставки"
             )
+            if config.get("gift_notice") is False:
+                message = "После выдачи: выключено"
             complete = bool(gift and gift["auto_fulfill"])
         else:
             if mode == "unique_stock" and not Inventory(self.store, self.api).counts(ident)["AVAILABLE"]:
@@ -739,7 +741,7 @@ class ProductReadiness:
             "ready": state == "READY",
             "problems": problems,
             "message": message,
-            "auto_message": bool(gift)
+            "auto_message": bool(gift) and config.get("gift_notice") is not False
             if mode == "telegram_gifts"
             else bool(
                 policy.paid_reply
@@ -779,7 +781,11 @@ class ProductReadiness:
         cache_key = (self.api.account.id, ident)
         version = self.item_version(ident)
         changed = old.get("edit_version", cached_versions.get(cache_key)) != version
-        if not for_arm and (lock.locked() or fresh(old.get("attempt"), 30) and not changed):
+        product = self.logical.listing(ident)
+        explicit_binding_check = not automatic and product and self.logical.binding_recheck_allowed(product)
+        if not for_arm and (
+            lock.locked() or fresh(old.get("attempt"), 30) and not changed and not explicit_binding_check
+        ):
             return {**self.snapshot(ident), "busy": True}
         async with lock:
             item, error = None, None
@@ -792,14 +798,15 @@ class ProductReadiness:
                         item = {**item, "_ui_cached": True, "_ui_stale": True}
                         raise self.superseded_read(ident, owner=owner)
                     product = self.logical.listing(ident)
-                    if product and product["error_code"] == "RELIST_CONFIRMATION_REQUIRED":
+                    if product and self.logical.binding_recheck_allowed(product):
                         stage = "binding_scan"
                         from app.workers.logical_products import LogicalProductWorker
 
                         # Clear an old scan blocker only through a complete
                         # catalogue/duplicate check and a second server read.
-                        self.logical.verify_listing(product, item)
                         await LogicalProductWorker(self.store, self.api).scan(product_id=product["id"])
+                    elif product:
+                        await self.logical.refresh_title(item)
                     _, policy = self.automation.get(ident)
                     gift = self.gifts.listing(ident)
                     if (
