@@ -248,6 +248,26 @@ class LogicalProductWorker:
             ):
                 self.problem(product, "DUPLICATE_ACTIVE_MARKER")
                 continue
+            if not candidates and product["error_code"] == "RELIST_CRITICAL_FIELDS_CHANGED":
+                # A sale can leave the old listing outside the active catalogue.
+                # Recheck only the exact public alias named by the saved incident.
+                problem = self.store.setting("logical:problem:" + product["id"], {})
+                linked = self.service.listing(problem.get("candidate_id"))
+                if (
+                    linked
+                    and linked["id"] == product["id"]
+                    and not linked["source_order_id"]
+                    and self.service.same_item_problem(linked, "RELIST_CRITICAL_FIELDS_CHANGED")
+                ):
+                    try:
+                        sold = await self.api.call("get_item", id=linked["item_id"])
+                    except APIError as error:
+                        if error.code != "HTTP_404":
+                            raise
+                    else:
+                        if sold.get("id") == linked["item_id"] and sold.get("status") == "SOLD":
+                            require_listing_details(sold)
+                            candidates.append(sold)
             for item in candidates:
                 if product_id and not self.service.listing(item["id"]):
                     # An explicit binding recovery can verify existing aliases,
@@ -274,9 +294,18 @@ class LogicalProductWorker:
                     ):
                         # The next scan will use one coherent publication state.
                         continue
+                    linked = self.service.listing(item["id"])
+                    sold_transition = (
+                        linked
+                        and linked["id"] == product["id"]
+                        and not linked["source_order_id"]
+                        and item.get("status") == "APPROVED"
+                        and fresh.get("status") == "SOLD"
+                    )
                     if (
                         fresh.get("id") != item["id"]
                         or fresh.get("status") != item.get("status")
+                        and not sold_transition
                         or fresh.get("deleted_at") != item.get("deleted_at")
                         or fresh.get("description") != item.get("description")
                         or critical(fresh) != critical(item)

@@ -957,7 +957,10 @@ class LogicalProducts:
     def binding_recheck_allowed(self, product):
         if product["error_code"] == "RELIST_CONFIRMATION_REQUIRED":
             return True
-        if product["error_code"] != "RELIST_BINDING_CONFLICT":
+        return self.same_item_problem(product, "RELIST_BINDING_CONFLICT")
+
+    def same_item_problem(self, product, code):
+        if product["error_code"] != code:
             return False
         evidence = self.store.setting("logical:problem:" + product["id"], {})
         return (
@@ -1408,9 +1411,9 @@ class LogicalProducts:
             or marker(item.get("name")) != product["code"]
             or item.get("status")
             not in (
-                {"APPROVED", "SOLD"}
-                if paid_order
-                else {"APPROVED"} | (MODERATION_STATUSES if existing else set())
+                {"APPROVED"}
+                | ({"SOLD"} if paid_order or existing else set())
+                | (MODERATION_STATUSES if existing and not paid_order else set())
             )
             or item.get("deleted_at")
         ):

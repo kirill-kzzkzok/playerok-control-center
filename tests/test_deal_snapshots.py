@@ -311,3 +311,53 @@ async def test_full_delivery_read_uses_existing_safe_get_transport_without_mutat
     finally:
         await close_calls(api)
         account.close()
+
+
+async def test_catalog_sale_during_hydration_does_not_raise_false_binding_conflict(case):
+    r = case
+    original = r.api.call
+
+    async def call(method, **kwargs):
+        if method == "get_my_items":
+            return r.api.page("items", [r.original])
+        return await original(method, **kwargs)
+
+    r.api.call = call
+    await LogicalProductWorker(r.store, r.api).once()
+    assert LogicalProducts(r.store, r.api).listing("lot")["server_status"] == "SOLD"
+    assert not r.store.rows("SELECT 1 FROM inbox WHERE kind='logical_product_blocked'")
+    await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+    await r.worker.once()
+    await r.worker.once()
+    assert len(r.api.remote.payments) == 2
+
+
+async def test_existing_false_sale_conflict_clears_without_delivering_manually_sent_order(case):
+    r = case
+    r.partial["status"] = r.full["status"] = "SENT"
+    Orders(r.store).ingest(r.partial)
+    logical = LogicalProducts(r.store, r.api)
+    before = logical.listing("lot")
+    worker = LogicalProductWorker(r.store, r.api)
+    worker.problem(before, "RELIST_CRITICAL_FIELDS_CHANGED", candidate_id="lot")
+    await worker.once()
+    after = logical.listing("lot")
+    assert after["error_code"] is None and after["server_status"] == "SOLD"
+    assert after["enabled"] == before["enabled"] == 1
+    await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
+    assert not r.store.rows("SELECT 1 FROM gift_jobs")
+    assert not r.api.remote.payments
+
+
+async def test_sold_source_with_changed_category_cannot_clear_saved_conflict(case):
+    r = case
+    r.partial["status"] = r.full["status"] = "SENT"
+    Orders(r.store).ingest(r.partial)
+    r.api.item["category"] = {"id": "different-category"}
+    logical = LogicalProducts(r.store, r.api)
+    worker = LogicalProductWorker(r.store, r.api)
+    worker.problem(logical.listing("lot"), "RELIST_CRITICAL_FIELDS_CHANGED", candidate_id="lot")
+    await worker.once()
+    assert logical.listing("lot")["error_code"] is not None
+    assert not r.store.rows("SELECT 1 FROM gift_jobs")
+    assert not r.api.remote.payments
