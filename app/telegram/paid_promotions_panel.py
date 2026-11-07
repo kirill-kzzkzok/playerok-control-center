@@ -1,3 +1,5 @@
+from dataclasses import asdict
+
 """Nested paid placement screens; confirmation tokens use existing durable FSM."""
 
 import json
@@ -257,7 +259,16 @@ class PaidPromotionsPanel:
             p = (await state.get_data()).get("paid_arm", {})
             if p.get("nonce") != parts[2] or p.get("account") != self.api.account.id:
                 raise Conflict("Подтверждение расходов устарело")
-            self.service.arm(owner, p["revision"])
+            with self.service.store.transaction():
+                revision = p["revision"]
+                if p.get("enable"):
+                    current, policy, selection = self.service.settings.get()
+                    if current != revision:
+                        raise Conflict("Настройки расходов изменились. Откройте разрешение заново")
+                    revision = self.service.settings.save(
+                        owner, revision, {**asdict(policy), "enabled": True}, selection
+                    )
+                self.service.arm(owner, revision)
             await state.clear()
             return "Повторные покупки разрешены для текущих настроек и подтверждённых тарифов.", keyboard(
                 [[("⛔ Остановить продвижение", "promo:stop")]], back=("К продвижению", "promotions")

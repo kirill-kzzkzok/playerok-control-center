@@ -2,6 +2,8 @@
 
 import pytest
 from aiogram import Bot
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.base import StorageKey
 
 from app.workers.promotions import PromotionWorker
 from tests.test_paid_promotions import rig as rig_fixture
@@ -28,10 +30,15 @@ async def test_disabled_promotion_has_enable_and_budget_then_explicit_money_cons
         assert not any("Расписание" in text for text in visible.values())
         await ui.click("promo:budget")
         ui.dp = production_dispatcher(r.store, r.api)
+        before = r.settings.get()
         await ui.message("50")
+        assert r.settings.get() == before
+        state = FSMContext(ui.dp.storage, StorageKey(bot_id=123, chat_id=7, user_id=7))
+        nonce = (await state.get_data())["promotion"]["nonce"]
+        await ui.click(f"pp:{nonce}:save")
         _, policy, _ = r.settings.get()
-        assert policy.daily == "50.00" and policy.per_operation == "20.00"
-        assert policy.monthly == "1000.00" and policy.max_operations_per_item == 10
+        assert policy.daily == "50.00" and policy.per_operation == before[1].per_operation
+        assert policy.monthly == before[1].monthly and policy.max_operations_per_item == 10
         assert not r.store.setting("promotions:paid_authority")
         assert not r.api.charges and not r.store.rows("SELECT * FROM outbox")
         await ui.click("promo:enable")

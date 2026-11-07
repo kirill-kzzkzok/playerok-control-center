@@ -72,6 +72,7 @@ class PromotionsPanel:
         return await self.show(
             {
                 "revision": revision,
+                "account": self.api.account.id,
                 "values": asdict(policy),
                 "selection": selection,
                 "advanced": advanced,
@@ -304,40 +305,24 @@ class PromotionsPanel:
         self.service.access.orders.owner(owner)
         parts = action.split(":")
         if action == "promo:budget":
-            revision, policy, selection = self.service.get()
-            await state.set_data(
-                {
-                    "promotion": {
-                        "revision": revision,
-                        "values": asdict(policy),
-                        "selection": selection,
-                        "account": self.api.account.id,
-                        "field": "daily_budget",
-                    }
-                }
-            )
-            await state.set_state("promotion:value")
-            return (
-                (
-                    f"Дневной предел сейчас: {policy.daily} ₽. Введите новый предел в рублях.\n"
-                    "Существующие более низкие лимиты сохранятся. Для новой настройки: операция не выше дневного предела, "
-                    "месяц — не выше 30 дневных пределов, до 30 поднятий на товар. "
-                    "Все границы будут показаны перед отдельным разрешением расходов. Ввод суммы ничего не оплачивает."
-                ),
-                keyboard([], back=("Отмена", "promotions")),
-            )
+            await self.settings(state, group="budget")
+            nonce = (await state.get_data())["promotion"]["nonce"]
+            return await self.callback(f"pp:{nonce}:edit:daily", owner, state)
         if action == "promo:enable":
-            revision, policy, selection = self.service.get()
+            _revision, policy, _selection = self.service.get()
             if (
                 min(money(policy.per_operation), money(policy.daily), money(policy.monthly)) <= 0
                 or policy.max_operations_per_item < 1
             ):
                 return await self.callback("promo:budget", owner, state)
-            if not policy.enabled:
-                self.service.save(owner, revision, {**asdict(policy), "enabled": True}, selection)
             from app.telegram.paid_promotions_panel import PaidPromotionsPanel
 
-            return await PaidPromotionsPanel(self.service.store, self.api).callback("payp:arm", owner, state)
+            result = await PaidPromotionsPanel(self.service.store, self.api).callback(
+                "payp:arm", owner, state
+            )
+            pending = (await state.get_data())["paid_arm"]
+            await state.update_data(paid_arm={**pending, "enable": not policy.enabled})
+            return result
         if action == "promo:expenses":
             rows = self.service.store.rows(
                 "SELECT item_id,amount,status,created_at FROM promotion_expenses ORDER BY created_at DESC LIMIT 20"
@@ -415,6 +400,8 @@ class PromotionsPanel:
         view = data.get("promotion", {})
         if len(parts) not in {3, 4} or parts[1] != view.get("nonce"):
             raise Conflict("Настройки продвижения устарели")
+        if view.get("account", self.api.account.id) != self.api.account.id:
+            raise Conflict("Аккаунт изменился. Откройте настройки заново")
         command, values = parts[2], view["values"]
         if command in {"advanced", "basic"}:
             view["advanced"] = command == "advanced"
@@ -431,7 +418,11 @@ class PromotionsPanel:
             await state.update_data(promotion=view)
             await state.set_state("promotion:value")
             back = ("⬅️ К параметрам", f"pp:{parts[1]}:group:{view.get('group', 'general')}")
-            return EDIT[parts[3]] + ". Введите значение; затем сохраните политику.", keyboard([], back=back)
+            return (
+                EDIT[parts[3]]
+                + f". Сейчас: {values[parts[3]]}. Введите значение; затем сохраните настройки.",
+                keyboard([], back=back),
+            )
         elif command == "save":
             view["revision"] = self.service.save(owner, view["revision"], values, view["selection"])
         else:
@@ -442,27 +433,8 @@ class PromotionsPanel:
         self.service.access.orders.owner(message.from_user.id)
         data = (await state.get_data())["promotion"]
         field = data.get("field")
-        if field == "daily_budget":
-            if data.get("account") != self.api.account.id:
-                raise Conflict("Аккаунт изменился. Откройте предел расходов заново")
-            daily = money((message.text or "").replace(",", "."))
-            if daily <= 0:
-                raise ValidationError("Введите положительный предел; для отключения используйте «Остановить»")
-            values = data["values"]
-            previous_operation, previous_month = money(values["per_operation"]), money(values["monthly"])
-            values.update(
-                daily=str(daily),
-                per_operation=str(min(previous_operation, daily) if previous_operation > 0 else daily),
-                monthly=str(previous_month if previous_month > 0 else daily * 30),
-                max_operations_per_item=values["max_operations_per_item"] or 30,
-            )
-            with self.service.store.transaction():
-                data["revision"] = self.service.save(
-                    message.from_user.id, data["revision"], values, data["selection"]
-                )
-                self.service.store.set_setting("promotions:paid_authority", {})
-            data.pop("field", None)
-            return await self.show(data, state)
+        if data.get("account", self.api.account.id) != self.api.account.id:
+            raise Conflict("Аккаунт изменился. Откройте настройки заново")
         if field not in EDIT:
             raise ValidationError("Поле устарело")
         value = message.text or ""
