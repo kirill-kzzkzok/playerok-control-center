@@ -35,12 +35,12 @@ class StockPanel:
             + escaped(item.get("name") or ident, 150)
             + "</b>\n"
             + "\n".join(
-                f"{LABELS[s]}: {n}"
+                f"{'Требует проверки' if s == 'QUARANTINED' else LABELS[s]}: {n}"
                 for s, n in counts.items()
                 if n or s in {"AVAILABLE", "RESERVED", "DELIVERED"}
             )
             + ("\n📦 Склад пуст" if not any(counts.values()) else "")
-            + "\nСодержимое единиц скрыто. Выданные и карантинные значения повторно не используются."
+            + "\nСодержимое единиц скрыто. Выданные и требующие проверки значения повторно не используются."
             + note,
             keyboard(rows),
         )

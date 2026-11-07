@@ -41,6 +41,29 @@ async def test_delivery_controls_do_not_offer_enable_and_stop_together(simulatio
     assert not r.api.messages
 
 
+async def test_stock_summary_explains_quarantine_and_keeps_existing_unit_history(simulation):
+    from tests.test_universal_delivery_e2e import setup_ui
+
+    r = await simulation()
+    await setup_ui(r, "unique_stock")
+    unit = r.store.rows("SELECT id FROM inventory ORDER BY id LIMIT 1")[0]["id"]
+    r.store.execute("UPDATE inventory SET status='QUARANTINED' WHERE id=?", (unit,))
+    before = r.store.rows("SELECT * FROM inventory ORDER BY id")
+    await r.ui.click("stock:view:lot")
+    assert "Требует проверки: 1" in r.session.last_panel.text
+    assert "Карантин" not in r.session.last_panel.text
+    assert "isolated-unit-" not in r.session.last_panel.text
+    history = [k for k in buttons(r.session.last_panel) if k.startswith("stock:list:")]
+    assert len(history) == 1
+    await r.ui.click(history[0])
+    await r.ui.click("stock:list:lot:QUARANTINED:0")
+    target = next(k for k in buttons(r.session.last_panel) if k.startswith("stock:unit:"))
+    await r.ui.click(target)
+    assert "isolated-unit-" in r.session.last_panel.text
+    assert r.store.rows("SELECT * FROM inventory ORDER BY id") == before
+    assert not r.api.messages and not r.api.remote.payments
+
+
 async def test_stop_requires_current_confirmation_and_cancel_is_read_only(simulation):
     from tests.test_universal_delivery_e2e import setup_ui
 
