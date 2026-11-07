@@ -161,6 +161,11 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
         InterfaceCleanup(store).recover()
         if recovered:
             logger.warning("Recovered %s operations as UNCERTAIN", recovered)
+        connection = PlayerokConnection(store, api)
+        verification_task = asyncio.create_task(
+            connection.check(cooldown=0), name="playerok-startup-verification"
+        )
+        tasks.append(verification_task)
         event("CHECK", "Проверка Telegram Bot...")
         telegram_verified, telegram_retry_at = False, 0
         try:
@@ -178,8 +183,7 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
                 "Telegram восстанавливает соединение; разрешённые операции Playerok продолжаются",
                 level=30,
             )
-        connection = PlayerokConnection(store, api)
-        verification = await connection.check(cooldown=0)
+        verification = await verification_task
         if verification["status"] == "CONNECTED":
             event("SUCCESS", "Playerok подключён. Аккаунт подтверждён")
         tasks.append(supervisor.start("playerok-connection-recovery", lambda: connection.run(stop), stop))

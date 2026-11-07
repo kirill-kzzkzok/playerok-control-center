@@ -3,7 +3,6 @@ import secrets
 
 from aiogram.types import BufferedInputFile
 
-from app.rendering.charts import revenue_chart
 from app.services.finance import checked_time
 from app.services.order_finance import profit_statistics, settlement_statistics
 from app.services.statistics import (
@@ -395,7 +394,13 @@ class StatisticsPanel:
             return await message.answer(text, reply_markup=self.markup(days))
         if view not in VIEWS:
             raise ValueError("График недоступен")
-        image = await asyncio.to_thread(revenue_chart, stats, view)
+
+        def render_chart():
+            from app.rendering.charts import revenue_chart
+
+            return revenue_chart(stats, view)
+
+        image = await asyncio.to_thread(render_chart)
         caption = (
             f"📊 <b>Статистика · {'всё время' if days == 0 else str(days * 24) + ' ч'}</b>\nЗаказов: {stats['orders']} · оплаченных: {stats['paid']}"
             + f"\nИзвестная выручка до комиссий: {stats['revenue']} ₽\nВозвраты: {stats['refunds']} ₽\nСредний чек: {stats['average'] if stats['average'] is not None else 'неизвестен'}"

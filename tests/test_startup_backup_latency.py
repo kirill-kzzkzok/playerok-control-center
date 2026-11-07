@@ -15,7 +15,10 @@ from tests.test_playerok_connection import API
 from tests.test_telegram_integration import Interaction, TelegramSession
 
 
-async def test_slow_backup_does_not_delay_polling_or_start_and_is_drained_on_shutdown(tmp_path, monkeypatch):
+@pytest.mark.parametrize("check_overlap", [False, True])
+async def test_slow_backup_does_not_delay_polling_or_start_and_is_drained_on_shutdown(
+    tmp_path, monkeypatch, check_overlap
+):
     from app import __main__ as application
 
     monkeypatch.chdir(tmp_path)
@@ -25,6 +28,16 @@ async def test_slow_backup_does_not_delay_polling_or_start_and_is_drained_on_shu
     api.account.writes_enabled = api.account.automation_enabled = False
     session = TelegramSession()
     bot = Bot("123:" + "x" * 35, session=session)
+    overlapping = []
+    if check_overlap:
+        me = bot.me
+
+        async def observe_me():
+            await asyncio.sleep(0)
+            overlapping.append(api.started.is_set())
+            return await me()
+
+        monkeypatch.setattr(bot, "me", observe_me)
     monkeypatch.setattr(
         bot,
         "get_webhook_info",
@@ -73,6 +86,8 @@ async def test_slow_backup_does_not_delay_polling_or_start_and_is_drained_on_shu
     running = asyncio.create_task(application.run_connected(config))
     try:
         await asyncio.wait_for(ready.wait(), 3)
+        if check_overlap:
+            assert overlapping == [True]
         elapsed = time.perf_counter() - started
         assert elapsed < 3
         print(f"Controlled polling and /start: {elapsed:.3f}s; backup still pending")
@@ -130,3 +145,26 @@ async def test_repeated_cleanup_cancellation_waits_for_backup_thread(tmp_path, m
         release.set()
         await asyncio.gather(task, return_exceptions=True)
         store.close()
+
+
+def test_application_import_defers_chart_engine_until_chart_is_requested():
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            "-X",
+            "utf8",
+            "-c",
+            "import sys; import app.__main__; assert 'matplotlib' not in sys.modules",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr[-1000:]
