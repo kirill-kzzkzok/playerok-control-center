@@ -110,22 +110,19 @@ async def test_relist_waits_for_viewer_before_scanning_and_resumes(shop):
     from app.workers.logical_products import LogicalProductWorker
 
     r = await shop()
+    await setup_ui(r, "fixed_text", "test-unit")
     worker = LogicalProductWorker(r.store, r.api)
     r.api.connection = SimpleNamespace(reads_allowed=False, state={"status": "UNKNOWN"})
-    scans = []
-
-    async def scan():
-        scans.append(True)
-        return 1
-
-    worker.once = scan
+    r.api.calls.clear()
     stop = asyncio.Event()
     with pytest.raises(APIError, match="CONNECTION_NOT_VERIFIED"):
         await worker._scan_with_connection_check(stop)
-    assert not scans
+    assert not r.api.calls
+    assert not r.store.setting("logical:scan:seller")
     r.api.connection.reads_allowed = True
+    r.api.connection.state = {"status": "CONNECTED"}
     assert await worker._scan_with_connection_check(stop) == 1
-    assert scans == [True]
+    assert r.api.calls
 
 
 async def test_relist_verification_wait_has_bounded_retry_and_recovers(shop, monkeypatch):
@@ -134,21 +131,26 @@ async def test_relist_verification_wait_has_bounded_retry_and_recovers(shop, mon
     from app.workers.logical_products import LogicalProductWorker
 
     r = await shop()
+    await setup_ui(r, "fixed_text", "test-unit")
+    operations = r.store.rows("SELECT id,status FROM outbox")
     worker = LogicalProductWorker(r.store, r.api)
     r.api.connection = SimpleNamespace(reads_allowed=False, state={"status": "UNKNOWN"})
     stop = asyncio.Event()
     delays = []
     scans = []
+    original = worker.once
 
     async def scan():
+        result = await original()
         scans.append(True)
         stop.set()
-        return 1
+        return result
 
     async def restore_connection(awaitable, timeout):
         awaitable.close()
         delays.append(timeout)
         r.api.connection.reads_allowed = True
+        r.api.connection.state = {"status": "CONNECTED"}
         raise TimeoutError
 
     worker.once = scan
@@ -157,7 +159,7 @@ async def test_relist_verification_wait_has_bounded_retry_and_recovers(shop, mon
     assert delays[0] <= 30
     assert scans == [True]
     assert r.store.setting("runtime:cycle:logical-products")["consecutive_failures"] == 0
-    assert not r.store.rows("SELECT * FROM outbox")
+    assert r.store.rows("SELECT id,status FROM outbox") == operations
     assert not r.api.remote.payments
 
 
@@ -176,3 +178,24 @@ async def test_relist_real_failure_after_verification_wait_still_alerts(shop):
         "SELECT n.status FROM notifications n JOIN inbox i ON i.key=n.event_key "
         "WHERE i.kind='worker_failed' AND n.status='SUCCEEDED'"
     ) == [{"status": "SUCCEEDED"}]
+
+
+async def test_verifier_wait_retries_in_same_cycle_before_scan_progress(shop):
+    from types import SimpleNamespace
+
+    from app.workers.logical_products import LogicalProductWorker
+
+    r = await shop()
+    await setup_ui(r, "fixed_text", "test-unit")
+    lock = asyncio.Lock()
+    r.api.connection = SimpleNamespace(
+        reads_allowed=False, lock=lock, state={"status": "UNKNOWN", "reason": "CHECK_IN_PROGRESS"}
+    )
+    worker = LogicalProductWorker(r.store, r.api)
+    async with lock:
+        task = asyncio.create_task(worker._scan_with_connection_check(asyncio.Event()))
+        await asyncio.sleep(0)
+        r.api.connection.reads_allowed = True
+        r.api.connection.state = {"status": "CONNECTED"}
+    assert await asyncio.wait_for(task, 2) == 1
+    assert not r.store.rows("SELECT 1 FROM inbox WHERE kind='worker_failed'")

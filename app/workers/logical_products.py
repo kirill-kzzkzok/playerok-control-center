@@ -60,6 +60,9 @@ class LogicalProductWorker:
         )
         if not products:
             return 0
+        connection = getattr(self.api, "connection", None)
+        if connection is not None and not connection.reads_allowed:
+            raise APIError("CONNECTION_NOT_VERIFIED")
         account = self.api.account.id
         if not account or account != self.store.setting("playerok:account_id"):
             raise Conflict("Аккаунт Playerok не подтверждён для сверки объявлений")
@@ -357,9 +360,6 @@ class LogicalProductWorker:
             )
 
     async def _scan_with_connection_check(self, stop):
-        connection = getattr(self.api, "connection", None)
-        if connection is not None and not connection.reads_allowed:
-            raise APIError("CONNECTION_NOT_VERIFIED")
         try:
             return await self.once()
         except APIError as error:
