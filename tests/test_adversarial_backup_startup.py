@@ -7,6 +7,8 @@ shop = shop_fixture
 
 
 async def test_backup_directory_failure_does_not_kill_paid_stock_and_retries(shop, tmp_path, monkeypatch):
+    import asyncio
+
     from app.services import backup_retention
 
     original = backup_retention.startup_backup
@@ -19,5 +21,15 @@ async def test_backup_directory_failure_does_not_kill_paid_stock_and_retries(sho
         return original(store, directory)
 
     monkeypatch.setattr(backup_retention, "startup_backup", backup)
+    wait_for = asyncio.wait_for
+
+    async def advance_backup_retry(awaitable, timeout):
+        # Backups now start inside this worker. Advance its retry timer rather
+        # than depending on a second attempt before polling is started.
+        if asyncio.current_task().get_name() == "upload-cleanup" and timeout == 60:
+            timeout = 0.01
+        return await wait_for(awaitable, timeout)
+
+    monkeypatch.setattr("app.workers.cleanup.asyncio.wait_for", advance_backup_retry)
     await bootstrap(shop, tmp_path, monkeypatch, None)
     assert len(calls) >= 2

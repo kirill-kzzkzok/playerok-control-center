@@ -66,12 +66,26 @@ class UploadCleanup:
         prune_edit_confirmations(self.store)
         return result
 
-    async def run(self, stop):
+    async def run(self, stop, *, startup_backup=False):
         while not stop.is_set():
-            if self.store.setting("backups:retention", {}).get("status") == "ERROR":
+            if startup_backup or self.store.setting("backups:retention", {}).get("status") == "ERROR":
                 from app.services.backup_retention import attempt_startup_backup
 
-                await asyncio.to_thread(attempt_startup_backup, self.store, Path("data/backups"))
+                startup_backup = False
+                backup = asyncio.create_task(
+                    asyncio.to_thread(attempt_startup_backup, self.store, Path("data/backups"))
+                )
+                interrupted = False
+                # Cancellation cannot stop SQLite's thread. Keep Store alive
+                # until its final health write, including repeated shutdown signals.
+                while not backup.done():
+                    try:
+                        await asyncio.shield(backup)
+                    except asyncio.CancelledError:
+                        interrupted = True
+                backup.result()
+                if interrupted:
+                    raise asyncio.CancelledError
             try:
                 await asyncio.to_thread(self.once)
             except (OSError, ValueError, ValidationError) as error:

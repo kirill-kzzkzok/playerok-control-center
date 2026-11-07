@@ -2,7 +2,6 @@ import asyncio
 import logging
 import sys
 import time
-from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -184,9 +183,6 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
         if verification["status"] == "CONNECTED":
             event("SUCCESS", "Playerok подключён. Аккаунт подтверждён")
         tasks.append(supervisor.start("playerok-connection-recovery", lambda: connection.run(stop), stop))
-        from app.services.backup_retention import attempt_startup_backup
-
-        await asyncio.to_thread(attempt_startup_backup, store, Path("data/backups"))
         orders = Orders(store)
         products = Products(store, api)
         from app.services.logical_products import LogicalProducts
@@ -203,7 +199,11 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
         dispatcher.message.outer_middleware(middleware)
         dispatcher.callback_query.outer_middleware(middleware)
         dispatcher.include_router(create_router(store, api, products, sync))
-        tasks.append(supervisor.start("upload-cleanup", lambda: UploadCleanup(store).run(stop), stop))
+        tasks.append(
+            supervisor.start(
+                "upload-cleanup", lambda: UploadCleanup(store).run(stop, startup_backup=True), stop
+            )
+        )
         tasks.append(
             supervisor.start("notifications", lambda: Notifications(store, bot, api).run(stop), stop)
         )
