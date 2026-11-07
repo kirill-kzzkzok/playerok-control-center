@@ -318,3 +318,63 @@ async def test_completed_failed_receipt_flush_does_not_poison_following_cycles(r
             await asyncio.sleep(0)
     assert OperationResults.notify.await_count == 1
     await notices.close()
+
+
+async def test_promotion_summary_shows_exact_total_and_live_available_balance_once(rig, caplog):
+    from aiogram import Bot
+
+    from app.services.account_binding import bind_account
+    from app.workers.notifications import Notifications
+    from tests.test_telegram_integration import TelegramSession
+
+    r = rig
+    bind_account(r.store, "seller")
+    await automatic_pair(r)
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    notices = Notifications(r.store, bot, r.api)
+    caplog.set_level("INFO", logger="pcc.shop")
+    before = r.api.calls.count("get")
+    try:
+        await notices.once()
+        await notices.once()
+        text = session.last_panel.text
+        assert "Поднято лотов: 2 · −20 ₽ · доступно 80 ₽" in text
+        assert r.api.calls.count("get") == before + 1
+        assert len(r.api.charges) == 2
+        assert sum("Поднято лотов: 2" in record.message for record in caplog.records) == 1
+    finally:
+        await notices.close()
+        await bot.session.close()
+
+
+async def test_promotion_summary_keeps_confirmed_total_when_balance_read_fails(rig):
+    from aiogram import Bot
+
+    from app.playerok.adapter import APIError
+    from app.services.account_binding import bind_account
+    from app.workers.notifications import Notifications
+    from tests.test_telegram_integration import TelegramSession
+
+    r = rig
+    bind_account(r.store, "seller")
+    await automatic_pair(r)
+    call = r.api.call
+
+    async def read(method, **kwargs):
+        if method == "get":
+            raise APIError("NETWORK_ERROR")
+        return await call(method, **kwargs)
+
+    r.api.call = read
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    notices = Notifications(r.store, bot, r.api)
+    try:
+        await notices.once()
+        assert "Поднято лотов: 2 · −20 ₽ · остаток не подтверждён" in session.last_panel.text
+        assert len(r.api.charges) == 2
+        assert r.store.rows("SELECT status FROM promotion_expenses") == [{"status": "SUCCEEDED"}] * 2
+    finally:
+        await notices.close()
+        await bot.session.close()

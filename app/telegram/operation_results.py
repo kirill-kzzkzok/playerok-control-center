@@ -40,8 +40,8 @@ TITLES = {
 
 
 class OperationResults:
-    def __init__(self, store):
-        self.store = store
+    def __init__(self, store, api=None):
+        self.store, self.api = store, api
 
     def owner(self, owner):
         if not self.store.rows("SELECT 1 FROM administrators WHERE user_id=?", (owner,)):
@@ -404,6 +404,7 @@ class OperationResults:
             lines.append("Выключено")
         links = []
         times = []
+        confirmed = []
         seen = False
         for target in targets:
             evaluations = self.store.rows(
@@ -494,10 +495,67 @@ class OperationResults:
                 lines.append("Остальные товары — в автоподнятии магазина.")
                 break
             lines.append(line)
+            if (
+                row
+                and row["status"] == "SUCCEEDED"
+                and result.get("payment_id")
+                and result.get("paid_rub") is not None
+            ):
+                confirmed.append(row)
         if times:
             at = max(datetime.fromisoformat(value) for value in times)
             lines[0] += " · " + at.astimezone(ZoneInfo("Europe/Moscow")).strftime("%H:%M")
-        return ("\n".join(lines), keyboard(links, home=False), operations) if seen else None
+        return ("\n".join(lines), keyboard(links, home=False), operations, confirmed) if seen else None
+
+    async def promotion_totals(self, owner, rows):
+        from app.playerok.adapter import APIError
+        from app.security.logging import event
+        from app.services.finance import money
+
+        if not rows:
+            return ""
+        by_receipt = {
+            result["payment_id"]: (row, result) for row in rows for result in (json.loads(row["result"]),)
+        }
+        ids = sorted(row["id"] for row, _ in by_receipt.values())
+        key = f"notifications:promotion-totals:{owner}"
+        previous = self.store.setting(key, {})
+        if previous.get("ids") == ids:
+            return previous["text"]
+        try:
+            spent = sum(money(result["paid_rub"]) for _, result in by_receipt.values())
+        except ValueError:
+            return ""
+        text = f"Поднято лотов: {len(by_receipt)} · −{spent.normalize():f} ₽"
+        account = self.store.setting("playerok:account_id")
+        if (
+            self.api is not None
+            and account
+            and self.api.account.id == account
+            and all(json.loads(row["payload"]).get("account_id") == account for row in rows)
+        ):
+            try:
+                async with asyncio.timeout(3):
+                    viewer = await self.api.call("get")
+                if (
+                    viewer.get("id") == account
+                    and self.api.account.id == account
+                    and self.store.setting("playerok:account_id") == account
+                ):
+                    balance = (viewer.get("profile") or {}).get("balance") or {}
+                    available = money(balance.get("available"))
+                    checked = datetime.now(ZoneInfo("Europe/Moscow")).strftime("%H:%M")
+                    text += f" · доступно {available.normalize():f} ₽ на {checked}"
+            except (APIError, TimeoutError, ValueError):
+                pass
+        if " · доступно " not in text:
+            text += " · остаток не подтверждён"
+        self.store.set_setting(key, {"ids": ids, "text": text})
+        if any(
+            row["id"] not in previous.get("ids", []) and row["notice_status"] == "PENDING" for row in rows
+        ):
+            event("🚀 ПРОДВИЖЕНИЕ", text, success=True)
+        return text
 
     async def notify_promotions(self, bot):
         import hashlib
@@ -509,7 +567,10 @@ class OperationResults:
             report = self.promotion_report(owner)
             if report is None:
                 continue
-            text, markup, operations = report
+            text, markup, operations, confirmed = report
+            totals = await self.promotion_totals(owner, confirmed)
+            if totals:
+                text += "\n\n" + escaped(totals, 160)
             critical = any(
                 row["status"] == "UNCERTAIN"
                 or row["status"] == "PERMANENT_FAILED"

@@ -71,8 +71,7 @@ def order_notice(order, stage, review=None):
         lines.append(escape(detail))
     if stage == "CONFIRMED" and amount(order):
         lines.append("💰 Сумма: " + amount(order))
-    lines += ["", '<a href="https://playerok.com/deal/' + quote(order["id"], safe="") + '">Открыть заказ</a>']
-    return "\n".join(lines)
+    return with_order_link("\n".join(lines), order["id"])
 
 
 def record_delivery(store, ident, *, gift=False):
@@ -91,5 +90,12 @@ def record_delivery(store, ident, *, gift=False):
 
 def order_alert(order, title, detail):
     name = short_title((order.get("item") or {}).get("name"))
-    link = '<a href="https://playerok.com/deal/' + quote(order["id"], safe="") + '">Открыть заказ</a>'
-    return f"⚠️ <b>{escape(title)}</b>\n\n{escape(name)}\n👤 Покупатель: {escape(buyer(order))}\n{escape(detail)}\n\n{link}"
+    body = (
+        f"⚠️ <b>{escape(title)}</b>\n\n{escape(name)}\n👤 Покупатель: {escape(buyer(order))}\n{escape(detail)}"
+    )
+    return with_order_link(body, order["id"])
+
+
+def with_order_link(body, ident):
+    url = "https://playerok.com/deal/" + quote(ident, safe="")
+    return body.rstrip() + f'\n\n<a href="{url}">Открыть заказ</a>'

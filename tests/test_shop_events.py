@@ -99,6 +99,8 @@ async def test_order_updates_use_one_card_with_link_and_no_buttons(shop):
     ]
     assert [m.__api_method__ for m in updates] == ["sendMessage", "editMessageText", "editMessageText"]
     assert all(m.reply_markup is None and "[VPM]" not in m.text for m in updates)
+    assert all(m.text.split('<a href="')[0].endswith("\n\n") for m in updates)
+    assert all(not m.text.split('<a href="')[0].endswith("\n\n\n") for m in updates)
     assert "Имя не указано" in updates[0].text and "+90 ₽" in updates[0].text
     assert "Покупатель подтвердил получение" in updates[-1].text
 

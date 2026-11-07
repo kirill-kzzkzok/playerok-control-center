@@ -55,7 +55,7 @@ class Notifications:
                 self.store.operation_receipt_flush_task = None
                 await task
             task = asyncio.create_task(
-                OperationResults(self.store).notify(self.bot), name="operation-receipts"
+                OperationResults(self.store, self.api).notify(self.bot), name="operation-receipts"
             )
             self.store.operation_receipt_flush_task = task
         await asyncio.wait_for(asyncio.shield(task), timeout=2)
