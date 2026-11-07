@@ -219,3 +219,21 @@ Ruff check, Ruff format --check, compileall, pip check и selfcheck прошли
 Проверенный source/test HEAD `2a9266638bf76ef9bcd60b37d8f56772a36e1549`:2465passed/0failed/0errors/0skipped,12 непересекающихся частей, один HEAD, все exit0. Ruff/format/compileall/pip check/selfcheck exit0; backup reopen/migrations вошли в полный набор. Найдено и исправлено10 адресных дефектов без новых кнопок, настроек и финансовых разрешений. Полные RED/GREEN, матрицы guards/recovery и ограничения —[FINAL_24_7_ADVERSARIAL_AUDIT.md](FINAL_24_7_ADVERSARIAL_AUDIT.md).
 
 Офлайн PASS не означает готовность Windows-магазина24/7: Task Scheduler только подготовлен, физический Happ/DNS/egress/reboot и реальные платежи не испытаны, визуальное сравнение owner counters недоступно. Рабочие лоты/.env/SQLite/сессии и настройки Windows не менялись. Свежие Playerok reads TXE427/VPM418 подтверждают sequence, priority_position10 не используется для решения. GitHub CI на этом SHA отсутствует. UNKNOWN без достаточной корреляции и явный STOP сохраняются.
+
+## Stability follow-up — 2026-11-07
+
+Accepted source `8900de607de64123060dad080104db0d2f42abd6`.
+
+| Scenario | Result | Evidence |
+| --- | --- | --- |
+| HTTP403 after delivery preparation, before HTTP dispatch | PASS OFFLINE | `tests/test_connection_delivery_recovery.py` reproduced terminal failure for both stock and fixed text on the original code. The existing worker now retains a proven unstarted operation, preserves its stock reservation and sends exactly once after fresh account verification and reopening temporary SQLite. |
+| Short account verification during relist | PASS OFFLINE | `tests/test_final_worker_cycles.py::test_verifier_wait_retries_in_same_cycle_before_scan_progress` failed with the early precheck. Moving it into the catalog scan restores the existing bounded verifier wait and prevents unverified scan-progress changes. Earlier relist incident regressions also pass. |
+| Order polling during identity verification recovery | PASS OFFLINE + LIVE OBSERVATION | Read-only working state showed CONNECTED while order sync still waited after CONNECTION_NOT_VERIFIED. Production Synchronizer RED reproduced gaps up to 481 seconds. The local gate now retries at 30 seconds; the paired RATE_LIMITED test preserves the server's 120-second minimum. |
+| Complete regression | PASS OFFLINE | 2735 passed, 0 failures, 0 errors, 0 skipped. All six processes exited 0. The existing CI collection/partition helper covered every collected case exactly once, with unchanged source and matching XML counts. |
+| Static/dependency/schema checks | PASS | Ruff, format check for all 504 Python files, compileall for app/SDK/tests/tools, pip check, offline selfcheck. Temporary schema versions 1–33 and backup reopen passed. Working SQLite read-only quick_check=ok, foreign-key violations=0, schema version=33. |
+| Actual Playerok reads | PASS POINT-IN-TIME | Viewer 0.99 seconds and owned item 0.25 seconds, both matching the bound account. Two samples are not a latency percentile or availability guarantee. |
+| Physical VPN outage, Python/Windows restart, live paid sale, continuous 24/7 operation | NOT VERIFIED LIVE | No real mutation or payment was used. External HTTP403/expired-session refusal remains fail-closed. Existing Windows auto-start preparation was not installed or changed. |
+
+Initial full run on `76d6723` had 2731 passed and four outdated launch-presentation assertions. The owner-requested compact launch has no duplicate free-placement Advanced/completion controls or long setup explanations. Those tests now verify compact rendering and durable staged settings, original product identity, no implicit arming, and no payment/publication/delivery mutation. Their 20 neighboring creation/launch tests pass. Production UI was not expanded to satisfy obsolete assertions.
+
+Final local evidence is in the temporary `pcc-stability-final-36q1j08r` directory under the current Windows user's Temp folder, including manifest, six logs/XML files and result.json. No GitHub Actions result is claimed for these local commits. Working settings, products, sessions and payment history were not edited in this follow-up. Apply the code by restarting the existing application. Offline acceptance does not certify unattended 24/7 operation against external server and Windows failures.
