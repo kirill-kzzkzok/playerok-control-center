@@ -89,3 +89,40 @@ async def test_completed_sales_use_only_dated_owner_declarations(shop):
     )
     r.api.call = original
     assert not r.api.messages and not r.api.remote.payments
+
+
+async def test_saved_profit_view_opens_without_playerok_reads(shop):
+    from app.playerok.adapter import APIError
+
+    r = await shop()
+    await setup_ui(r, "unique_stock")
+    boundary = FinancialAPI()
+    boundary.item = {**deepcopy(r.api.item), "fee_multiplier": "0.1", "raw_price": 100}
+    r.api.call = boundary.call
+    await r.ui.click("finance:lot")
+    assert "Прогноз будущей продажи" in r.session.last_panel.text
+    calls = []
+
+    async def offline(method, **kwargs):
+        calls.append(method)
+        raise APIError("NETWORK_ERROR")
+
+    r.api.call = offline
+    await r.ui.click("finance:lot")
+    assert "Прогноз будущей продажи" in r.session.last_panel.text
+    assert "Снимок расчёта" in r.session.last_panel.text
+    assert not calls
+    from app.services.financial_quotes import refresh_due_quote
+
+    await r.ui.click("fin:itemrefresh:lot")
+    await refresh_due_quote(r.store, r.api)
+    assert calls == ["get_item"]
+    queued = r.store.rows("SELECT key FROM settings WHERE key GLOB 'ui:finance_refresh:*'")
+    assert len(queued) == 1
+    r.store.set_setting(queued[0]["key"], {"due": 0, "owner": 7, "item": "lot", "account": "seller"})
+    boundary.item.update(price=120, raw_price=120)
+    r.api.call = boundary.call
+    await refresh_due_quote(r.store, r.api)
+    assert not r.store.setting(queued[0]["key"])
+    await r.ui.click("finance:lot")
+    assert "120.00 ₽" in r.session.last_panel.text

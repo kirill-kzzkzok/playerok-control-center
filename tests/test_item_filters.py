@@ -207,3 +207,77 @@ async def test_category_filter_native_wire_keeps_user_scope(tmp_path):
     finally:
         account.close()
         store.close()
+
+
+async def test_dispatcher_reopens_known_catalog_page_during_outage(tmp_path):
+    from app.playerok.adapter import APIError
+    from app.services.item_filters import refresh_due_catalog
+
+    store = Store(tmp_path / "catalog.sqlite")
+    api, session = CatalogAPI(), TelegramSession()
+    store.set_setting("playerok:account_id", api.account.id)
+    bot = Bot("123:" + "x" * 35, session=session)
+    ui = Interaction(bot, dispatcher(store, api))
+    calls = []
+
+    items = [
+        {"id": f"lot-{i}", "name": f"Known item {i} [ABC]", "price": 100, "status": "APPROVED"}
+        for i in range(101)
+    ]
+
+    async def catalog(method, **kwargs):
+        calls.append(method)
+        start = int(kwargs["after_cursor"] or 0)
+        end = min(start + kwargs["count"], len(items))
+        return {
+            "items": items[start:end],
+            "page_info": {
+                "has_next_page": end < len(items),
+                "end_cursor": str(end) if end < len(items) else None,
+            },
+        }
+
+    try:
+        api.call = catalog
+        await ui.message("/start")
+        await ui.click("items")
+        assert "Known item" in str(session.last_panel.reply_markup)
+
+        async def offline(method, **kwargs):
+            calls.append(method)
+            raise APIError("NETWORK_ERROR")
+
+        assert len(calls) == 1
+        api.call = offline
+        await ui.click("home")
+        await ui.click("items")
+        assert "Known item" in str(session.last_panel.reply_markup)
+        assert "Снимок списка" in session.last_panel.text
+        assert len(calls) == 1
+        api.call = catalog
+        for _ in range(5):
+            await refresh_due_catalog(store, api)
+        assert len(calls) == 6
+        assert len(store.setting("ui:catalog:" + api.account.id)["items"]) == 101
+        calls.clear()
+        api.call = offline
+        await ui.click("home")
+        await ui.click("items")
+        assert "Known item" in str(session.last_panel.reply_markup)
+        assert "по снимку каталога" in session.last_panel.text
+        next_page = next(
+            b.callback_data
+            for row in session.last_panel.reply_markup.inline_keyboard
+            for b in row
+            if b.callback_data.startswith("listnext:")
+        )
+        await ui.click(next_page)
+        assert "item:lot-10" in str(session.last_panel.reply_markup)
+        assert "item:lot-0'" not in str(session.last_panel.reply_markup)
+        await ui.click("il:search")
+        await ui.message("ABC")
+        assert "Совпало: 101" in session.last_panel.text
+        assert not calls
+    finally:
+        await bot.session.close()
+        store.close()

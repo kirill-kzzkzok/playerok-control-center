@@ -21,6 +21,8 @@ from app.services.playerok_connection import REASONS, TEMPORARY_READ_FAILURES
 from app.services.products import ValidationError
 from app.services.sync_health import orders_sync_failed
 
+LISTING_KINDS_SQL = "('edit','edit_fields','publish','premium_publish','premium_bump','discount','stock_pause','stock_resume','delete')"
+
 
 def fresh(value, seconds=300):
     try:
@@ -90,12 +92,15 @@ class ProductReadiness:
         current = self.observed_item(ident)
         if cached and (cached.get("user") or {}).get("id") == account:
             item = deepcopy(cached)
-            if product and product["state"] == "VERIFIED" and product["title_snapshot"]:
-                item["name"] = product["title_snapshot"]
             if changed:
+                unfinished = durable.get("unfinished", []) if durable.get("at") == stamp else []
                 for operation in self.store.rows(
-                    "SELECT kind,payload,result FROM outbox WHERE target=? AND status='SUCCEEDED' AND COALESCE(started_at,created_at)>? ORDER BY COALESCE(started_at,created_at),id",
-                    (ident, stamp or ""),
+                    "SELECT kind,payload,result FROM outbox WHERE target=? AND status='SUCCEEDED' "
+                    "AND kind IN "
+                    + LISTING_KINDS_SQL
+                    + " AND (COALESCE(started_at,created_at)>? OR id IN (SELECT value FROM json_each(?))) "
+                    "ORDER BY COALESCE(started_at,created_at),id",
+                    (ident, stamp or "", json.dumps(unfinished)),
                 ):
                     receipt = json.loads(operation["result"] or "{}")
                     if receipt.get("remote_id") != ident:
@@ -146,7 +151,7 @@ class ProductReadiness:
         # An edit queued/closed after the observation invalidates UI evidence too.
         rows = self.store.rows(
             "SELECT id,status,attempts,error_code,started_at FROM outbox "
-            "WHERE target=? AND kind IN ('edit','edit_fields','publish','premium_publish','premium_bump','discount','stock_pause','stock_resume','delete') ORDER BY id",
+            "WHERE target=? AND kind IN " + LISTING_KINDS_SQL + " ORDER BY id",
             (ident,),
         )
         return hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
@@ -218,6 +223,15 @@ class ProductReadiness:
                     "account": key[0],
                     "item": public,
                     "version": current_version,
+                    "unfinished": [
+                        row["id"]
+                        for row in self.store.rows(
+                            "SELECT id FROM outbox WHERE target=? AND kind IN "
+                            + LISTING_KINDS_SQL
+                            + " AND status IN ('PENDING','PROCESSING','RETRYABLE_FAILED','UNCERTAIN')",
+                            (item["id"],),
+                        )
+                    ],
                     "at": self.api.readiness_item_times[key],
                 },
             },
@@ -798,7 +812,21 @@ class ProductReadiness:
                     "CHECK_TIMEOUT" if isinstance(exc, TimeoutError) else getattr(exc, "code", "CHECK_FAILED")
                 )
                 safe_code = code if code in REASONS else "CHECK_FAILED"
-                event("WARNING", f"Readiness stage={stage} type={type(exc).__name__} code={safe_code}")
+                event(
+                    "WARNING",
+                    f"Readiness stage={stage} type={type(exc).__name__} code={safe_code}",
+                    level=10
+                    if automatic
+                    and code
+                    in TEMPORARY_READ_FAILURES
+                    | {
+                        "PROXY_UNAVAILABLE",
+                        "MTPROTO_TIMEOUT",
+                        "PROXY_ROUTE_CHANGED",
+                        "ITEM_READ_SUPERSEDED",
+                    }
+                    else 30,
+                )
                 error = "Проверка не завершена: " + (
                     {
                         "SESSION_UNAUTHORIZED": "Личный Telegram не авторизован. Выполните локальную авторизацию аккаунта.",
@@ -889,11 +917,16 @@ class ProductReadiness:
         return len(due)
 
     async def run(self, stop):
+        from app.services.financial_quotes import refresh_due_quote
+        from app.services.item_filters import refresh_due_catalog
         from app.workers.supervisor import worker_cycle
 
         while not stop.is_set():
-            with worker_cycle(self.store, "readiness", 30, max_seconds=75) as cycle:
+            with worker_cycle(self.store, "readiness", 30, max_seconds=90) as cycle:
                 cycle["processed"] = await self.refresh_due()
+                await asyncio.gather(
+                    refresh_due_quote(self.store, self.api), refresh_due_catalog(self.store, self.api)
+                )
             try:
                 await asyncio.wait_for(stop.wait(), 15)
             except TimeoutError:

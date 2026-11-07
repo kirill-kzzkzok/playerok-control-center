@@ -2,6 +2,8 @@ import asyncio
 from copy import deepcopy
 from time import perf_counter
 
+import pytest
+
 from app.services.product_readiness import ProductReadiness
 from tests.test_product_readiness import shop as shop_fixture
 from tests.test_universal_delivery_e2e import setup_ui
@@ -88,3 +90,35 @@ async def test_first_item_read_cannot_stamp_a_late_old_response_with_the_new_edi
         release.set()
         if not reading.done():
             await reading
+
+
+@pytest.mark.parametrize(
+    "kind,field,value",
+    [
+        ("edit", "name", "Confirmed new name"),
+        ("edit_fields", "name", "Confirmed fields"),
+        ("publish", "status", "APPROVED"),
+        ("premium_publish", "priority", "PREMIUM"),
+        ("premium_bump", "priority", "PREMIUM"),
+        ("discount", "price", 70),
+        ("stock_pause", "status", "DISCONTINUED"),
+        ("stock_resume", "status", "APPROVED"),
+    ],
+)
+async def test_only_committed_receipt_projects_over_item_read_during_operation(shop, kind, field, value):
+    from app.database.store import encode
+
+    r = await shop()
+    readiness = ProductReadiness(r.store, r.api)
+    old = "DRAFT" if field == "status" else "DEFAULT" if field == "priority" else r.api.item[field]
+    r.api.item[field] = old
+    op = r.store.enqueue("fixture:" + kind, kind, "lot", {}, actor=7)
+    r.store.execute("UPDATE outbox SET status='PROCESSING',started_at=created_at WHERE id=?", (op,))
+    readiness.remember_item(r.api.item)
+    r.store.execute(
+        "UPDATE outbox SET status='UNCERTAIN',result=? WHERE id=?",
+        (encode({"remote_id": "lot", field: value}), op),
+    )
+    assert (await readiness.ui_item(7, "lot"))[field] == old
+    r.store.execute("UPDATE outbox SET status='SUCCEEDED' WHERE id=?", (op,))
+    assert (await readiness.ui_item(7, "lot"))[field] == value

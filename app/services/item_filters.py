@@ -72,3 +72,75 @@ def matches_item(item, filters):
         if filters.get("maximum") is not None and price > money(filters["maximum"]):
             return False
     return True
+
+
+def catalog_item(value, account):
+    from app.playerok.adapter import APIError
+    from app.services.logical_products import marker
+
+    seller = (value.get("user") or {}).get("id")
+    if seller and seller != account:
+        raise APIError("CATALOG_ACCOUNT_MISMATCH")
+    item = {key: value.get(key) for key in ("id", "name", "price", "status", "priority", "deleted_at")}
+    item["category"] = {"id": (value.get("category") or {}).get("id")}
+    try:
+        item["search_code"] = marker(value.get("name") or "")
+    except ValueError:
+        item["search_code"] = None
+    return item
+
+
+async def catalog_page(api, account, cache):
+    from app.database.store import now
+    from app.playerok.adapter import APIError, validate_page
+
+    page = await api.call("get_my_items", count=24, after_cursor=cache.get("cursor"), statuses=None)
+    if api.account.id != account:
+        raise APIError("CATALOG_ACCOUNT_MISMATCH")
+    seen = cache.get("seen", [])
+    values, cursor = validate_page(page, "items", seen)
+    items = {item["id"]: item for item in cache.get("items", [])}
+    items.update((value["id"], catalog_item(value, account)) for value in values)
+    return {
+        "at": cache.get("at") or now(),
+        "items": list(items.values()),
+        "cursor": cursor,
+        "seen": [*seen, cursor] if cursor else [],
+        "complete": not cursor,
+    }
+
+
+async def refresh_due_catalog(store, api):
+    import asyncio
+    import time
+
+    from app.playerok.adapter import APIError
+
+    account = api.account.id
+    if not account or account != store.setting("playerok:account_id"):
+        return
+    key = "ui:catalog:" + account
+    pending_key = key + ":pending"
+    request = store.setting(pending_key)
+    if not request or request.get("due", 0) > time.time():
+        return
+    try:
+        async with asyncio.timeout(8):
+            cache = await catalog_page(api, account, request.get("scan", {}))
+        if account != store.setting("playerok:account_id"):
+            return
+    except (APIError, TimeoutError, ValueError, TypeError, KeyError) as error:
+        failures = min(request.get("failures", 0) + 1, 5)
+        retry_after = getattr(error, "retry_after", None)
+        delay = max(30 * 2**failures, int(retry_after) if str(retry_after).isdigit() else 0)
+        store.set_setting(pending_key, {**request, "failures": failures, "due": time.time() + delay})
+    else:
+        with store.transaction():
+            if cache["complete"]:
+                previous = store.setting(key, {})
+                if previous.get("at") and previous["at"] != cache["at"]:
+                    store.set_setting(key + ":previous", previous)
+                store.set_setting(key, {**cache, "background": True})
+                store.execute("DELETE FROM settings WHERE key=?", (pending_key,))
+            else:
+                store.set_setting(pending_key, {"scan": cache, "due": 0})

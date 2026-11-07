@@ -65,6 +65,7 @@ class FinancialAPI:
 @pytest.fixture
 def setup(tmp_path):
     store = Store(tmp_path / "financial.sqlite")
+    store.claim_first_owner(7)
     api = FinancialAPI()
     products = Products(store, api)
     state = FSMContext(SQLiteStorage(store), StorageKey(bot_id=1, chat_id=7, user_id=7))

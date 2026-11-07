@@ -1,11 +1,10 @@
 import json
 import secrets
-import time
 
 from app.database.store import now
-from app.playerok.adapter import APIError, validate_page
+from app.playerok.adapter import validate_page
 from app.services.finance import quote_fresh
-from app.services.item_filters import checked_filters, matches_item
+from app.services.item_filters import catalog_item, catalog_page, checked_filters, matches_item
 from app.services.products import ValidationError
 from app.telegram.item_category_picker import ItemCategoryPicker
 from app.telegram.keyboards import keyboard
@@ -18,58 +17,31 @@ class ListingsPanel:
         self.api, self.store = api, store
         self.category_picker = ItemCategoryPicker(api)
 
+    def request_catalog(self, account, *, scan=None):
+        if self.store and self.store.setting("playerok:account_id") == account:
+            key = "ui:catalog:" + account + ":pending"
+            if not self.store.setting(key):
+                self.store.set_setting(key, {"scan": scan or {}, "due": 0})
+
     async def search_page(self, filters, state, cursor):
         account = getattr(self.api.account, "id", None)
-        if not account:
+        if not account or self.store and self.store.setting("playerok:account_id") not in (None, account):
             raise ValidationError("Подтвердите аккаунт Playerok перед поиском")
         key = "ui:catalog:" + account
         cache = self.store.setting(key, {}) if self.store else {}
-        if not quote_fresh(cache.get("at"), max_age=60):
-            if cursor:
-                raise ValidationError("Снимок каталога устарел. Выполните поиск заново")
-            cache = {"at": now(), "items": [], "cursor": None, "seen": [], "complete": False}
-        if not cache["complete"]:
-            indexed = {item["id"]: item for item in cache["items"]}
-            started = time.monotonic()
-            for _ in range(3):
-                if time.monotonic() - started >= 5:
-                    break
-                try:
-                    page = await self.api.call(
-                        "get_my_items", count=24, after_cursor=cache["cursor"], statuses=None
-                    )
-                    values, continuation = validate_page(page, "items", cache["seen"])
-                except APIError:
-                    cache["error"] = True
-                    break
-                for value in values:
-                    item = {
-                        k: value.get(k) for k in ("id", "name", "price", "status", "priority", "category")
-                    }
-                    if self.store:
-                        code = self.store.rows(
-                            "SELECT p.code FROM logical_products p JOIN logical_listings l ON l.product_id=p.id WHERE l.item_id=? AND p.account_id=?",
-                            (value["id"], account),
-                        )
-                    else:
-                        code = []
-                    from app.services.logical_products import marker
-
-                    try:
-                        item["search_code"] = code[0]["code"] if code else marker(value.get("name") or "")
-                    except ValueError:
-                        item["search_code"] = None
-                    indexed[item["id"]] = item
-                cache.update(cursor=continuation, error=False, complete=not continuation)
-                if continuation:
-                    cache["seen"].append(continuation)
-                else:
-                    break
-            cache["items"] = list(indexed.values())
+        data = await state.get_data()
+        if cursor and data.get("list_catalog_at") != cache.get("at"):
+            previous = self.store.setting(key + ":previous", {}) if self.store else {}
+            if previous.get("at") != data.get("list_catalog_at"):
+                raise ValidationError("Снимок каталога обновился. Откройте список заново")
+            cache = previous
+        if not cache:
+            cache = await catalog_page(self.api, account, {})
             if self.store:
                 self.store.set_setting(key, cache)
-        data = await state.get_data()
-        if cursor and (not str(cursor).startswith("catalog:") or data.get("list_catalog_at") != cache["at"]):
+        if self.store and (not cache["complete"] or not quote_fresh(cache["at"], max_age=60)):
+            self.request_catalog(account, scan=cache if not cache["complete"] else None)
+        if cursor and not str(cursor).startswith("catalog:"):
             raise ValidationError("Результаты поиска изменились. Откройте поиск заново")
         offset = int(cursor.split(":")[1]) if cursor else 0
         matches = [
@@ -145,22 +117,56 @@ class ListingsPanel:
             status = filters.get("status")
             extra = {"category_id": filters["category_id"]} if filters.get("category_id") else {}
             search = bool(filters.get("search") or filters.get("delivery") or filters.get("problems"))
-            if search:
+            account = getattr(self.api.account, "id", None)
+            bound = self.store.setting("playerok:account_id") if self.store else None
+            if bound and account != bound:
+                raise ValidationError("Аккаунт Playerok изменился")
+            snapshot = self.store.setting("ui:catalog:" + account, {}) if bound else {}
+            use_catalog = search or (
+                str(cursor).startswith("catalog:") if cursor else bool(snapshot.get("background"))
+            )
+            page_stamp = None
+            if use_catalog:
                 page, search_cache, found = await self.search_page(filters, state, cursor)
             else:
-                page = await self.api.call(
-                    "get_my_items",
-                    count=10,
-                    after_cursor=cursor,
-                    statuses=(
-                        [value for value in ItemStatuses if value.name not in {"APPROVED", "DRAFT"}]
-                        if filters.get("archive")
-                        else [ItemStatuses[status]]
-                        if status
-                        else None
-                    ),
-                    **extra,
-                )
+                page_key = "ui:catalog_pages:" + account if bound else None
+                pages = self.store.setting(page_key, {}) if page_key else {}
+                cache_key = json.dumps([status, filters.get("archive"), extra, cursor], sort_keys=True)
+                saved = pages.get(cache_key)
+                if saved:
+                    page, page_stamp = saved["page"], saved["at"]
+                else:
+                    page = await self.api.call(
+                        "get_my_items",
+                        count=10,
+                        after_cursor=cursor,
+                        statuses=(
+                            [value for value in ItemStatuses if value.name not in {"APPROVED", "DRAFT"}]
+                            if filters.get("archive")
+                            else [ItemStatuses[status]]
+                            if status
+                            else None
+                        ),
+                        **extra,
+                    )
+                    if page_key:
+                        if (
+                            self.api.account.id != account
+                            or self.store.setting("playerok:account_id") != account
+                        ):
+                            raise ValidationError("Аккаунт Playerok изменился")
+                        values, _ = validate_page(page, kind, seen)
+                        page_stamp = now()
+                        pages[cache_key] = {
+                            "page": {
+                                "items": [catalog_item(v, account) for v in values],
+                                "page_info": page["page_info"],
+                            },
+                            "at": page_stamp,
+                        }
+                        self.store.set_setting(page_key, dict(list(pages.items())[-120:]))
+                if not page_stamp or not quote_fresh(page_stamp, max_age=60) or not snapshot:
+                    self.request_catalog(account)
             title, prefix = "📦 Мои товары", "item"
             if promotion_picker:
                 title, prefix = "🚀 Выберите товар для продвижения", "payp:item"
@@ -175,6 +181,8 @@ class ListingsPanel:
             if (
                 self.store
                 and not cursor
+                and not page_stamp
+                and not use_catalog
                 and filters.get("status") == "APPROVED"
                 and not any(value for key, value in filters.items() if key != "status")
             ):
@@ -276,12 +284,14 @@ class ListingsPanel:
         note = "\nФрагменты — по сохранённой истории." if kind == "chats" else ""
         if gift_picker:
             note = "\nВыберите созданный на Playerok товар, включая серверные черновики. Локальный черновик сначала нужно создать на Playerok через мастер."
-        if kind == "items" and search:
+        if kind == "items" and use_catalog:
             note += f"\nСовпало: {found} по снимку каталога · {local_time(search_cache['at'])}."
             if not search_cache["complete"]:
                 note += " Поиск не завершён: часть каталога ещё не проверена."
-                rows.append([("Продолжить поиск", "il:scan")])
+                note += " Бот продолжит загрузку автоматически."
             rows.append([("🔄 Обновить каталог", "il:refreshsearch")])
+        elif kind == "items" and page_stamp:
+            note += f"\nСнимок списка от {local_time(page_stamp)}. Статусы могли измениться."
         elif kind == "items" and any(v is not None and v != "" for v in filters.values()):
             note += f"\nСовпало: {len(values)}. Фильтрация постраничная."
             if not values:
@@ -299,8 +309,7 @@ class ListingsPanel:
 
     async def filter_action(self, action, state):
         if action in {"il:scan", "il:refreshsearch"}:
-            if action == "il:refreshsearch" and self.store:
-                self.store.set_setting("ui:catalog:" + self.api.account.id, {})
+            self.request_catalog(self.api.account.id)
             return await self.show("items", state)
         if action in {"il:delivery", "il:problems"}:
             filters = checked_filters((await state.get_data()).get("item_filters", {}))

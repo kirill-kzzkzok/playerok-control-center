@@ -4,9 +4,8 @@ from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from html import escape
 
 from app.database.store import now
-from app.playerok.adapter import APIError
-from app.services.finance import FeeRule, money, selected_fee_multiplier
-from app.services.financial_quotes import save_quote
+from app.services.finance import FeeRule, money, quote_fresh
+from app.services.financial_quotes import item_preferences, prepare_item_quote, save_quote
 from app.services.products import priority_price_basis
 from app.services.withdrawals import (
     draft_calculation,
@@ -39,74 +38,45 @@ class FinancePanel:
             raise ValueError("Владение товаром не подтверждено")
         return item
 
-    async def item(self, owner, ident, *, details=False):
-        item = await self.read_owned(ident)
-        payload = {
-            "price": item["price"],
-            "fee_multiplier": item.get("fee_multiplier"),
-            "fee_checked_at": now(),
-            "cost": self.store.setting(f"finance:{owner}:cost:{ident}"),
-        }
-        obtaining = item.get("obtaining_type") or {}
-        payload["fee_multiplier"] = selected_fee_multiplier(
-            item.get("fee_multiplier"), obtaining.get("fee_multiplier")
+    async def item(self, owner, ident, *, details=False, refresh=False, force_read=False):
+        from app.services.product_readiness import ProductReadiness
+        from app.telegram.presentation import local_time
+
+        account = self.api.account.id
+        if not account or self.store.setting("playerok:account_id") not in (None, account):
+            raise ValueError("Аккаунт Playerok не подтверждён")
+        rows = self.store.rows(
+            "SELECT payload,created_at FROM financial_quotes WHERE owner_id=? AND target=? ORDER BY rowid DESC LIMIT 1",
+            (owner, "item:" + ident),
         )
-        payload["fee_basis"] = {
-            "item_id": ident,
-            "obtaining_type_id": obtaining.get("id"),
-            "category_id": (item.get("category") or {}).get("id"),
-        }
+        saved = json.loads(rows[0]["payload"]) if rows else {}
+        context = saved.get("context") or {}
+        observed = None
         if (
-            item.get("fee_multiplier") is None
-            and obtaining.get("fee_multiplier") is None
-            and payload["fee_basis"]["category_id"]
+            not force_read
+            and context.get("account") == account
+            and (context.get("item") or {}).get("id") == ident
         ):
-            try:
-                schema = await self.products.schema_details(
-                    payload["fee_basis"]["category_id"], obtaining.get("id"), auto_agreements=False
-                )
-                payload["fee_multiplier"] = schema["fee_multiplier"]
-                payload["fee_checked_at"] = schema["checked_at"]
-            except APIError:
-                payload["fee_multiplier"] = None
-        chosen = self.store.setting(self.preference_key(owner))
-        if chosen:
-            payload["withdrawal"] = await withdrawal_snapshot(self.api, chosen["provider"]["id"])
-        placement, quotes = None, []
-        if item.get("raw_price") is not None:
-            try:
-                quotes = await self.products.priority_preview(ident, priority_price_basis(item))
-            except APIError:
-                quotes = []
-        if item.get("status") == "DRAFT" and quotes:
-            preferred = self.store.setting(f"finance:{owner}:placement:{ident}")
-            chosen = (
-                next((q for q in quotes if q.get("id") == preferred), None)
-                if preferred
-                else next(
-                    (
-                        q
-                        for q in quotes
-                        if q.get("type") == "DEFAULT"
-                        and q.get("price") is not None
-                        and money(q["price"]) == 0
-                    ),
-                    None,
-                )
+            observed = rows[0]["created_at"]
+            item, payload, quotes = context["item"], saved["inputs"], context["quotes"]
+            allocation = payload.get("placement")
+            placement = context.get("new_placement")
+            result = draft_calculation(
+                payload, placement=money(allocation) if allocation is not None else None
             )
-            if chosen and chosen.get("price") is not None:
-                placement = money(chosen["price"])
-                payload["placement_quote"] = {
-                    "id": chosen["id"],
-                    "type": chosen.get("type"),
-                    "price": str(placement),
-                    "base_price": priority_price_basis(item),
-                    "checked_at": now(),
-                    "source": "Playerok itemPriorityStatuses",
-                }
-        allocation = self.store.setting(f"finance:{owner}:placement_per_sale:{ident}")
-        result = draft_calculation(payload, placement=money(allocation) if allocation is not None else None)
-        save_quote(self.store, owner, "item:" + ident, {**payload, "placement": allocation}, result)
+            if (
+                context["version"] != ProductReadiness(self.store, self.api).item_version(ident)
+                or context["preferences"] != item_preferences(self.store, owner, ident)
+                or not quote_fresh(observed, max_age=60)
+                or refresh
+            ):
+                key = f"ui:finance_refresh:{account}:{owner}:{ident}"
+                if not self.store.setting(key):
+                    self.store.set_setting(key, {"due": 0, "owner": owner, "item": ident, "account": account})
+        else:
+            item, payload, result, quotes, allocation, placement = await prepare_item_quote(
+                self.store, self.api, self.products, owner, ident
+            )
         name = ((payload.get("withdrawal") or {}).get("provider") or {}).get("name") or "не выбран"
 
         def rub(value):
@@ -144,12 +114,14 @@ class FinancePanel:
         text += "\nИсторическая прибыль по завершённым заказам учитывается отдельно."
         if not details:
             text = self.compact(owner, ident, item, payload, result, quotes)
+        if observed:
+            text += "\nСнимок расчёта от " + local_time(observed) + ". Условия могли измениться."
         rows = [
             [("Подробности", "fin:details:" + ident)]
             if not details
             else [("К краткому расчёту", "finance:" + ident)],
             [("⚙️ Параметры расчёта", "fin:options:" + ident)],
-            [("🔄 Обновить расчёт", "finance:" + ident)],
+            [("🔄 Обновить расчёт", "fin:itemrefresh:" + ident)],
         ]
         if not payload.get("withdrawal"):
             rows.insert(0, [("💳 Выбрать способ получения денег", "providers")])
@@ -253,6 +225,8 @@ class FinancePanel:
         return "\n".join(lines)
 
     async def callback(self, action, owner, state):
+        if action.startswith("fin:itemrefresh:"):
+            return await self.item(owner, action.split(":", 2)[2], refresh=True)
         if action.startswith("fin:details:"):
             return await self.item(owner, action.split(":", 2)[2], details=True)
         if action.startswith(("fin:otherzero:", "fin:otherunknown:")):
@@ -414,7 +388,7 @@ class FinancePanel:
             ident = data["placement_item_id"]
             self.store.set_setting(f"finance:{owner}:placement:{ident}", option["id"])
             await state.clear()
-            return await self.item(owner, ident)
+            return await self.item(owner, ident, force_read=True)
         if action.startswith("fin:clearcost:"):
             ident = action.split(":", 2)[2]
             from app.services.logical_products import LogicalProducts
@@ -427,7 +401,7 @@ class FinancePanel:
                     (f"finance:{owner}:cost:{ident}", f"finance:{owner}:cost_basis:{scope}"),
                 )
             await state.clear()
-            return await self.item(owner, ident)
+            return await self.item(owner, ident, force_read=True)
         raise ValueError("Неизвестное действие финансового калькулятора")
 
     def amount_text(self, amount, snapshot, owner):
@@ -479,5 +453,5 @@ class FinancePanel:
                     {"account": self.api.account.id, "cost": str(amount), "declared_at": now()},
                 )
             await state.clear()
-            return await self.item(owner, ident)
+            return await self.item(owner, ident, force_read=True)
         raise ValueError("Финансовый сценарий устарел")
