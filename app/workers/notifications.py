@@ -273,6 +273,12 @@ class Notifications:
                     ):
                         self.close_pending(event["key"], "RESOLVED")
                         continue
+                    if (
+                        payload["worker"] == "logical-products"
+                        and current.get("error_code") == "CONNECTION_NOT_VERIFIED"
+                    ):
+                        self.close_pending(event["key"], "SUPPRESSED")
+                        continue
                 text = (
                     (
                         "⚠️ <b>Фоновая обработка требует проверки</b>\n"

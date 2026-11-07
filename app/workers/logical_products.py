@@ -357,6 +357,9 @@ class LogicalProductWorker:
             )
 
     async def _scan_with_connection_check(self, stop):
+        connection = getattr(self.api, "connection", None)
+        if connection is not None and not connection.reads_allowed:
+            raise APIError("CONNECTION_NOT_VERIFIED")
         try:
             return await self.once()
         except APIError as error:
@@ -380,8 +383,15 @@ class LogicalProductWorker:
         while not stop.is_set():
             prior = self.store.setting("runtime:cycle:logical-products", {})
             try:
-                with worker_cycle(self.store, "logical-products", min(900, 30 * 2 ** min(failures + 1, 5))):
-                    await self._scan_with_connection_check(stop)
+                with worker_cycle(
+                    self.store, "logical-products", min(900, 30 * 2 ** min(failures + 1, 5))
+                ) as cycle:
+                    try:
+                        await self._scan_with_connection_check(stop)
+                    except APIError as error:
+                        if error.code == "CONNECTION_NOT_VERIFIED":
+                            cycle["retry_delay"] = 30
+                        raise
                 if prior.get("consecutive_failures", 0) >= 3:
                     event("INFO", "Сверка перевыставлений восстановлена")
                 failures = 0
@@ -395,7 +405,7 @@ class LogicalProductWorker:
                 )
             try:
                 pending = self.store.setting("logical:scan:" + str(self.api.account.id), {})
-                delay = min(900, 30 * 2 ** min(failures, 5)) if failures else 5 if pending else 120
+                delay = cycle["retry_delay"] if failures else 5 if pending else 120
                 await asyncio.wait_for(stop.wait(), delay)
             except TimeoutError:
                 pass

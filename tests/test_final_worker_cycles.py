@@ -87,3 +87,92 @@ async def test_normal_long_gift_cycle_is_not_a_failed_worker_or_write_authority(
         assert not r.api.messages and not r.api.remote.payments
     health = r.store.setting("runtime:cycle:gifts")
     assert health["last_success"] and health["consecutive_failures"] == 0
+
+
+async def test_relist_verification_gate_does_not_send_background_warning(shop):
+    from app.playerok.adapter import APIError
+
+    r = await shop()
+    for _ in range(3):
+        with pytest.raises(APIError), worker_cycle(r.store, "logical-products", 30):
+            raise APIError("CONNECTION_NOT_VERIFIED")
+    await Notifications(r.store, r.bot).once()
+    assert r.store.rows(
+        "SELECT n.status FROM notifications n JOIN inbox i ON i.key=n.event_key WHERE i.kind='worker_failed'"
+    ) == [{"status": "SUPPRESSED"}]
+    assert r.store.setting("runtime:cycle:logical-products")["consecutive_failures"] == 3
+
+
+async def test_relist_waits_for_viewer_before_scanning_and_resumes(shop):
+    from types import SimpleNamespace
+
+    from app.playerok.adapter import APIError
+    from app.workers.logical_products import LogicalProductWorker
+
+    r = await shop()
+    worker = LogicalProductWorker(r.store, r.api)
+    r.api.connection = SimpleNamespace(reads_allowed=False, state={"status": "UNKNOWN"})
+    scans = []
+
+    async def scan():
+        scans.append(True)
+        return 1
+
+    worker.once = scan
+    stop = asyncio.Event()
+    with pytest.raises(APIError, match="CONNECTION_NOT_VERIFIED"):
+        await worker._scan_with_connection_check(stop)
+    assert not scans
+    r.api.connection.reads_allowed = True
+    assert await worker._scan_with_connection_check(stop) == 1
+    assert scans == [True]
+
+
+async def test_relist_verification_wait_has_bounded_retry_and_recovers(shop, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.workers.logical_products import LogicalProductWorker
+
+    r = await shop()
+    worker = LogicalProductWorker(r.store, r.api)
+    r.api.connection = SimpleNamespace(reads_allowed=False, state={"status": "UNKNOWN"})
+    stop = asyncio.Event()
+    delays = []
+    scans = []
+
+    async def scan():
+        scans.append(True)
+        stop.set()
+        return 1
+
+    async def restore_connection(awaitable, timeout):
+        awaitable.close()
+        delays.append(timeout)
+        r.api.connection.reads_allowed = True
+        raise TimeoutError
+
+    worker.once = scan
+    monkeypatch.setattr("app.workers.logical_products.asyncio.wait_for", restore_connection)
+    await worker.run(stop)
+    assert delays[0] <= 30
+    assert scans == [True]
+    assert r.store.setting("runtime:cycle:logical-products")["consecutive_failures"] == 0
+    assert not r.store.rows("SELECT * FROM outbox")
+    assert not r.api.remote.payments
+
+
+async def test_relist_real_failure_after_verification_wait_still_alerts(shop):
+    from app.playerok.adapter import APIError
+
+    r = await shop()
+    for _ in range(3):
+        with pytest.raises(APIError), worker_cycle(r.store, "logical-products", 30):
+            raise APIError("CONNECTION_NOT_VERIFIED")
+    await Notifications(r.store, r.bot).once()
+    with pytest.raises(ValueError), worker_cycle(r.store, "logical-products", 60):
+        raise ValueError("invalid catalog state")
+    await Notifications(r.store, r.bot).once()
+    assert r.store.rows(
+        "SELECT n.status FROM notifications n JOIN inbox i ON i.key=n.event_key "
+        "WHERE i.kind='worker_failed' AND n.status='SUCCEEDED'"
+    ) == [{"status": "SUCCEEDED"}]

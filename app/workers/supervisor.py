@@ -49,7 +49,7 @@ def worker_cycle(store, name, retry_delay, *, max_seconds=900):
                 health["state"] = "STOPPED"
             elif result.get("error_code"):
                 failures = health.get("consecutive_failures", 0) + 1
-                if failures == 1:
+                if failures == 1 or health.get("error_code") != result["error_code"]:
                     health["incident"] = uuid.uuid4().hex
                 health.update(
                     state="DEGRADED" if result["processed"] else "ERROR",
