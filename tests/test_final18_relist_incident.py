@@ -1,3 +1,4 @@
+import asyncio
 import json
 from copy import deepcopy
 from types import SimpleNamespace
@@ -13,6 +14,57 @@ from tests.test_universal_delivery_e2e import setup_ui
 from tests.test_ux_redesign import buttons
 
 shop = shop_fixture
+
+
+async def test_short_identity_verification_does_not_warn_on_recovered_scan(shop, monkeypatch, caplog):
+    r = await shop()
+    worker = LogicalProductWorker(r.store, r.api)
+    stop = asyncio.Event()
+    failed = asyncio.Event()
+    lock = asyncio.Lock()
+    connection = SimpleNamespace(lock=lock, state={"status": "UNKNOWN", "reason": "CHECK_IN_PROGRESS"})
+    r.api.connection = connection
+    r.store.set_setting("runtime:cycle:logical-products", {"consecutive_failures": 2, "incident": "prior"})
+    caplog.set_level("INFO", logger="pcc.shop")
+    attempts = 0
+
+    async def once():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            failed.set()
+            raise APIError("CONNECTION_NOT_VERIFIED")
+        stop.set()
+
+    monkeypatch.setattr(worker, "once", once)
+    async with lock:
+        task = asyncio.create_task(worker.run(stop))
+        await failed.wait()
+        connection.state = {"status": "CONNECTED", "reason": None}
+    try:
+        await asyncio.wait_for(task, 2)
+    finally:
+        stop.set()
+    assert attempts == 2
+    assert not any(record.levelno >= 30 for record in caplog.records)
+    assert not r.store.rows("SELECT 1 FROM inbox WHERE kind='worker_failed'")
+
+
+async def test_unresolved_scan_connection_failure_still_warns(shop, monkeypatch, caplog):
+    r = await shop()
+    worker = LogicalProductWorker(r.store, r.api)
+    stop = asyncio.Event()
+    r.api.connection = SimpleNamespace(state={"status": "DISCONNECTED", "reason": "AUTH_REJECTED"})
+    r.store.set_setting("runtime:cycle:logical-products", {"consecutive_failures": 2, "incident": "prior"})
+
+    async def once():
+        stop.set()
+        raise APIError("CONNECTION_NOT_VERIFIED")
+
+    monkeypatch.setattr(worker, "once", once)
+    await worker.run(stop)
+    assert "Не удалось завершить сверку перевыставлений" in caplog.text
+    assert len(r.store.rows("SELECT 1 FROM inbox WHERE kind='worker_failed'")) == 1
 
 
 async def test_relist_critical_conflict_retains_exact_candidate_and_notification(shop):

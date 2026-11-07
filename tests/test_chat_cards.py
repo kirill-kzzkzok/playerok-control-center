@@ -74,6 +74,20 @@ def calls(r, method):
     return [m for m in r.session.calls if m.__api_method__ == method]
 
 
+def test_buyer_console_logs_playerok_nick_once_without_message_text(cards, caplog):
+    caplog.set_level("INFO", logger="pcc.shop")
+    message = {
+        "id": "buyer-message",
+        "text": "private customer content",
+        "user": {"id": "buyer", "username": "Buyer_42"},
+    }
+    orders = Orders(cards.store)
+    assert orders.ingest_message("chat", message)
+    assert not orders.ingest_message("chat", message)
+    assert caplog.messages.count("📩 Новое сообщение от покупателя Buyer_42") == 1
+    assert "private customer content" not in caplog.text
+
+
 async def test_ten_incoming_events_update_one_card_and_keep_two_buttons(cards):
     r = cards
     for n in range(10):

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 
 from app.database.store import Conflict, encode, now, server_time
 from app.security.logging import event
@@ -372,16 +373,23 @@ class Orders:
                 (message["id"], chat_id, message.get("created_at"), encode(message)),
             )
             db.execute("UPDATE inbox SET processed_at=? WHERE key=?", (now(), key))
-            if added and (message.get("user") or {}).get("id") not in (
+            author = message.get("user") or {}
+            if added and author.get("id") not in (
                 None,
                 self.store.setting("playerok:account_id"),
             ):
                 order = db.execute(
                     "SELECT id FROM orders WHERE chat_id=? ORDER BY created_at DESC LIMIT 2", (chat_id,)
                 ).fetchall()
+                username = author.get("username")
+                label = (
+                    " " + username
+                    if isinstance(username, str) and re.fullmatch(r"[\w.-]{1,40}", username)
+                    else ""
+                )
                 event(
                     "ORDER",
-                    "📩 Новое сообщение от покупателя",
+                    "📩 Новое сообщение от покупателя" + label,
                     order=order[0]["id"] if len(order) == 1 else None,
                 )
             return bool(added)

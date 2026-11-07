@@ -356,6 +356,23 @@ class LogicalProductWorker:
                 ),
             )
 
+    async def _scan_with_connection_check(self, stop):
+        try:
+            return await self.once()
+        except APIError as error:
+            connection = getattr(self.api, "connection", None)
+            if error.code != "CONNECTION_NOT_VERIFIED" or connection is None or stop.is_set():
+                raise
+            if connection.state.get("reason") == "CHECK_IN_PROGRESS":
+                try:
+                    async with asyncio.timeout(5), connection.lock:
+                        pass
+                except TimeoutError:
+                    raise error from None
+            if connection.state.get("status") != "CONNECTED" or stop.is_set():
+                raise
+        return await self.once()
+
     async def run(self, stop):
         from app.workers.supervisor import worker_cycle
 
@@ -364,7 +381,7 @@ class LogicalProductWorker:
             prior = self.store.setting("runtime:cycle:logical-products", {})
             try:
                 with worker_cycle(self.store, "logical-products", min(900, 30 * 2 ** min(failures + 1, 5))):
-                    await self.once()
+                    await self._scan_with_connection_check(stop)
                 if prior.get("consecutive_failures", 0) >= 3:
                     event("INFO", "Сверка перевыставлений восстановлена")
                 failures = 0
@@ -372,7 +389,8 @@ class LogicalProductWorker:
                 failures += 1
                 event(
                     "WARNING",
-                    "Сверка перевыставлений остановлена: " + getattr(error, "code", type(error).__name__),
+                    "Не удалось завершить сверку перевыставлений: "
+                    + getattr(error, "code", type(error).__name__),
                     level=30 if prior.get("consecutive_failures", 0) == 2 else 10,
                 )
             try:
