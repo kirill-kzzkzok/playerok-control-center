@@ -105,29 +105,37 @@ async def test_order_updates_use_one_card_with_link_and_no_buttons(shop):
     assert "Покупатель подтвердил получение" in updates[-1].text
 
 
-async def test_connection_recheck_alert_is_not_sent_to_owner(shop):
+@pytest.mark.parametrize(
+    "worker,code,expected",
+    [
+        ("sync", "CONNECTION_NOT_VERIFIED", "SUPPRESSED"),
+        ("transactions", "UNAUTHORIZED_OR_CHALLENGE", "SUPPRESSED"),
+        ("transactions", "TRANSACTION_SCHEMA_ERROR", "SUCCEEDED"),
+    ],
+)
+async def test_connection_recheck_alert_is_not_sent_to_owner(shop, worker, code, expected):
     from app.database.store import encode
 
     r = await shop()
     r.store.set_setting(
-        "runtime:cycle:sync",
-        {"consecutive_failures": 3, "incident": "temp", "error_code": "CONNECTION_NOT_VERIFIED"},
+        "runtime:cycle:" + worker,
+        {"consecutive_failures": 3, "incident": "temp", "error_code": code},
     )
     r.store.execute(
         "INSERT INTO inbox(key,kind,payload,received_at,processed_at) VALUES('test-sync','worker_failed',?,?,?)",
         (
-            encode(
-                {"worker": "sync", "incident": "temp", "error_type": "CONNECTION_NOT_VERIFIED", "cycle": True}
-            ),
+            encode({"worker": worker, "incident": "temp", "error_type": code, "cycle": True}),
             now(),
             now(),
         ),
     )
     await Notifications(r.store, r.bot).once()
     assert r.store.rows("SELECT status FROM notifications WHERE event_key='test-sync'") == [
-        {"status": "SUPPRESSED"}
+        {"status": expected}
     ]
-    assert not any("Фоновая обработка" in (getattr(call, "text", "") or "") for call in r.session.calls)
+    assert any("Фоновая обработка" in (getattr(call, "text", "") or "") for call in r.session.calls) == (
+        expected == "SUCCEEDED"
+    )
 
 
 @pytest.mark.parametrize("mode", ["unique_stock", "telegram_gifts"])
