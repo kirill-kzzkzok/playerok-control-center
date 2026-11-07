@@ -260,3 +260,25 @@ async def test_supervised_loop_survives_restart_without_reusing_memory_as_author
     assert restarted.snapshot("lot")["ready"]
     assert reads == ["get_item", "get_item"]
     assert not r.api.remote.payments and not r.api.messages
+
+
+async def test_gift_binding_recheck_logs_transport_detail_only_in_debug(shop, caplog):
+    from app.playerok.adapter import APIError
+
+    r = await configured(shop)
+    original = r.api.pages
+
+    async def pages(method, collection, **kwargs):
+        if method == "get_game_category_data_fields":
+            raise APIError("UNAUTHORIZED_OR_CHALLENGE")
+        async for values in original(method, collection, **kwargs):
+            yield values
+
+    r.api.pages = pages
+    r.store.set_setting("readiness:lot", {})
+    caplog.clear()
+    caplog.set_level("DEBUG", logger="pcc.shop")
+    await ProductReadiness(r.store, r.api).check(7, "lot", automatic=True)
+    detail = [v for v in caplog.records if "Readiness stage=gift_binding" in v.getMessage()]
+    assert detail and all(v.levelno < 30 for v in detail)
+    assert not r.api.remote.payments

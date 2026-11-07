@@ -838,8 +838,7 @@ class ProductReadiness:
                     f"Readiness stage={stage} type={type(exc).__name__} code={safe_code}",
                     level=10
                     if (
-                        stage == "item"
-                        and isinstance(exc, APIError)
+                        isinstance(exc, APIError)
                         and code in {"UNAUTHORIZED_OR_CHALLENGE", "CONNECTION_NOT_VERIFIED", "AUTH_REJECTED"}
                     )
                     or (

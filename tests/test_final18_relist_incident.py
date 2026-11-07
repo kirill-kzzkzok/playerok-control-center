@@ -50,7 +50,7 @@ async def test_short_identity_verification_does_not_warn_on_recovered_scan(shop,
     assert not r.store.rows("SELECT 1 FROM inbox WHERE kind='worker_failed'")
 
 
-async def test_unresolved_scan_connection_failure_still_warns(shop, monkeypatch, caplog):
+async def test_unresolved_scan_gate_is_diagnostic_without_duplicate_owner_warning(shop, monkeypatch, caplog):
     r = await shop()
     worker = LogicalProductWorker(r.store, r.api)
     stop = asyncio.Event()
@@ -63,7 +63,7 @@ async def test_unresolved_scan_connection_failure_still_warns(shop, monkeypatch,
 
     monkeypatch.setattr(worker, "once", once)
     await worker.run(stop)
-    assert "Не удалось завершить сверку перевыставлений" in caplog.text
+    assert not any(record.levelno >= 30 for record in caplog.records)
     assert len(r.store.rows("SELECT 1 FROM inbox WHERE kind='worker_failed'")) == 1
 
 

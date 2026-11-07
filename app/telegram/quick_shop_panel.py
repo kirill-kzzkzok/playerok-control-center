@@ -111,7 +111,10 @@ class QuickShopPanel:
         return brief(ProductReadiness(self.store, self.api).snapshot(ident))
 
     async def status(self, owner):
-        from app.playerok.adapter import validate_page
+        import asyncio
+
+        from app.database.store import now
+        from app.playerok.adapter import APIError, validate_page
         from app.services.finance import quote_fresh
         from app.services.item_filters import catalog_item
         from app.services.product_readiness import ProductReadiness
@@ -132,22 +135,35 @@ class QuickShopPanel:
                 items, cursor = validate_page(saved["page"], "items")
                 if not cursor:
                     cache = {"items": items, "complete": True, "at": saved["at"]}
-        if not cache:
-            items, cursor, seen = {}, None, []
-            for _ in range(3):
-                page = await self.api.call(
-                    "get_my_items", count=24, after_cursor=cursor, statuses=[ItemStatuses.APPROVED]
-                )
-                if self.api.account.id != account or self.store.setting("playerok:account_id") != bound:
-                    raise ValidationError("Аккаунт Playerok изменился")
-                values, cursor = validate_page(page, "items", seen)
-                items.update((item["id"], catalog_item(item, account)) for item in values)
-                if not cursor:
-                    break
-                seen.append(cursor)
-            cache = {"items": list(items.values()), "complete": not cursor}
-        if not cache.get("complete") or cache.get("at") and not quote_fresh(cache["at"], max_age=60):
+        stale = cache and (
+            not cache.get("complete") or not cache.get("at") or not quote_fresh(cache["at"], max_age=60)
+        )
+        if stale or not cache:
             ListingsPanel(self.api, self.store).request_catalog(account)
+        if not cache or stale:
+            try:
+                async with asyncio.timeout(6):
+                    items, cursor, seen = {}, None, []
+                    for _ in range(3):
+                        page = await self.api.call(
+                            "get_my_items", count=24, after_cursor=cursor, statuses=[ItemStatuses.APPROVED]
+                        )
+                        if (
+                            self.api.account.id != account
+                            or self.store.setting("playerok:account_id") != bound
+                        ):
+                            raise ValidationError("Аккаунт Playerok изменился")
+                        values, cursor = validate_page(page, "items", seen)
+                        items.update((item["id"], catalog_item(item, account)) for item in values)
+                        if not cursor:
+                            break
+                        seen.append(cursor)
+                    cache = {"items": list(items.values()), "complete": not cursor, "at": now()}
+            except (APIError, TimeoutError) as error:
+                if not cache or getattr(error, "code", None) == "CATALOG_ACCOUNT_MISMATCH":
+                    raise
+        if self.api.account.id != account or self.store.setting("playerok:account_id") != bound:
+            raise ValidationError("Аккаунт Playerok изменился")
         active = [
             item for item in cache["items"] if item["status"] == "APPROVED" and not item.get("deleted_at")
         ]
@@ -160,10 +176,10 @@ class QuickShopPanel:
             delivery = (
                 "Playerok"
                 if result["mode"] == "playerok"
-                else ("вкл" if result["ready"] else "пауза" if result["enabled"] else "выкл")
+                else ("🟢" if result["ready"] else "🟡 пауза" if result["enabled"] else "🔴")
             )
-            completion = "вкл" if result["enabled"] and result["complete"] else "выкл"
-            reply = "вкл" if result["enabled"] and result["auto_message"] else "выкл"
+            completion = "🟢" if result["enabled"] and result["complete"] else "🔴"
+            reply = "🟢" if result["enabled"] and result["auto_message"] else "🔴"
             row = f"\n\n{index}. {escaped(item.get('name') or 'Товар', 90)}\nВыдача: {delivery} · Завершение: {completion} · Сообщение: {reply}"
             if result["mode"] == "playerok" and result["enabled"] and not result["ready"]:
                 row += " · действия бота на паузе"

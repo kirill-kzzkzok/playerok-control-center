@@ -75,7 +75,7 @@ async def test_status_only_verified_active_and_unknown_not_green(shop):
     h.api.item.update(status="APPROVED", priority="DEFAULT")
     await h.ui.message("/status")
     assert "Активные товары" in h.session.last_panel.text
-    assert "Выдача: выкл" in h.session.last_panel.text
+    assert "Выдача: 🔴" in h.session.last_panel.text
     assert set(buttons(h.session.last_panel)) == {"status:close"}
     assert not h.store.rows("SELECT * FROM outbox")
     h.api.item["status"] = "SOLD"
@@ -144,7 +144,7 @@ async def test_status_blocked_stock_is_not_green_and_owner_only(shop):
         future_confirmed=True,
     )
     await h.ui.message("/status")
-    assert "Выдача: пауза" in h.session.last_panel.text
+    assert "Выдача: 🟡 пауза" in h.session.last_panel.text
     assert "🟢 готово" not in h.session.last_panel.text
     count = len(h.session.calls)
     await h.ui.message("/status", owner=99)
@@ -187,3 +187,82 @@ async def test_product_catalog_pages_only_fetch_requested_page(shop):
         h.session.last_panel
     )
     assert seen == [None, "next"]
+
+
+async def test_status_refreshes_stale_catalog_and_includes_newly_published_stock(shop):
+    from datetime import UTC, datetime, timedelta
+
+    from app.services.item_filters import catalog_item
+
+    h = shop
+    h.api.item.update(status="APPROVED")
+    account = h.api.account.id
+    h.store.set_setting(
+        "ui:catalog:" + account,
+        {
+            "items": [catalog_item(h.api.item, account)],
+            "complete": True,
+            "at": (datetime.now(UTC) - timedelta(minutes=2)).isoformat(),
+        },
+    )
+    original = h.api.call
+
+    async def read(method, **kwargs):
+        if method == "get_my_items":
+            return {
+                "items": [
+                    deepcopy(h.api.item),
+                    {**deepcopy(h.api.item), "id": "new-steam", "name": "Steam [RZP]"},
+                ],
+                "page_info": {"has_next_page": False},
+            }
+        return await original(method, **kwargs)
+
+    h.api.call = read
+    await h.ui.message("/status")
+    assert "Steam [RZP]" in h.session.last_panel.text
+    assert "· 2" in h.session.last_panel.text
+    assert "Выдача: 🔴" in h.session.last_panel.text
+    assert set(buttons(h.session.last_panel)) == {"status:close"}
+    assert not h.store.rows("SELECT * FROM outbox")
+
+
+@pytest.mark.parametrize("fault", ["NETWORK_ERROR", "foreign"])
+async def test_status_stale_read_failure_keeps_owner_cache_but_rejects_foreign_items(shop, fault):
+    from datetime import UTC, datetime, timedelta
+
+    from app.playerok.adapter import APIError
+    from app.services.item_filters import catalog_item
+
+    h = shop
+    h.api.item.update(status="APPROVED")
+    account = h.api.account.id
+    h.store.set_setting(
+        "ui:catalog:" + account,
+        {
+            "items": [catalog_item(h.api.item, account)],
+            "complete": True,
+            "at": (datetime.now(UTC) - timedelta(minutes=2)).isoformat(),
+        },
+    )
+    original = h.api.call
+
+    async def read(method, **kwargs):
+        if method == "get_my_items":
+            if fault == "NETWORK_ERROR":
+                raise APIError(fault)
+            return {
+                "items": [{**deepcopy(h.api.item), "name": "FOREIGN LOT", "user": {"id": "someone-else"}}],
+                "page_info": {"has_next_page": False},
+            }
+        return await original(method, **kwargs)
+
+    h.api.call = read
+    await h.ui.message("/status")
+    if fault == "NETWORK_ERROR":
+        assert "сохранённый список" in h.session.last_panel.text
+        assert "Telegram Heart" in h.session.last_panel.text
+    else:
+        assert "FOREIGN LOT" not in h.session.last_panel.text
+        assert "Не удалось" in h.session.last_panel.text
+    assert not h.store.rows("SELECT * FROM outbox")

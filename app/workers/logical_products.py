@@ -393,7 +393,7 @@ class LogicalProductWorker:
                             cycle["retry_delay"] = 30
                         raise
                 if prior.get("consecutive_failures", 0) >= 3:
-                    event("INFO", "Сверка перевыставлений восстановлена")
+                    event("INFO", "Сверка перевыставлений восстановлена", level=10)
                 failures = 0
             except (APIError, ValueError) as error:
                 failures += 1
@@ -401,8 +401,13 @@ class LogicalProductWorker:
                     "WARNING",
                     "Не удалось завершить сверку перевыставлений: "
                     + getattr(error, "code", type(error).__name__),
-                    level=30 if prior.get("consecutive_failures", 0) == 2 else 10,
+                    level=10,
                 )
+                if (
+                    prior.get("consecutive_failures", 0) == 2
+                    and getattr(error, "code", None) != "CONNECTION_NOT_VERIFIED"
+                ):
+                    event("WARNING", "Перевыставления временно недоступны. Бот повторит проверку.", level=30)
             try:
                 pending = self.store.setting("logical:scan:" + str(self.api.account.id), {})
                 delay = cycle["retry_delay"] if failures else 5 if pending else 120
