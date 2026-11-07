@@ -5,6 +5,7 @@ import json
 from dataclasses import asdict
 
 from app.database.store import Conflict, encode, now
+from app.playerok.adapter import APIError
 from app.services.automation import Automation, DeliveryPolicy
 from app.services.products import ValidationError
 
@@ -38,11 +39,50 @@ class Inventory:
         from app.services.logical_products import LogicalProducts
         from app.services.product_readiness import ProductReadiness
 
-        item = (
-            await ProductReadiness(self.store, self.automation.api).ui_item(owner, ident)
-            if LogicalProducts(self.store, self.automation.api).listing(ident)
-            else await self.automation.item(owner, ident)
-        )
+        self.automation.orders.owner(owner)
+        api = self.automation.api
+        account = api.account.id
+        bound = self.store.setting("playerok:account_id")
+        if not account or bound and bound != account:
+            raise Conflict("Подключённый аккаунт Playerok изменился; склад закрыт")
+        readiness = ProductReadiness(self.store, api)
+        if LogicalProducts(self.store, api).listing(ident):
+            item = await readiness.ui_item(owner, ident)
+        else:
+            version = readiness.item_version(ident)
+            try:
+                item = await self.automation.item(owner, ident)
+            except APIError as error:
+                saved = self.store.setting("readiness:" + ident, {}).get("ui_snapshot", {})
+                if (
+                    error.code
+                    not in {
+                        "CONNECTION_NOT_VERIFIED",
+                        "NETWORK_ERROR",
+                        "HTTP_500",
+                        "HTTP_502",
+                        "HTTP_503",
+                        "HTTP_504",
+                    }
+                    or bound != account
+                    or saved.get("account") != account
+                    or saved.get("version") != readiness.item_version(ident)
+                    or (saved.get("item") or {}).get("id") != ident
+                ):
+                    raise
+                item = await readiness.ui_item(owner, ident)
+            else:
+                if api.account.id != account or self.store.setting("playerok:account_id") != bound:
+                    raise Conflict("Подключённый аккаунт Playerok изменился; склад закрыт")
+                if readiness.remember_item(item, version=version) is False:
+                    raise readiness.superseded_read(ident, owner=owner)
+        if (
+            api.account.id != account
+            or self.store.setting("playerok:account_id") != bound
+            or item.get("id") != ident
+            or (item.get("user") or {}).get("id") != account
+        ):
+            raise Conflict("Владелец объявления не подтверждён")
         if item.get("deleted_at") or item.get("status") not in {
             "DRAFT",
             "APPROVED",

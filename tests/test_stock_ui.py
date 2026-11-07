@@ -289,3 +289,34 @@ async def test_sync_error_blocks_ready_label(rig):
     )
     Orders(store).add_stock("item", ["private-unit"])
     assert service.readiness("item")["status"] == "Не готово"
+
+
+@pytest.mark.parametrize("changed_account", [False, True])
+async def test_stock_intake_survives_verification_outage_after_opening_input(rig, changed_account):
+    from app.playerok.adapter import APIError
+
+    store, api, session, _bot, ui, state = rig
+    store.set_setting("playerok:account_id", "seller")
+    store.set_setting("delivery:item:enabled", False)
+    await ui.click("stock:add:item")
+
+    async def offline(*args, **kwargs):
+        raise APIError("CONNECTION_NOT_VERIFIED")
+
+    api.call = offline
+    if changed_account:
+        api.account.id = "different-seller"
+    await ui.message("synthetic-private-unit")
+    if changed_account:
+        assert "❗" in session.calls[-1].text
+        assert not store.rows("SELECT id FROM inventory")
+        return
+
+    assert "новых единиц: 1" in session.calls[-1].text
+    pending = (await state.get_data())["stock_pending"]
+    ui.dp = dispatcher(store, api)
+    await ui.click("stock:commit:" + pending["nonce"])
+    assert Inventory(store, api).counts("item")["AVAILABLE"] == 1
+    assert store.setting("delivery:item:enabled") is False
+    assert not store.rows("SELECT id FROM outbox")
+    assert all("synthetic-private-unit" not in (getattr(call, "text", "") or "") for call in session.calls)
