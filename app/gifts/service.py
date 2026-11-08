@@ -652,14 +652,9 @@ class GiftService:
             (username, j["order_id"]),
         )
         if not j["recipient_username"]:
-            from app.services.shop_events import buyer, short_title
-
-            name = short_title((order.get("item") or {}).get("name"))
-            saved = self.store.rows("SELECT payload FROM orders WHERE id=?", (j["order_id"],))
-            label = buyer(json.loads(saved[0]["payload"]) if saved else order)
             event(
-                "🔎 ПОЛУЧАТЕЛЬ",
-                f"{name} · {label} · Telegram username извлечён",
+                "CHECK",
+                "Telegram username извлечён",
                 order=j["order_id"],
                 operation=action["id"],
             )
@@ -980,7 +975,7 @@ class GiftService:
 
                 record_delivery(self.store, order_id, gift=True)
                 self.queue_notice(db, job, "DELIVERED")
-        event("SUCCESS", "Доставка подтверждена сверкой", order=order_id, position=step["position"] + 1)
+        event("CHECK", "Доставка подтверждена сверкой", order=order_id, position=step["position"] + 1)
         return receipt
 
     async def recover_resource_preflights(self):

@@ -59,11 +59,11 @@ def ingest_review(store, db, order):
         ),
     ).rowcount:
         from app.security.logging import event
-        from app.services.shop_events import buyer, short_title
+        from app.services.shop_events import buyer, order_title
 
         event(
             "⭐ ОТЗЫВ",
-            f"{buyer(order)} · {short_title(order['item'].get('name'))} · {review['rating']}/5",
+            f"⭐ {buyer(order)} оставил отзыв · {review['rating']}/5 · «{order_title(order)}»",
             order=order_id,
         )
     chat = (order.get("chat") or {}).get("id")

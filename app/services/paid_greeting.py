@@ -1,6 +1,7 @@
 import re
 
 from app.database.store import Conflict, now, server_time
+from app.gifts.core import USERNAME
 from app.services.order_management import deal_details
 from app.services.shop_events import short_title
 
@@ -53,7 +54,7 @@ def enqueue(store, db, order, seller):
     )
 
 
-def render(order):
+def render(order, *, username_field_id=None):
     item = order["item"]
     fields = {}
     for field in item.get("data_fields") or []:
@@ -63,7 +64,7 @@ def render(order):
         if isinstance(field, dict) and field.get("id"):
             fields[field["id"]] = {**fields.get(field["id"], {}), **field}
     filled, missing = [], []
-    for field in list(fields.values())[:12]:
+    for ident, field in list(fields.items())[:12]:
         label = field.get("label")
         if not isinstance(label, str) or not label.strip():
             continue
@@ -76,8 +77,14 @@ def render(order):
         if isinstance(value, str) and value.strip():
             value = value.strip()
             public = re.fullmatch(r"\btelegram\b|\b(?:ник(?:нейм)?|nickname)\b", label, re.IGNORECASE)
-            shown = value if public and re.fullmatch(r"@?[A-Za-z][A-Za-z0-9_.-]{2,31}", value) else "указано"
-            filled.append(f"{label}: {shown}")
+            if ident == username_field_id or re.search(r"(?<!\w)@username\b", label, re.IGNORECASE):
+                match = USERNAME.fullmatch(value)
+                filled.append(f"@username: @{match.group(1)}" if match else "@username: указано")
+            else:
+                shown = (
+                    value if public and re.fullmatch(r"@?[A-Za-z][A-Za-z0-9_.-]{2,31}", value) else "указано"
+                )
+                filled.append(f"{label}: {shown}")
         elif field.get("required") is True:
             missing.append(label)
     lines = [
@@ -147,4 +154,4 @@ async def prepare(store, api, action):
                 for field in fields
             ]
         order = {**order, "obtaining_fields": fields}
-    return render(order)
+    return render(order, username_field_id=configured[0]["username_field_id"] if configured else None)

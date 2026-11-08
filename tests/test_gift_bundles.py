@@ -119,7 +119,9 @@ async def test_ordered_bundle_all_receipts_once_notice_and_fulfillment(rig, code
     await r.worker.once()
     await r.worker.once()
     await w.once()
-    assert len(r.api.sent) == 1 and "Все предусмотренные" in r.api.sent[0][1]
+    from app.gifts.execution import MESSAGES
+
+    assert len(r.api.sent) == 1 and r.api.sent[0][1] == MESSAGES["DELIVERED"]
     assert r.api.orders["order"]["status"] == "SENT"
     assert r.service.discover() == 0
 
@@ -384,7 +386,7 @@ async def test_full_refund_only_before_any_payment_in_bundle(rig):
 
 
 async def test_owner_notice_shows_partial_delivery_without_recipient_or_false_success(rig):
-    from app.telegram.operation_results import OperationResults
+    from app.workers.notifications import Notifications
 
     r = rig
     t = await setup(r, "bear, rose")
@@ -394,10 +396,13 @@ async def test_owner_notice_shows_partial_delivery_without_recipient_or_false_su
     session = TelegramSession()
     bot = Bot("123:" + "x" * 35, session=session)
     try:
-        await OperationResults(r.store).notify(bot)
+        notices = Notifications(r.store, bot)
+        await notices.once()
+        await notices.once()
         output = "\n".join(c.text for c in session.calls if hasattr(c, "text"))
         assert "Realbuyer" not in output
-        assert "Доставлено частично" in output and "Медведь" in output and "Роза" in output
+        assert output.count("Недостаточно Stars") == 1
+        assert "Подтверждена доставка: 1 из 2" in output and "/deal/order" in output
         assert not r.api.sent
     finally:
         await bot.session.close()
@@ -485,8 +490,8 @@ async def test_live_console_records_only_committed_receipt_and_masked_recipient(
         rendered.append(ConsoleFormatter().format(record))
     output = "\n".join(rendered)
     assert "bear 1/2 — отправка" in output
-    assert output.count("Telegram Stars — подтверждено списание") == 2
-    assert output.count("Товар успешно выдан") == 1
+    assert "Telegram Stars — подтверждено списание" not in output
+    assert output.count("Товар «Heart gift» успешно выдан") == 1
     assert "Realbuyer" not in output
     # A decimal access_hash must not leak; random operation UUIDs may contain
     # these three digits without representing the sensitive numeric value.

@@ -24,6 +24,8 @@ event('ORDER','Пакет 🧸 ×2, 🌹 ×1',order='sale-1',operation='operatio
 logging.getLogger('pcc.shop').debug('username @Realbuyer api_hash=dummy-api-hash token=dummy-token-secret access_hash=987654321 session_string=private-string C:/private/account.session')
 event('SUCCESS','Доставка подтверждена',order='sale-1',position=1)
 logging.getLogger('aiogram.event').info('polling-noise')
+logging.getLogger('aiogram.dispatcher').info('Start polling')
+logging.getLogger('aiogram.dispatcher').info('Run polling for bot')
 for h in logging.getLogger().handlers:
     if hasattr(h,'maxBytes'):
         h.maxBytes=100
@@ -44,7 +46,8 @@ logging.shutdown()
     assert result.returncode == 0, result.stderr
     output = result.stdout
     assert output.count("Пакет 🧸 ×2, 🌹 ×1") == 1
-    assert "🛒 ЗАКАЗ" in output and "✅ УСПЕХ" in output and "[DEBUG" not in output
+    assert "ℹ️ Пакет" in output and "🟢 Доставка подтверждена" in output and "[DEBUG" not in output
+    assert "Start polling" not in output and "Run polling for bot" not in output
     assert "sale-1" not in output
     assert "operation_id=" not in output and "gift_position=" not in output
     assert "polling-noise" not in output and "\x1b" not in output

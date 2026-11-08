@@ -41,6 +41,14 @@ async def test_stock_notice_uses_shared_scope_and_never_resumes_delivery(shop, r
         "SELECT n.status FROM notifications n JOIN inbox i ON i.key=n.event_key WHERE i.kind='stock_empty'"
     )
     assert notices == [{"status": "SKIPPED" if restock else "SUCCEEDED"}]
+    stock_notices = [
+        call.text for call in r.session.calls if "СКЛАД ПУСТ" in (getattr(call, "text", "") or "")
+    ]
+    assert len(stock_notices) == int(not restock)
+    if stock_notices:
+        from html import escape
+
+        assert escape(r.api.items["next-lot"]["name"]) in stock_notices[0]
     assert r.store.setting("delivery:next-lot:enabled") is False
     assert r.store.rows("SELECT * FROM reservations ORDER BY order_id") == reservations
     assert not r.api.messages and not r.api.remote.payments

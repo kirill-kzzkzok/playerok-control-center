@@ -1246,9 +1246,9 @@ class LogicalProducts:
             cutoff = self.store.rows(
                 "SELECT updated_at FROM delivery_policies WHERE item_id=?", (item["id"],)
             )[0]["updated_at"]
-        from app.services.shop_events import short_title
+        from app.services.shop_events import product_title
 
-        event("✅ ВЫДАЧА", short_title(item.get("name")) + " · автовыдача включена", success=True)
+        event("SUCCESS", f"✅ Автовыдача включена для «{product_title(item.get('name'))}»", success=True)
         return cutoff
 
     async def _active_inheritance(self, owner, product, item, inherit, projection):
@@ -1666,12 +1666,12 @@ class LogicalProducts:
             )
 
         if product["enabled"]:
-            from app.services.shop_events import short_title
+            from app.services.shop_events import product_title
 
             link = self.listing(product["stock_item_id"])
             event(
                 "⏸ ВЫДАЧА",
-                short_title(link.get("title_snapshot") if link else None) + " · автовыдача остановлена",
+                f"⏸️ Автовыдача остановлена для «{product_title(link.get('title_snapshot') if link else None)}»",
             )
 
     def detach(self, owner, product_id, revision):

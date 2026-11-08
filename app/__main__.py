@@ -116,7 +116,7 @@ async def wait_for_telegram(bot, stop, *, verified=False, retry_at=0):
 
 
 async def run_connected(config, *, network_diagnostics=False, instance_lock=None):
-    event("INFO", "Запуск Playerok Control Center")
+    event("INFO", "🚀 Playerok Control Center запускается...")
     store = Store(config.database_path)
     account = SafeAccount(config.playerok_header, writes_enabled=config.writes_enabled)
     account.automation_enabled = config.automation_enabled
@@ -295,7 +295,7 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
             if not telegram_verified:
                 event("SUCCESS", "Telegram Bot подключён")
             if connection.state["status"] == "CONNECTED":
-                event("INFO", "Бот готов к работе. Запускаем приём команд Telegram")
+                event("SUCCESS", "✨ Магазин готов к работе")
             else:
                 event(
                     "INFO",

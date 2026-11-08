@@ -13,7 +13,9 @@ from tests.test_unified_delivery_controls import shop as shop_fixture
 shop = shop_fixture
 
 
-@pytest.mark.parametrize("rating,send", [(5, True), (4, True), (3, False), (None, False)])
+@pytest.mark.parametrize(
+    "rating,send", [(5, True), (4, True), (3, False), (2, False), (1, False), (None, False)]
+)
 async def test_review_pipeline_short_read_dedupe_and_safe_reply(shop, rating, send):
     r = await shop()
     r.store.set_setting("reviews:thanks_since", (datetime.now(UTC) - timedelta(minutes=1)).isoformat())
@@ -40,12 +42,13 @@ async def test_review_pipeline_short_read_dedupe_and_safe_reply(shop, rating, se
     await r.worker.once()
     assert [m["text"] for m in r.api.messages] == ([THANKS] if send else [])
     await Notifications(r.store, r.bot).once()
-    notices = [m for m in r.session.calls if getattr(m, "text", "") and "Новый отзыв" in m.text]
+    notices = [m for m in r.session.calls if getattr(m, "text", "") and "НОВЫЙ ОТЗЫВ" in m.text]
     assert len(notices) == int(rating is not None)
     if notices:
         assert "&lt;прекрасно&gt;" in notices[0].text and "Buyer.On.Playerok" in notices[0].text
         assert 'href="https://playerok.com/deal/review-sale"' in notices[0].text
         assert notices[0].reply_markup is None
+        assert f"{'⭐' * rating} {rating}/5" in notices[0].text
 
 
 async def test_lost_thanks_reply_is_never_replayed(shop):
@@ -79,6 +82,8 @@ async def test_lost_thanks_reply_is_never_replayed(shop):
     await r.worker.once()
     assert len(r.api.messages) == 1
     assert r.store.rows("SELECT status FROM outbox") == [{"status": "UNCERTAIN"}]
+    await Notifications(r.store, r.bot).once()
+    assert not any("Неопределённый результат" in (getattr(c, "text", "") or "") for c in r.session.calls)
 
 
 async def test_order_updates_use_one_card_with_link_and_no_buttons(shop):
@@ -93,14 +98,18 @@ async def test_order_updates_use_one_card_with_link_and_no_buttons(shop):
         order["status"] = state
         local.ingest(order)
         await notice.once()
-    await notice.once()
+    from tests.test_logical_faults import reopen
+
+    reopen(r)
+    Orders(r.store).ingest(order)
+    await Notifications(r.store, r.bot).once()
     updates = [
         m for m in r.session.calls if "https://playerok.com/deal/sale" in (getattr(m, "text", "") or "")
     ]
     assert [m.__api_method__ for m in updates] == ["sendMessage", "editMessageText", "editMessageText"]
-    assert all(m.reply_markup is None and "[VPM]" not in m.text for m in updates)
-    assert all(m.text.split('<a href="')[0].endswith("\n\n") for m in updates)
-    assert all(not m.text.split('<a href="')[0].endswith("\n\n\n") for m in updates)
+    assert all(m.reply_markup is None and order["item"]["name"] in m.text for m in updates)
+    assert all(m.text.split('🔗 <a href="')[0].endswith("\n\n") for m in updates)
+    assert all(not m.text.split('🔗 <a href="')[0].endswith("\n\n\n") for m in updates)
     assert "Имя не указано" in updates[0].text and "+90 ₽" in updates[0].text
     assert "Покупатель подтвердил получение" in updates[-1].text
 
@@ -175,11 +184,7 @@ async def test_confirmed_delivery_updates_card_and_unknown_never_announces_succe
     await notice.once()
     await notice.once()
     delivered = [
-        c.text
-        for c in r.session.calls
-        if (getattr(c, "text", "") or "").startswith(
-            "🎁 <b>Подарок отправлен" if mode == "telegram_gifts" else "🎁 <b>Товар выдан"
-        )
+        c.text for c in r.session.calls if (getattr(c, "text", "") or "").startswith("🎁 <b>ТОВАР ВЫДАН")
     ]
     assert len(delivered) == 1
     assert "/deal/success" in delivered[0]
@@ -193,7 +198,7 @@ async def test_confirmed_delivery_updates_card_and_unknown_never_announces_succe
     order["status"] = "ROLLED_BACK"
     local.ingest(order)
     await notice.once()
-    refund = [c.text for c in r.session.calls if "Возврат подтверждён" in (getattr(c, "text", "") or "")]
+    refund = [c.text for c in r.session.calls if "ВОЗВРАТ ПОДТВЕРЖДЁН" in (getattr(c, "text", "") or "")]
     assert len(refund) == 1 and "/deal/success" in refund[0]
     expected = (
         "Подарок был отправлен до возврата" if mode == "telegram_gifts" else "Товар был выдан до возврата"

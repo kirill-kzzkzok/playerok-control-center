@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import sys
+import unicodedata
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -65,6 +66,8 @@ class PollingFilter(logging.Filter):
     def filter(self, record):
         text = record.getMessage()
         for prefix, safe in (
+            ("Start polling", "Start polling"),
+            ("Run polling for bot", "Run polling for bot"),
             ("Failed to fetch updates", "Telegram polling: запрос прерван"),
             ("Sleep for", "Telegram polling: повтор с задержкой"),
             ("Connection established", "Telegram polling: обновления восстановлены"),
@@ -110,19 +113,20 @@ class ConsoleFormatter(logging.Formatter):
         text = f"[{self.formatTime(record, self.datefmt)}] [{category:<8}] {record.getMessage()}"
         if context and self.technical:
             text += " · " + context
-        elif getattr(record, "order_id", None):
-            text += " · заказ #" + str(record.order_id)
         if not self.technical:
-            label = {
-                "INFO": "ℹ️  МАГАЗИН",
-                "ORDER": "🛒 ЗАКАЗ",
-                "GIFT": "🎁 ПОДАРОК",
-                "SUCCESS": "✅ УСПЕХ",
-                "WARNING": "⚠️  ВНИМАНИЕ",
-                "ERROR": "⛔ ОШИБКА",
-                "CRITICAL": "⛔ ОШИБКА",
-            }.get(category, category)
-            text = f"{self.formatTime(record, self.datefmt)}  {label:<13} {record.getMessage()}"
+            message = " ".join(record.getMessage().splitlines()).strip()
+            if message and unicodedata.category(message[0]) != "So":
+                icon = {"SUCCESS": "🟢", "WARNING": "⚠️", "ERROR": "❌", "CRITICAL": "❌"}.get(category)
+                if icon is None:
+                    icon = (
+                        "❌"
+                        if record.levelno >= logging.ERROR
+                        else "⚠️"
+                        if record.levelno >= logging.WARNING
+                        else "ℹ️"
+                    )
+                message = f"{icon} {message}"
+            text = f"{self.formatTime(record, self.datefmt)}  {message}"
             text = re.sub(r"(?i)\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b|\b[0-9a-f]{32}\b", "—", text)
         color = {"SUCCESS": "32", "GIFT": "35", "CHECK": "34", "ORDER": "36"}.get(
             category, self.COLORS.get(record.levelno, "0")

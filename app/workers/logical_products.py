@@ -352,7 +352,7 @@ class LogicalProductWorker:
                     continue
                 adopted += int(self.service.listing(item["id"]) is not None)
                 if source_order:
-                    event("ORDER", "Привязка оплаченной сделки подтверждена", order=source_order)
+                    event("CHECK", "Привязка оплаченной сделки подтверждена", order=source_order)
         self.store.set_setting(
             key + ":completed", {"at": now(), "generation": generation, "adopted": adopted}
         )

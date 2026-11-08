@@ -4,6 +4,7 @@ import json
 import time
 from datetime import datetime
 from enum import Enum
+from html import escape
 
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 
@@ -11,6 +12,7 @@ from app.database.store import Conflict, encode
 from app.gifts.outcomes import DELAYED_PREFLIGHT_SQL
 from app.services.chat_events import system_event
 from app.services.notification_preferences import NotificationPreferences, notification_baseline
+from app.services.shop_events import notice_heading, order_alert, stock_title
 from app.telegram.chat_cards import ChatCards
 from app.telegram.errors import TERMINAL_EDIT, send_failure, telegram_error
 from app.telegram.formatting import escaped
@@ -391,20 +393,24 @@ class Notifications:
                         "Остальные заказы обрабатываются; ручное действие пока не требуется."
                     )
                 else:
-                    text = (
-                        "⚠️ <b>Автоматическая выдача не запущена</b>\nЗаказ: "
-                        + escaped(payload.get("order_id") or "неизвестен", 100)
-                        + (
-                            "\nPlayerok вернул противоречащую идентичность этой сделки. Нужна её проверка."
-                            if payload.get("identity_conflict")
-                            else "\nТребуется проверка владельца. Сбой условий не запускает слепой повтор."
-                        )
+                    order_id = payload.get("order_id")
+                    saved = self.store.rows("SELECT payload FROM orders WHERE id=?", (order_id,))
+                    detail = (
+                        "Данные сделки на Playerok противоречат сохранённым. Проверьте заказ."
+                        if payload.get("identity_conflict")
+                        else "Проверьте условия выдачи в карточке заказа."
                     )
-                markup = keyboard(
-                    [[("Заказ", "order:" + payload["order_id"])]]
-                    if payload.get("order_id")
-                    else [[("Заказы", "orders")]]
-                )
+                    title = "Автоматическая выдача не запущена"
+                    if order_id:
+                        text = order_alert(
+                            json.loads(saved[0]["payload"]) if saved else {"id": order_id}, title, detail
+                        )
+                        markup = None
+                    else:
+                        text = notice_heading("⚠️", "Проблема с заказом") + f"\n❌ {title}\n{detail}"
+                        markup = keyboard([[("Заказы", "orders")]])
+                if payload.get("snapshot_wait"):
+                    markup = keyboard([[("Заказы", "orders")]])
             elif event["kind"] == "logical_product_blocked":
                 rows = self.store.rows(
                     "SELECT code,error_code,revision,control_revision FROM logical_products WHERE id=?",
@@ -475,33 +481,68 @@ class Notifications:
                     self.close_pending(event["key"], "SKIPPED")
                     continue
                 if pause_operation:
-                    text = (
-                        "⚠️ <b>Playerok не разрешил снять товар с продажи</b>\n"
-                        "Склад пуст. Объявление может оставаться доступным для покупки. "
-                        "Бот не выдаст отсутствующий товар и повторит безопасную проверку."
+                    title, detail = (
+                        "Не удалось снять товар с продажи",
+                        (
+                            "Склад пуст, а объявление может оставаться доступным для покупки. "
+                            "Бот повторит проверку автоматически."
+                        ),
                     )
                 else:
-                    text = (
-                        "📦 <b>На складе осталась 1 единица</b>\nПополните запас, чтобы продажи не остановились."
+                    title, detail = (
+                        ("На складе осталась 1 единица", "Пополните запас, чтобы продажи не остановились.")
                         if event["kind"] == "stock_low"
-                        else "📦 <b>Доступный запас закончился</b>\nНовые выдачи остановлены до пополнения. Уже зарезервированные товары будут выданы; карантинные данные не используются повторно."
+                        else (
+                            "Склад пуст",
+                            "Новые выдачи ждут пополнения. Резервы текущих заказов сохранены.",
+                        )
                     )
+                with self.store.lock:
+                    name = stock_title(self.store.db, payload["item_id"], payload.get("order_id"))
+                text = notice_heading("📦", title) + f"\n📦 {escape(name)}\n\n{detail}"
                 markup = keyboard([[("Пополнить склад", "stock:add:" + payload["item_id"])]])
             elif event["kind"] == "order_problem":
+                gift_operation = payload.get("gift_operation")
                 order = self.store.rows(
-                    "SELECT payload FROM orders WHERE id=? AND json_extract(payload,'$.has_problem')=1",
+                    "SELECT payload FROM orders WHERE id=? AND "
+                    + ("status='PAID'" if gift_operation else "json_extract(payload,'$.has_problem')=1"),
                     (payload["order_id"],),
                 )
                 if not order:
                     self.close_pending(event["key"], "SKIPPED")
                     continue
-                from app.services.shop_events import order_alert
+                title, detail = "Покупатель открыл проблему", "Проверьте сделку на Playerok."
+                if gift_operation:
+                    active = self.store.rows(
+                        "SELECT 1 FROM outbox WHERE id=? AND target=? AND error_code=? "
+                        "AND status IN ('RETRYABLE_FAILED','PERMANENT_FAILED')",
+                        (gift_operation, payload["order_id"], payload.get("error")),
+                    )
+                    if not active:
+                        self.close_pending(event["key"], "SKIPPED")
+                        continue
+                    from app.gifts.core import gift_reason
 
-                text = order_alert(
-                    json.loads(order[0]["payload"]),
-                    "Покупатель открыл проблему",
-                    "Проверьте сделку на Playerok.",
-                )
+                    title = gift_reason(payload["error"])
+                    if payload["error"] == "BALANCE_TOO_LOW":
+                        progress = self.store.rows(
+                            "SELECT COUNT(*) AS total,COUNT(CASE WHEN state='SUCCEEDED' THEN 1 END) AS sent "
+                            "FROM gift_steps WHERE order_id=?",
+                            (payload["order_id"],),
+                        )[0]
+                        detail = "Бот автоматически повторит проверку баланса."
+                        if progress["sent"]:
+                            detail = (
+                                f"Подтверждена доставка: {progress['sent']} из {progress['total']}. " + detail
+                            )
+                    else:
+                        refund = self.store.rows(
+                            "SELECT refund_state FROM gift_jobs WHERE order_id=?", (payload["order_id"],)
+                        )
+                        if refund and refund[0]["refund_state"] in {"QUEUED", "SPENDING"}:
+                            continue
+                        detail = "Проверьте данные получателя и состояние возврата в заказе."
+                text = order_alert(json.loads(order[0]["payload"]), title, detail)
                 markup = None
             elif event["kind"] == "delivery_delayed":
                 incident = self.store.setting("gifts:preflight_incident", {})
@@ -530,6 +571,9 @@ class Notifications:
                     self.close_pending(event["key"], "SKIPPED")
                     continue
                 operation = current[0]
+                if operation["kind"] == "reply" and json.loads(operation["payload"]).get("review_thanks"):
+                    self.close_pending(event["key"], "SUPPRESSED")
+                    continue
                 order = self.store.rows(
                     "SELECT status,payload FROM orders WHERE id=?", (operation["target"],)
                 )
@@ -563,7 +607,6 @@ class Notifications:
                     "chain_message",
                     "fulfill",
                 }:
-                    from app.services.shop_events import order_alert
                     from app.telegram.presentation import operation_name
 
                     text = order_alert(

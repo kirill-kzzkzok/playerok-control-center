@@ -8,13 +8,27 @@ from app.playerok.adapter import APIError
 from app.security.logging import event
 from app.services.order_management import deliverable, sale
 from app.services.orders import Orders
+from app.services.paid_greeting import FRAME
 from app.services.products import ValidationError
 from playerokapi.enums import ItemDealStatuses
 
 MESSAGES = {
-    "DELIVERED": "Все предусмотренные заказом Telegram-подарки отправлены на указанный при оплате аккаунт. Доставка каждого подтверждена Telegram.",
-    "REFUNDED": "Заказ отменён: указанный Telegram username не существует или некорректен. Возврат подтверждён Playerok.",
-    "INVALID": "Возникла проблема с указанным Telegram username. Заказ передан продавцу для решения. Завершённый возврат пока не подтверждён.",
+    "DELIVERED": (
+        f"{FRAME}\n\n🎀 ура, твой заказ доставлен! ♡\n\n"
+        "🎁 все подарки успешно отправлены\nна указанный Telegram-аккаунт.\n\n"
+        f"💗 спасибо, что выбрал мой магазин!\nбуду очень рада видеть тебя снова ♡\n\n{FRAME}"
+    ),
+    "REFUNDED": (
+        f"{FRAME}\n\n💌 ой, кажется, что-то пошло не так...\n\n"
+        "не получилось найти Telegram-аккаунт\nпо указанному username 🥺\n\n"
+        f"💗 заказ отменён, а возврат\nсредств уже подтверждён.\n\nнадеюсь, увидимся снова! ♡\n\n{FRAME}"
+    ),
+    "INVALID": (
+        f"{FRAME}\n\n💌 возникла небольшая проблема...\n\n"
+        "не получилось отправить подарок\nна указанный Telegram-аккаунт.\n\n"
+        "🧸 заказ передан продавцу,\nчтобы разобраться в ситуации.\n\n"
+        f"💗 возврат средств пока\nне подтверждён. ♡\n\n{FRAME}"
+    ),
 }
 
 
@@ -129,7 +143,7 @@ async def execute_followup(executor, action):
         ):
             raise APIError("REFUND_NOT_CONFIRMED", uncertain=True)
         Orders(executor.store).ingest(confirmed)
-        event("SUCCESS", "Возврат подтверждён Playerok", order=target, operation=action["id"])
+        event("CHECK", "Возврат подтверждён Playerok", order=target, operation=action["id"])
         return {"remote_id": target, "remote_status": "ROLLED_BACK"}
     outcome = action["payload"].get("outcome")
     if not permitted_notice(j, outcome):

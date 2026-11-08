@@ -255,7 +255,7 @@ class Orders:
     @staticmethod
     def stock_level(db, item_id, order_id=None):
         product = db.execute(
-            "SELECT p.stock_item_id,p.code FROM logical_products p JOIN logical_listings l ON l.product_id=p.id "
+            "SELECT p.stock_item_id FROM logical_products p JOIN logical_listings l ON l.product_id=p.id "
             "WHERE l.item_id=? AND p.handler='unique_stock' AND p.state='VERIFIED' AND l.verified_at IS NOT NULL",
             (item_id,),
         ).fetchone()
@@ -271,21 +271,24 @@ class Orders:
                 "INSERT OR IGNORE INTO inbox(key,kind,payload,received_at,processed_at) VALUES(?,'stock_low',?,?,?)",
                 (
                     f"stock_low:{scope}:{generation}",
-                    encode({"item_id": item_id, "generation": generation}),
+                    encode({"item_id": item_id, "generation": generation, "order_id": order_id}),
                     now(),
                     now(),
                 ),
             ).rowcount
             if added:
+                from app.services.shop_events import stock_title
+
                 event(
-                    "ORDER",
-                    f"📦 [{product['code']}] — осталось 1 шт." if product else "📦 На складе осталась 1 шт.",
+                    "WARNING",
+                    f"📦 На складе осталась 1 единица · «{stock_title(db, item_id, order_id)}»",
+                    level=30,
                 )
 
     @staticmethod
     def empty_stock(db, item_id, order_id):
         product = db.execute(
-            "SELECT p.id,p.stock_item_id FROM logical_products p JOIN logical_listings l ON l.product_id=p.id "
+            "SELECT p.stock_item_id FROM logical_products p JOIN logical_listings l ON l.product_id=p.id "
             "WHERE l.item_id=? AND p.handler='unique_stock' AND p.state='VERIFIED' AND l.verified_at IS NOT NULL",
             (item_id,),
         ).fetchone()
@@ -302,7 +305,7 @@ class Orders:
         last_id = db.execute(
             "SELECT COALESCE(MAX(id),0) FROM inventory WHERE item_id=?", (scope,)
         ).fetchone()[0]
-        db.execute(
+        added = db.execute(
             "INSERT OR IGNORE INTO inbox(key,kind,payload,received_at,processed_at) VALUES(?,'stock_empty',?,?,?)",
             (
                 f"stock_empty:{scope}:{last_id}",
@@ -310,7 +313,15 @@ class Orders:
                 now(),
                 now(),
             ),
-        )
+        ).rowcount
+        if added:
+            from app.services.shop_events import stock_title
+
+            event(
+                "WARNING",
+                f"📦 Склад пуст · «{stock_title(db, item_id, order_id)}»",
+                level=30,
+            )
 
     def reserve(self, order_id, actor=None):
         from app.services.logical_products import LogicalProducts, stock_scope

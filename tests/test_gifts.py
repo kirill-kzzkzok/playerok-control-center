@@ -339,8 +339,24 @@ async def test_definitive_username_failure_refund_or_honest_manual_fallback(rig,
         assert r.api.orders["order"]["status"] == "ROLLED_BACK"
     await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
     await r.worker.once()
-    assert ("Возврат подтверждён" in r.api.sent[0][1]) is supported
+    from app.gifts.execution import MESSAGES
+
+    assert r.api.sent[0][1] == MESSAGES["REFUNDED" if supported else "INVALID"]
     assert len(r.api.refunds) == int(supported)
+    from app.workers.notifications import Notifications
+
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    try:
+        await Notifications(r.store, bot).once()
+        problems = [
+            call.text for call in session.calls if "ПРОБЛЕМА С ЗАКАЗОМ" in (getattr(call, "text", "") or "")
+        ]
+        assert len(problems) == int(not supported)
+        if problems:
+            assert "username" in problems[0] and "/deal/order" in problems[0]
+    finally:
+        await bot.session.close()
 
 
 async def test_lost_payment_ack_restart_cannot_guess_blank_gift_or_repeat(rig):
@@ -578,7 +594,7 @@ async def test_restart_during_recipient_check_retains_unstarted_retry(rig):
 
 @pytest.mark.parametrize("lost_ack", [True, False])
 async def test_dispatcher_uncertain_read_reconciliation_and_owner_notice(rig, lost_ack):
-    from app.telegram.operation_results import OperationResults
+    from app.workers.notifications import Notifications
 
     r = rig
     await enroll(r)
@@ -597,8 +613,12 @@ async def test_dispatcher_uncertain_read_reconciliation_and_owner_notice(rig, lo
     bot = Bot("123:" + "x" * 35, session=session)
     ui = Interaction(bot, dispatcher(r.store, r.api))
     try:
-        await OperationResults(r.store).notify(bot)
-        assert "Результат неизвестен" in session.calls[-1].text
+        await Notifications(r.store, bot).once()
+        assert any(
+            "Неопределённый результат операции" in (getattr(call, "text", "") or "")
+            and "/deal/order" in call.text
+            for call in session.calls
+        )
         await ui.click("gft:list:uncertain:0")
         await ui.click("gft:job:order")
         assert "Realbuyer" not in session.calls[-1].text

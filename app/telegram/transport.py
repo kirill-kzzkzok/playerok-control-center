@@ -164,7 +164,7 @@ class TelegramNetworkSession(AiohttpSession):
             if outcome == "OK":
                 failures = self._connection_failures.pop(method, 0)
                 if failures >= 3:
-                    event("INFO", f"Telegram-соединение восстановлено · {failures} неудачных попыток")
+                    event("SUCCESS", "🟢 Связь с Telegram восстановлена")
                 for key in tuple(self._reported):
                     if key[0] == method:
                         self._reported.pop(key)
@@ -175,7 +175,7 @@ class TelegramNetworkSession(AiohttpSession):
             if failures == 3:
                 event(
                     "WARNING",
-                    f"Telegram не отвечает несколько попыток подряд · {method}",
+                    "Telegram не отвечает. Бот продолжает попытки подключения.",
                     level=logging.WARNING,
                 )
             return

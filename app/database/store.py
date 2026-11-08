@@ -474,17 +474,13 @@ class Store:
 
                 position = self.rows("SELECT position FROM gift_steps WHERE operation_id=?", (action["id"],))
                 if not position or position[0]["position"] == 0:
-                    from app.services.shop_events import buyer, short_title
+                    from app.services.shop_events import buyer, order_title
 
                     rows = self.rows("SELECT payload FROM orders WHERE id=?", (action["target"],))
                     order = json.loads(rows[0]["payload"]) if rows else {}
-                    name = short_title((order.get("item") or {}).get("name"))
-                    detail = (
-                        "Начата отправка подарка" if action["kind"] == "gift_send" else "Началась автовыдача"
-                    )
                     event(
                         "⚙️ ВЫДАЧА",
-                        f"{buyer(order)} · {name} · {detail}",
+                        f"🎁 Начата выдача «{order_title(order)}» для {buyer(order)}",
                         order=action["target"],
                         operation=action["id"],
                     )
@@ -617,6 +613,23 @@ class Store:
                     (json.loads(row["payload"])["draft_id"],),
                 )
             payload = json.loads(row["payload"])
+            if row["kind"] == "gift_send" and (
+                status == "RETRYABLE_FAILED"
+                and error == "BALANCE_TOO_LOW"
+                or status == "PERMANENT_FAILED"
+                and error in {"USERNAME_INVALID", "USERNAME_NOT_OCCUPIED"}
+            ):
+                at = now()
+                db.execute(
+                    "INSERT OR IGNORE INTO inbox(key,kind,payload,received_at,processed_at) "
+                    "VALUES(?,'order_problem',?,?,?)",
+                    (
+                        f"order-delivery-problem:{row['target']}:{error}",
+                        encode({"order_id": row["target"], "gift_operation": ident, "error": error}),
+                        at,
+                        at,
+                    ),
+                )
             if (
                 row["kind"] == "stock_pause"
                 and status == "RETRYABLE_FAILED"

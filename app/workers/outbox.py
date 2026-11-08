@@ -1177,6 +1177,14 @@ class OutboxWorker:
             self.store.rows("SELECT status FROM outbox WHERE id=?", (action["id"],))[0]["status"],
         )
         outcome = self.store.rows("SELECT status,error_code FROM outbox WHERE id=?", (action["id"],))[0]
+        if action["kind"] == "reply" and action["payload"].get("review_thanks"):
+            event(
+                "CHECK",
+                f"Review reply outcome: {outcome['status']} · {outcome['error_code']}",
+                operation=action["id"],
+                level=10,
+            )
+            return True
         from app.services.fulfillment import automatic_legacy_completion
 
         checking_completion = (
@@ -1229,12 +1237,10 @@ class OutboxWorker:
             if order_target:
                 order = self.store.rows("SELECT payload FROM orders WHERE id=?", (order_target,))
                 if order:
-                    from app.services.shop_events import buyer, short_title
+                    from app.services.shop_events import buyer, order_title
 
                     value = json.loads(order[0]["payload"])
-                    message = (
-                        f"{buyer(value)} · {short_title((value.get('item') or {}).get('name'))} · {message}"
-                    )
+                    message = f"{message} · «{order_title(value)}» · {buyer(value)}"
             event(
                 "INFO" if checking_receipt or checking_completion else "WARNING",
                 message,
@@ -1243,11 +1249,11 @@ class OutboxWorker:
                 level=10 if repeated_wait else 20 if checking_receipt or checking_completion else 30,
             )
         elif action["kind"] in {"publish", "premium_publish"} and result.get("status") == "APPROVED":
-            from app.services.shop_events import short_title
+            from app.services.shop_events import product_title
 
             event(
                 "✅ ТОВАР",
-                short_title(result.get("name")) + " · опубликован",
+                f"📦 Товар «{product_title(result.get('name'))}» опубликован",
                 operation=action["id"],
                 success=True,
             )
