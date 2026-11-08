@@ -29,6 +29,10 @@ PLATFORM_STATES = {
 }
 
 
+def switch(label, enabled):
+    return ("🟢 " if enabled else "🔴 ") + label
+
+
 def summary(result, *, compact=False):
     text = "Способ выдачи: " + MODES[result["mode"]] + "\n" + STATES[result["state"]]
     if result["mode"] == "playerok":
@@ -67,10 +71,9 @@ def summary(result, *, compact=False):
             if result["balance"].get("at"):
                 text += "\nЗамер Stars: " + local_time(result["balance"]["at"])
         text += "\n💬 " + escaped(result["message"], 180)
-        text += "\n✅ Отметка выполнения: " + (
-            result.get("completion_note")
-            or ("автоматически, если Playerok разрешает без отчёта" if result["complete"] else "вручную")
-        )
+        text += "\n" + switch("Автозавершение", result["complete"])
+        if result.get("completion_note"):
+            text += "\n" + result["completion_note"]
         text += "\nПолная проверка: " + (
             local_time(result["checked_at"]) if result["checked_at"] else "ещё не выполнялась"
         )

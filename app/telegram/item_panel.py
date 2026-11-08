@@ -269,16 +269,11 @@ class ItemPanel:
                 for draft in stock.service.prepared(owner, ident):
                     rows.append([("📥 Добавить подготовленный запас", "stock:transfer:" + draft)])
             elif section in {"messages", "completion"}:
-                text += "\n\n" + (
-                    "Сообщение после оплаты и отметка выполнения настраиваются независимо."
-                    if platform
-                    else "Приветствие отправляется до выдачи, итоговое сообщение — после подтверждения. У подарков действует стандартное уведомление, если своё не задано."
-                )
                 rows = [
                     [
                         (
-                            "Изменить настройки",
-                            "platform:item:" + ident if platform else "lp:" + section + ":" + ident,
+                            "Настройки выдачи" if section == "completion" else "Настроить сообщение",
+                            route if section == "completion" or platform else "lp:messages:" + ident,
                         )
                     ]
                 ]

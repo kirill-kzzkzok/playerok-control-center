@@ -348,3 +348,31 @@ async def test_gift_success_message_can_be_disabled_without_affecting_gift(shop)
     assert len(r.api.remote.payments) == 3
     assert [m["chat_id"] for m in r.api.messages] == ["chat-gift-old", "chat-gift-on"]
     assert not r.store.rows("SELECT id FROM outbox WHERE kind='gift_notice' AND target='gift-off'")
+
+
+@pytest.mark.parametrize("mode", ["unique_stock", "fixed_text", "telegram_gifts"])
+async def test_delivery_card_completion_switch_has_same_label_and_toggles_in_place(shop, mode):
+    r = await shop(gift=mode == "telegram_gifts")
+    await setup_ui(r, mode, {"fixed_text": "private-unit", "telegram_gifts": "gift: heart"}.get(mode))
+    await r.ui.click("lp:item:lot")
+    visible = buttons(r.session.last_panel)
+    toggle = next(key for key, label in visible.items() if label == "🔴 Автозавершение")
+    await r.ui.click(toggle)
+    assert "🟢 Автозавершение" in buttons(r.session.last_panel).values()
+    assert not r.api.messages and not r.api.remote.payments
+
+
+async def test_active_playerok_completion_uses_same_switch_without_save(shop):
+    from app.services.automation import Automation
+
+    r = await shop()
+    await configure(r, reply=True, fulfill=False)
+    r.store.set_setting("orders:greeting_since", "2026-01-01T00:00:00+00:00")
+    await r.ui.click("platform:item:lot")
+    visible = buttons(r.session.last_panel)
+    assert "🔴 Автозавершение" in visible.values()
+    assert not any(key.endswith(":save") for key in visible)
+    await click(r, suffix=":fulfill")
+    assert "🟢 Автозавершение" in buttons(r.session.last_panel).values()
+    assert Automation(r.store, r.api).get("lot")[1].mark_sent
+    assert not r.api.messages and not r.api.remote.payments

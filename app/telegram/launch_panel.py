@@ -1,3 +1,5 @@
+from app.telegram.product_presentation import switch
+
 """Durable setup within the product wizard, before the final publication confirmation."""
 
 import json
@@ -151,12 +153,8 @@ class LaunchPanel:
                 if ready
                 else "требует проверки"
             )
-            + "\nЗавершение заказа: "
-            + (
-                "автоматически, только если Playerok не требует отчёт"
-                if value["auto_complete"]
-                else "вручную"
-            )
+            + "\n"
+            + switch("Автозавершение", value["auto_complete"])
         )
         if value["mode"] in {"text", "stock"}:
             text += "\nДанные: " + ("подготовлены, содержимое скрыто" if value["data"] else "не заданы")
@@ -250,14 +248,14 @@ class LaunchPanel:
                 )
                 if value.get("platform_reply"):
                     rows.insert(2, [("Изменить сообщение после оплаты", p + "edit:greeting")])
-            rows.insert(2, [("Автоматическая отметка выполнения", p + "complete")])
+            rows.insert(2, [(switch("Автозавершение", value["auto_complete"]), p + "complete")])
         elif value["mode"] != "manual":
             rows.insert(
                 1,
                 [
                     ("Сообщение после выдачи", p + "edit:after"),
                     (
-                        "Завершение заказа: " + ("авто" if value["auto_complete"] else "вручную"),
+                        switch("Автозавершение", value["auto_complete"]),
                         p + "complete",
                     ),
                 ],

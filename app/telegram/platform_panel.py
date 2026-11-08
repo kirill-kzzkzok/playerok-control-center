@@ -5,6 +5,7 @@ from app.services.automation import message_text
 from app.services.platform_orders import DEFAULT_REPLY, PlatformOrders
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
+from app.telegram.product_presentation import switch
 
 
 class PlatformPanel:
@@ -40,7 +41,7 @@ class PlatformPanel:
             if universal
             else "\n\nАвтоответ после оплаты: " + ("🟢 Включён" if data["reply"] else "выключен")
         )
-        text += "\nАвтовыполнение заказа: " + ("🟢 Включено" if data["fulfill"] else "выключено")
+        text += "\n" + switch("Автозавершение", data["fulfill"])
         if not universal:
             text += "\nОтвет: «" + escaped(data["text"], 600) + "»"
         text += "\nСохранение разрешает выбранные действия для будущих покупок и наследование при штатном перевыставлении. Обязательный отчёт остаётся ручным действием."
@@ -50,12 +51,12 @@ class PlatformPanel:
                     []
                     if universal
                     else [
-                        [("💬 Автоответ: " + ("Вкл" if data["reply"] else "Выкл"), prefix + "reply")],
+                        [(switch("Автоответ", data["reply"]), prefix + "reply")],
                         [("✏️ Изменить текст ответа", prefix + "text")],
                     ]
                 ),
-                [("✅ Автовыполнение: " + ("Вкл" if data["fulfill"] else "Выкл"), prefix + "fulfill")],
-                [("💾 Сохранить", prefix + "save")],
+                [(switch("Автозавершение", data["fulfill"]), prefix + "fulfill")],
+                *([] if universal and data.get("active") else [[("💾 Сохранить", prefix + "save")]]),
                 [("🔄 Изменить способ выдачи", "lp:method:" + data["id"])],
             ],
             back=("⬅️ К товару", "item:" + data["id"]),
@@ -161,6 +162,12 @@ class PlatformPanel:
         command = parts[2]
         if command in {"reply", "fulfill"}:
             data[command] = not data[command]
+            if (
+                command == "fulfill"
+                and data.get("active")
+                and self.service.store.setting("orders:greeting_since")
+            ):
+                return await self.save(data, owner, state)
         elif command == "text":
             await state.set_state("platform:text")
             return "✏️ Пришлите новый ответ покупателю.\nТекущий: «" + escaped(

@@ -1,3 +1,5 @@
+from app.telegram.product_presentation import switch
+
 """Owner setup of stable product identities in the existing navigation panel."""
 
 import json
@@ -26,6 +28,12 @@ MODES = {
 def gift_summary(bundle):
     counts = Counter(g["code"] for g in bundle)
     return ", ".join(f"{gift_name(code)} ×{count}" for code, count in counts.items())
+
+
+def completion_enabled(handler, config):
+    if handler == "telegram_gifts":
+        return bool(config.get("auto_fulfill"))
+    return bool(config.get("mark_sent") and config.get("automatic_completion"))
 
 
 class LogicalProductsPanel:
@@ -238,7 +246,12 @@ class LogicalProductsPanel:
             if platform:
                 rows.append([("Сменить способ выдачи", prefix + "configure")])
             elif product["handler"] != "manual":
-                rows.insert(1, [("Сообщение после выдачи", prefix + "editafter")])
+                message_enabled = (
+                    config.get("gift_notice") is not False
+                    if product["handler"] == "telegram_gifts"
+                    else bool(config.get("after"))
+                )
+                rows.insert(1, [(switch("Сообщение после выдачи", message_enabled), prefix + "editafter")])
             delivered = self.store.rows(
                 "SELECT o.id,o.created_at FROM logical_order_scopes s JOIN orders o ON o.id=s.order_id "
                 "WHERE s.product_id=? AND (EXISTS(SELECT 1 FROM gift_jobs g WHERE g.order_id=o.id AND g.state='SUCCEEDED' AND g.receipt IS NOT NULL) "
@@ -277,6 +290,16 @@ class LogicalProductsPanel:
         text += divergence_note
         if readiness["problems"]:
             text += "\n" + "\n".join("• " + escaped(p["text"], 180) for p in readiness["problems"][:6])
+        if product and product["state"] == "VERIFIED" and not platform and product["handler"] != "manual":
+            rows.insert(
+                1,
+                [
+                    (
+                        switch("Автозавершение", completion_enabled(product["handler"], config)),
+                        prefix + "togglecompletion",
+                    )
+                ],
+            )
         rows.append([("Подробности готовности", "rd:check:" + item_id)])
         if not details:
             from app.telegram.product_presentation import brief
@@ -290,11 +313,18 @@ class LogicalProductsPanel:
                 text += f"\nОстаток: {readiness['stock']['AVAILABLE']} · в резерве: {readiness['stock']['RESERVED']}"
             if product and product["handler"] != "manual":
                 text += "\n💬 " + escaped(readiness["message"], 150)
-                text += "\n✅ Завершение: " + (
-                    readiness.get("completion_note")
-                    or ("после доставки, если не нужен отчёт" if readiness["complete"] else "вручную")
-                )
-            keep = {"stop", "arm", "configure", "editafter", "migrate", "reconcile", "rebind", "title"}
+
+            keep = {
+                "stop",
+                "arm",
+                "togglecompletion",
+                "configure",
+                "editafter",
+                "migrate",
+                "reconcile",
+                "rebind",
+                "title",
+            }
             rows = [
                 [
                     (label, route)
@@ -532,6 +562,13 @@ class LogicalProductsPanel:
             return "⚡ <b>Способ выдачи</b>\nВыберите, что получит покупатель.", keyboard(
                 rows, back=("К товару", "lp:item:" + view["item"])
             )
+        if command == "togglecompletion":
+            if not product or product["state"] != "VERIFIED" or product["handler"] == "manual":
+                raise Conflict("Сначала подтвердите способ выдачи")
+            config = json.loads(product["config"])
+            enabled = completion_enabled(product["handler"], config)
+            self.service.update_after(owner, view["item"], product, not enabled, field="completion")
+            return await self.card(owner, view["item"], state)
         if command == "toggleafter":
             data = await state.get_data()
             expected = data.get("logical_message_edit")
@@ -573,18 +610,12 @@ class LogicalProductsPanel:
             await state.set_state("logical:notice")
             rows = []
             if command == "editafter" and product["handler"] == "telegram_gifts":
-                label = (
-                    "Включить сообщение"
-                    if json.loads(product["config"]).get("gift_notice") is False
-                    else "Выключить сообщение"
+                label = switch(
+                    "Сообщение после выдачи", json.loads(product["config"]).get("gift_notice") is not False
                 )
                 rows = [[(label, prefix + "toggleafter")]]
             if command == "editafter" and product["handler"] in {"unique_stock", "fixed_text"}:
-                label = (
-                    "Выключить сообщение"
-                    if json.loads(product["config"]).get("after")
-                    else "Включить стандартное сообщение"
-                )
+                label = switch("Сообщение после выдачи", json.loads(product["config"]).get("after"))
                 rows = [
                     [(label, prefix + "toggleafter")],
                 ]
@@ -716,7 +747,10 @@ class LogicalProductsPanel:
                 raise Conflict("Настройка устарела")
             config = setup["config"]
             key = "auto_fulfill" if setup["handler"] == "telegram_gifts" else "mark_sent"
-            config[key] = not config.get(key, False)
+            config[key] = not (
+                config.get(key)
+                and (setup["handler"] == "telegram_gifts" or config.get("automatic_completion"))
+            )
             if setup["handler"] != "telegram_gifts":
                 config["automatic_completion"] = config[key]
             await state.update_data(logical_setup=setup)
@@ -994,7 +1028,7 @@ class LogicalProductsPanel:
             )
             rows += [
                 [("Изменить пакет", prefix + "mode:telegram_gifts")],
-                [("Способ завершения", prefix + "completion")],
+                [(switch("Автозавершение", config.get("auto_fulfill")), prefix + "completion")],
                 [("Лимит на заказ", prefix + "input:order"), ("Лимит в сутки", prefix + "input:day")],
                 [("Возврат при неверном username", prefix + "refund")],
             ]
@@ -1019,17 +1053,14 @@ class LogicalProductsPanel:
             rows.append([("📚 Загрузить запас", prefix + "stockinput")])
         if handler in {"fixed_text", "unique_stock"}:
             automatic = config.get("automatic_completion", False)
-            text += "\nЗавершение: " + (
-                "автоматически после доставки, если не нужен отчёт"
-                if automatic and config.get("mark_sent")
-                else "вручную" + ("; напоминание включено" if config.get("mark_sent") else "")
-            )
+            if config.get("mark_sent") and not automatic:
+                text += "\nНапоминание о завершении включено."
             if not self.store.setting("orders:greeting_since"):
                 rows.append([("Приветствие", prefix + "input:greeting")])
             rows += [
                 [
                     (
-                        "Автоматическая отметка выполнения" if automatic else "Напоминать о завершении",
+                        switch("Автозавершение", automatic and config.get("mark_sent")),
                         prefix + "completion",
                     )
                 ],
