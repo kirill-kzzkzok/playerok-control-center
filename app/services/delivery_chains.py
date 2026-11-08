@@ -120,7 +120,14 @@ class DeliveryChains:
                 (ident, item_id, actor, revision, encode(saved_policy), now()),
             )
             steps = []
-            if policy.greeting:
+            from app.services.paid_greeting import greeting_key
+
+            if (
+                policy.greeting
+                and not db.execute(
+                    "SELECT 1 FROM outbox WHERE operation_key=?", (greeting_key(self.api.account.id, ident),)
+                ).fetchone()
+            ):
                 steps.append(("chain_message", policy.greeting))
             steps.append(
                 (

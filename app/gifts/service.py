@@ -122,7 +122,7 @@ class GiftService:
             "APPROVED",
             "PENDING_APPROVAL",
             "PENDING_MODERATION",
-        } | ({"SOLD"} if logical_code else set()):
+        } | ({"SOLD", "EXPIRED", "DISCONTINUED", "DECLINED"} if logical_code or preview_code else set()):
             raise GiftValidationError(
                 "Состояние товара не разрешает настройку подарков. Обновите карточку товара"
             )
@@ -412,7 +412,10 @@ class GiftService:
         if disabled:
             raise GiftValidationError("; ".join(disabled))
         await self.refresh()
-        if data["item"]["status"] != ("DRAFT" if prepublication else "APPROVED"):
+        from app.services.logical_products import ARMABLE_STATUSES
+
+        allowed = {"DRAFT"} if prepublication else ARMABLE_STATUSES if logical_arm else {"APPROVED"}
+        if data["item"]["status"] not in allowed:
             raise GiftValidationError("Включать можно только опубликованный лот")
         with self.store.transaction() as db:
             if self.store.setting("gifts:stop_revision", 0) != stop_revision:

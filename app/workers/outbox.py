@@ -127,6 +127,10 @@ class Executor:
             Products(self.store, self.api).require_critical_edit(action["target"], action["id"])
         if action["payload"].get("chain_id"):
             DeliveryChains(self.store, self.api).dispatchable(action)
+        if action["payload"].get("paid_greeting"):
+            from app.services.paid_greeting import guard
+
+            guard(self.store, self.api, action)
         if action["payload"].get("review_thanks"):
             from app.services.review_thanks import guard
 
@@ -872,7 +876,11 @@ class Executor:
                 raise APIError("READ_STATUS_NOT_CONFIRMED", uncertain=True)
             return {"chat_id": target, "unread_messages_counter": 0}
         if kind == "reply":
-            if payload.get("review_thanks"):
+            if payload.get("paid_greeting"):
+                from app.services.paid_greeting import prepare
+
+                payload = {"text": await prepare(self.store, self.api, action)}
+            elif payload.get("review_thanks"):
                 from app.services.review_thanks import verify
 
                 await verify(self.store, self.api, action)

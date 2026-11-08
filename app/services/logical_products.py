@@ -40,6 +40,7 @@ class RelistConflict(Conflict):
 
 HANDLERS = frozenset({"telegram_gifts", "unique_stock", "fixed_text", "manual"})
 MODERATION_STATUSES = frozenset({"PENDING_APPROVAL", "PENDING_MODERATION"})
+ARMABLE_STATUSES = MODERATION_STATUSES | {"APPROVED", "DRAFT", "SOLD", "EXPIRED", "DISCONTINUED", "DECLINED"}
 
 
 def digest(value):
@@ -1175,8 +1176,14 @@ class LogicalProducts:
         if item.get("id") != ident:
             raise Conflict("Playerok вернул другое объявление. Обновите карточку товара")
         self.verify_listing(product, item)
-        if item.get("status") != "APPROVED":
-            raise Conflict("Включение доступно для опубликованного товара")
+        link = self.listing(ident)
+        if (
+            item.get("status") not in ARMABLE_STATUSES
+            or item.get("deleted_at")
+            or not link
+            or link["source_order_id"]
+        ):
+            raise Conflict("Для этого объявления нельзя сохранить разрешение будущей выдачи")
         config = json.loads(product["config"])
         arm_context = {
             "product_id": product_id,

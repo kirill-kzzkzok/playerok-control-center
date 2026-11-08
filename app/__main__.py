@@ -208,10 +208,12 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
                 "upload-cleanup", lambda: UploadCleanup(store).run(stop, startup_backup=True), stop
             )
         )
-        if not store.setting("reviews:thanks_since"):
+        for cutoff in ("reviews:thanks_since", "orders:greeting_since"):
+            if store.setting(cutoff):
+                continue
             from app.database.store import now
 
-            store.set_setting("reviews:thanks_since", now())
+            store.set_setting(cutoff, now())
         tasks.append(
             supervisor.start("notifications", lambda: Notifications(store, bot, api).run(stop), stop)
         )

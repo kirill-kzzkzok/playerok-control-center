@@ -283,7 +283,14 @@ class PlatformOrders:
             ).fetchone():
                 raise Conflict("Заказ требует решения продавца")
             steps = []
-            if policy.paid_reply:
+            from app.services.paid_greeting import greeting_key
+
+            if (
+                policy.paid_reply
+                and not db.execute(
+                    "SELECT 1 FROM outbox WHERE operation_key=?", (greeting_key(self.api.account.id, ident),)
+                ).fetchone()
+            ):
                 steps.append(("chain_message", policy.greeting))
             if policy.mark_sent and order["status"] == "PAID":
                 steps.append(("fulfill", ""))

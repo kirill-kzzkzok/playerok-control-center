@@ -131,12 +131,16 @@ async def refresh_due_catalog(store, api):
         if account != store.setting("playerok:account_id"):
             return
     except (APIError, TimeoutError, ValueError, TypeError, KeyError) as error:
+        if store.setting(pending_key) != request:
+            return
         failures = min(request.get("failures", 0) + 1, 5)
         retry_after = getattr(error, "retry_after", None)
         delay = max(30 * 2**failures, int(retry_after) if str(retry_after).isdigit() else 0)
         store.set_setting(pending_key, {**request, "failures": failures, "due": time.time() + delay})
     else:
         with store.transaction():
+            if store.setting(pending_key) != request:
+                return
             count = (
                 sum(
                     item.get("status") == "APPROVED" and not item.get("deleted_at") for item in cache["items"]

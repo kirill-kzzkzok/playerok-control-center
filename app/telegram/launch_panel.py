@@ -163,7 +163,11 @@ class LaunchPanel:
             if value["mode"] == "stock" and value["data"]:
                 values, empty, duplicates = stock_values(value["data"])
                 text += f" · {len(values)} ед.; пустых строк {empty}, повторов {duplicates}"
-        if value["mode"] in {"text", "stock"} and value["greeting"]:
+        if (
+            value["mode"] in {"text", "stock"}
+            and value["greeting"]
+            and not self.store.setting("orders:greeting_since")
+        ):
             text += "\nПриветствие: " + ("задано" if value["greeting"] else "выключено")
         if value["mode"] in {"text", "stock", "gifts"}:
             text += "\nПосле выдачи: " + (
@@ -228,21 +232,24 @@ class LaunchPanel:
         if value["mode"] in {"text", "stock"}:
             rows.insert(1, [("🔐 Данные выдачи", p + "edit:data")])
         if value["mode"] == "playerok":
-            text += "\nСообщение после оплаты: " + (
-                "включено" if value.get("platform_reply") else "выключено"
-            )
-            text += "\nБот не отправляет товар повторно. Действия по заказу разрешаются только после подтверждения выдачи Playerok."
-            rows.insert(
-                1,
-                [
-                    (
-                        "Сообщение после оплаты: " + ("вкл" if value.get("platform_reply") else "выкл"),
-                        p + "platform_reply",
-                    )
-                ],
-            )
-            if value.get("platform_reply"):
-                rows.insert(2, [("Изменить сообщение после оплаты", p + "edit:greeting")])
+            text += "\nТовар выдаёт Playerok. Действия по заказу проверяются отдельно."
+            if self.store.setting("orders:greeting_since"):
+                text += "\nПосле оплаты бот отправит общее приветствие магазина."
+            else:
+                text += "\nСообщение после оплаты: " + (
+                    "включено" if value.get("platform_reply") else "выключено"
+                )
+                rows.insert(
+                    1,
+                    [
+                        (
+                            "Сообщение после оплаты: " + ("вкл" if value.get("platform_reply") else "выкл"),
+                            p + "platform_reply",
+                        )
+                    ],
+                )
+                if value.get("platform_reply"):
+                    rows.insert(2, [("Изменить сообщение после оплаты", p + "edit:greeting")])
             rows.insert(2, [("Автоматическая отметка выполнения", p + "complete")])
         elif value["mode"] != "manual":
             rows.insert(

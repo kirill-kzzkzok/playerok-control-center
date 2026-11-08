@@ -450,6 +450,7 @@ class ProductReadiness:
                 else "Товар сейчас не опубликован. Настройки сохраняются для будущих продаж.",
                 "Открыть товар",
                 "item:" + ident,
+                blocking=not for_arm,
             )
         if not item:
             add(
@@ -722,6 +723,8 @@ class ProductReadiness:
             if any(p["terminal"] for p in blocking)
             else "OFF"
             if not enabled and not for_arm
+            else "WAITING_PUBLICATION"
+            if enabled and blocking and all(p["code"] == "NOT_PUBLISHED" for p in blocking)
             else "BLOCKED"
             if any(not p["unknown"] for p in blocking)
             else "UNKNOWN"

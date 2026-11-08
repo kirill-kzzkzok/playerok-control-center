@@ -12,6 +12,7 @@ MODES = {
     "unconfigured": "Не настроена — ожидается сверка привязки",
 }
 STATES = {
+    "WAITING_PUBLICATION": "⏳ Выдача настроена. Ожидает публикации.",
     "READY": "🟢 Готово к новым подходящим покупкам",
     "BLOCKED": "🟡 Включено, есть блокировка",
     "UNKNOWN": "⚪ Требуется актуальная проверка",
@@ -19,6 +20,7 @@ STATES = {
     "STOPPED": "⛔ Остановлено — требуется решение",
 }
 PLATFORM_STATES = {
+    "WAITING_PUBLICATION": "⏳ Выдача настроена. Ожидает публикации.",
     "READY": "✅ Действия бота после оплаты готовы",
     "OFF": "⏸ Действия бота после оплаты выключены",
     "UNKNOWN": "🔄 Проверяем действия бота после оплаты",
@@ -91,6 +93,7 @@ def brief(result):
     else:
         text = "Выдача: " + MODES[mode]
     labels = {
+        "WAITING_PUBLICATION": "⏳ Выдача настроена. Ожидает публикации.",
         "READY": "✅ Автовыдача работает",
         "OFF": "⏸ Автовыдача выключена — отправка остановлена",
         "UNKNOWN": "🔄 Проверяем готовность",
@@ -102,7 +105,13 @@ def brief(result):
     if any(p["code"] == "GIFT_IN_PROGRESS" for p in problems) and state == "UNKNOWN":
         text = "Выдача: " + MODES[mode] + "\n⏳ Отправляем подарок, следующие покупки ожидают"
     actionable = sorted(
-        (p for p in problems if p["blocking"] and not p["unknown"]),
+        (
+            p
+            for p in problems
+            if p["blocking"]
+            and not p["unknown"]
+            and not (state == "WAITING_PUBLICATION" and p["code"] == "NOT_PUBLISHED")
+        ),
         key=lambda p: not p["terminal"],
     )
     if actionable:

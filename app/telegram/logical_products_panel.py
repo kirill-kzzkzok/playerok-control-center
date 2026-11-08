@@ -587,8 +587,9 @@ class LogicalProductsPanel:
                 )
                 rows = [
                     [(label, prefix + "toggleafter")],
-                    [("Приветствие перед выдачей", prefix + "editgreeting")],
                 ]
+                if not self.store.setting("orders:greeting_since"):
+                    rows.append([("Приветствие перед выдачей", prefix + "editgreeting")])
             return (
                 (
                     "Введите приветствие перед выдачей"
@@ -1023,8 +1024,9 @@ class LogicalProductsPanel:
                 if automatic and config.get("mark_sent")
                 else "вручную" + ("; напоминание включено" if config.get("mark_sent") else "")
             )
+            if not self.store.setting("orders:greeting_since"):
+                rows.append([("Приветствие", prefix + "input:greeting")])
             rows += [
-                [("Приветствие", prefix + "input:greeting")],
                 [
                     (
                         "Автоматическая отметка выполнения" if automatic else "Напоминать о завершении",

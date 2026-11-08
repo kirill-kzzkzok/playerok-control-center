@@ -184,6 +184,14 @@ class Orders:
 
                 request_sync(self.store, "deal", ident)
             ingest_review(self.store, db, order)
+            from app.services.paid_greeting import enqueue
+
+            enqueue(
+                self.store,
+                db,
+                order,
+                (item.get("user") or {}).get("id") if "item.user" not in retained else None,
+            )
             from app.services.fulfillment import reconcile_observed_completion
 
             if previous and previous["status"] not in {"ROLLED_BACK", "FAILED"}:

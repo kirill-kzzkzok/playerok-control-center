@@ -234,6 +234,9 @@ class Notifications:
                 rows = self.store.rows("SELECT chat_id FROM chat_messages WHERE id=?", (payload["id"],))
                 chat_id = rows[0]["chat_id"] if rows else None
                 event_label = system_event(payload)
+                if event_label and payload.get("text") == "{{ITEM_PAID}}":
+                    self.close_pending(event["key"], "SUPPRESSED")
+                    continue
                 deal_id = (payload.get("deal") or {}).get("id")
                 if (
                     event_label

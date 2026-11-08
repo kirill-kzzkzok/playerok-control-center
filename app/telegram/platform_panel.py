@@ -34,14 +34,26 @@ class PlatformPanel:
         if product and product["state"] == "VERIFIED":
             text += "✅ Привязка подтверждена\n🔐 Постоянный код: " + escaped(product["code"], 20) + "\n"
         text += "Товар уже выдаётся самой площадкой. Бот не отправляет его повторно, а может автоматически ответить покупателю и отметить выполнение заказа."
-        text += "\n\nАвтоответ после оплаты: " + ("🟢 Включён" if data["reply"] else "выключен")
+        universal = self.service.store.setting("orders:greeting_since")
+        text += (
+            "\n\nПосле оплаты бот автоматически отправляет общее приветствие магазина."
+            if universal
+            else "\n\nАвтоответ после оплаты: " + ("🟢 Включён" if data["reply"] else "выключен")
+        )
         text += "\nАвтовыполнение заказа: " + ("🟢 Включено" if data["fulfill"] else "выключено")
-        text += "\nОтвет: «" + escaped(data["text"], 600) + "»"
+        if not universal:
+            text += "\nОтвет: «" + escaped(data["text"], 600) + "»"
         text += "\nСохранение разрешает выбранные действия для будущих покупок и наследование при штатном перевыставлении. Обязательный отчёт остаётся ручным действием."
         return text, keyboard(
             [
-                [("💬 Автоответ: " + ("Вкл" if data["reply"] else "Выкл"), prefix + "reply")],
-                [("✏️ Изменить текст ответа", prefix + "text")],
+                *(
+                    []
+                    if universal
+                    else [
+                        [("💬 Автоответ: " + ("Вкл" if data["reply"] else "Выкл"), prefix + "reply")],
+                        [("✏️ Изменить текст ответа", prefix + "text")],
+                    ]
+                ),
                 [("✅ Автовыполнение: " + ("Вкл" if data["fulfill"] else "Выкл"), prefix + "fulfill")],
                 [("💾 Сохранить", prefix + "save")],
                 [("🔄 Изменить способ выдачи", "lp:method:" + data["id"])],

@@ -1,8 +1,9 @@
+import asyncio
 import json
 import secrets
 
 from app.database.store import now
-from app.playerok.adapter import validate_page
+from app.playerok.adapter import APIError, validate_page
 from app.services.finance import quote_fresh
 from app.services.item_filters import catalog_item, catalog_page, checked_filters, matches_item
 from app.services.products import ValidationError
@@ -310,7 +311,27 @@ class ListingsPanel:
 
     async def filter_action(self, action, state):
         if action in {"il:scan", "il:refreshsearch"}:
-            self.request_catalog(self.api.account.id)
+            account = self.api.account.id
+            if not self.store or not account or self.store.setting("playerok:account_id") != account:
+                raise ValidationError("Подтвердите аккаунт Playerok перед обновлением")
+            key = "ui:catalog:" + account
+            try:
+                async with asyncio.timeout(6):
+                    cache = await catalog_page(self.api, account, {})
+            except TimeoutError:
+                self.request_catalog(account)
+                raise APIError("NETWORK_ERROR") from None
+            with self.store.transaction():
+                if self.store.setting("playerok:account_id") != account or self.api.account.id != account:
+                    raise ValidationError("Аккаунт Playerok изменился")
+                previous = self.store.setting(key, {})
+                if previous:
+                    self.store.set_setting(key + ":previous", previous)
+                cache.update(generation=secrets.token_hex(8), background=True)
+                self.store.set_setting(key, cache)
+                self.store.set_setting(
+                    key + ":pending", {} if cache["complete"] else {"scan": cache, "due": 0}
+                )
             return await self.show("items", state)
         if action in {"il:delivery", "il:problems"}:
             filters = checked_filters((await state.get_data()).get("item_filters", {}))
