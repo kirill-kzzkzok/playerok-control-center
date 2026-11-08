@@ -227,7 +227,7 @@ class PromotionWorker:
             )
             processed += 1
         failed = self.store.rows(
-            "SELECT s.item_id,s.failures,s.due_at FROM promotion_schedule s "
+            "SELECT s.item_id,s.failures,s.due_at,s.error_code FROM promotion_schedule s "
             "LEFT JOIN promotion_targets t ON t.item_id=s.item_id "
             "WHERE s.policy_revision=? AND s.error_code IS NOT NULL "
             "AND (t.disposition='include' OR (?='all' AND coalesce(t.disposition,'default')!='exclude'))",
@@ -280,6 +280,10 @@ class PromotionWorker:
                 "revision": revision,
                 "failed_items": len(failed),
                 "discovery_error": discovery.get("error_code") if discovery_failed else None,
+                "error_codes": sorted(
+                    {row["error_code"] for row in failed}
+                    | ({discovery["error_code"]} if discovery_failed else set())
+                ),
                 "last_success": last_success,
                 "next_retry": min(retries, default=None),
                 "incident": incident,

@@ -250,3 +250,31 @@ async def test_late_server_order_status_reconciles_only_automatic_legacy_complet
     await notices.once()
     assert not any("Неопределённый" in (getattr(call, "text", "") or "") for call in r.session.calls)
     assert not r.api.messages and not r.api.remote.payments
+
+
+@pytest.mark.parametrize(
+    "code", ["CONNECTION_NOT_VERIFIED", "RATE_LIMITED", "HTTP_503", "PROMOTION_CHECK_UNAVAILABLE"]
+)
+async def test_promotion_read_outage_does_not_spam_owner(shop, code):
+    from app.database.store import encode
+
+    r = await shop()
+    r.store.set_setting(
+        "promotions:health",
+        {
+            "status": "DEGRADED",
+            "incident": "connection",
+            "failed_items": 4,
+            "error_codes": [code],
+        },
+    )
+    r.store.execute(
+        "INSERT INTO inbox(key,kind,payload,received_at,processed_at) VALUES('promotion-read-outage','promotion_error',?,?,?)",
+        (encode({"incident": "connection"}), now(), now()),
+    )
+    await Notifications(r.store, r.bot).once()
+    await Notifications(r.store, r.bot).once()
+    notices = [
+        call for call in r.session.calls if "Проверки автопродвижения" in (getattr(call, "text", "") or "")
+    ]
+    assert len(notices) == int(code == "PROMOTION_CHECK_UNAVAILABLE")

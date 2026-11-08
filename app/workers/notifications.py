@@ -362,6 +362,31 @@ class Notifications:
                 if health.get("status") != "DEGRADED" or health.get("incident") != payload.get("incident"):
                     self.close_pending(event["key"], "RESOLVED")
                     continue
+                codes = set(health.get("error_codes") or [])
+                if not codes:
+                    codes = {
+                        row["error_code"]
+                        for row in self.store.rows(
+                            "SELECT DISTINCT error_code FROM promotion_schedule "
+                            "WHERE policy_revision=? AND error_code IS NOT NULL",
+                            (health.get("revision"),),
+                        )
+                    }
+                    if health.get("discovery_error"):
+                        codes.add(health["discovery_error"])
+                if codes and codes <= {
+                    "CONNECTION_NOT_VERIFIED",
+                    "UNAUTHORIZED_OR_CHALLENGE",
+                    "NETWORK_ERROR",
+                    "HTTP_429",
+                    "RATE_LIMITED",
+                    "HTTP_500",
+                    "HTTP_502",
+                    "HTTP_503",
+                    "HTTP_504",
+                }:
+                    self.close_pending(event["key"], "SUPPRESSED")
+                    continue
                 text = (
                     "⚠️ <b>Проверки автопродвижения повторно завершаются ошибкой</b>\n"
                     f"Товаров с ошибками: {health.get('failed_items', 0)}. "
