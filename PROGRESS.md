@@ -3982,3 +3982,9 @@ Product readiness follow-up verified. The same closed completion predicate is re
 Order-scope readiness contract. A historical or current order-specific Outbox action may still require review on that order, but it does not disable product-wide admission. Closed after-sale messages and completion are omitted from the product card. Real listing mutations, explicit STOP and the dedicated Gift payment gate still block where required. Closed chain warnings are excluded without deleting history.
 
 Order-scope readiness RED reproduced an old unknown post-sale message still appearing as a product stop after confirmation. GREEN scopes order-only uncertainty to the order, hides closed follow-up activity from the product card, and retains financial and listing gates. 49 profile tests, Ruff, format and compileall passed. No changes to working operations.
+
+## 2026-11-08 — ожидание Telegram Bot API при запуске
+
+При недоступном Bot API /start не может поступить до завершения проверок getMe и getWebhookInfo. Журнал 12:22 показывает таймауты getMe по 36 секунд без HTTP-ответа, при работающих Playerok и MTProto. Контракт: ограничить каждое безопасное чтение перед polling, сохранять backoff и проверку webhook, держать фоновые задачи Playerok активными. Сообщение о готовности панели допустимо только после успешных проверок Bot API. Маршрутизация, данные и бизнес-операции остаются вне изменения.
+
+Проверка: два RED-теста воспроизвели зависание getMe/getWebhookInfo (exit 1). После патча общий дедлайн попытки 5 секунд, далее существующий backoff. Все 10 тестов test_happ_recovery.py прошли (exit 0). Ruff, форматирование изменённых файлов, compileall и git diff --check прошли. Изменены app/__main__.py и tests/test_happ_recovery.py. Живой сетевой маршрут и ответ /start на рабочем экземпляре после патча не проверялись.

@@ -98,10 +98,11 @@ async def wait_for_telegram(bot, stop, *, verified=False, retry_at=0):
             except TimeoutError:
                 pass
         try:
-            if not verified:
-                await bot.me()
-                verified = True
-            webhook = await bot.get_webhook_info()
+            async with asyncio.timeout(5):
+                if not verified:
+                    await bot.me()
+                    verified = True
+                webhook = await bot.get_webhook_info()
         except TelegramRetryAfter as error:
             retry_at = time.monotonic() + max(1, error.retry_after)
         except (TelegramNetworkError, TimeoutError, OSError):
@@ -289,20 +290,18 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
                     stop,
                 )
             )
-        logger.info(
-            "Telegram panel started; writes=%s; first_start_claim=%s",
-            config.writes_enabled,
-            config.first_start_claim,
-        )
-        event(
-            "INFO",
-            "Бот готов к работе"
-            if connection.state["status"] == "CONNECTED"
-            else "Telegram-панель доступна для диагностики; операции записи и автовыдача заблокированы. "
-            + REASONS.get(connection.state.get("reason"), REASONS["CHECK_FAILED"]),
-        )
         # Webhook is checked before polling; no deletion or dropping updates.
         if await wait_for_telegram(bot, stop, verified=telegram_verified, retry_at=telegram_retry_at):
+            if not telegram_verified:
+                event("SUCCESS", "Telegram Bot подключён")
+            if connection.state["status"] == "CONNECTED":
+                event("INFO", "Бот готов к работе. Запускаем приём команд Telegram")
+            else:
+                event(
+                    "INFO",
+                    "Запускаем панель Telegram для диагностики. "
+                    + REASONS.get(connection.state.get("reason"), REASONS["CHECK_FAILED"]),
+                )
 
             async def polling():
                 await dispatcher.start_polling(

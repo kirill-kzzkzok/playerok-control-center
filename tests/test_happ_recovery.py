@@ -59,7 +59,7 @@ async def test_bot_waits_without_http_then_resumes_and_survives_another_outage(m
 
     monkeypatch.setattr(AiohttpSession, "make_request", boundary)
     monkeypatch.setattr(application, "time", SimpleNamespace(monotonic=lambda: clock[0]))
-    monkeypatch.setattr(application, "asyncio", SimpleNamespace(wait_for=timed_wait))
+    monkeypatch.setattr(application, "asyncio", SimpleNamespace(wait_for=timed_wait, timeout=asyncio.timeout))
     try:
         with pytest.raises(TelegramRequestNotStarted):
             await session.make_request(bot, SendMessage(chat_id=7, text="notice"))
@@ -233,3 +233,42 @@ async def test_personal_login_uses_the_same_pinned_connection(tmp_path, monkeypa
     await auth.main()
     assert arguments[0].get("connection") is system_tunnel.HappConnectionTcpFull
     assert arguments[0]["auto_reconnect"] is False
+
+
+@pytest.mark.parametrize("stalled_method", ["getMe", "getWebhookInfo"])
+async def test_startup_probe_recovers_from_stalled_bot_api_read(monkeypatch, stalled_method):
+    import asyncio
+
+    from aiogram.types import User, WebhookInfo
+
+    from app import __main__ as application
+
+    bot = Bot("123:" + "x" * 35, session=TelegramNetworkSession())
+    calls = []
+
+    async def boundary(self, bot, method, timeout=None):
+        name = method.__api_method__
+        calls.append(name)
+        if name == stalled_method and calls.count(name) == 1:
+            await asyncio.Future()
+        if name == "getMe":
+            return User(id=123, is_bot=True, first_name="test")
+        return WebhookInfo(url="", has_custom_certificate=False, pending_update_count=0)
+
+    async def elapse_backoff(waiter, delay):
+        waiter.close()
+        raise TimeoutError
+
+    monkeypatch.setattr(AiohttpSession, "make_request", boundary)
+    monkeypatch.setattr(
+        application,
+        "asyncio",
+        SimpleNamespace(timeout=lambda _: asyncio.timeout(0.01), wait_for=elapse_backoff),
+    )
+    try:
+        async with asyncio.timeout(0.5):
+            assert await application.wait_for_telegram(bot, asyncio.Event())
+        assert calls.count(stalled_method) == 2
+        assert calls[-1] == "getWebhookInfo"
+    finally:
+        await bot.session.close()
