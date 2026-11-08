@@ -21,6 +21,8 @@ from app.services.orders import Orders
 from app.workers.pagination import PageScanner
 from playerokapi.enums import ItemStatuses
 
+RATE_LIMIT_CODES = {"RATE_LIMITED", "HTTP_429"}
+
 
 def require_listing_details(item):
     # The catalog classifies malformed markers per product after hydration.
@@ -139,6 +141,7 @@ class LogicalProductWorker:
         # ownership or payment authority by itself.
         paid_items, snapshot_orders = {}, {}
         cursor = self.store.setting(key + ":paid_cursor", "")
+        batch_start = cursor
 
         def platform_candidates(deal):
             try:
@@ -218,12 +221,17 @@ class LogicalProductWorker:
                 ):
                     self.store.audit(None, "DEAL_BINDING_BLOCKED", row["id"], code)
                     event(
-                        "WARNING",
-                        "Не удалось подтвердить полную карточку покупки; выдача не запускалась · " + code,
+                        "CHECK",
+                        "Оплаченная сделка не прошла проверку кандидата на привязку · " + code,
                         order=row["id"],
+                        level=10,
                     )
                 continue
             except APIError as error:
+                if error.code in RATE_LIMIT_CODES:
+                    # Candidates are linked only after the whole batch is read.
+                    self.store.set_setting(key + ":paid_cursor", batch_start)
+                    raise
                 self.store.audit(None, "DEAL_ITEM_READ", row["id"], error.code)
                 event(
                     "WARNING", "Не удалось проверить товар сделки: " + error.code, order=row["id"], level=10
@@ -348,6 +356,8 @@ class LogicalProductWorker:
                         expected_product=product,
                     )
                 except APIError as error:
+                    if error.code in RATE_LIMIT_CODES and source_order:
+                        self.store.set_setting(key + ":paid_cursor", batch_start)
                     self.store.set_setting(
                         key + ":error", {"code": error.code, "candidate_id": item["id"], "at": now()}
                     )
@@ -461,10 +471,9 @@ class LogicalProductWorker:
                     + getattr(error, "code", type(error).__name__),
                     level=10,
                 )
-                if (
-                    prior.get("consecutive_failures", 0) == 2
-                    and getattr(error, "code", None) != "CONNECTION_NOT_VERIFIED"
-                ):
+                if prior.get("consecutive_failures", 0) == 2 and getattr(
+                    error, "code", None
+                ) not in RATE_LIMIT_CODES | {"CONNECTION_NOT_VERIFIED"}:
                     event("WARNING", "Перевыставления временно недоступны. Бот повторит проверку.", level=30)
             pending = self.store.setting("logical:scan:" + str(self.api.account.id), {})
             delay = cycle["retry_delay"] if failures else 5 if pending else 120

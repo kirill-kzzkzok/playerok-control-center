@@ -228,3 +228,36 @@ def _catalog_including_moderation(original, item):
         return await original(method, **kwargs)
 
     return call
+
+
+async def test_paid_candidate_rate_limit_stops_scan_and_retries_same_candidate(shop):
+    from app.services.orders import Orders
+
+    r = await shop()
+    await setup_ui(r, "fixed_text", "private-unit")
+    r.api.item["status"] = "SOLD"
+    r.api.items["candidate"] = {**deepcopy(r.api.item), "id": "candidate"}
+    r.api.items["first-candidate"] = {**deepcopy(r.api.item), "id": "first-candidate"}
+    Orders(r.store).ingest(r.api.order("first-order", "first-candidate"))
+    order = r.api.order("rate-limited-order", "candidate")
+    Orders(r.store).ingest(order)
+    original = r.api.call
+    attempts = 0
+
+    async def call(method, **kwargs):
+        nonlocal attempts
+        if method == "get_item" and kwargs["id"] == "candidate":
+            attempts += 1
+            if attempts == 1:
+                raise APIError("RATE_LIMITED", retry_after="75")
+        return await original(method, **kwargs)
+
+    r.api.call = call
+    worker = LogicalProductWorker(r.store, r.api)
+    with pytest.raises(APIError, match="RATE_LIMITED") as caught:
+        await worker.once()
+    assert caught.value.retry_after == "75"
+    await worker.once()
+    assert attempts >= 2 and LogicalProducts(r.store, r.api).listing("candidate")
+    assert LogicalProducts(r.store, r.api).listing("first-candidate")
+    assert not r.api.messages and not r.api.remote.payments

@@ -119,6 +119,7 @@ async def test_order_updates_use_one_card_with_link_and_no_buttons(shop):
     [
         ("sync", "CONNECTION_NOT_VERIFIED", "SUPPRESSED"),
         ("transactions", "UNAUTHORIZED_OR_CHALLENGE", "SUPPRESSED"),
+        ("logical-products", "RATE_LIMITED", "SUPPRESSED"),
         ("transactions", "TRANSACTION_SCHEMA_ERROR", "SUCCEEDED"),
     ],
 )

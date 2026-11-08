@@ -328,7 +328,7 @@ class Notifications:
                         self.close_pending(event["key"], "RESOLVED")
                         continue
                     code = current.get("error_code")
-                    if code == "CONNECTION_NOT_VERIFIED" or (
+                    if code in {"CONNECTION_NOT_VERIFIED", "RATE_LIMITED", "HTTP_429"} or (
                         payload["worker"] == "transactions" and code == "UNAUTHORIZED_OR_CHALLENGE"
                     ):
                         self.close_pending(event["key"], "SUPPRESSED")
