@@ -488,7 +488,7 @@ class Store:
             from app.security.logging import event
 
             name = action.get("display_name") or action["target"]
-            event("INFO", f"🚀 Поднимаю лот — {str(name)[:150]}", operation=action["id"])
+            event("CHECK", f"Начат запрос на поднятие «{str(name)[:150]}»", operation=action["id"], level=10)
 
     def finish(self, ident, token, status, result=None, error=None, retry_after=None):
         if status not in {"SUCCEEDED", "RETRYABLE_FAILED", "UNCERTAIN", "PERMANENT_FAILED"}:

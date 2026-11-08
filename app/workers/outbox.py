@@ -1246,7 +1246,7 @@ class OutboxWorker:
                 message,
                 order=order_target,
                 operation=action["id"],
-                level=10 if repeated_wait else 20 if checking_receipt or checking_completion else 30,
+                level=10 if repeated_wait or checking_receipt else 20 if checking_completion else 30,
             )
         elif action["kind"] in {"publish", "premium_publish"} and result.get("status") == "APPROVED":
             from app.services.shop_events import product_title

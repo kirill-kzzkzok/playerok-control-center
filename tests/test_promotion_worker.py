@@ -184,3 +184,18 @@ async def test_failed_discovery_keeps_cursor_and_respects_backoff(setup):
     assert await worker.once() == 0
     assert api.call.await_count == 1
     assert store.setting("promotions:discovery")["after"] == "saved"
+
+
+async def test_routine_promotion_check_is_diagnostic_only(setup, caplog):
+    import logging
+
+    from app.security.logging import OwnerConsoleFilter
+
+    store, _, settings, worker = setup
+    enable(settings)
+    with caplog.at_level(logging.DEBUG, logger="pcc.shop"):
+        assert await worker.once() == 1
+    assert len(store.rows("SELECT * FROM promotion_evaluations")) == 1
+    checks = [record for record in caplog.records if "Автоподнятие —" in record.getMessage()]
+    assert len(checks) == 1
+    assert checks[0].levelno == logging.DEBUG and not OwnerConsoleFilter().filter(checks[0])

@@ -147,13 +147,14 @@ class PromotionWorker:
                             raise ValidationError("Однозначная стоимость текущего типа размещения недоступна")
                         result = await self.settings.evaluate(actor, ident, choices[0]["id"])
                         event(
-                            "INFO",
+                            "CHECK",
                             f"🔍 Автоподнятие — {str(item.get('name') or ident)[:150]} — позиция {result['position'] or 'не подтверждена'}"
                             + (
                                 " — условия выполнены"
                                 if result["would_allow"]
                                 else " — " + "; ".join(result["reasons"])
                             ),
+                            level=10,
                         )
                         from app.services.paid_promotions import PaidPromotions
 
