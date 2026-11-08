@@ -11,6 +11,17 @@ from app.telegram.keyboards import keyboard, main_menu
 from app.telegram.presentation import connection_summary, enrollment_wait_text
 from app.workers.supervisor import CYCLE_LABELS
 
+# Closed orders cannot need another automatic completion. Keep the original
+# operation in history and keep every other uncertain action actionable.
+ACTIVE_UNKNOWN_SQL = (
+    "NOT (coalesce(o.status,'') IN ('ROLLED_BACK','FAILED','CONFIRMED','CONFIRMED_AUTOMATICALLY') "
+    "AND q.kind='fulfill' AND json_extract(q.payload,'$.mode') IS 'legacy' "
+    "AND (json_extract(q.payload,'$.gift_proof') IS q.target OR "
+    "(json_extract(q.payload,'$.chain_id') IS q.target AND "
+    "(json_extract(q.payload,'$.platform_followup') IS 1 OR "
+    "json_extract(q.payload,'$.delivery_proof') IS 1))))"
+)
+
 
 class HomePanel:
     def __init__(self, store, api):
@@ -29,7 +40,7 @@ class HomePanel:
             "EXISTS(SELECT 1 FROM reservations r JOIN inventory i ON i.id=r.inventory_id "
             "WHERE r.order_id=o.id AND i.status='QUARANTINED') AS quarantine, "
             "EXISTS(SELECT 1 FROM outbox q WHERE q.target=o.id AND (q.status='UNCERTAIN' "
-            "OR q.status='PROCESSING' AND q.lease_until<=?)) AS uncertain, "
+            "OR q.status='PROCESSING' AND q.lease_until<=?) AND " + ACTIVE_UNKNOWN_SQL + ") AS uncertain, "
             "EXISTS(SELECT 1 FROM gift_jobs g WHERE g.order_id=o.id AND "
             "(g.state='UNCERTAIN' OR g.refund_state='UNCERTAIN')) AS payment_unknown, "
             "EXISTS(SELECT 1 FROM gift_jobs g WHERE g.order_id=o.id "
@@ -94,7 +105,8 @@ class HomePanel:
             (
                 "Операции с неизвестным результатом",
                 "ops:list:UNCERTAIN:0",
-                "SELECT 1 FROM outbox WHERE status='UNCERTAIN' LIMIT 1",
+                "SELECT 1 FROM outbox q LEFT JOIN orders o ON o.id=q.target "
+                "WHERE q.status='UNCERTAIN' AND " + ACTIVE_UNKNOWN_SQL + " LIMIT 1",
             ),
             (
                 "Действия не выполнены",

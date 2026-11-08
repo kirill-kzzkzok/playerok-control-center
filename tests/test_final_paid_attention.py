@@ -150,3 +150,29 @@ async def test_attention_paginates_real_paid_problems_without_page_size_counter(
     assert "Проблемных заказов: 12" in r.session.last_panel.text
     assert len([key for key in buttons(r.session.last_panel) if key.startswith("order:")]) == 2
     assert not r.api.messages and not r.api.remote.payments
+
+
+async def test_refunded_order_with_only_unknown_automatic_completion_is_history_not_attention(shop):
+    r = await shop()
+    order = r.api.order("refunded-completion")
+    Orders(r.store).ingest(order)
+    ident = r.store.enqueue(
+        "gift-fulfill:refunded-completion",
+        "fulfill",
+        order["id"],
+        {"mode": "legacy", "gift_proof": order["id"], "actor": 7},
+    )
+    claim = r.store.claim(operation_id=ident)
+    r.store.mark_started(claim)
+    r.store.finish(ident, claim["lease_token"], "UNCERTAIN", error="RATE_LIMITED")
+    await r.ui.click("attention")
+    assert "order:refunded-completion" in buttons(r.session.last_panel)
+    order["status"] = "ROLLED_BACK"
+    Orders(r.store).ingest(order)
+    await r.ui.click("attention")
+    assert "order:refunded-completion" not in buttons(r.session.last_panel)
+    assert "ops:list:UNCERTAIN:0" not in buttons(r.session.last_panel)
+    assert r.store.rows("SELECT status,error_code FROM outbox WHERE id=?", (ident,)) == [
+        {"status": "UNCERTAIN", "error_code": "RATE_LIMITED"}
+    ]
+    assert not r.api.remote.payments
