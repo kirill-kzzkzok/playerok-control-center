@@ -176,3 +176,31 @@ async def test_refunded_order_with_only_unknown_automatic_completion_is_history_
         {"status": "UNCERTAIN", "error_code": "RATE_LIMITED"}
     ]
     assert not r.api.remote.payments
+
+
+async def test_product_readiness_does_not_stop_for_refunded_legacy_completion(shop):
+    from app.services.product_readiness import ProductReadiness
+
+    r = await shop(gift=True)
+    await setup_ui(r, "telegram_gifts", "gift: heart")
+    order = r.api.order("closed-completion")
+    orders = Orders(r.store)
+    orders.ingest(order)
+    op = r.store.enqueue(
+        "gift-fulfill:closed-completion",
+        "fulfill",
+        order["id"],
+        {"mode": "legacy", "gift_proof": order["id"], "actor": 7},
+    )
+    claim = r.store.claim(operation_id=op)
+    r.store.mark_started(claim)
+    r.store.finish(op, claim["lease_token"], "UNCERTAIN", error="RATE_LIMITED")
+    readiness = ProductReadiness(r.store, r.api)
+    active = readiness.snapshot("lot", item=r.api.item)
+    assert not any(p["blocking"] and p["code"] == "UNCERTAIN" for p in active["problems"])
+    order["status"] = "ROLLED_BACK"
+    orders.ingest(order)
+    await r.ui.click("item:lot")
+    assert "Результат операции неизвестен" not in r.session.last_panel.text
+    assert r.store.rows("SELECT status FROM outbox WHERE id=?", (op,)) == [{"status": "UNCERTAIN"}]
+    assert not r.api.remote.payments

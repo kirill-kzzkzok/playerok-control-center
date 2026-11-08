@@ -484,8 +484,10 @@ class ProductReadiness:
                 )
             ]
         marks = ",".join("?" for _ in ids)
+        from app.services.fulfillment import ACTIVE_UNKNOWN_SQL, automatic_legacy_completion
+
         operations = self.store.rows(
-            f"SELECT b.id,b.kind,b.target,b.payload,b.status,b.error_code,EXISTS(SELECT 1 FROM gift_jobs g WHERE g.order_id=b.target) AS gift_job FROM outbox b LEFT JOIN orders o ON o.id=b.target WHERE b.kind!='premium_bump' AND (o.item_id IN ({marks}) OR b.target IN ({marks})) AND (b.status IN ('UNCERTAIN','PROCESSING','PENDING','RETRYABLE_FAILED') OR b.error_code='MANUALLY_STOPPED_UNCERTAIN') ORDER BY b.created_at DESC LIMIT 10",
+            f"SELECT q.id,q.kind,q.target,q.payload,q.status,q.error_code,EXISTS(SELECT 1 FROM gift_jobs g WHERE g.order_id=q.target) AS gift_job FROM outbox q LEFT JOIN orders o ON o.id=q.target WHERE q.kind!='premium_bump' AND (o.item_id IN ({marks}) OR q.target IN ({marks})) AND (q.status IN ('UNCERTAIN','PROCESSING','PENDING','RETRYABLE_FAILED') OR q.error_code='MANUALLY_STOPPED_UNCERTAIN') AND {ACTIVE_UNKNOWN_SQL} ORDER BY q.created_at DESC LIMIT 10",
             ids + ids,
         )
         for op in operations:
@@ -504,6 +506,9 @@ class ProductReadiness:
                     )
                 continue
             uncertain = op["status"] == "UNCERTAIN" or op["error_code"] == "MANUALLY_STOPPED_UNCERTAIN"
+            completion_only = op["kind"] == "fulfill" and automatic_legacy_completion(
+                json.loads(op["payload"]), op["target"]
+            )
             route = (
                 "gft:details:" + op["target"]
                 if op["kind"] in {"gift_send", "gift_refund"} and op["gift_job"]
@@ -511,13 +516,15 @@ class ProductReadiness:
             )
             add(
                 "UNCERTAIN" if uncertain else "IN_PROGRESS",
-                "Результат операции неизвестен. Повтор запрещён до сверки."
+                "Отметка выполнения одного заказа проверяется отдельно."
+                if uncertain and completion_only
+                else "Результат операции неизвестен. Повтор запрещён до сверки."
                 if uncertain
                 else "Есть незавершённая операция. Посмотрите её состояние.",
                 "Сверить без повторной отправки" if uncertain else "Посмотреть операцию",
                 route,
-                terminal=uncertain,
-                blocking=uncertain,
+                terminal=uncertain and not completion_only,
+                blocking=uncertain and not completion_only,
                 unknown=not uncertain,
             )
         if self.store.rows(

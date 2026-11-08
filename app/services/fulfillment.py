@@ -8,6 +8,18 @@ from app.database.store import Conflict, encode, now
 from app.services.order_management import OrderManagement, deal_details, deliverable, order_snapshot
 from app.services.products import ValidationError
 
+# Closed orders cannot need another automatic completion. Keep the original
+# operation in history and keep every other uncertain action actionable.
+ACTIVE_UNKNOWN_SQL = (
+    "NOT (coalesce(o.status,'') IN ('ROLLED_BACK','FAILED','CONFIRMED','CONFIRMED_AUTOMATICALLY') "
+    "AND q.kind='fulfill' AND json_extract(q.payload,'$.mode') IS 'legacy' "
+    "AND (json_extract(q.payload,'$.gift_proof') IS q.target OR "
+    "(json_extract(q.payload,'$.chain_id') IS q.target AND "
+    "(json_extract(q.payload,'$.platform_followup') IS 1 OR "
+    "json_extract(q.payload,'$.delivery_proof') IS 1))))"
+)
+
+
 SELLER_CHECK = "Я передал(а) товар покупателю и выполнил(а) заказ"
 KNOWN_ROLES = {
     "USER",

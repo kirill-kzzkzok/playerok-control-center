@@ -5,22 +5,12 @@ import time
 
 from app.database.store import Conflict
 from app.gifts.outcomes import DELAYED_PREFLIGHT_SQL
+from app.services.fulfillment import ACTIVE_UNKNOWN_SQL
 from app.services.order_management import ENROLLMENT_WAIT_SQL
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard, main_menu
 from app.telegram.presentation import connection_summary, enrollment_wait_text
 from app.workers.supervisor import CYCLE_LABELS
-
-# Closed orders cannot need another automatic completion. Keep the original
-# operation in history and keep every other uncertain action actionable.
-ACTIVE_UNKNOWN_SQL = (
-    "NOT (coalesce(o.status,'') IN ('ROLLED_BACK','FAILED','CONFIRMED','CONFIRMED_AUTOMATICALLY') "
-    "AND q.kind='fulfill' AND json_extract(q.payload,'$.mode') IS 'legacy' "
-    "AND (json_extract(q.payload,'$.gift_proof') IS q.target OR "
-    "(json_extract(q.payload,'$.chain_id') IS q.target AND "
-    "(json_extract(q.payload,'$.platform_followup') IS 1 OR "
-    "json_extract(q.payload,'$.delivery_proof') IS 1))))"
-)
 
 
 class HomePanel:
