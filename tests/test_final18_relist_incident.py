@@ -261,3 +261,29 @@ async def test_paid_candidate_rate_limit_stops_scan_and_retries_same_candidate(s
     assert attempts >= 2 and LogicalProducts(r.store, r.api).listing("candidate")
     assert LogicalProducts(r.store, r.api).listing("first-candidate")
     assert not r.api.messages and not r.api.remote.payments
+
+
+async def test_stock_marketing_edit_during_scan_does_not_create_pause(shop):
+    r = await shop()
+    await setup_ui(r, "unique_stock")
+    logical = LogicalProducts(r.store, r.api)
+    old = logical.listing("lot")
+    original = r.api.call
+    reads = 0
+
+    async def call(method, **kwargs):
+        nonlocal reads
+        if method == "get_item" and kwargs["id"] == "lot":
+            reads += 1
+            if reads == 2:
+                r.api.item["description"] = "Updated marketing description"
+                r.api.item["name"] = "Updated name [" + old["code"] + "]"
+                r.api.item["comment"] = "Seller comment"
+        return await original(method, **kwargs)
+
+    r.api.call = call
+    await LogicalProductWorker(r.store, r.api).once()
+    after = logical.listing("lot")
+    assert after["enabled"] and after["error_code"] is None
+    assert after["title_snapshot"] == r.api.item["name"]
+    logical.verify_listing(after, r.api.item)

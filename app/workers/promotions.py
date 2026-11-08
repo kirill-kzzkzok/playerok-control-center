@@ -271,6 +271,14 @@ class PromotionWorker:
             if purchase_authority
             else "DRY_RUN"
         )
+        if status == "DRY_RUN" and (
+            previous_health.get("status") != status or previous_health.get("revision") != revision
+        ):
+            event(
+                "INFO",
+                "🚀 Автоподнятие проверяет позиции без покупок. "
+                "Проверьте разрешение расходов для текущих настроек в разделе «Продвижение».",
+            )
         self.store.set_setting(
             "promotions:health",
             {

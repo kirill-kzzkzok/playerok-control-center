@@ -411,7 +411,7 @@ def profit_statistics(store, actor, account_id, days=7, at=None, *, include_cost
     return result
 
 
-def cache_shop_profit(store, account_id):
+def cache_shop_profit(store, account_id, *, partial=False):
     """Observed historical evidence only, never a spending/delivery permission."""
     from app.services.transactions import transaction_statistics
 
@@ -474,6 +474,7 @@ def cache_shop_profit(store, account_id):
                     for key in ("unknown_dates", "unknown_amounts", "unknown_directions", "foreign_currency")
                 ),
                 "at": at.isoformat(),
+                "partial": partial,
             },
         )
 

@@ -104,7 +104,7 @@ async def acknowledge(query, **kwargs):
     except TelegramAPIError:
         status = "rejected"
     if status != "ok":
-        log_event("WARNING", "Telegram callback ACK: " + status + "; автоматического повтора нет", level=30)
+        log_event("CHECK", "Telegram callback ACK: " + status, level=10)
     return {"status": status, "checked_at": time.monotonic()}
 
 

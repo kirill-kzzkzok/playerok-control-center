@@ -72,8 +72,11 @@ def critical(item):
 
 
 def binding_fields_match(product, item, baseline, actual):
-    if product["handler"] == "unique_stock" and "stock_fields" in baseline:
-        return field_baseline(item, local_stock=True) == baseline["stock_fields"]
+    if product["handler"] == "unique_stock":
+        if "stock_contract" in baseline:
+            return field_baseline(item, local_stock=True, ignore_comment=True) == baseline["stock_contract"]
+        if "stock_fields" in baseline:
+            return field_baseline(item, local_stock=True) == baseline["stock_fields"]
     return actual["fields"] == baseline.get("fields")
 
 
@@ -484,7 +487,7 @@ class LogicalProducts:
         if baseline["account"] != product["account_id"] or observed.get("status") != "DRAFT":
             raise Conflict("Созданный товар не подтверждён как черновик своего магазина")
         if product["handler"] == "unique_stock":
-            baseline["stock_fields"] = field_baseline(observed, local_stock=True)
+            baseline["stock_contract"] = field_baseline(observed, local_stock=True, ignore_comment=True)
         return {
             "product": product["id"],
             "remote": observed["id"],
@@ -852,7 +855,7 @@ class LogicalProducts:
             "baseline": {
                 **critical(observed),
                 **(
-                    {"stock_fields": field_baseline(observed, local_stock=True)}
+                    {"stock_contract": field_baseline(observed, local_stock=True, ignore_comment=True)}
                     if product["handler"] == "unique_stock"
                     else {}
                 ),
@@ -978,7 +981,9 @@ class LogicalProducts:
     def binding_recheck_allowed(self, product):
         if product["error_code"] == "RELIST_CONFIRMATION_REQUIRED":
             return True
-        return self.same_item_problem(product, "RELIST_BINDING_CONFLICT")
+        return self.same_item_problem(product, "RELIST_BINDING_CONFLICT") or self.same_item_problem(
+            product, "RELIST_ITEM_CHANGED"
+        )
 
     def same_item_problem(self, product, code):
         if product["error_code"] != code:
@@ -1081,7 +1086,7 @@ class LogicalProducts:
             or not product["verified_at"]
             or product["config_revision"] != product["revision"]
             or product["source_order_id"]
-            or product["error_code"] not in {None, "RELIST_CONFIRMATION_REQUIRED"}
+            or (product["error_code"] is not None and not self.binding_recheck_allowed(product))
             or marker(item.get("name")) != product["code"]
             or item.get("deleted_at")
             or item.get("status") not in {"APPROVED", "DRAFT", "SOLD"}

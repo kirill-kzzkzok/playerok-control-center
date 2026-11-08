@@ -229,7 +229,7 @@ class HomePanel:
         else:
             text += "\n⭐ Баланс: обновляем данные"
         profit = self.store.setting(f"shop:profit:{account}:{owner}", {}) if owner else {}
-        if not fresh(profit.get("at")) or "net" not in profit:
+        if not fresh(profit.get("at"), 86400) or "net" not in profit:
             text += "\n💰 Прибыль: ожидаем подтверждённые данные"
         else:
             text += "\n\n💰 <b>Прибыль за последние 24 часа</b>"
@@ -250,22 +250,23 @@ class HomePanel:
                 text += f"\nУдержания неизвестны для {profit['unknown_withdrawals']} выводов."
             if profit.get("incomplete_transactions"):
                 text += "\nЧасть транзакций ожидает полных данных."
+            if profit.get("partial"):
+                text += "\nИстория операций ещё загружается."
             if profit.get("uncertain_promotions"):
                 text += "\nЕсть расходы на продвижение с неподтверждённым результатом."
-            text += "\nОбновлено " + local_time(profit["at"])
+            text += ("\nОбновлено " if fresh(profit["at"]) else "\nСохранённый расчёт на ") + local_time(
+                profit["at"]
+            )
         return text
 
     def home(self, owner=None):
         paid = self.paid_issues()
         paid_total = paid[0]["total"] if paid else 0
-        problems = self.problems(include_paid=False) or bool(paid_total)
         connection = connection_summary(self.api)
         status = getattr(getattr(self.api, "connection", None), "state", {}).get("status")
         note = ""
         if status == "DISCONNECTED":
             note = "\nПроверьте подключение в профиле."
-        elif problems:
-            note = "\nЕсть важные события по заказам или работе магазина, требующие внимания."
         return (
             "🏠 <b>Мой магазин</b>\n\n"
             + connection

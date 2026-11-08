@@ -194,7 +194,7 @@ def save_image(data, directory, max_size=10_000_000):
         raise ValidationError("Повреждённое или неподдерживаемое изображение") from None
 
 
-def field_baseline(item, *, local_stock=False):
+def field_baseline(item, *, local_stock=False, ignore_comment=False):
     fields = {
         key: item.get(key) for key in ("attributes", "data_fields", "comment", "category", "obtaining_type")
     }
@@ -205,6 +205,8 @@ def field_baseline(item, *, local_stock=False):
             else field
             for field in fields["data_fields"]
         ]
+    if ignore_comment:
+        fields.pop("comment")
     return fingerprint(fields)
 
 

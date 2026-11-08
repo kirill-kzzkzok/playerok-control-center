@@ -218,3 +218,21 @@ async def test_website_premium_is_counted_without_bot_operation_after_restart(st
         assert len(restarted.rows("SELECT id FROM account_transactions")) == 3
     finally:
         restarted.close()
+
+
+async def test_profit_is_available_while_transaction_history_backfills(store):
+    from tests.test_order_finance import expense
+
+    expense(store, "existing-premium", value=9, completed_at=now())
+
+    async def call(method, **kwargs):
+        assert method == "get_transactions"
+        return {"transactions": [], "page_info": {"has_next_page": True, "end_cursor": "next"}}
+
+    api = SimpleNamespace(account=SimpleNamespace(id="seller"), call=call)
+    worker = TransactionWorker(store, api, pages_per_cycle=1)
+    await worker.once()
+    assert worker.health["status"] == "BACKFILL"
+    text, _ = HomePanel(store, api).home(owner=7)
+    assert "PREMIUM и размещение: 9.00 ₽" in text
+    assert "История операций ещё загружается" in text

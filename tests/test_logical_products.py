@@ -307,6 +307,7 @@ async def test_stock_binding_accepts_seller_data_value_rotation_but_not_buyer_fi
     await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
     product = service.product(result["product_id"])
     api.item["data_fields"][0]["value"] = "rotated"
+    api.item["comment"] = "seller comment rotated"
     service.verify_listing(product, api.item)
     api.item["data_fields"][1]["required"] = True
     with pytest.raises(Conflict, match="поля получения"):

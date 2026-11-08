@@ -329,6 +329,12 @@ class LogicalProductWorker:
                         # The next scan will use one coherent publication state.
                         continue
                     linked = self.service.listing(item["id"])
+                    same_public_listing = (
+                        linked
+                        and linked["id"] == product["id"]
+                        and not source_order
+                        and not linked["source_order_id"]
+                    )
                     sold_transition = (
                         linked
                         and linked["id"] == product["id"]
@@ -342,7 +348,9 @@ class LogicalProductWorker:
                         and not sold_transition
                         or fresh.get("deleted_at") != item.get("deleted_at")
                         or fresh.get("description") != item.get("description")
+                        and not same_public_listing
                         or critical(fresh) != critical(item)
+                        and not same_public_listing
                     ):
                         raise RelistConflict("RELIST_ITEM_CHANGED")
                     await self.service.adopt(
