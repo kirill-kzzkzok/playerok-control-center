@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.database.store import Store
+from app.database.store import Conflict, Store
 from app.services.logical_products import LogicalProducts, configuration, marked_title, marker
 from app.services.products import Products
 from app.workers.outbox import Executor, OutboxWorker
@@ -295,3 +295,19 @@ async def test_second_old_preview_cannot_replace_first_verified_binding(logical)
     assert store.rows("SELECT * FROM logical_listings") == before
     assert len(store.rows("SELECT * FROM logical_products")) == 1
     assert len(store.rows("SELECT * FROM outbox")) == 1
+
+
+async def test_stock_binding_accepts_seller_data_value_rotation_but_not_buyer_fields(logical):
+    store, api, service = logical
+    api.item["data_fields"] = [
+        {"id": "seller", "type": "ITEM_DATA", "value": "old"},
+        {"id": "buyer", "type": "OBTAINING_DATA", "required": False},
+    ]
+    result = service.commit(7, await service.prepare(7, "lot", "unique_stock", {}))
+    await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
+    product = service.product(result["product_id"])
+    api.item["data_fields"][0]["value"] = "rotated"
+    service.verify_listing(product, api.item)
+    api.item["data_fields"][1]["required"] = True
+    with pytest.raises(Conflict, match="поля получения"):
+        service.verify_listing(product, api.item)

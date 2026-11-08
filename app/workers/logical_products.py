@@ -373,6 +373,10 @@ class LogicalProductWorker:
                     self.problem(product, code, candidate_id=item["id"])
                     continue
                 adopted += int(self.service.listing(item["id"]) is not None)
+                if item["id"] in paid_items:
+                    wake = getattr(self.store, "enrollment_wake", None)
+                    if wake is not None:
+                        wake.set()
                 if source_order:
                     event("CHECK", "Привязка оплаченной сделки подтверждена", order=source_order)
         self.store.set_setting(

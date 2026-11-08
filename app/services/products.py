@@ -194,10 +194,18 @@ def save_image(data, directory, max_size=10_000_000):
         raise ValidationError("Повреждённое или неподдерживаемое изображение") from None
 
 
-def field_baseline(item):
-    return fingerprint(
-        {key: item.get(key) for key in ("attributes", "data_fields", "comment", "category", "obtaining_type")}
-    )
+def field_baseline(item, *, local_stock=False):
+    fields = {
+        key: item.get(key) for key in ("attributes", "data_fields", "comment", "category", "obtaining_type")
+    }
+    if local_stock and isinstance(fields["data_fields"], list):
+        fields["data_fields"] = [
+            {key: value for key, value in field.items() if key != "value"}
+            if isinstance(field, dict) and field.get("type") == "ITEM_DATA"
+            else field
+            for field in fields["data_fields"]
+        ]
+    return fingerprint(fields)
 
 
 def priority_price_basis(item):

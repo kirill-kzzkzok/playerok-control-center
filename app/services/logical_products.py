@@ -71,6 +71,12 @@ def critical(item):
     }
 
 
+def binding_fields_match(product, item, baseline, actual):
+    if product["handler"] == "unique_stock" and "stock_fields" in baseline:
+        return field_baseline(item, local_stock=True) == baseline["stock_fields"]
+    return actual["fields"] == baseline.get("fields")
+
+
 def configuration(handler, config, *, max_count=5):
     if handler not in HANDLERS or not isinstance(config, dict):
         raise ValueError("Выберите поддерживаемый способ выдачи")
@@ -477,6 +483,8 @@ class LogicalProducts:
         baseline = critical(observed)
         if baseline["account"] != product["account_id"] or observed.get("status") != "DRAFT":
             raise Conflict("Созданный товар не подтверждён как черновик своего магазина")
+        if product["handler"] == "unique_stock":
+            baseline["stock_fields"] = field_baseline(observed, local_stock=True)
         return {
             "product": product["id"],
             "remote": observed["id"],
@@ -841,7 +849,14 @@ class LogicalProducts:
             "item_id": action["target"],
             "status": observed["status"],
             "description_sha256": digest(expected),
-            "baseline": critical(observed),
+            "baseline": {
+                **critical(observed),
+                **(
+                    {"stock_fields": field_baseline(observed, local_stock=True)}
+                    if product["handler"] == "unique_stock"
+                    else {}
+                ),
+            },
             "title_snapshot": marked_title(observed["name"], product["code"]),
         }
 
@@ -936,7 +951,12 @@ class LogicalProducts:
         }.items():
             if key == "fields" and platform_managed_fields:
                 continue
-            if actual.get(key) != baseline.get(key):
+            matches = (
+                binding_fields_match(product, item, baseline, actual)
+                if key == "fields"
+                else actual.get(key) == baseline.get(key)
+            )
+            if not matches:
                 raise Conflict("Изменились " + label + ". Проверьте настройки и подтвердите привязку заново")
         if link and marked_title(item["name"], product["code"]) != link["title_snapshot"]:
             raise Conflict("Изменилось название товара. Проверьте настройки и подтвердите привязку заново")
@@ -1414,10 +1434,14 @@ class LogicalProducts:
             and (not product["enabled"] or not (product["inherit_enabled"] or source_order_id))
         ):
             raise RelistConflict("RELIST_PERMISSION_MISSING")
+        baseline = json.loads(product["baseline"])
+        actual = critical(item)
         if (
             not existing
-            and {k: v for k, v in critical(item).items() if k != "price"}
-            != {k: v for k, v in json.loads(product["baseline"]).items() if k != "price"}
+            and (
+                any(actual[k] != baseline.get(k) for k in ("account", "category", "obtaining", "name"))
+                or not binding_fields_match(product, item, baseline, actual)
+            )
             or marker(item.get("name")) != product["code"]
             or item.get("status")
             not in (

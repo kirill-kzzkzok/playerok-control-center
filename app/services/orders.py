@@ -215,6 +215,10 @@ class Orders:
                 order_event(order, status)
             wake = getattr(self.store, "logical_paid_wake", None)
             date_confirmed = not previous_created and bool(observed_created)
+            if (added or date_confirmed) and status == "PAID" and policy:
+                enrollment_wake = getattr(self.store, "enrollment_wake", None)
+                if enrollment_wake is not None:
+                    enrollment_wake.set()
             if (
                 (added or date_confirmed)
                 and status == "PAID"

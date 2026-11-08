@@ -17,6 +17,8 @@ class EnrollmentWorker:
 
     def __init__(self, store, api):
         self.store, self.api, self.chains = store, api, DeliveryChains(store, api)
+        if not hasattr(store, "enrollment_wake"):
+            store.enrollment_wake = asyncio.Event()
 
     def recover_startup(self, instance_lock):
         """Only the exclusive app startup may fence checks left by a dead process.
@@ -189,6 +191,7 @@ class EnrollmentWorker:
 
     async def run(self, stop):
         while not stop.is_set():
+            self.store.enrollment_wake.clear()
             try:
                 with worker_cycle(self.store, "enrollment", 10) as cycle:
                     cycle["processed"] = await self.once()
@@ -196,7 +199,10 @@ class EnrollmentWorker:
                 self.store.set_setting(
                     "enrollment:health", {"status": "ERROR", "code": type(error).__name__, "at": now()}
                 )
+            waiting = [asyncio.create_task(signal.wait()) for signal in (stop, self.store.enrollment_wake)]
             try:
-                await asyncio.wait_for(stop.wait(), 10)
-            except TimeoutError:
-                pass
+                await asyncio.wait(waiting, timeout=10, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for task in waiting:
+                    task.cancel()
+                await asyncio.gather(*waiting, return_exceptions=True)

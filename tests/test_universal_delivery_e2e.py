@@ -277,3 +277,33 @@ async def test_duplicate_marker_has_owner_notification_and_no_inherited_delivery
         == "SUCCEEDED"
     )
     assert not r.api.messages
+
+
+async def test_paid_stock_sale_wakes_enrollment_without_waiting_for_poll_interval(simulation, monkeypatch):
+    import asyncio
+
+    r = await simulation()
+    await setup_ui(r, "unique_stock")
+    enrollment = EnrollmentWorker(r.store, r.api)
+    stop, idle, queued = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    original = enrollment.once
+
+    async def observed_once():
+        processed = await original()
+        idle.set()
+        if processed:
+            queued.set()
+        return processed
+
+    monkeypatch.setattr(enrollment, "once", observed_once)
+    task = asyncio.create_task(enrollment.run(stop))
+    try:
+        await asyncio.wait_for(idle.wait(), timeout=2)
+        Orders(r.store).ingest(r.api.order("new-stock-sale"))
+        await asyncio.wait_for(queued.wait(), timeout=2)
+        assert ChainWorker(r.store, r.api).once()
+        await r.worker.once()
+        assert Inventory(r.store, r.api).counts("lot")["DELIVERED"] == 1
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=2)
