@@ -331,3 +331,56 @@ async def test_new_binding_inherits_private_partial_paid_snapshot(shop):
     assert len(r.api.messages) == 1
     assert r.api.orders["order"]["status"] == "SENT"
     assert not r.api.remote.payments
+
+
+@pytest.mark.parametrize("supplied", [True, False])
+async def test_playerok_purchase_snapshot_with_native_item_data_and_false_automated_flag(shop, supplied):
+    from app.services.orders import Orders
+    from app.services.paid_greeting import greeting_key
+
+    r = await shop()
+    r.api.item["obtaining_type"]["stock_type"] = "MULTIPLE"
+    r.api.item["data_fields"] = [
+        {"id": "access", "type": "ITEM_DATA", "required": True, "value": "private access"}
+    ]
+    await save(r)
+    await click(r, suffix=":bind")
+    await r.worker.once()
+    r.api.item["status"] = "SOLD"
+    full = r.api.order("order")
+    full["is_automated"] = False
+    full["item"]["id"] = "private"
+    full["item"]["obtaining_type"] = {**full["item"]["obtaining_type"], "stock_type": "MULTIPLE"}
+    full["item"]["data_fields"] = [
+        {"id": "access", "type": "ITEM_DATA", "required": True, "value": "private access" if supplied else ""}
+    ]
+    Orders(r.store).ingest(full)
+    original = r.api.call
+
+    async def call(method, **kwargs):
+        if method == "get_item" and kwargs["id"] == "private":
+            raise APIError("HTTP_404")
+        if method == "get_delivery_deal":
+            return deepcopy(r.api.orders[kwargs["deal_id"]])
+        if method == "get_deal":
+            compact = deepcopy(r.api.orders[kwargs["deal_id"]])
+            compact["item"]["data_fields"] = []
+            return compact
+        return await original(method, **kwargs)
+
+    r.api.call = call
+    # Universal greeting already sent for this sale.
+    key = greeting_key(r.api.account.id, "order")
+    ident = r.store.enqueue(key, "reply", full["chat"]["id"], {})
+    r.store.execute("UPDATE outbox SET status='SUCCEEDED' WHERE id=?", (ident,))
+    await LogicalProductWorker(r.store, r.api).once()
+    if supplied:
+        compact = deepcopy(full)
+        compact["item"].update(status=None, data_fields=[])
+        Orders(r.store).ingest(compact)
+    await drain(r)
+    listing = LogicalProducts(r.store, r.api).listing("private")
+    assert bool(listing) is supplied
+    assert LogicalProducts(r.store, r.api).listing("lot")["error_code"] is None
+    assert r.api.orders["order"]["status"] == ("SENT" if supplied else "PAID")
+    assert not r.api.messages and not r.api.remote.payments

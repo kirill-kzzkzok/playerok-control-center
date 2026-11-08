@@ -140,19 +140,25 @@ class LogicalProductWorker:
         paid_items, snapshot_orders = {}, {}
         cursor = self.store.setting(key + ":paid_cursor", "")
 
-        def validate_candidate_order(deal, ident):
-            if deal.get("is_automated") is not True:
-                return deliverable(deal, ident, account)
-            from app.services.platform_orders import platform_sale
-
-            code = marker((deal.get("item") or {}).get("name"))
-            candidates = [
+        def platform_candidates(deal):
+            try:
+                code = marker((deal.get("item") or {}).get("name"))
+            except ValueError:
+                return []
+            return [
                 p
                 for p in products
                 if json.loads(p["config"]).get("platform_only") is True
                 and p["code"] == code
                 and future_order(deal.get("created_at"), p["armed_at"])
             ]
+
+        def validate_candidate_order(deal, ident):
+            candidates = platform_candidates(deal)
+            if deal.get("is_automated") is not True and not candidates:
+                return deliverable(deal, ident, account)
+            from app.services.platform_orders import platform_sale
+
             if len(candidates) != 1:
                 raise Conflict("Не подтверждена постоянная привязка выдачи Playerok")
             return platform_sale(deal, ident, account)
@@ -169,7 +175,13 @@ class LogicalProductWorker:
             if observed_date and not any(future_order(observed_date, p["armed_at"]) for p in products):
                 continue
             try:
-                deal = await deal_details(self.api, row["id"], full_item=True, need_created=True)
+                deal = await deal_details(
+                    self.api,
+                    row["id"],
+                    full_item=True,
+                    need_created=True,
+                    need_platform_data=bool(platform_candidates(local)),
+                )
                 validate_candidate_order(deal, row["id"])
                 if not server_time(deal.get("created_at")):
                     raise APIError("DELIVERY_SNAPSHOT_NOT_YET_AVAILABLE")

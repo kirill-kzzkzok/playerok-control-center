@@ -7,7 +7,7 @@ from app.database.store import Conflict, encode, now, server_time
 from app.playerok.adapter import APIError
 from app.services.automation import Automation, DeliveryPolicy, future_order, message_text
 from app.services.logical_products import MODERATION_STATUSES, PROBLEMS, LogicalProducts
-from app.services.order_management import deal_details, sale
+from app.services.order_management import deal_details, has_playerok_item_data, sale
 from app.services.products import ValidationError
 
 DEFAULT_REPLY = (
@@ -42,7 +42,11 @@ def platform_sale(order, ident, account, *, item=None, wait_for_details=False):
         and order["item"]["id"] != item
         or order.get("status") not in PAID_STATUSES
         or order.get("has_problem") is not False
-        or order.get("is_automated") is not True
+        or not (
+            order.get("is_automated") is True
+            or order.get("is_automated") is False
+            and has_playerok_item_data(order)
+        )
     ):
         raise ValidationError("Не подтверждена оплаченная продажа с выдачей Playerok без проблемы")
     return order
@@ -244,7 +248,9 @@ class PlatformOrders:
             raise Conflict("Оплаченный заказ ещё не сохранён")
         item = local[0]["item_id"]
         policy = self.authority(item, revision)
-        order = await deal_details(self.api, ident, need_chat=policy.paid_reply, need_created=True)
+        order = await deal_details(
+            self.api, ident, need_chat=policy.paid_reply, need_created=True, need_platform_data=True
+        )
         platform_sale(order, ident, policy.account_id, item=item, wait_for_details=True)
         self.policies.orders.orders.ingest(order)
         product = self.logical.listing(item)
@@ -327,7 +333,9 @@ class PlatformOrders:
 
     async def verify(self, action):
         chain, policy = self.guard(action)
-        order = await deal_details(self.api, action["target"], need_chat=action["kind"] == "chain_message")
+        order = await deal_details(
+            self.api, action["target"], need_chat=action["kind"] == "chain_message", need_platform_data=True
+        )
         platform_sale(
             order, action["target"], policy.account_id, item=chain["item_id"], wait_for_details=True
         )

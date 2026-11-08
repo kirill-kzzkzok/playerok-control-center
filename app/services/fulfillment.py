@@ -90,7 +90,9 @@ class Fulfillment:
         self.orders = OrderManagement(store, api)
 
     async def load(self, ident, *, platform=False):
-        order = await deal_details(self.api, ident, need_chat=not platform, need_role=True)
+        order = await deal_details(
+            self.api, ident, need_chat=not platform, need_role=True, need_platform_data=platform
+        )
         if platform:
             from app.services.platform_orders import platform_sale
 

@@ -58,6 +58,16 @@ class Orders:
             # remain distinguishable in provenance. No status/problem flags merge.
             order, item = dict(order), dict(item)
             retained = {}
+            if (
+                order.get("is_automated") is False
+                and item.get("status") is None
+                and item.get("data_fields") == []
+            ):
+                from app.services.order_management import has_playerok_item_data
+
+                if has_playerok_item_data(old_payload):
+                    item["data_fields"] = old_item["data_fields"]
+                    retained["item.data_fields"] = "compact"
             old_buyer, new_buyer = old_payload.get("user") or {}, order.get("user") or {}
             if (
                 new_buyer.get("id")

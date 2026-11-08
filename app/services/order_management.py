@@ -61,7 +61,23 @@ def deliverable(order, ident, account_id, *, wait_for_details=False):
     return order
 
 
-def compatible_detail(short, detailed):
+def has_playerok_item_data(order):
+    """A purchased native stock entry carries seller data even with isAutomated=false."""
+    item = order.get("item") or {}
+    if (item.get("obtaining_type") or {}).get("stock_type") != "MULTIPLE":
+        return False
+    fields = [
+        field
+        for field in item.get("data_fields") or []
+        if isinstance(field, dict) and field.get("type") == "ITEM_DATA"
+    ]
+    populated = [isinstance(field.get("value"), str) and bool(field["value"].strip()) for field in fields]
+    return any(populated) and all(
+        present or field.get("required") is not True for field, present in zip(fields, populated, strict=True)
+    )
+
+
+def compatible_detail(short, detailed, *, compact_platform_data=False):
     """Partial observations may omit data, but conflicting evidence is not merged."""
     old, new = short.get("item") or {}, detailed.get("item") or {}
     for left, right, label in (
@@ -79,6 +95,8 @@ def compatible_detail(short, detailed):
         if left and right and left != right:
             raise Conflict("Карточки одной сделки содержат разные данные: " + label)
     for field in ("name", "description", "attributes", "data_fields", "comment"):
+        if field == "data_fields" and compact_platform_data and old.get(field) == []:
+            continue
         if old.get(field) is not None and new.get(field) is not None and old[field] != new[field]:
             raise Conflict("Критичные параметры в карточках одной сделки расходятся")
     if old.get("price") is not None and new.get("price") is not None:
@@ -120,6 +138,7 @@ async def deal_details(
     obtaining_field_id=None,
     need_created=False,
     need_role=False,
+    need_platform_data=False,
     force_full=False,
 ):
     """Persisted/list deals may omit chat and item fields; omissions are not refusals.
@@ -169,6 +188,9 @@ async def deal_details(
         and server_time(order.get("created_at")) is None
         or need_role
         and not (item.get("user") or {}).get("role")
+        or need_platform_data
+        and order.get("is_automated") is not True
+        and not has_playerok_item_data(order)
         or order.get("has_problem") is None
         or order.get("is_automated") is None
     ):
@@ -178,7 +200,16 @@ async def deal_details(
         sale(detailed, ident, api.account.id)
         if item.get("id") and (detailed.get("item") or {}).get("id") != item["id"]:
             raise Conflict("Полная сделка относится к другому товару; выдача остановлена")
-        compatible_detail(order, detailed)
+        compatible_detail(
+            order,
+            detailed,
+            compact_platform_data=(
+                need_platform_data
+                and order.get("is_automated") is False
+                and detailed.get("is_automated") is False
+                and has_playerok_item_data(detailed)
+            ),
+        )
         order = detailed
     return order
 

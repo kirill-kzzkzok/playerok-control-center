@@ -170,7 +170,7 @@ async def test_empty_stock_alert_is_deduplicated_and_not_hidden_by_initial_sync(
     await worker.once()
     await worker.once()
     assert bot.send_message.await_count == 1
-    assert "запас закончился" in bot.send_message.call_args.args[1]
+    assert "СКЛАД ПУСТ" in bot.send_message.call_args.args[1]
     assert not store.setting("delivery:item:enabled", True)
 
 
@@ -246,7 +246,7 @@ async def test_stale_paid_event_does_not_notify_after_sent(setup):
     bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=10)))
     await Notifications(store, bot).once()
     assert bot.send_message.await_count == 1
-    assert "Продавец отметил отправку" in bot.send_message.call_args.args[1]
+    assert "ЗАКАЗ ВЫПОЛНЕН" in bot.send_message.call_args.args[1]
     assert "SENT" not in bot.send_message.call_args.args[1]
     assert "PAID" not in bot.send_message.call_args.args[1]
     assert "Оплачен" not in bot.send_message.call_args.args[1]
@@ -265,7 +265,7 @@ async def test_problem_transition_same_status_notifies_once_and_can_reopen(setup
     await worker.once()
     await worker.once()
     assert bot.send_message.await_count == 1
-    assert "Проблема в сделке" in bot.send_message.call_args.args[1]
+    assert "ПРОБЛЕМА С ЗАКАЗОМ" in bot.send_message.call_args.args[1]
     service.orders.ingest(order)
     service.orders.ingest({**order, "has_problem": True})
     await worker.once()
