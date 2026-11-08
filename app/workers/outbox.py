@@ -880,6 +880,8 @@ class Executor:
                 from app.services.paid_greeting import prepare
 
                 payload = {"text": await prepare(self.store, self.api, action)}
+                if payload["text"] is None:
+                    return {"recipient_request_not_needed": True}
             elif payload.get("review_thanks"):
                 from app.services.review_thanks import verify
 
@@ -962,7 +964,14 @@ class Executor:
             )
             if not result.get("id"):
                 raise APIError("MESSAGE_ID_MISSING", uncertain=True)
-            return {"message_id": result["id"]}
+            return {
+                "message_id": result["id"],
+                **(
+                    {"recipient_requested": action["recipient_requested"]}
+                    if "recipient_requested" in action
+                    else {}
+                ),
+            }
         if kind == "delivery":
             from app.services.logical_products import LogicalProducts, stock_scope
 
@@ -1079,6 +1088,10 @@ class OutboxWorker:
                 error = APIError("CONNECTION_NOT_VERIFIED")
             gift_retry = False
             visibility_retry = False
+            from app.services.paid_greeting import unstarted_recipient_request
+
+            with self.store.transaction() as db:
+                request_retry = unstarted_recipient_request(db, action["id"])
             if action["kind"] in {"stock_pause", "stock_resume"}:
                 from app.services.stock_visibility import unstarted
 
@@ -1100,6 +1113,7 @@ class OutboxWorker:
                     or delivery_retry
                     or visibility_retry
                     or listing_retry
+                    or request_retry
                 )
                 and not error.uncertain
                 and (
@@ -1136,6 +1150,7 @@ class OutboxWorker:
                         "MTPROTO_TIMEOUT",
                         "GIFT_TEMPORARY_PAUSE",
                         "GIFT_SYNC_PENDING",
+                        "RECIPIENT_DATA_PENDING",
                         "PAYMENT_LOCKED",
                         "GIFT_UNAVAILABLE",
                         "GIFT_QUANTITY_UNAVAILABLE",
@@ -1195,6 +1210,11 @@ class OutboxWorker:
         if outcome["status"] != "SUCCEEDED":
             from app.gifts.core import gift_reason
 
+            waiting_recipient = (
+                action["kind"] == "gift_send"
+                and outcome["status"] == "RETRYABLE_FAILED"
+                and outcome["error_code"] == "RECIPIENT_DATA_PENDING"
+            )
             repeated_wait = outcome["status"] == "RETRYABLE_FAILED" and outcome["error_code"] == action.get(
                 "error_code"
             )
@@ -1219,7 +1239,7 @@ class OutboxWorker:
                 message = "📦 Пустой склад: Playerok не разрешил снять лот с продажи. Проверка продолжится автоматически."
             elif action["kind"].startswith("gift_"):
                 message = gift_reason(outcome["error_code"])
-                if outcome["status"] == "RETRYABLE_FAILED":
+                if outcome["status"] == "RETRYABLE_FAILED" and not waiting_recipient:
                     message += " Проверка продолжится автоматически."
             elif outcome["status"] == "RETRYABLE_FAILED":
                 message = (
@@ -1242,11 +1262,15 @@ class OutboxWorker:
                     value = json.loads(order[0]["payload"])
                     message = f"{message} · «{order_title(value)}» · {buyer(value)}"
             event(
-                "INFO" if checking_receipt or checking_completion else "WARNING",
+                "INFO" if checking_receipt or checking_completion or waiting_recipient else "WARNING",
                 message,
                 order=order_target,
                 operation=action["id"],
-                level=10 if repeated_wait or checking_receipt else 20 if checking_completion else 30,
+                level=10
+                if repeated_wait or checking_receipt
+                else 20
+                if checking_completion or waiting_recipient
+                else 30,
             )
         elif action["kind"] in {"publish", "premium_publish"} and result.get("status") == "APPROVED":
             from app.services.shop_events import product_title

@@ -10,6 +10,7 @@ from html import escape
 from app.database.store import Conflict, encode, now, server_time
 from app.gifts.core import (
     SEED_GIFTS,
+    USERNAME,
     GiftValidationError,
     buyer_recipient,
     gift_code_from_description,
@@ -17,7 +18,7 @@ from app.gifts.core import (
 )
 from app.gifts.mtproto import GiftFailure, InvalidRecipient
 from app.localvpn import active_proxy
-from app.playerok.adapter import APIError
+from app.playerok.adapter import APIError, validate_page
 from app.security.logging import event
 from app.services.order_management import deal_details, deliverable, sale
 from app.services.orders import Orders
@@ -627,6 +628,117 @@ class GiftService:
             raise GiftFailure("LISTING_CHANGED") from None
         return order
 
+    async def recipient_username(self, order, listing, *, request=True):
+        """Read explicit buyer data only; chat fallback is scoped to one paid sale."""
+        field_id = listing["username_field_id"]
+        fields = order.get("obtaining_fields")
+        matches = [f for f in fields or [] if isinstance(f, dict) and f.get("id") == field_id]
+        if len(matches) > 1 or matches and matches[0].get("value"):
+            return buyer_recipient(order, field_id=field_id)
+        deliverable(order, order["id"], self.api.account.id, wait_for_details=True)
+        chat_id = order["chat"]["id"]
+        buyer = (order.get("user") or {}).get("id")
+        created = server_time(order.get("created_at"))
+        if not buyer or buyer == self.api.account.id or not created:
+            raise GiftFailure("RECIPIENT_DATA_PENDING")
+        chat = await self.api.call("get_chat", chat_id=chat_id)
+        participants = {user.get("id") for user in chat.get("users") or []}
+        if (
+            chat.get("id") != chat_id
+            or chat.get("type") != "PM"
+            or chat.get("is_texting_allowed") is not True
+            or participants != {buyer, self.api.account.id}
+            or self.store.rows(
+                "SELECT 1 FROM orders WHERE chat_id=? AND id<>? AND status IN ('PAID','SENT') LIMIT 1",
+                (chat_id, order["id"]),
+            )
+        ):
+            raise GiftFailure("RECIPIENT_DATA_PENDING")
+        page = await self.api.call("get_chat_messages", chat_id=chat_id, count=24, after_cursor=None)
+        try:
+            messages, _ = validate_page(page, "messages")
+        except APIError:
+            raise GiftFailure("GIFT_PREFLIGHT_NETWORK") from None
+        rejected = {
+            row["message"]: row["fingerprint"]
+            for row in self.store.rows(
+                "SELECT json_extract(payload,'$.paid_greeting.rejected_message.id') AS message,"
+                "json_extract(payload,'$.paid_greeting.rejected_message.fingerprint') AS fingerprint "
+                "FROM outbox WHERE kind='reply' AND target=? "
+                "AND json_extract(payload,'$.paid_greeting.order')=?",
+                (chat_id, order["id"]),
+            )
+            if row["message"] and row["fingerprint"]
+        }
+        names = {}
+        latest_input = None
+        for message in messages:
+            when = server_time(message.get("created_at"))
+            if (
+                (message.get("user") or {}).get("id") != buyer
+                or message.get("deleted_at")
+                or message.get("event") is not None
+                or not when
+                or when < created
+                or when > now()
+                or (message.get("deal") or {}).get("id") not in (None, order["id"])
+            ):
+                continue
+            position = (when, message["id"])
+            if latest_input is None or position > latest_input:
+                latest_input = position
+            text = message.get("text")
+            if isinstance(text, str) and text.strip().startswith("@"):
+                match = USERNAME.fullmatch(text.strip())
+                if match:
+                    username = "@" + match.group(1)
+                    fingerprint = hashlib.sha256(username.casefold().encode()).hexdigest()
+                    if rejected.get(message["id"]) != fingerprint:
+                        names[match.group(1).casefold()] = (username, message["id"], fingerprint)
+        if len(names) > 1:
+            raise GiftFailure("RECIPIENT_CHANGED")
+        if not names:
+            if request:
+                self.request_recipient(order, latest_input[1] if latest_input else None)
+            raise GiftFailure("RECIPIENT_DATA_PENDING")
+        username, message_id, fingerprint = next(iter(names.values()))
+        order["_gift_recipient_message"] = {"id": message_id, "fingerprint": fingerprint}
+        return username
+
+    def request_recipient(self, order, message_id=None, *, rejected_message=None):
+        from app.services.paid_greeting import greeting_key
+
+        greeting = self.store.rows(
+            "SELECT status,result FROM outbox WHERE operation_key=?",
+            (greeting_key(self.api.account.id, order["id"]),),
+        )
+        if (
+            not message_id
+            and greeting
+            and (
+                greeting[0]["status"] in {"PENDING", "PROCESSING", "RETRYABLE_FAILED", "UNCERTAIN"}
+                or (json.loads(greeting[0]["result"] or "{}") or {}).get("recipient_requested")
+            )
+        ):
+            return
+        job = self.job(order["id"])
+        self.store.enqueue(
+            "gift-recipient-request:" + order["id"] + (":" + message_id if message_id else ""),
+            "reply",
+            order["chat"]["id"],
+            {
+                "paid_greeting": {
+                    "account": self.api.account.id,
+                    "order": order["id"],
+                    "item": job["item_id"],
+                    "buyer": order["user"]["id"],
+                    "recipient_request": True,
+                    "gift_operation": job["operation_id"],
+                    "rejected_message": rejected_message,
+                }
+            },
+        )
+
     async def execute(self, action):
         measured = {}
         stage_start = time.perf_counter()
@@ -646,23 +758,34 @@ class GiftService:
             )
         order = await self.fresh_order(j)
         measured["deal_check"] = time.perf_counter() - stage_start
-        username = buyer_recipient(order, field_id=l["username_field_id"])
+        username = await self.recipient_username(order, l)
         self.store.execute(
             "UPDATE gift_jobs SET recipient_username=? WHERE order_id=? AND state='CHECKING'",
             (username, j["order_id"]),
         )
         if not j["recipient_username"]:
+            from app.services.shop_events import buyer, order_title
+
             event(
-                "CHECK",
-                "Telegram username извлечён",
+                "INFO",
+                f"👤 Telegram username получен · {buyer(order)} · «{order_title(order)}»",
                 order=j["order_id"],
                 operation=action["id"],
+                recipient=username,
             )
         j["recipient_username"] = username
         stage_start = time.perf_counter()
         try:
             recipient = await self.sender.resolve(username)
         except InvalidRecipient as exc:
+            if not j["spent_at"] and order.get("_gift_recipient_message"):
+                proof = order["_gift_recipient_message"]
+                self.request_recipient(order, proof["id"], rejected_message=proof)
+                self.store.execute(
+                    "UPDATE gift_jobs SET recipient_username=NULL WHERE order_id=? AND state='CHECKING'",
+                    (j["order_id"],),
+                )
+                raise GiftFailure("RECIPIENT_DATA_PENDING") from None
             if not j["spent_at"]:
                 await self.invalid_recipient(j, exc.code)
             raise
@@ -710,7 +833,7 @@ class GiftService:
         generation = self.store.rows("SELECT COUNT(*) n FROM gift_steps WHERE spent_at IS NOT NULL")[0]["n"]
         balance = await self.sender.balance()
         fresh = await self.fresh_order(j)
-        if buyer_recipient(fresh, field_id=l["username_field_id"]).casefold() != username.casefold():
+        if (await self.recipient_username(fresh, l)).casefold() != username.casefold():
             raise GiftFailure("RECIPIENT_CHANGED")
         try:
             again = await self.sender.resolve(username)
@@ -869,8 +992,8 @@ class GiftService:
         order = await deal_details(self.api, job["order_id"])
         deliverable(order, job["order_id"], self.api.account.id)
         listing = self.listing(job["item_id"])
-        if (order.get("item") or {}).get("id") != job["item_id"] or buyer_recipient(
-            order, field_id=listing["username_field_id"]
+        if (order.get("item") or {}).get("id") != job["item_id"] or (
+            await self.recipient_username(order, listing)
         ).casefold() != (job.get("recipient_username") or "").casefold():
             raise GiftFailure("REFUND_RECIPIENT_CHANGED")
         Orders(self.store).ingest(order)
@@ -886,6 +1009,10 @@ class GiftService:
             and refund_allowed(self.store, job["item_id"], job["order_id"])
             else False
         )
+        try:
+            buyer_recipient(order, field_id=listing["username_field_id"])
+        except GiftValidationError:
+            supported = False  # Chat input grants no automatic refund authority.
         if supported is True:
             with self.store.transaction() as db:
                 op = self.store.enqueue(

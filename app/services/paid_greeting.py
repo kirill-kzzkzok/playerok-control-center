@@ -12,6 +12,19 @@ def greeting_key(account, order_id):
     return f"paid-greeting:{account}:{order_id}"
 
 
+def unstarted_recipient_request(db, ident):
+    return bool(
+        db.execute(
+            "SELECT 1 FROM outbox o WHERE o.id=? AND o.kind='reply' AND o.started_at IS NULL "
+            "AND (o.result IS NULL OR o.result='null') "
+            "AND json_extract(o.payload,'$.paid_greeting.recipient_request')=1 "
+            "AND NOT EXISTS(SELECT 1 FROM outbox_late_results r WHERE r.operation_id=o.id) "
+            "AND NOT EXISTS(SELECT 1 FROM operation_resolutions r WHERE r.operation_id=o.id)",
+            (ident,),
+        ).fetchone()
+    )
+
+
 def enqueue(store, db, order, seller):
     account = store.setting("playerok:account_id")
     cutoff = store.setting("orders:greeting_since")
@@ -122,6 +135,26 @@ def guard(store, api, action):
         or (local[0]["chat_id"], local[0]["item_id"]) != (action["target"], proof["item"])
     ):
         raise Conflict("Сделка приветствия изменилась")
+    if proof.get("recipient_request"):
+        from app.gifts.service import GiftService
+        from app.services.logical_products import LogicalProducts
+
+        service = GiftService(store, api, api.gift_settings, api.gift_sender)
+        job = service.job(proof["order"])
+        listing = service.listing(proof["item"])
+        if (
+            local[0]["status"] != "PAID"
+            or job["state"] not in {"PENDING", "CHECKING"}
+            or job["spent_at"]
+            or job["form_id"]
+            or job["receipt"]
+            or job["operation_id"] != proof.get("gift_operation")
+            or not service.runtime()
+            or not listing["enabled"]
+            or listing["revision"] != job["listing_revision"]
+        ):
+            raise Conflict("Запрос получателя больше не разрешён")
+        LogicalProducts(store, api).require_delivery(proof["item"], "telegram_gifts", proof["order"])
     return proof
 
 
@@ -141,6 +174,22 @@ async def prepare(store, api, action):
     if chat.get("id") != action["target"] or chat.get("is_texting_allowed") is not True:
         raise Conflict("Чат покупателя недоступен")
     configured = store.rows("SELECT username_field_id FROM gift_listings WHERE item_id=?", (proof["item"],))
+    if not configured:
+        from app.services.product_codes import title_code
+
+        try:
+            code = title_code(order["item"].get("name"))
+        except ValueError:
+            code = None
+        configured = store.rows(
+            "SELECT DISTINCT g.username_field_id FROM logical_products p "
+            "JOIN logical_listings l ON l.product_id=p.id JOIN gift_listings g ON g.item_id=l.item_id "
+            "WHERE p.account_id=? AND p.code=? AND p.handler='telegram_gifts' "
+            "AND p.state='VERIFIED' AND p.enabled=1 AND l.verified_at IS NOT NULL AND g.enabled=1",
+            (proof["account"], code),
+        )
+        if len(configured) != 1:
+            configured = []
     if configured:
         field_id = configured[0]["username_field_id"]
         fields = list(order.get("obtaining_fields") or [])
@@ -154,4 +203,25 @@ async def prepare(store, api, action):
                 for field in fields
             ]
         order = {**order, "obtaining_fields": fields}
+        missing = not any(f.get("id") == field_id and f.get("value") for f in fields if isinstance(f, dict))
+        action["recipient_requested"] = missing
+        if proof.get("recipient_request"):
+            if not missing:
+                return None
+            from app.gifts.mtproto import GiftFailure
+            from app.gifts.service import GiftService
+
+            try:
+                await GiftService(store, api, api.gift_settings, api.gift_sender).recipient_username(
+                    order, {"username_field_id": field_id}, request=False
+                )
+            except GiftFailure as error:
+                if error.code != "RECIPIENT_DATA_PENDING":
+                    raise
+            else:
+                return None
+            return (
+                f"{FRAME}\n\n💌 чтобы отправить подарок,\nпришли свой Telegram @username одним сообщением в этот чат ♡\n\n"
+                f"например: @username\n\n{FRAME}"
+            )
     return render(order, username_field_id=configured[0]["username_field_id"] if configured else None)

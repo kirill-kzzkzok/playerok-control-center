@@ -127,6 +127,9 @@ class ConsoleFormatter(logging.Formatter):
                     )
                 message = f"{icon} {message}"
             text = f"{self.formatTime(record, self.datefmt)}  {message}"
+            recipient = getattr(record, "owner_recipient", None)
+            if isinstance(recipient, str) and re.fullmatch(r"@[A-Za-z][A-Za-z0-9_]{4,31}", recipient):
+                text += " · " + recipient
             text = re.sub(r"(?i)\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b|\b[0-9a-f]{32}\b", "—", text)
         color = {"SUCCESS": "32", "GIFT": "35", "CHECK": "34", "ORDER": "36"}.get(
             category, self.COLORS.get(record.levelno, "0")
@@ -163,6 +166,7 @@ def event(
     position=None,
     level=logging.INFO,
     success=False,
+    recipient=None,
 ):
     try:
         logging.getLogger("pcc.shop").log(
@@ -174,6 +178,7 @@ def event(
                 "order_id": order,
                 "operation_id": operation,
                 "gift_position": position,
+                "owner_recipient": recipient,
             },
         )
     except Exception:  # noqa: BLE001 -- never recursively log into a failed sink or alter paid transitions

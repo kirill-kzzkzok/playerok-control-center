@@ -262,7 +262,7 @@ async def test_shared_outbox_success_receipt_notice_and_automatic_completion(rig
         ("changed", "RECIPIENT_CHANGED"),
         ("temporary", "GIFT_PREFLIGHT_NETWORK"),
         ("format", "GIFT_VALIDATION_FAILED"),
-        ("missing", "GIFT_VALIDATION_FAILED"),
+        ("missing", "RECIPIENT_DATA_PENDING"),
         ("restricted", "GIFT_RESTRICTED"),
         ("stop", "AUTOMATION_STOPPED_OR_STALE"),
         ("description", "LISTING_CHANGED"),
@@ -313,9 +313,9 @@ async def test_preflight_failures_never_spend_or_refund(rig, fault, expected):
         r.api.gift_sender.client = ChannelClient()
     await r.worker.once()
     j = r.service.job("order")
-    assert j["state"] == ("PENDING" if fault in {"temporary", "balance", "catalog"} else "BLOCKED")
+    assert j["state"] == ("PENDING" if fault in {"temporary", "balance", "catalog", "missing"} else "BLOCKED")
     assert j["error_code"] == expected
-    if fault in {"temporary", "balance", "catalog"}:
+    if fault in {"temporary", "balance", "catalog", "missing"}:
         assert r.store.rows("SELECT status FROM outbox WHERE kind='gift_send'") == [
             {"status": "RETRYABLE_FAILED"}
         ]
@@ -986,3 +986,328 @@ async def test_raw_mtproto_valueerror_is_not_reflected_in_panel(rig):
         assert not r.service.listing("item") and not r.remote.payments
     finally:
         await bot.session.close()
+
+
+async def test_missing_recipient_waits_and_resumes_only_after_safe_data_arrives(rig):
+    r = rig
+    await enroll(r)
+    r.api.orders["order"]["obtaining_fields"] = []
+    await r.worker.once()
+    assert r.service.job("order")["state"] == "PENDING"
+    assert r.store.rows("SELECT status FROM outbox WHERE kind='gift_send'") == [
+        {"status": "RETRYABLE_FAILED"}
+    ]
+    assert not r.remote.payments
+    r.store.execute(
+        "UPDATE outbox SET attempts=4,created_at='2000-01-01T00:00:00+00:00' WHERE kind='gift_send'"
+    )
+    from app.gifts.outcomes import DELAYED_PREFLIGHT_SQL
+
+    assert not r.store.rows(DELAYED_PREFLIGHT_SQL)
+    r.api.orders["order"]["obtaining_fields"] = [{"id": "username-field", "value": "@Realbuyer"}]
+    r.store.execute("UPDATE outbox SET retry_at=0 WHERE kind='gift_send'")
+    await r.worker.once()
+    assert r.service.job("order")["state"] == "SUCCEEDED"
+    assert len(r.remote.payments) == 1
+
+
+@pytest.mark.parametrize("risk", ["none", "author", "old", "deal", "ambiguous", "parallel", "page"])
+async def test_explicit_buyer_chat_recipient_requires_exact_safe_context(rig, risk):
+    r = rig
+    await enroll(r)
+    await asyncio.sleep(1.1)  # Fixture's server creation date is one second after enrollment.
+    r.api.orders["order"]["obtaining_fields"] = []
+    Orders(r.store).ingest(r.api.orders["order"])
+    if risk == "parallel":
+        other = copy.deepcopy(r.api.orders["order"])
+        other["id"] = "another-sale"
+        Orders(r.store).ingest(other)
+    original = r.api.call
+    message = {
+        "id": "explicit-recipient",
+        "text": "@Realbuyer",
+        "user": {"id": "playerok-buyer" if risk != "author" else "shop"},
+        "created_at": now() if risk != "old" else "2000-01-01T00:00:00+00:00",
+        "deal": {"id": "order" if risk != "deal" else "another-sale"},
+    }
+    reads = 0
+
+    async def call(method, **kwargs):
+        nonlocal reads
+        if method == "get_chat":
+            return {
+                "id": "chat-order",
+                "type": "PM",
+                "is_texting_allowed": True,
+                "users": [{"id": "shop"}, {"id": "playerok-buyer"}],
+            }
+        if method == "get_chat_messages":
+            reads += 1
+            if risk == "page":
+                return {"messages": []}
+            messages = [message]
+            if risk == "ambiguous":
+                messages.append({**message, "id": "conflicting", "text": "@Anotherbuyer"})
+            return {"messages": copy.deepcopy(messages), "page_info": {"has_next_page": False}}
+        return await original(method, **kwargs)
+
+    r.api.call = call
+    await r.worker.once()
+    assert len(r.remote.payments) == int(risk == "none")
+    if risk == "none":
+        assert reads == 2
+        assert r.service.job("order")["state"] == "SUCCEEDED"
+    elif risk != "ambiguous":
+        assert r.service.job("order")["state"] == "PENDING"
+    assert r.service.job("order")["state"] != "UNCERTAIN"
+
+
+async def test_old_generic_block_is_never_automatically_replayed(rig):
+    r = rig
+    await enroll(r)
+    r.api.orders["order"]["obtaining_fields"][0]["value"] = "@bad!"
+    await r.worker.once()
+    r.api.orders["order"]["obtaining_fields"][0]["value"] = "@Realbuyer"
+    assert await r.service.recover_resource_preflights() == 0
+    assert not await r.worker.once()
+    assert not r.remote.payments
+
+
+@pytest.mark.parametrize("lost_request", [False, True])
+async def test_empty_field_requests_username_once_then_delivers_from_chat_after_restart(rig, lost_request):
+    import time
+
+    r = rig
+    r.store.set_setting("playerok:account_id", r.api.account.id)
+    await enroll(r)
+    await asyncio.sleep(1.1)
+    r.api.orders["order"]["obtaining_fields"] = []
+    original = r.api.call
+    answers = []
+
+    async def call(method, **kwargs):
+        if method == "get_chat":
+            return {
+                "id": "chat-order",
+                "type": "PM",
+                "is_texting_allowed": True,
+                "users": [{"id": "shop"}, {"id": "playerok-buyer"}],
+            }
+        if method == "get_chat_messages":
+            return {"messages": copy.deepcopy(answers), "page_info": {"has_next_page": False}}
+        return await original(method, **kwargs)
+
+    r.api.call = call
+    if lost_request:
+        send = r.api.account.send_message
+
+        def lost(**kwargs):
+            send(**kwargs)
+            raise APIError("NETWORK_ERROR", uncertain=True)
+
+        r.api.account.send_message = lost
+    await r.worker.once()
+    assert not r.remote.payments
+    await r.worker.once()
+    assert len(r.api.sent) == 1 and "пришли свой Telegram @username" in r.api.sent[0][1], r.store.rows(
+        "SELECT kind,status,error_code FROM outbox"
+    )
+    r.store.close()
+    r.store = Store(r.store.path)
+    r.service = GiftService(r.store, r.api, r.api.gift_settings, r.api.gift_sender)
+    r.worker = OutboxWorker(r.store, Executor(r.store, r.api, Products(r.store, r.api)))
+    r.store.execute("UPDATE outbox SET retry_at=0 WHERE kind='gift_send'")
+    await r.worker.once()
+    assert len(r.api.sent) == 1 and not r.remote.payments
+    assert (
+        r.store.rows("SELECT retry_at FROM outbox WHERE kind='gift_send'")[0]["retry_at"] <= time.time() + 11
+    )
+    answers.append(
+        {
+            "id": "buyer-reply",
+            "text": "@Realbuyer",
+            "created_at": now(),
+            "user": {"id": "playerok-buyer"},
+            "deal": {"id": "order"},
+        }
+    )
+    r.store.execute("UPDATE outbox SET retry_at=0 WHERE kind='gift_send'")
+    await r.worker.once()
+    assert r.service.job("order")["state"] == "SUCCEEDED"
+    assert len(r.remote.payments) == 1
+    await r.worker.once()
+    assert len(r.remote.payments) == 1
+
+
+def test_explicit_recipient_is_visible_only_in_owner_console():
+    import logging
+
+    from app.security.logging import ConsoleFormatter, SecretFilter
+
+    record = logging.makeLogRecord(
+        {
+            "msg": "👤 Telegram username получен",
+            "levelno": logging.INFO,
+            "owner_recipient": "@Realbuyer",
+            "event_type": "INFO",
+        }
+    )
+    SecretFilter().filter(record)
+    assert "@Realbuyer" in ConsoleFormatter(technical=False).format(record)
+    assert "@Realbuyer" not in ConsoleFormatter(technical=True).format(record)
+    record.owner_recipient = "@Realbuyer\nsecret"
+    assert "secret" not in ConsoleFormatter(technical=False).format(record)
+
+
+async def test_invalid_chat_answers_prompt_once_each_then_single_gift(rig):
+    r = rig
+    r.store.set_setting("playerok:account_id", r.api.account.id)
+    await enroll(r)
+    await asyncio.sleep(1.1)
+    r.api.orders["order"]["obtaining_fields"] = []
+    original = r.api.call
+    answers = []
+
+    async def call(method, **kwargs):
+        if method == "get_chat":
+            return {
+                "id": "chat-order",
+                "type": "PM",
+                "is_texting_allowed": True,
+                "users": [{"id": "shop"}, {"id": "playerok-buyer"}],
+            }
+        if method == "get_chat_messages":
+            return {"messages": copy.deepcopy(answers), "page_info": {"has_next_page": False}}
+        return await original(method, **kwargs)
+
+    r.api.call = call
+    for index, text in enumerate(["hello", "@bad!", "Re4mix юз", "@Ghostbuyer"]):
+        r.remote.resolve_error = errors.UsernameNotOccupiedError(None) if text == "@Ghostbuyer" else None
+        answers.append(
+            {
+                "id": f"bad-{index}",
+                "text": text,
+                "created_at": now(),
+                "user": {"id": "playerok-buyer"},
+                "deal": {"id": "order"},
+            }
+        )
+        r.store.execute("UPDATE outbox SET retry_at=0 WHERE kind='gift_send'")
+        await r.worker.once()
+        await r.worker.once()
+        assert len(r.api.sent) == index + 1
+        # The same message is read twice, but the request is durable and unique.
+        r.store.execute("UPDATE outbox SET retry_at=0 WHERE kind='gift_send'")
+        await r.worker.once()
+        await r.worker.once()
+        assert len(r.api.sent) == index + 1
+        assert not r.remote.payments
+    r.remote.resolve_error = None
+    answers.append(
+        {
+            "id": "correct",
+            "text": "@Realbuyer",
+            "created_at": now(),
+            "user": {"id": "playerok-buyer"},
+            "deal": {"id": "order"},
+        }
+    )
+    r.store.execute("UPDATE outbox SET retry_at=0 WHERE kind='gift_send'")
+    await r.worker.once()
+    assert len(r.remote.payments) == 1
+    for _ in range(3):
+        await r.worker.once()
+    assert len(r.remote.payments) == 1
+
+
+@pytest.mark.parametrize("risk", ["changed", "stop"])
+async def test_chat_recipient_rechecked_before_payment(rig, risk):
+    r = rig
+    await enroll(r)
+    await asyncio.sleep(1.1)
+    r.api.orders["order"]["obtaining_fields"] = []
+    original = r.api.call
+    reads = 0
+
+    async def call(method, **kwargs):
+        nonlocal reads
+        if method == "get_chat":
+            return {
+                "id": "chat-order",
+                "type": "PM",
+                "is_texting_allowed": True,
+                "users": [{"id": "shop"}, {"id": "playerok-buyer"}],
+            }
+        if method == "get_chat_messages":
+            reads += 1
+            if risk == "stop" and reads == 2:
+                r.service.stop(7)
+            return {
+                "messages": [
+                    {
+                        "id": "recipient",
+                        "text": "@Realbuyer" if reads == 1 or risk == "stop" else "@Otherbuyer",
+                        "created_at": now(),
+                        "user": {"id": "playerok-buyer"},
+                        "deal": {"id": "order"},
+                    }
+                ],
+                "page_info": {"has_next_page": False},
+            }
+        return await original(method, **kwargs)
+
+    r.api.call = call
+    await r.worker.once()
+    assert not r.remote.payments
+    assert r.service.job("order")["state"] != "SUCCEEDED"
+
+
+async def test_recipient_request_recovers_long_read_outage_without_replaying_send(rig):
+    r = rig
+    r.store.set_setting("playerok:account_id", r.api.account.id)
+    await enroll(r)
+    r.api.orders["order"]["obtaining_fields"] = []
+    r.service.request_recipient(r.api.orders["order"])
+    op = r.store.rows("SELECT id FROM outbox WHERE kind='reply'")[0]["id"]
+    r.store.execute("UPDATE outbox SET attempts=7 WHERE id=?", (op,))
+    original = r.api.call
+
+    async def unavailable(method, **kwargs):
+        if method == "get_deal":
+            raise APIError("HTTP_503")
+        return await original(method, **kwargs)
+
+    r.api.call = unavailable
+    await r.worker.once(operation_id=op)
+    assert r.store.rows("SELECT status FROM outbox WHERE id=?", (op,)) == [{"status": "RETRYABLE_FAILED"}]
+    assert not r.api.sent and not r.remote.payments
+    r.api.call = original
+    r.store.execute("UPDATE outbox SET retry_at=0 WHERE id=?", (op,))
+    await r.worker.once(operation_id=op)
+    assert len(r.api.sent) == 1
+    await r.worker.once(operation_id=op)
+    assert len(r.api.sent) == 1
+
+
+@pytest.mark.parametrize("proof", ["unstarted", "started", "late"])
+async def test_recipient_request_restart_uses_dispatch_evidence(rig, proof):
+    r = rig
+    r.store.set_setting("playerok:account_id", r.api.account.id)
+    await enroll(r)
+    r.api.orders["order"]["obtaining_fields"] = []
+    r.service.request_recipient(r.api.orders["order"])
+    op = r.store.rows("SELECT id FROM outbox WHERE kind='reply'")[0]["id"]
+    claim = r.store.claim(operation_id=op)
+    if proof == "started":
+        r.store.mark_started(claim)
+    if proof == "late":
+        r.store.record_late_result(op, "previous-lease", "SUCCEEDED", result={"message_id": "possibly-sent"})
+    r.store.execute("UPDATE outbox SET lease_until=0,attempts=8 WHERE id=?", (op,))
+    r.store.recover()
+    assert r.store.rows("SELECT status FROM outbox WHERE id=?", (op,)) == [
+        {"status": "RETRYABLE_FAILED" if proof == "unstarted" else "UNCERTAIN"}
+    ]
+    r.store.execute("UPDATE outbox SET retry_at=0 WHERE id=?", (op,))
+    await r.worker.once(operation_id=op)
+    assert len(r.api.sent) == int(proof == "unstarted")
+    assert not r.remote.payments

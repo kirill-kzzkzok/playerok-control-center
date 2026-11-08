@@ -9,7 +9,7 @@ DELAYED_PREFLIGHT_SQL = (
     "SELECT b.id,b.target FROM outbox b WHERE b.status='RETRYABLE_FAILED' "
     "AND b.started_at IS NULL AND b.attempts>=3 AND julianday(b.created_at)<julianday('now','-5 minutes') "
     "AND NOT EXISTS(SELECT 1 FROM outbox_late_results x WHERE x.operation_id=b.id) AND ((b.kind='gift_send' "
-    "AND b.error_code NOT IN ('GIFT_TEMPORARY_PAUSE','PAYMENT_LOCKED') "
+    "AND b.error_code NOT IN ('GIFT_TEMPORARY_PAUSE','PAYMENT_LOCKED','RECIPIENT_DATA_PENDING') "
     "AND EXISTS(SELECT 1 FROM gift_jobs g JOIN gift_listings l ON l.item_id=g.item_id "
     "WHERE g.operation_id=b.id AND l.enabled=1 AND g.state IN ('PENDING','CHECKING')) "
     "AND COALESCE((SELECT json_extract(value,'$') FROM settings WHERE key='gifts:stopped'),1)=0 "

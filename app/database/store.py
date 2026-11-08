@@ -495,7 +495,8 @@ class Store:
             raise ValueError("Недопустимый результат операции")
         with self.transaction() as db:
             evidence = db.execute(
-                "SELECT kind,started_at,attempts,EXISTS(SELECT 1 FROM outbox_late_results l WHERE l.operation_id=o.id) AS late_result "
+                "SELECT kind,started_at,attempts,json_extract(payload,'$.paid_greeting.recipient_request') AS recipient_request,"
+                "EXISTS(SELECT 1 FROM outbox_late_results l WHERE l.operation_id=o.id) AS late_result "
                 "FROM outbox o WHERE id=? AND status='PROCESSING' AND lease_token=?",
                 (ident, token),
             ).fetchone()
@@ -506,6 +507,9 @@ class Store:
                 unstarted_delivery,
                 unstarted_listing,
             )
+            from app.services.paid_greeting import unstarted_recipient_request
+
+            request_unstarted = unstarted_recipient_request(db, ident)
 
             listing_kind = evidence["kind"] in {
                 "edit",
@@ -542,8 +546,9 @@ class Store:
                 and error == "PROCESS_CANCELLED"
                 and evidence["started_at"] is None
                 and evidence["kind"] in {"reply", "mark_read"}
+                and (not evidence["recipient_request"] or request_unstarted)
             ):
-                status = "PERMANENT_FAILED"  # Proven no POST; hold reserve for explicit owner recovery.
+                status = "RETRYABLE_FAILED" if request_unstarted else "PERMANENT_FAILED"
             if (
                 status == "UNCERTAIN"
                 and error == "PROCESS_CANCELLED"
@@ -579,6 +584,8 @@ class Store:
                     status = "UNCERTAIN"
             if status == "RETRYABLE_FAILED":
                 delay = min(300, 5 * 2 ** min(evidence["attempts"], 5))
+                if evidence["kind"] == "gift_send" and error == "RECIPIENT_DATA_PENDING":
+                    delay = 10
                 if str(retry_after or "").isdigit():
                     delay = max(delay, int(retry_after))
                 db.execute(
@@ -743,7 +750,9 @@ class Store:
 
             restored_edits = recover_historical_edits(db)
             affected = db.execute(
-                "SELECT id,operation_key,kind,target,started_at,attempts FROM outbox WHERE status='PROCESSING' AND lease_until<?",
+                "SELECT id,operation_key,kind,target,started_at,attempts,"
+                "json_extract(payload,'$.paid_greeting.recipient_request') AS recipient_request "
+                "FROM outbox WHERE status='PROCESSING' AND lease_until<?",
                 (time.time(),),
             ).fetchall()
             db.execute(
@@ -752,8 +761,9 @@ class Store:
             )
             for row in affected:
                 from app.services.operation_outcomes import unstarted_delivery, unstarted_listing
+                from app.services.paid_greeting import unstarted_recipient_request
 
-                if unstarted_listing(db, row):
+                if unstarted_listing(db, row) or unstarted_recipient_request(db, row["id"]):
                     db.execute(
                         "UPDATE outbox SET status='RETRYABLE_FAILED',error_code='PREFLIGHT_INTERRUPTED',"
                         "retry_at=?,lease_token=NULL,lease_until=NULL WHERE id=?",
@@ -789,6 +799,9 @@ class Store:
                         )
                         finish(db, row, "RETRYABLE_FAILED", None, "PREFLIGHT_INTERRUPTED", self)
                         continue
+                if row["kind"] == "reply" and row["recipient_request"]:
+                    self.uncertain_event(db, row["id"])
+                    continue
                 if row["started_at"] is None and row["kind"] in {
                     "reply",
                     "mark_read",
