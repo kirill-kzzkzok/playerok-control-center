@@ -150,7 +150,7 @@ class HomePanel:
                 rows.append([("⚠️ " + label + " требует проверки", "diagnostics:workers")])
         return rows
 
-    def overview(self, owner, *, paid_problems=0):
+    def overview(self, owner, *, paid_problems=0, rechecking=False):
         from app.services.product_readiness import fresh
         from app.services.statistics import parsed_time
         from app.telegram.presentation import local_time
@@ -184,7 +184,9 @@ class HomePanel:
             "AND json_extract(payload,'$.item.user.id')=?",
             (account,),
         )[0]["n"]
-        text = "\n\n📦 Активные товары: " + (str(active) if active is not None else "обновляем данные")
+        text = "\n"
+        if active is not None or not rechecking:
+            text += "\n📦 Активные товары: " + (str(active) if active is not None else "обновляем данные")
         text += f"\n🛒 Оплаченные заказы: {paid}"
         funds = self.store.setting("playerok:balance:" + str(account), {})
         from app.services.finance import money
@@ -209,13 +211,13 @@ class HomePanel:
             "SELECT COUNT(*) AS n FROM logical_products WHERE account_id=? AND enabled=1", (account,)
         )[0]["n"]
         text += f"\n⚡ Автовыдача включена у товаров: {enabled}"
-        if enabled and (
-            not getattr(self.api.account, "writes_enabled", False)
-            or not getattr(self.api.account, "automation_enabled", False)
-        ):
+        connection = getattr(self.api, "connection", None)
+        writes = getattr(connection, "desired_writes", getattr(self.api.account, "writes_enabled", False))
+        automation = getattr(
+            connection, "desired_automation", getattr(self.api.account, "automation_enabled", False)
+        )
+        if enabled and not (writes and automation):
             text += "\n⏸ Запуск автоматики запрещён настройками подключения"
-        elif enabled and not getattr(self.api.account, "connection_verified", False):
-            text += "\n🔄 Ожидаем подтверждения подключения"
         has_gifts = self.store.rows("SELECT 1 FROM gift_listings LIMIT 1")
         if has_gifts and self.store.setting("gifts:stopped", True):
             text += "\n⛔ Подарочные покупки остановлены владельцем"
@@ -245,21 +247,16 @@ class HomePanel:
         paid_total = paid[0]["total"] if paid else 0
         problems = self.problems(include_paid=False) or bool(paid_total)
         connection = connection_summary(self.api)
-        note = (
-            "Есть важные события по заказам или работе магазина, требующие внимания."
-            if problems
-            else (
-                "В локальной истории проблем нет."
-                if getattr(getattr(self.api, "connection", None), "state", {}).get("status") == "CONNECTED"
-                and getattr(self.api.account, "connection_verified", False)
-                else "Проверьте подключение в профиле."
-            )
-        )
+        status = getattr(getattr(self.api, "connection", None), "state", {}).get("status")
+        note = ""
+        if status == "DISCONNECTED":
+            note = "\nПроверьте подключение в профиле."
+        elif problems:
+            note = "\nЕсть важные события по заказам или работе магазина, требующие внимания."
         return (
             "🏠 <b>Мой магазин</b>\n\n"
             + connection
-            + self.overview(owner, paid_problems=paid_total)
-            + "\n"
+            + self.overview(owner, paid_problems=paid_total, rechecking=status == "UNKNOWN")
             + note,
             main_menu(attention=paid_total),
         )

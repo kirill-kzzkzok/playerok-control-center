@@ -108,3 +108,29 @@ async def test_item_has_four_actions_and_opens_existing_delivery_controller(shop
     await r.ui.click("lp:details:lot")
     assert any(key.endswith(":links") for key in buttons(r.session.last_panel))
     assert "rd:check:lot" in buttons(r.session.last_panel)
+
+
+@pytest.mark.parametrize("configured", [True, False])
+async def test_home_distinguishes_playerok_recheck_from_disabled_automation(shop, configured):
+    from types import SimpleNamespace
+
+    r = await shop(gift=True)
+    await setup_ui(r, "telegram_gifts", "gift: heart")
+    r.api.connection = SimpleNamespace(
+        state={"status": "UNKNOWN", "reason": "UNAUTHORIZED_OR_CHALLENGE"},
+        desired_writes=True,
+        desired_automation=configured,
+    )
+    r.api.account.writes_enabled = False
+    r.api.account.automation_enabled = False
+    for key in ("ui:catalog", "shop:active", "logical:scan"):
+        suffix = ":completed" if key == "logical:scan" else ""
+        r.store.set_setting(f"{key}:{r.api.account.id}{suffix}", {})
+    reads = len(r.api.calls)
+    await r.ui.click("home")
+    text = r.session.last_panel.text
+    assert ("запрещён настройками подключения" in text) is not configured
+    assert "Проверьте подключение в профиле" not in text
+    assert "автоматически перепроверяет подключение Playerok" in text
+    assert "Активные товары: обновляем данные" not in text
+    assert len(r.api.calls) == reads
