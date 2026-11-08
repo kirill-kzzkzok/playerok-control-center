@@ -171,3 +171,50 @@ def test_daily_profit_excludes_old_sales_and_reports_missing_cost(store):
     assert result["cost"] == "0.00"
     assert result["missing_cost"] == 1
     assert result["net"] == "71.00"
+
+
+async def test_website_premium_is_counted_without_bot_operation_after_restart(store):
+    from app.database.store import Store
+
+    at = now()
+    entries = [
+        {
+            "id": ident,
+            "operation": operation,
+            "direction": direction,
+            "status": "CONFIRMED",
+            "currency": "RUB",
+            "value": value,
+            "created_at": at,
+            "completed_at": at,
+            "user": {"id": "seller"},
+        }
+        for ident, operation, direction, value in (
+            ("website-sale", "SELL", "IN", 90),
+            ("website-premium", "ITEM_PREMIUM_PRIORITY", "OUT", 9),
+            ("website-placement", "ITEM_CUSTOM_PRIORITY", "OUT", 5),
+        )
+    ]
+
+    async def call(method, **kwargs):
+        assert method == "get_transactions"
+        return {"transactions": entries, "page_info": {"has_next_page": False}}
+
+    api = SimpleNamespace(account=SimpleNamespace(id="seller"), call=call)
+    await TransactionWorker(store, api).once()
+    assert store.setting("shop:profit:seller:7")["net"] == "76.00"
+    assert not store.rows("SELECT * FROM outbox")
+    assert not store.rows("SELECT * FROM promotion_expenses")
+    restarted = Store(store.path)
+    try:
+        await TransactionWorker(restarted, api).once()
+        result = restarted.setting("shop:profit:seller:7")
+        assert result["sales_credit"] == "90.00"
+        assert result["promotion"] == "14.00"
+        assert result["net"] == "76.00"
+        assert result["missing_cost"] == 1
+        text, _ = HomePanel(restarted, api).home(owner=7)
+        assert "PREMIUM и размещение: 14.00 ₽" in text
+        assert len(restarted.rows("SELECT id FROM account_transactions")) == 3
+    finally:
+        restarted.close()
