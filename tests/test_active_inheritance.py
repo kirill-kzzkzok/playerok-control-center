@@ -13,6 +13,7 @@ from app.workers.enrollment import EnrollmentWorker
 from app.workers.logical_products import LogicalProductWorker
 from tests.test_stage_a_controls import shop as shop_fixture
 from tests.test_universal_delivery_e2e import click, setup_ui
+from tests.test_ux_redesign import buttons
 
 shop = shop_fixture
 
@@ -33,6 +34,7 @@ async def test_active_inheritance_change_preserves_paid_job_and_original_admissi
         await EnrollmentWorker(r.store, r.api).once()
     # An existing saved callback still goes through actual Dispatcher/FSM approval.
     await r.ui.click("lp:ready:lot")
+    assert not any(key.endswith(":enable:this") for key in buttons(r.session.last_panel))
     await click(r, suffix=":enable:inherit")
     current = logical.listing("lot")
     assert current["inherit_enabled"] == 1
@@ -82,3 +84,20 @@ async def test_active_inheritance_never_overrides_stop_arriving_during_fresh_rea
     assert not after["enabled"] and after["inherit_enabled"] == before["inherit_enabled"]
     assert not r.store.rows("SELECT 1 FROM gift_listings WHERE enabled=1")
     assert not r.api.remote.payments
+
+
+async def test_new_delivery_confirmation_has_one_choice(shop):
+    r = await shop()
+    await setup_ui(r, "fixed_text", "test delivery")
+    await r.ui.click("iv:delivery:lot")
+    await click(r, suffix=":stop")
+    await click(r, suffix=":stop_confirm")
+    await r.ui.click("iv:delivery:lot")
+    await click(r, suffix=":arm")
+    choices = {key.rsplit(":", 1)[-1] for key in buttons(r.session.last_panel) if ":enable:" in key}
+    assert choices == {"inherit"}
+    await click(r, suffix=":enable:inherit")
+    assert r.store.rows("SELECT inherit_enabled,enabled FROM logical_products") == [
+        {"inherit_enabled": 1, "enabled": 1}
+    ]
+    assert not r.api.messages and not r.api.remote.payments

@@ -22,6 +22,13 @@ from app.workers.pagination import PageScanner
 from playerokapi.enums import ItemStatuses
 
 RATE_LIMIT_CODES = {"RATE_LIMITED", "HTTP_429"}
+PAID_DETAILS_PENDING = {
+    "DELIVERY_SNAPSHOT_NOT_YET_AVAILABLE",
+    "DELIVERY_FLAGS_NOT_YET_AVAILABLE",
+    "DELIVERY_SELLER_NOT_YET_AVAILABLE",
+    "DELIVERY_CHAT_NOT_YET_AVAILABLE",
+    "PLATFORM_DETAILS_NOT_YET_AVAILABLE",
+}
 
 
 def require_listing_details(item):
@@ -49,6 +56,7 @@ class LogicalProductWorker:
         if not hasattr(store, "logical_paid_wake"):
             store.logical_paid_wake = asyncio.Event()
         self.paid_wake = store.logical_paid_wake
+        self.paid_retry = False
 
     async def once(self):
         return await self.scan()
@@ -58,6 +66,7 @@ class LogicalProductWorker:
             return await self._scan(product_id=product_id)
 
     async def _scan(self, *, product_id=None):
+        self.paid_retry = False
         products = self.store.rows(
             "SELECT * FROM logical_products WHERE state='VERIFIED' AND "
             + ("id=?" if product_id else "enabled=1"),
@@ -83,15 +92,49 @@ class LogicalProductWorker:
             self.store.set_setting(key + ":error", {"code": "SCAN_EXPIRED", "at": now()})
             return 0
 
+        linked_ids = {
+            row["item_id"]
+            for row in self.store.rows(
+                "SELECT l.item_id FROM logical_listings l JOIN logical_products p ON p.id=l.product_id "
+                "WHERE p.account_id=?",
+                (account,),
+            )
+        }
+
         def ingest(item):
             if not isinstance(item.get("id"), str) or not item["id"]:
                 raise APIError("LOGICAL_CATALOG_ITEM_ID_MISSING")
+            compact = None
+            name = item.get("name")
+            if (
+                item["id"] not in linked_ids
+                and isinstance(name, str)
+                and name.strip()
+                and item.get("status") in {"APPROVED"} | MODERATION_STATUSES
+                and (item.get("user") or {}).get("id") == account
+            ):
+                try:
+                    unmarked = marker(name) is None
+                except ValueError:
+                    unmarked = False
+                if unmarked:
+                    compact = encode(
+                        {
+                            "id": item["id"],
+                            "name": name,
+                            "status": item["status"],
+                            "user": {"id": account},
+                            "deleted_at": item.get("deleted_at"),
+                            "_catalog_unmarked": True,
+                        }
+                    )
             self.store.execute(
-                "INSERT INTO logical_scan_items(account_id,item_id,generation) VALUES(?,?,?) "
+                "INSERT INTO logical_scan_items(account_id,item_id,generation,payload) VALUES(?,?,?,?) "
                 "ON CONFLICT(account_id,item_id) DO UPDATE SET generation=excluded.generation,"
-                "payload=CASE WHEN generation=excluded.generation THEN payload ELSE NULL END,"
+                "payload=CASE WHEN generation=excluded.generation AND payload IS NOT NULL "
+                "AND json_extract(payload,'$._catalog_unmarked') IS NOT 1 THEN payload ELSE excluded.payload END,"
                 "checked_at=CASE WHEN generation=excluded.generation THEN checked_at ELSE NULL END",
-                (account, item["id"], generation),
+                (account, item["id"], generation, compact),
             )
 
         if progress["phase"] == "LISTING":
@@ -159,7 +202,7 @@ class LogicalProductWorker:
         def validate_candidate_order(deal, ident):
             candidates = platform_candidates(deal)
             if deal.get("is_automated") is not True and not candidates:
-                return deliverable(deal, ident, account)
+                return deliverable(deal, ident, account, wait_for_details=True)
             from app.services.platform_orders import platform_sale
 
             if len(candidates) != 1:
@@ -228,6 +271,8 @@ class LogicalProductWorker:
                     )
                 continue
             except APIError as error:
+                if error.code in PAID_DETAILS_PENDING:
+                    self.paid_retry = True
                 if error.code in RATE_LIMIT_CODES:
                     # Candidates are linked only after the whole batch is read.
                     self.store.set_setting(key + ":paid_cursor", batch_start)
@@ -364,6 +409,9 @@ class LogicalProductWorker:
                         expected_product=product,
                     )
                 except APIError as error:
+                    if source_order and error.code in PAID_DETAILS_PENDING:
+                        self.paid_retry = True
+                        continue
                     if error.code in RATE_LIMIT_CODES and source_order:
                         self.store.set_setting(key + ":paid_cursor", batch_start)
                     self.store.set_setting(
@@ -488,7 +536,7 @@ class LogicalProductWorker:
                 ) not in RATE_LIMIT_CODES | {"CONNECTION_NOT_VERIFIED"}:
                     event("WARNING", "Перевыставления временно недоступны. Бот повторит проверку.", level=30)
             pending = self.store.setting("logical:scan:" + str(self.api.account.id), {})
-            delay = cycle["retry_delay"] if failures else 5 if pending else 120
+            delay = cycle["retry_delay"] if failures else 5 if pending else 15 if self.paid_retry else 120
             if failures:
                 try:
                     await asyncio.wait_for(stop.wait(), delay)

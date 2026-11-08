@@ -57,7 +57,7 @@ async def test_item_offers_start_and_relisting_permission_without_claiming_platf
     assert "Перевыставление включено" not in r.session.last_panel.text
     assert "private-text" not in r.session.last_panel.text
     await r.ui.click("iv:delivery:lot")
-    await click(r, action="lp:details:lot")
+    await r.ui.click("lp:details:lot")
     assert "Наследование перевыставлений" in r.session.last_panel.text
     await r.ui.click("lp:item:lot")
     await click(r, suffix=":arm")

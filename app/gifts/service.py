@@ -633,8 +633,13 @@ class GiftService:
         field_id = listing["username_field_id"]
         fields = order.get("obtaining_fields")
         matches = [f for f in fields or [] if isinstance(f, dict) and f.get("id") == field_id]
-        if len(matches) > 1 or matches and matches[0].get("value"):
+        if len(matches) > 1:
             return buyer_recipient(order, field_id=field_id)
+        if matches and matches[0].get("value"):
+            try:
+                return buyer_recipient(order, field_id=field_id)
+            except GiftValidationError:
+                pass  # One malformed field can be corrected in the verified buyer chat.
         deliverable(order, order["id"], self.api.account.id, wait_for_details=True)
         chat_id = order["chat"]["id"]
         buyer = (order.get("user") or {}).get("id")

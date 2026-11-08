@@ -29,10 +29,10 @@ async def test_price_change_stop_restart_and_worker_agree(shop):
     logical = LogicalProducts(r.store, r.api)
     original = dict(logical.listing("lot"))
     r.api.item.update(price=90, discount=10, attachments=[{"id": "new-photo"}])
-    # Optional detailed readiness lives inside the single Delivery controller.
+    # Old details callbacks can still open the read-only readiness check.
     await r.ui.click("item:lot")
     await click(r, action="iv:delivery:lot")
-    await click(r, action="lp:details:lot")
+    await r.ui.click("lp:details:lot")
     await click(r, action="rd:check:lot")
     result = ProductReadiness(r.store, r.api).snapshot("lot", item=r.api.item)
     assert result["ready"], result["problems"]

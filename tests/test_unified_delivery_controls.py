@@ -134,7 +134,7 @@ async def test_text_product_keeps_a_read_only_paid_order_check(shop):
     Orders(r.store).ingest(r.api.order("check-order"))
     before = r.store.rows("SELECT id,status FROM outbox")
     await r.ui.click("iv:delivery:lot")
-    await click(r, action="lp:details:lot")
+    await r.ui.click("lp:details:lot")
     await click(r, action="auto:check:lot")
     await click(r, suffix=":simulate:0")
     assert "Проверка без отправки" in r.session.last_panel.text

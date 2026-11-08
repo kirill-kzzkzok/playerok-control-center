@@ -5,7 +5,7 @@ import pytest
 from app.workers.logical_products import LogicalProductWorker
 from tests.test_stage_a_controls import shop as shop_fixture
 from tests.test_unified_delivery_controls import state
-from tests.test_universal_delivery_e2e import setup_ui
+from tests.test_universal_delivery_e2e import click, setup_ui
 from tests.test_ux_redesign import buttons
 
 shop = shop_fixture
@@ -103,11 +103,9 @@ async def test_item_has_four_actions_and_opens_existing_delivery_controller(shop
     assert "Сверка каталога:" not in r.session.last_panel.text
     assert "Разрешение выдачи:" not in r.session.last_panel.text
     visible = buttons(r.session.last_panel)
-    assert "lp:details:lot" in visible
+    assert "lp:details:lot" not in visible
     assert not any(key.endswith((":detach", ":links", ":check")) for key in visible)
-    await r.ui.click("lp:details:lot")
-    assert any(key.endswith(":links") for key in buttons(r.session.last_panel))
-    assert "rd:check:lot" in buttons(r.session.last_panel)
+    assert "rd:check:lot" not in visible
 
 
 @pytest.mark.parametrize("configured", [True, False])
@@ -134,3 +132,20 @@ async def test_home_distinguishes_playerok_recheck_from_disabled_automation(shop
     assert "автоматически перепроверяет подключение Playerok" in text
     assert "Активные товары: обновляем данные" not in text
     assert len(r.api.calls) == reads
+
+
+async def test_stopped_stock_shows_configured_message_without_history_menu(shop):
+    r = await shop()
+    await setup_ui(r, "unique_stock")
+    await r.ui.click("iv:delivery:lot")
+    await click(r, suffix=":stop")
+    await click(r, suffix=":stop_confirm")
+    # Reproduce a stopped legacy projection without its saved message.
+    r.store.execute("UPDATE delivery_policies SET payload=json_remove(payload, '$.after')")
+    await r.ui.click("iv:delivery:lot")
+    panel = r.session.last_panel
+    assert "После выдачи: включено" in panel.text
+    visible = buttons(panel)
+    assert any(key.endswith(":editafter") and label.startswith("🟢") for key, label in visible.items())
+    assert "lp:details:lot" not in visible
+    assert not r.api.messages and not r.api.remote.payments

@@ -10,15 +10,17 @@ from tests.test_ux_redesign import buttons
 shop = shop_fixture
 
 
-async def test_products_has_three_tabs_without_legacy_filter_controls(shop):
+async def test_products_has_no_redundant_active_button(shop):
     r = await shop()
     r.store.set_setting("ui:7:item_filters", {"search": "cannot-match", "status": "SOLD"})
     r.store.set_setting("ui:7:item_filters_pinned", False)
     await r.ui.click("items")
     visible = buttons(r.session.last_panel)
     assert "item:lot" in visible
-    assert {"itemfilter:APPROVED", "itemfilter:ARCHIVE", "itemfilter:DRAFT", "create"} <= visible.keys()
-    assert not {"il:search", "itemfilters", "drafts"} & visible.keys()
+    assert {"itemfilter:ARCHIVE", "itemfilter:DRAFT", "create"} <= visible.keys()
+    assert not {"itemfilter:APPROVED", "il:search", "itemfilters", "drafts"} & visible.keys()
+    await r.ui.click("itemfilter:ARCHIVE")
+    assert "itemfilter:APPROVED" in buttons(r.session.last_panel)
     assert not r.store.rows("SELECT * FROM outbox")
 
 

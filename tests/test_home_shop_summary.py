@@ -84,7 +84,8 @@ async def test_incomplete_costs_are_not_reported_as_zero_profit(store):
     api = Boundary()
     await TransactionWorker(store, api).once()
     text, _ = HomePanel(store, api).home(owner=7)
-    assert "Себестоимость неизвестна для 1 зачислений" in text
+    assert store.setting("shop:profit:seller:7")["missing_cost"] == 1
+    assert "Итог по учтённым суммам" in text
     assert "Прибыль: 0" not in text
     foreign = SimpleNamespace(account=SimpleNamespace(id="other"))
     text, _ = HomePanel(store, foreign).home(owner=7)
@@ -111,10 +112,10 @@ async def test_home_shows_store_result_with_known_expenses_without_order_review(
     api = SimpleNamespace(account=SimpleNamespace(id="seller"), call=call)
     await TransactionWorker(store, api).once()
     text, _ = HomePanel(store, api).home(owner=7)
-    assert "Зачисления за продажи: 90.00 ₽" in text
+    assert "Зачислено: 90.00 ₽" in text
     assert "Себестоимость: 40.00 ₽" in text
-    assert "PREMIUM и размещение: 25.00 ₽" in text
-    assert "Итог по известным данным: 16.00 ₽" in text
+    assert "PREMIUM без категории: 20.00 ₽" in text
+    assert "Итог по учтённым суммам: 16.00 ₽" in text
 
 
 def test_daily_profit_deduplicates_premium_receipt_and_excludes_foreign_account(store):
@@ -214,7 +215,7 @@ async def test_website_premium_is_counted_without_bot_operation_after_restart(st
         assert result["net"] == "76.00"
         assert result["missing_cost"] == 1
         text, _ = HomePanel(restarted, api).home(owner=7)
-        assert "PREMIUM и размещение: 14.00 ₽" in text
+        assert "Другие размещения: 5.00 ₽" in text
         assert len(restarted.rows("SELECT id FROM account_transactions")) == 3
     finally:
         restarted.close()
@@ -234,5 +235,92 @@ async def test_profit_is_available_while_transaction_history_backfills(store):
     await worker.once()
     assert worker.health["status"] == "BACKFILL"
     text, _ = HomePanel(store, api).home(owner=7)
-    assert "PREMIUM и размещение: 9.00 ₽" in text
-    assert "История операций ещё загружается" in text
+    assert "PREMIUM без категории: 9.00 ₽" in text
+    assert store.setting("shop:profit:seller:7")["partial"]
+    assert "история неполная" not in text
+
+
+async def test_daily_summary_counts_open_sales_and_excludes_rolled_back_sales(store):
+    from app.services.orders import Orders
+
+    at = now()
+    for seller in ("seller", "foreign"):
+        Orders(store).ingest(
+            {
+                "id": seller + "-sent",
+                "direction": "OUT",
+                "status": "SENT",
+                "created_at": at,
+                "item": {"id": "product", "price": 90, "user": {"id": seller}},
+            }
+        )
+    entries = [
+        {
+            "id": ident,
+            "operation": operation,
+            "direction": direction,
+            "status": status,
+            "value": value,
+            "created_at": at,
+            "completed_at": at if status in {"CONFIRMED", "ROLLED_BACK"} else None,
+            "user": {"id": "seller"},
+        }
+        for ident, operation, direction, status, value in (
+            ("paid", "SELL", "IN", "CONFIRMED", 72),
+            ("frozen", "SELL", "IN", "PROCESSING", 80),
+            ("pending", "SELL", "IN", "PENDING", 90),
+            ("returned", "SELL", "IN", "ROLLED_BACK", 70),
+            ("premium", "ITEM_PREMIUM_PRIORITY", "OUT", "CONFIRMED", 9),
+        )
+    ]
+
+    async def call(method, **kwargs):
+        return {"transactions": entries, "page_info": {"has_next_page": False}}
+
+    api = SimpleNamespace(account=SimpleNamespace(id="seller"), call=call)
+    worker = TransactionWorker(store, api)
+    await worker.once()
+    result = store.setting("shop:profit:seller:7")
+    assert result["sales_count"] == 3
+    assert result["pending_sales"] == "170.00"
+    assert result["refunds"] == "70.00"
+    assert result["net"] == "63.00"
+    assert result["projected_net"] == "233.00"
+    text, _ = HomePanel(store, api).home(owner=7)
+    assert "в обработке:" not in text
+    assert "Ждут подтверждения: 1" in text
+    assert "Ожидается:" not in text
+    assert "Возвраты:" not in text
+    assert "Итог по учтённым суммам: 63.00 ₽" in text
+    entries[1].update(status="CONFIRMED", completed_at=at)
+    await worker.once()
+    result = store.setting("shop:profit:seller:7")
+    assert result["sales_count"] == 3
+    assert result["pending_sales"] == "90.00"
+    assert result["projected_net"] == "233.00"
+
+
+async def test_daily_home_omits_wallet_pending_and_splits_confirmed_premium(store):
+    from app.database.store import encode
+    from app.services.order_finance import cache_shop_profit
+    from tests.test_order_finance import expense
+
+    for kind, key, value in (("premium_bump", "bump", 9), ("premium_publish", "publish", 13)):
+        op = store.enqueue(key, kind, "product", {"account_id": "seller"})
+        store.execute(
+            "UPDATE outbox SET status='SUCCEEDED',result=? WHERE id=?",
+            (encode({"payment_id": key, "paid_rub": str(value)}), op),
+        )
+        store.execute(
+            "INSERT INTO promotion_expenses VALUES(?,?,?,?,?)",
+            (key, "product", str(value), "SUCCEEDED", now()),
+        )
+        expense(store, key, value=value, completed_at=now())
+    expense(store, "unclassified", value=5, completed_at=now())
+    cache_shop_profit(store, "seller", partial=True)
+    text, _ = HomePanel(store, SimpleNamespace(account=SimpleNamespace(id="seller"))).home(owner=7)
+    assert "Поднятия: 9.00 ₽" in text
+    assert "Размещение PREMIUM: 13.00 ₽" in text
+    assert "PREMIUM без категории: 5.00 ₽" in text
+    assert "Итог по учтённым суммам: -27.00 ₽" in text
+    assert "история неполная" not in text and "Итог с ожидаемыми" not in text

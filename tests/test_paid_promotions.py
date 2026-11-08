@@ -738,3 +738,31 @@ async def test_sold_historical_premium_receipt_is_readonly_and_never_rebought(ri
         assert not r.store.setting(intent_key(op))["pending"]
     assert len(r.api.charges) == 1
     assert not await r.worker.once()
+
+
+async def test_item_promotion_history_shows_confirmed_charge_without_buying_again(rig):
+    r = rig
+    r.api.items["item"]["status"] = "APPROVED"
+    op = await enqueue(r)
+    await r.worker.once(operation_id=op)
+    assert len(r.api.charges) == 1
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    ui = Interaction(bot, dispatcher(r.store, r.api))
+    try:
+        await ui.click("payp:item:item")
+        assert any(
+            b.callback_data == "payp:history:item"
+            for row in session.calls[-1].reply_markup.inline_keyboard
+            for b in row
+        )
+        await ui.click("payp:history:item")
+        text = session.calls[-1].text
+        assert "Поднятие" in text and "10.00 ₽" in text
+        assert "дата не указана" not in text
+        await ui.click("payp:history:other")
+        assert "10.00 ₽" not in session.calls[-1].text
+        assert len(r.api.charges) == 1
+        assert len(r.store.rows("SELECT id FROM outbox")) == 1
+    finally:
+        await bot.session.close()

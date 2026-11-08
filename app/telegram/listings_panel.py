@@ -265,10 +265,12 @@ class ListingsPanel:
                 title = "💾 Черновики · локально и на Playerok"
             rows.extend(
                 [
-                    [("Активные", "itemfilter:APPROVED"), ("Архив и прочие", "itemfilter:ARCHIVE")],
+                    [("Архив и прочие", "itemfilter:ARCHIVE")],
                     [("💾 Черновики", "itemfilter:DRAFT")],
                 ]
             )
+            if filters.get("status") != "APPROVED":
+                rows.append([("⬅️ К активным товарам", "itemfilter:APPROVED")])
         # Save only after the whole response/buttons validate; errors leave retryable cursor.
         await state.update_data(
             list_kind=kind,

@@ -148,7 +148,7 @@ async def test_gift_main_card_has_single_settings_and_readiness_route(shop):
     assert "lp:method:lot" in visible
     assert any(key.endswith(":editafter") for key in visible)
     assert "lp:method:lot" in visible
-    assert "lp:details:lot" in visible
+    assert "lp:details:lot" not in visible
     assert not any(key.startswith("rd:balance:") for key in visible)
     assert "Состав, сообщения и лимиты" not in visible.values()
     await click(r, suffix=":stop")

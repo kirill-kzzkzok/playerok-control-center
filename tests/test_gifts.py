@@ -261,7 +261,7 @@ async def test_shared_outbox_success_receipt_notice_and_automatic_completion(rig
         ("channel", "RECIPIENT_NOT_USER"),
         ("changed", "RECIPIENT_CHANGED"),
         ("temporary", "GIFT_PREFLIGHT_NETWORK"),
-        ("format", "GIFT_VALIDATION_FAILED"),
+        ("format", "RECIPIENT_DATA_PENDING"),
         ("missing", "RECIPIENT_DATA_PENDING"),
         ("restricted", "GIFT_RESTRICTED"),
         ("stop", "AUTOMATION_STOPPED_OR_STALE"),
@@ -313,9 +313,11 @@ async def test_preflight_failures_never_spend_or_refund(rig, fault, expected):
         r.api.gift_sender.client = ChannelClient()
     await r.worker.once()
     j = r.service.job("order")
-    assert j["state"] == ("PENDING" if fault in {"temporary", "balance", "catalog", "missing"} else "BLOCKED")
+    assert j["state"] == (
+        "PENDING" if fault in {"temporary", "balance", "catalog", "missing", "format"} else "BLOCKED"
+    )
     assert j["error_code"] == expected
-    if fault in {"temporary", "balance", "catalog", "missing"}:
+    if fault in {"temporary", "balance", "catalog", "missing", "format"}:
         assert r.store.rows("SELECT status FROM outbox WHERE kind='gift_send'") == [
             {"status": "RETRYABLE_FAILED"}
         ]
@@ -688,7 +690,7 @@ async def test_dispatcher_bind_restart_confirm_limits_enable_stop_and_order_resu
         assert r.service.limits() == (15, 30)
         await ui.click("gft:enable:item")
         await ui.click(next(k for k in buttons(bot.session.last_panel) if k.endswith(":arm")))
-        confirm = next(k for k in buttons(bot.session.last_panel) if k.endswith(":enable:this"))
+        confirm = next(k for k in buttons(bot.session.last_panel) if k.endswith(":enable:inherit"))
         await ui.click(confirm)
         await ui.click(confirm)
         assert r.service.listing("item")["enabled"] == 1
@@ -1074,7 +1076,9 @@ async def test_old_generic_block_is_never_automatically_replayed(rig):
 
 
 @pytest.mark.parametrize("lost_request", [False, True])
-async def test_empty_field_requests_username_once_then_delivers_from_chat_after_restart(rig, lost_request):
+async def test_empty_field_requests_username_once_then_delivers_from_chat_after_restart(
+    rig, lost_request, caplog
+):
     import time
 
     r = rig
@@ -1127,11 +1131,17 @@ async def test_empty_field_requests_username_once_then_delivers_from_chat_after_
             "id": "buyer-reply",
             "text": "@Realbuyer",
             "created_at": now(),
-            "user": {"id": "playerok-buyer"},
+            "user": {"id": "playerok-buyer", "username": "PlayerokBuyer"},
             "deal": {"id": "order"},
         }
     )
-    r.store.execute("UPDATE outbox SET retry_at=0 WHERE kind='gift_send'")
+    caplog.set_level("INFO", logger="pcc.shop")
+    assert Orders(r.store).ingest_message("chat-order", answers[-1])
+    assert not Orders(r.store).ingest_message("chat-order", answers[-1])
+    assert [r.message for r in caplog.records if "Новое сообщение от покупателя" in r.message] == [
+        "📩 Новое сообщение от покупателя · PlayerokBuyer"
+    ]
+    assert r.store.rows("SELECT retry_at FROM outbox WHERE kind='gift_send'")[0]["retry_at"] == 0
     await r.worker.once()
     assert r.service.job("order")["state"] == "SUCCEEDED"
     assert len(r.remote.payments) == 1
@@ -1181,7 +1191,7 @@ async def test_invalid_chat_answers_prompt_once_each_then_single_gift(rig):
         return await original(method, **kwargs)
 
     r.api.call = call
-    for index, text in enumerate(["hello", "@bad!", "Re4mix юз", "@Ghostbuyer"]):
+    for index, text in enumerate(["hello", "kzzkzok", "@bad!", "Re4mix юз", "@Ghostbuyer"]):
         r.remote.resolve_error = errors.UsernameNotOccupiedError(None) if text == "@Ghostbuyer" else None
         answers.append(
             {
@@ -1196,6 +1206,7 @@ async def test_invalid_chat_answers_prompt_once_each_then_single_gift(rig):
         await r.worker.once()
         await r.worker.once()
         assert len(r.api.sent) == index + 1
+        assert "обязательно с @" in r.api.sent[-1][1]
         # The same message is read twice, but the request is durable and unique.
         r.store.execute("UPDATE outbox SET retry_at=0 WHERE kind='gift_send'")
         await r.worker.once()
@@ -1311,3 +1322,45 @@ async def test_recipient_request_restart_uses_dispatch_evidence(rig, proof):
     await r.worker.once(operation_id=op)
     assert len(r.api.sent) == int(proof == "unstarted")
     assert not r.remote.payments
+
+
+async def test_malformed_checkout_username_requests_chat_correction(rig):
+    r = rig
+    r.store.set_setting("playerok:account_id", r.api.account.id)
+    await enroll(r)
+    r.api.orders["order"]["obtaining_fields"][0]["value"] = "not a username!"
+    original = r.api.call
+    answers = []
+
+    async def call(method, **kwargs):
+        if method == "get_chat":
+            return {
+                "id": "chat-order",
+                "type": "PM",
+                "is_texting_allowed": True,
+                "users": [{"id": "shop"}, {"id": "playerok-buyer"}],
+            }
+        if method == "get_chat_messages":
+            return {"messages": copy.deepcopy(answers), "page_info": {"has_next_page": False}}
+        return await original(method, **kwargs)
+
+    r.api.call = call
+    await r.worker.once()
+    await r.worker.once()
+    assert len(r.api.sent) == 1 and "обязательно с @" in r.api.sent[0][1]
+    assert not r.remote.payments and not r.api.refunds
+    await asyncio.sleep(1.1)  # The fixture timestamps its sale one second ahead.
+    answers.append(
+        {
+            "id": "corrected-field",
+            "text": "@Realbuyer",
+            "created_at": now(),
+            "user": {"id": "playerok-buyer"},
+            "deal": {"id": "order"},
+        }
+    )
+    Orders(r.store).ingest_message("chat-order", answers[0])
+    await r.worker.once()
+    assert r.service.job("order")["state"] == "SUCCEEDED"
+    assert len(r.remote.payments) == 1
+    assert not await r.worker.once()

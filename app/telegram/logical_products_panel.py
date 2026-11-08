@@ -306,13 +306,20 @@ class LogicalProductsPanel:
 
             text = "📦 <b>Выдача</b>\n" + escaped(view["title"], 120) + "\n" + brief(readiness)
             text += divergence_note
+            if product and product["state"] == "PENDING":
+                text += "\nИзменение лота: " + status(outcome)
             if product and product["handler"] == "telegram_gifts":
                 text += "\n🎁 " + escaped(gift_summary(config.get("bundle", [])), 220)
                 text += f" · {sum(g['stars'] for g in config.get('bundle', []))} ⭐"
             if readiness.get("stock"):
                 text += f"\nОстаток: {readiness['stock']['AVAILABLE']} · в резерве: {readiness['stock']['RESERVED']}"
             if product and product["handler"] != "manual":
-                text += "\n💬 " + escaped(readiness["message"], 150)
+                message = (
+                    readiness["message"]
+                    if platform
+                    else "После выдачи: " + ("включено" if message_enabled else "выключено")
+                )
+                text += "\n💬 " + escaped(message, 150)
 
             keep = {
                 "stop",
@@ -344,7 +351,6 @@ class LogicalProductsPanel:
             problem = next((p for p in readiness["problems"] if p["terminal"]), None)
             if problem and problem["action"][1] not in {"lp:item:" + item_id, "iv:delivery:" + item_id}:
                 rows.insert(0, [tuple(problem["action"])])
-            rows.append([("Подробности и история", "lp:details:" + item_id)])
         if legacy:
             return await self.setup_screen(state)
         if product and product.get("operation_id"):
@@ -838,21 +844,16 @@ class LogicalProductsPanel:
             await state.update_data(logical_view=view)
             prefix = "lp:" + view["nonce"] + ":"
             return (
-                "▶️ <b>Включить выдачу будущих заказов?</b>\nПроверим объявление и настройки. Старые заказы не запускаются.\nНаследование разрешает применять эти настройки к проверенным перевыставлениям с тем же кодом; конфликтующие копии блокируются.",
+                "▶️ <b>Включить выдачу будущих заказов?</b>\nПри штатном перевыставлении настройки сохранятся.",
                 keyboard(
-                    [
-                        [("Включить только это объявление", prefix + "enable:this")],
-                        [("Включить и наследовать перевыставления", prefix + "enable:inherit")],
-                    ],
+                    [[("Включить выдачу", prefix + "enable:inherit")]],
                     back=("Отмена", "lp:item:" + view["item"]),
                 ),
             )
         if command == "enable":
-            if value not in {"this", "inherit"} or view.get("confirm") != "enable":
+            if value != "inherit" or view.get("confirm") != "enable":
                 raise Conflict("Подтверждение включения устарело")
-            await self.service.arm(
-                owner, product["id"], view["revision"], inherit=value == "inherit", item_id=view["item"]
-            )
+            await self.service.arm(owner, product["id"], view["revision"], item_id=view["item"])
             return await self.card(owner, view["item"], state)
         if command in {"stop", "stop_confirm"}:
             platform = json.loads(product["config"]).get("platform_only") is True

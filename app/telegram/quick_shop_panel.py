@@ -176,12 +176,22 @@ class QuickShopPanel:
             delivery = (
                 "Playerok"
                 if result["mode"] == "playerok"
-                else ("🟢" if result["ready"] else "🟡 пауза" if result["enabled"] else "🔴")
+                else (
+                    "🟡 пауза"
+                    if result["enabled"] and result["state"] in {"STOPPED", "BLOCKED"}
+                    else "🟢"
+                    if result["enabled"]
+                    else "🔴"
+                )
             )
             completion = "🟢" if result["enabled"] and result["complete"] else "🔴"
             reply = "🟢" if result["enabled"] and result["auto_message"] else "🔴"
             row = f"\n\n{index}. {escaped(item.get('name') or 'Товар', 90)}\nВыдача: {delivery} · Завершение: {completion} · Сообщение: {reply}"
-            if result["mode"] == "playerok" and result["enabled"] and not result["ready"]:
+            if (
+                result["mode"] == "playerok"
+                and result["enabled"]
+                and result["state"] in {"STOPPED", "BLOCKED"}
+            ):
                 row += " · действия бота на паузе"
             if len((text + row).encode("utf-16-le")) > 7800:
                 text += f"\n\nНе поместилось товаров: {len(active) - index + 1}."

@@ -312,3 +312,85 @@ async def test_stock_binding_accepts_seller_data_value_rotation_but_not_buyer_fi
     api.item["data_fields"][1]["required"] = True
     with pytest.raises(Conflict, match="поля получения"):
         service.verify_listing(product, api.item)
+
+
+async def test_relist_scan_skips_detail_reads_for_unrelated_catalog_items(logical):
+    from app.workers.logical_products import LogicalProductWorker
+
+    store, api, service = logical
+    result = service.commit(7, await service.prepare(7, "lot", "fixed_text", {"text": "Delivery"}))
+    await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
+    product = service.product(result["product_id"])
+    await service.arm(7, product["id"], product["revision"])
+    candidate = {**api.item, "id": "relisted"}
+    unrelated = [
+        {"id": f"other-{i}", "name": f"Other listing {i}", "status": "APPROVED", "user": candidate["user"]}
+        for i in range(50)
+    ]
+    reads = []
+
+    async def catalog(method, **kwargs):
+        if method == "get_my_items":
+            offset = int(kwargs["after_cursor"] or 0)
+            items = [*unrelated, candidate]
+            following = offset + 24
+            return {
+                "items": items[offset:following],
+                "page_info": {"has_next_page": following < len(items), "end_cursor": str(following)},
+            }
+        reads.append(kwargs["id"])
+        return candidate if kwargs["id"] == "relisted" else {**candidate, **unrelated[int(kwargs["id"][6:])]}
+
+    api.call = catalog
+    worker = LogicalProductWorker(store, api)
+    assert await worker.once() == 0
+    assert not reads
+    assert await worker.once() == 1
+    assert service.listing("relisted")["id"] == product["id"]
+    assert reads == ["relisted", "relisted"]
+
+
+async def test_unlinked_paid_deal_requests_short_retry_until_flags_arrive(logical):
+    from datetime import datetime, timedelta
+
+    from app.services.orders import Orders
+    from app.workers.logical_products import LogicalProductWorker
+
+    store, api, service = logical
+    result = service.commit(7, await service.prepare(7, "lot", "fixed_text", {"text": "Delivery"}))
+    await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
+    product = service.product(result["product_id"])
+    await service.arm(7, product["id"], product["revision"])
+    product = service.product(product["id"])
+    candidate = {**api.item, "id": "relisted"}
+    order = {
+        "id": "paid-new",
+        "status": "PAID",
+        "direction": "OUT",
+        "item": candidate,
+        "user": {"id": "buyer"},
+        "chat": {"id": "chat"},
+        "created_at": (datetime.fromisoformat(product["armed_at"]) + timedelta(seconds=2)).isoformat(),
+        "has_problem": None,
+        "is_automated": False,
+    }
+    Orders(store).ingest(order)
+
+    async def read(method, **kwargs):
+        if method == "get_my_items":
+            return {"items": [], "page_info": {"has_next_page": False}}
+        if method in {"get_deal", "get_delivery_deal"}:
+            return copy.deepcopy(order)
+        assert method == "get_item" and kwargs["id"] == "relisted"
+        return copy.deepcopy(candidate)
+
+    api.call = read
+    worker = LogicalProductWorker(store, api)
+    assert await worker.once() == 0
+    assert worker.paid_retry
+    assert not service.listing("relisted")
+    order["has_problem"] = False
+    assert await worker.once() == 1
+    assert service.listing("relisted")["id"] == product["id"]
+    assert not worker.paid_retry
+    assert len(api.mutations) == 1  # Only the original test title binding.

@@ -417,7 +417,7 @@ def cache_shop_profit(store, account_id, *, partial=False):
 
     at = datetime.now(UTC)
     start = at - timedelta(hours=24)
-    ledger = transaction_statistics(store, days=1, at=at, account_id=account_id)
+    ledger = transaction_statistics(store, days=1, at=at, account_id=account_id, include_open_sales=True)
     promotion = ledger["premium_debit"] + ledger["other_priority_debit"]
     uncertain = store.rows(
         "SELECT COUNT(*) AS n FROM promotion_expenses e JOIN outbox o ON o.operation_key=e.operation_key "
@@ -425,17 +425,20 @@ def cache_shop_profit(store, account_id, *, partial=False):
         (account_id,),
     )[0]["n"]
     seen = set()
+    promotion_by_kind = {"premium_bump": Decimal(0), "premium_publish": Decimal(0)}
     for row in store.rows(
-        "SELECT e.amount,e.created_at,json_extract(o.result,'$.payment_id') AS payment_id,"
-        "json_extract(o.result,'$.paid_rub') AS paid_rub "
+        "SELECT o.kind,e.amount,e.created_at,json_extract(o.result,'$.payment_id') AS payment_id,"
+        "json_extract(o.result,'$.paid_rub') AS paid_rub,t.id AS ledger_id,t.completed_at,"
+        "t.status,t.operation,t.direction,t.currency,t.value "
         "FROM promotion_expenses e JOIN outbox o ON o.operation_key=e.operation_key "
+        "LEFT JOIN account_transactions t ON t.account_id=? AND t.id=json_extract(o.result,'$.payment_id') "
         "WHERE e.status='SUCCEEDED' AND o.status='SUCCEEDED' "
         "AND o.kind IN ('premium_bump','premium_publish') AND json_extract(o.payload,'$.account_id')=? "
-        "AND NOT EXISTS (SELECT 1 FROM account_transactions t WHERE t.account_id=? "
-        "AND t.id=json_extract(o.result,'$.payment_id'))",
+        "ORDER BY e.created_at,o.id",
         (account_id, account_id),
     ):
-        ident, when = row["payment_id"], parsed_time(row["created_at"])
+        ident = row["payment_id"]
+        when = parsed_time(row["completed_at"] if row["ledger_id"] else row["created_at"])
         paid = amount_or_none(row["paid_rub"])
         if (
             isinstance(ident, str)
@@ -446,27 +449,60 @@ def cache_shop_profit(store, account_id, *, partial=False):
             and paid is not None
             and paid == amount_or_none(row["amount"])
         ):
-            promotion += paid
+            if row["ledger_id"]:
+                if (row["status"], row["operation"], row["direction"], row["currency"]) != (
+                    "CONFIRMED",
+                    "ITEM_PREMIUM_PRIORITY",
+                    "OUT",
+                    "RUB",
+                ) or amount_or_none(row["value"]) != paid:
+                    continue
+            else:
+                promotion += paid
+            promotion_by_kind[row["kind"]] += paid
             seen.add(ident)
+    awaiting_confirmation = store.rows(
+        "SELECT COUNT(*) AS n FROM orders WHERE status='SENT' "
+        "AND json_extract(payload,'$.direction')='OUT' "
+        "AND json_extract(payload,'$.item.user.id')=? "
+        "AND julianday(created_at) BETWEEN julianday(?) AND julianday(?)",
+        (account_id, start.isoformat(), at.isoformat()),
+    )[0]["n"]
     for owner in store.rows("SELECT user_id FROM administrators"):
         costs = profit_statistics(store, owner["user_id"], account_id, days=1, at=at, include_costs=True)
         sales = ledger["sales_credit"]
         cost, other = costs["known_cost"], costs["known_other_expenses"]
         withdrawal = ledger["withdraw_retained_known"]
+        net = sales - cost - other - promotion - withdrawal
+        sales_count = ledger["sales_count"] + ledger["pending_sales_count"]
         result = {
             "sales_credit": sales,
             "cost": cost,
             "other": other,
             "promotion": promotion,
+            "premium": promotion - ledger["other_priority_debit"],
+            "premium_bump": promotion_by_kind["premium_bump"],
+            "premium_publish": promotion_by_kind["premium_publish"],
+            "premium_unclassified": promotion
+            - ledger["other_priority_debit"]
+            - sum(promotion_by_kind.values()),
+            "other_placement": ledger["other_priority_debit"],
             "withdrawal": withdrawal,
-            "net": sales - cost - other - promotion - withdrawal,
+            "net": net,
+            "pending_sales": ledger["pending_sales"],
+            "refunds": ledger["refunds"],
+            "projected_net": net + ledger["pending_sales"],
         }
         store.set_setting(
             f"shop:profit:{account_id}:{owner['user_id']}",
             {
                 **{key: f"{value:.2f}" for key, value in result.items()},
-                "missing_cost": max(0, ledger["sales_count"] - costs["costed_sales"]),
-                "missing_other": max(0, ledger["sales_count"] - costs["other_costed_sales"]),
+                "sales_count": sales_count,
+                "awaiting_confirmation": awaiting_confirmation,
+                "pending_sales_count": ledger["pending_sales_count"],
+                "refund_count": ledger["refund_count"],
+                "missing_cost": max(0, sales_count - costs["costed_sales"]),
+                "missing_other": max(0, sales_count - costs["other_costed_sales"]),
                 "unknown_withdrawals": ledger["withdraw_net_unknown"],
                 "uncertain_promotions": uncertain,
                 "incomplete_transactions": sum(

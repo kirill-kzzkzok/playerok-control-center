@@ -94,6 +94,8 @@ async def test_provider_selection_amount_and_restart_never_withdraw(setup):
 
 async def test_local_cost_for_sold_item_does_not_require_market_editability(setup):
     store, api, _, state, panel = setup
+    _, markup = await panel.callback("finance:item", 7, state)
+    assert any(button.callback_data == "fin:cost:item" for row in markup.inline_keyboard for button in row)
     await panel.callback("fin:cost:item", 7, state)
     text, _ = await panel.message(SimpleNamespace(text="500,25", from_user=SimpleNamespace(id=7)), state)
     assert store.setting("finance:7:cost:item") == "500.25"

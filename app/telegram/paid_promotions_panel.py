@@ -12,6 +12,7 @@ from app.services.paid_promotions import PaidPromotions, placement_funds
 from app.services.premium_review import PremiumReview, blocking_expenses
 from app.services.products import priority_price_basis
 from app.services.reconciliation import signature
+from app.services.statistics import amount_or_none
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard
 from app.telegram.presentation import local_time
@@ -21,6 +22,45 @@ class PaidPromotionsPanel:
     def __init__(self, store, api):
         self.store, self.api, self.service = store, api, PaidPromotions(store, api)
         self.review = PremiumReview(store, api)
+
+    def history(self, ident):
+        account = self.api.account.id
+        if not account:
+            raise Conflict("Аккаунт Playerok ещё не подтверждён")
+        rows = self.store.rows(
+            """
+            WITH confirmed AS (
+                SELECT o.kind, json_extract(o.result,'$.paid_rub') AS amount,
+                       COALESCE(t.completed_at,o.started_at,e.created_at) AS paid_at,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY json_extract(o.result,'$.payment_id')
+                           ORDER BY o.started_at DESC,o.id
+                       ) AS receipt_row
+                FROM promotion_expenses e JOIN outbox o ON o.operation_key=e.operation_key
+                LEFT JOIN account_transactions t ON t.account_id=?
+                    AND t.id=json_extract(o.result,'$.payment_id')
+                WHERE e.item_id=? AND o.status='SUCCEEDED' AND e.status='SUCCEEDED'
+                    AND o.kind IN ('premium_bump','premium_publish')
+                    AND json_extract(o.payload,'$.account_id')=?
+                    AND json_extract(o.result,'$.payment_id')<>''
+                    AND COALESCE(t.status,'CONFIRMED')<>'ROLLED_BACK'
+            )
+            SELECT kind,amount,paid_at FROM confirmed WHERE receipt_row=1
+            ORDER BY julianday(paid_at) DESC LIMIT 20
+            """,
+            (account, ident, account),
+        )
+        lines = []
+        for row in rows:
+            amount = amount_or_none(row["amount"])
+            if amount is not None and amount > 0:
+                label = "Поднятие" if row["kind"] == "premium_bump" else "Размещение PREMIUM"
+                lines.append(f"{local_time(row['paid_at'])} · {label} · {amount:.2f} ₽")
+        return (
+            "🧾 <b>История продвижения</b>\n\n"
+            + ("\n".join(lines) if lines else "Подтверждённых списаний в истории бота пока нет."),
+            keyboard([], back=("⬅️ К продвижению", "payp:item:" + ident)),
+        )
 
     async def blocked(self, ident):
         pending = blocking_expenses(self.store)
@@ -49,6 +89,7 @@ class PaidPromotionsPanel:
         if intent.get("candidate_id") and intent["candidate_id"] == payload.get("before_payment_id"):
             text += "\nПосле запроса Playerok вернул ID предыдущего платежа."
         rows = [[("Открыть операцию", "ops:show:" + row["id"])]] if row["id"] else []
+        rows.append([("История продвижения", "payp:history:" + ident)])
         if len(pending) > 1:
             text += f"\nТаких операций: {len(pending)}."
         return text, keyboard(rows, back=("⬅️ К товару", "item:" + ident))
@@ -69,6 +110,8 @@ class PaidPromotionsPanel:
     async def callback(self, action, owner, state):
         self.service.settings.access.orders.owner(owner)
         parts = action.split(":")
+        if parts[1] == "history" and len(parts) == 3:
+            return self.history(parts[2])
         if parts[1] == "review" and len(parts) == 3:
             ident = parts[2]
             row = next((r for r in blocking_expenses(self.store) if r["id"] == ident), None)
@@ -171,6 +214,7 @@ class PaidPromotionsPanel:
                 ]
                 + [
                     [("Автоподнятие", "payp:auto:" + ident)],
+                    [("История продвижения", "payp:history:" + ident)],
                 ],
                 back=("⬅️ К товару", "item:" + ident),
             )

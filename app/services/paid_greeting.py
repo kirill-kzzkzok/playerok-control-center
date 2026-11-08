@@ -99,7 +99,7 @@ def render(order, *, username_field_id=None):
                 )
                 filled.append(f"{label}: {shown}")
         elif field.get("required") is True:
-            missing.append(label)
+            missing.append("@username" if ident == username_field_id else label)
     lines = [
         FRAME,
         "",
@@ -193,11 +193,19 @@ async def prepare(store, api, action):
     if configured:
         field_id = configured[0]["username_field_id"]
         fields = list(order.get("obtaining_fields") or [])
+        matching = [field for field in fields if isinstance(field, dict) and field.get("id") == field_id]
+        raw = matching[0].get("value") if len(matching) == 1 else None
+        invalid = bool(raw) and not (isinstance(raw, str) and USERNAME.fullmatch(raw.strip()))
         if not any(isinstance(field, dict) and field.get("id") == field_id for field in fields):
             fields.append({"id": field_id, "label": "Telegram", "required": True})
         else:
             fields = [
-                {**field, "label": field.get("label") or "Telegram", "required": True}
+                {
+                    **field,
+                    "label": field.get("label") or "Telegram",
+                    "required": True,
+                    "value": None if invalid else field.get("value"),
+                }
                 if isinstance(field, dict) and field.get("id") == field_id
                 else field
                 for field in fields
@@ -221,7 +229,9 @@ async def prepare(store, api, action):
             else:
                 return None
             return (
-                f"{FRAME}\n\n💌 чтобы отправить подарок,\nпришли свой Telegram @username одним сообщением в этот чат ♡\n\n"
+                f"{FRAME}\n\n"
+                + ("💌 не получилось распознать username из заказа.\n" if invalid else "")
+                + "чтобы отправить подарок,\nпришли свой Telegram @username одним сообщением, обязательно с @ ♡\n\n"
                 f"например: @username\n\n{FRAME}"
             )
     return render(order, username_field_id=configured[0]["username_field_id"] if configured else None)

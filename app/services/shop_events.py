@@ -96,6 +96,8 @@ def order_notice(order, stage, review=None, *, delivered_before_refund=None):
             lines.extend(("", "💬 " + escape(text)))
         return with_order_link("\n".join(lines), order["id"])
     icon, _, title, detail = STAGES[stage]
+    if stage == "PAID" and order.get("status") != "PAID":
+        detail = "Оплата подтверждена."
     lines = [notice_heading(icon, title), product, customer]
     if stage in {"PAID", "SENT", "CONFIRMED_AUTOMATICALLY"} and (price := amount(order)):
         lines.append("💰 " + ("+" if stage == "PAID" else "") + price)

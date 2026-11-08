@@ -1,8 +1,10 @@
 import hashlib
 import json
+from datetime import UTC, datetime, timedelta
 
 from app.database.store import Conflict, encode, now, server_time
 from app.security.logging import event
+from app.services.chat_events import EVENTS
 
 
 class Orders:
@@ -411,6 +413,7 @@ class Orders:
         if not message.get("id"):
             raise ValueError("Сообщение без ID")
         key = f"message:{message['id']}"
+        buyer_name = None
         with self.store.transaction() as db:
             added = db.execute(
                 "INSERT OR IGNORE INTO inbox(key,kind,payload,received_at) VALUES(?,?,?,?)",
@@ -430,4 +433,36 @@ class Orders:
                 (message["id"], chat_id, message.get("created_at"), encode(message)),
             )
             db.execute("UPDATE inbox SET processed_at=? WHERE key=?", (now(), key))
-            return bool(added)
+            author = message.get("user") or {}
+            when = server_time(message.get("created_at"))
+            account = self.store.setting("playerok:account_id")
+            if (
+                added
+                and account
+                and author.get("id")
+                and author["id"] != account
+                and not message.get("deleted_at")
+                and message.get("event") is None
+                and message.get("text") not in EVENTS
+                and when
+                and (datetime.now(UTC) - timedelta(minutes=2)).isoformat() <= when <= now()
+            ):
+                deal_id = (message.get("deal") or {}).get("id")
+                orders = db.execute(
+                    "SELECT id,status,json_extract(payload,'$.user.username') AS buyer FROM orders "
+                    "WHERE chat_id=? AND (? IS NULL OR id=?) AND json_extract(payload,'$.user.id')=? "
+                    "AND json_extract(payload,'$.item.user.id')=? ORDER BY created_at DESC LIMIT 1",
+                    (chat_id, deal_id, deal_id, author["id"], account),
+                ).fetchone()
+                if orders:
+                    buyer_name = author.get("username") or orders["buyer"]
+                    if orders["status"] == "PAID":
+                        db.execute(
+                            "UPDATE outbox SET retry_at=0 WHERE kind='gift_send' AND target=? "
+                            "AND status='RETRYABLE_FAILED' AND error_code='RECIPIENT_DATA_PENDING' "
+                            "AND started_at IS NULL",
+                            (orders["id"],),
+                        )
+        if isinstance(buyer_name, str) and buyer_name.strip():
+            event("INFO", "📩 Новое сообщение от покупателя · " + " ".join(buyer_name.split())[:80])
+        return bool(added)

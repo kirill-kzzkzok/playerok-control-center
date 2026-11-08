@@ -378,3 +378,43 @@ async def test_diagnostic_write_cannot_precede_saving_returned_candidate(rig, mo
     await r.worker.once(operation_id=op)
     assert r.store.setting(intent_key(op))["candidate_id"] == "receipt-1"
     assert r.store.rows("SELECT status FROM outbox WHERE id=?", (op,)) == [{"status": "SUCCEEDED"}]
+
+
+@pytest.mark.parametrize("mutation", ["full", "old"])
+async def test_partial_item_receipt_can_be_proved_by_exact_history(rig, mutation):
+    r = rig
+    op, _ = await scenario(r, mutation=mutation)
+    original = r.api.call
+
+    async def partial(method, **kwargs):
+        result = await original(method, **kwargs)
+        if method == "get_item" and r.api.charges:
+            result["status_payment"] = {"id": "receipt-1"}
+        return result
+
+    r.api.call = partial
+    await r.worker.once(operation_id=op)
+    row = r.store.rows("SELECT status,result FROM outbox WHERE id=?", (op,))[0]
+    assert row["status"] == "SUCCEEDED"
+    assert json.loads(row["result"])["payment_id"] == "receipt-1"
+    assert len(r.api.charges) == 1
+
+
+async def test_matching_item_receipt_dated_before_dispatch_stays_unknown(rig):
+    r = rig
+    op, _ = await scenario(r, mutation="full")
+    original = r.api.call
+
+    async def stale(method, **kwargs):
+        result = await original(method, **kwargs)
+        if method == "get_item" and r.api.charges:
+            started = r.store.setting(intent_key(op))["started_at"]
+            result["status_payment"]["created_at"] = (
+                datetime.fromisoformat(started) - timedelta(days=1)
+            ).isoformat()
+        return result
+
+    r.api.call = stale
+    await r.worker.once(operation_id=op)
+    assert r.store.rows("SELECT status FROM outbox WHERE id=?", (op,)) == [{"status": "UNCERTAIN"}]
+    assert len(r.api.charges) == 1

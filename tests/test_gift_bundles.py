@@ -278,7 +278,7 @@ async def test_bundle_dispatcher_preview_restart_progress_and_partial_retry(rig)
         ui.dp = dispatcher(r.store, r.api)
         await ui.click("gft:enable:item")
         await ui.click(next(k for k in buttons(session.last_panel) if k.endswith(":arm")))
-        await ui.click(next(k for k in buttons(session.last_panel) if k.endswith(":enable:this")))
+        await ui.click(next(k for k in buttons(session.last_panel) if k.endswith(":enable:inherit")))
         Orders(r.store).ingest(r.api.add_order())
         r.service.discover()
         await r.worker.once()
@@ -553,8 +553,8 @@ async def test_binding_preview_rejects_changed_individual_prices_even_same_total
         await r.service.refresh()
         await ui.click("gft:enable:item")
         await ui.click(next(k for k in buttons(session.last_panel) if k.endswith(":arm")))
-        if any(k.endswith(":enable:this") for k in buttons(session.last_panel)):
-            await ui.click(next(k for k in buttons(session.last_panel) if k.endswith(":enable:this")))
+        if any(k.endswith(":enable:inherit") for k in buttons(session.last_panel)):
+            await ui.click(next(k for k in buttons(session.last_panel) if k.endswith(":enable:inherit")))
         assert r.service.listing("item") == original
         assert not r.service.listing("item")["enabled"]
         assert not t.payments

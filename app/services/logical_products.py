@@ -1187,7 +1187,7 @@ class LogicalProducts:
                 ),
             )
 
-    async def arm(self, owner, product_id, revision, *, inherit=False, item_id=None):
+    async def arm(self, owner, product_id, revision, *, inherit=True, item_id=None):
         product = self.product(product_id, owner)
         if json.loads(product["config"]).get("platform_only"):
             raise Conflict("Товар выдаёт Playerok. Включите нужные действия в настройках этого режима")

@@ -232,31 +232,26 @@ class HomePanel:
         if not fresh(profit.get("at"), 86400) or "net" not in profit:
             text += "\n💰 Прибыль: ожидаем подтверждённые данные"
         else:
-            text += "\n\n💰 <b>Прибыль за последние 24 часа</b>"
+            text += "\n\n💰 <b>За последние 24 часа</b>"
+            if "awaiting_confirmation" in profit:
+                text += f"\nЖдут подтверждения: {profit['awaiting_confirmation']}"
             for label, key in (
-                ("Зачисления за продажи", "sales_credit"),
+                ("Зачислено", "sales_credit"),
                 ("Себестоимость", "cost"),
-                ("PREMIUM и размещение", "promotion"),
-                ("Удержания при выводе", "withdrawal"),
-                ("Прочие учтённые расходы", "other"),
-                ("Итог по известным данным", "net"),
+                ("Поднятия", "premium_bump"),
+                ("Размещение PREMIUM", "premium_publish"),
+                ("PREMIUM без категории", "premium_unclassified"),
+                ("Другие размещения", "other_placement"),
+                ("Комиссия вывода", "withdrawal"),
+                ("Прочие расходы", "other"),
+                ("Итог по учтённым суммам", "net"),
             ):
-                text += f"\n{label}: {escaped(profit[key], 30)} ₽"
-            if profit["missing_cost"]:
-                text += f"\nСебестоимость неизвестна для {profit['missing_cost']} зачислений."
-            if profit.get("missing_other"):
-                text += "\nПрочие расходы указаны не для всех продаж."
-            if profit["unknown_withdrawals"]:
-                text += f"\nУдержания неизвестны для {profit['unknown_withdrawals']} выводов."
-            if profit.get("incomplete_transactions"):
-                text += "\nЧасть транзакций ожидает полных данных."
-            if profit.get("partial"):
-                text += "\nИстория операций ещё загружается."
-            if profit.get("uncertain_promotions"):
-                text += "\nЕсть расходы на продвижение с неподтверждённым результатом."
-            text += ("\nОбновлено " if fresh(profit["at"]) else "\nСохранённый расчёт на ") + local_time(
-                profit["at"]
-            )
+                if key in profit and (key in {"sales_credit", "net"} or profit[key] != "0.00"):
+                    text += f"\n{label}: {escaped(profit[key], 30)} ₽"
+            if "premium_bump" not in profit and profit.get("promotion") not in {None, "0.00"}:
+                text += f"\nПродвижение: {escaped(profit['promotion'], 30)} ₽"
+            if not fresh(profit["at"]):
+                text += "\nСохранённый расчёт на " + local_time(profit["at"])
         return text
 
     def home(self, owner=None):

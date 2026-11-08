@@ -211,22 +211,10 @@ class LaunchPanel:
             if ready.get("units") is not None:
                 text += f"\nБудет доступно: {ready['units']} единиц"
         rows = []
-        if self.store.rows("SELECT 1 FROM logical_listings WHERE item_id=?", (item["id"],)):
-            text += "\nПосле перевыставления: " + (
-                "настройки наследуют проверенные перевыставления с тем же кодом. Отдельные денежные разрешения и ограничения сохраняются."
-                if value.get("inherit")
-                else "каждое новое объявление проверяется отдельно; автоматическое наследование выключено."
-            )
-            rows.insert(
-                1,
-                [
-                    (
-                        "Сохранять выдачу после перевыставления: "
-                        + ("да" if value.get("inherit") else "нет"),
-                        p + "inherit",
-                    )
-                ],
-            )
+        if value["mode"] != "manual" and self.store.rows(
+            "SELECT 1 FROM logical_listings WHERE item_id=?", (item["id"],)
+        ):
+            text += "\nПри штатном перевыставлении настройки выдачи сохранятся."
         if value["mode"] in {"text", "stock"}:
             rows.insert(1, [("🔐 Данные выдачи", p + "edit:data")])
         if value["mode"] == "playerok":
@@ -395,7 +383,6 @@ class LaunchPanel:
             if previous != parts[3]:
                 value.update(
                     auto_complete=parts[3] != "manual",
-                    inherit=parts[3] != "manual",
                     platform_reply=False,
                     refund=False,
                 )
@@ -404,7 +391,7 @@ class LaunchPanel:
             if value["mode"] != "playerok":
                 raise Conflict("Выбран другой способ выдачи")
             value["platform_switch_confirmed"] = True
-            value.update(auto_complete=True, inherit=True, platform_reply=False, refund=False)
+            value.update(auto_complete=True, platform_reply=False, refund=False)
             value.pop("prior_mode", None)
         elif command == "platform_cancel":
             if value["mode"] != "playerok" or value.get("platform_switch_confirmed"):
@@ -414,7 +401,9 @@ class LaunchPanel:
             if value["mode"] != "playerok":
                 raise Conflict("Сообщение после оплаты доступно в режиме Playerok")
             value["platform_reply"] = not value.get("platform_reply", False)
-        elif command in {"complete", "refund", "promotion", "inherit"}:
+        elif command == "inherit":
+            return await self.show(owner, state, draft["id"])
+        elif command in {"complete", "refund", "promotion"}:
             key = "auto_complete" if command == "complete" else command
             value[key] = not value.get(key, False)
         elif command == "edit":

@@ -272,3 +272,20 @@ async def test_readiness_check_remains_readonly_and_reachable_after_lost_ack(sho
     assert "Проверка готовности" in r.session.last_panel.text
     assert r.store.rows("SELECT id,status FROM outbox") == before
     assert not r.api.messages and not r.api.remote.payments
+
+
+async def test_stale_item_card_requests_prompt_refresh_without_indefinite_spinner(shop):
+    from datetime import UTC, datetime, timedelta
+
+    r = await shop()
+    await setup_ui(r, "unique_stock")
+    key = (r.api.account.id, "lot")
+    stamp = datetime.now(UTC)
+    r.api.readiness_item_times[key] = (stamp - timedelta(minutes=3)).isoformat()
+    r.store.set_setting("readiness:lot", {"attempt": (stamp - timedelta(seconds=60)).isoformat()})
+    await r.ui.click("item:lot")
+    assert "Проверяем готовность" not in r.session.last_panel.text
+    assert "Автовыдача включена" in r.session.last_panel.text
+    assert await ProductReadiness(r.store, r.api).refresh_due() == 1
+    await r.ui.click("item:lot")
+    assert "Автовыдача работает" in r.session.last_panel.text

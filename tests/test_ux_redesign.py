@@ -224,9 +224,7 @@ async def test_more_and_all_tools_have_real_routes_without_external_calls(ux):
 async def test_item_compact_sections_all_old_actions_and_safe_delete(ux):
     r = ux
     await r.ui.click("items")
-    assert {"create", "itemfilter:APPROVED", "itemfilter:ARCHIVE", "itemfilter:DRAFT"} <= buttons(
-        r.session.calls[-1]
-    ).keys()
+    assert {"create", "itemfilter:ARCHIVE", "itemfilter:DRAFT"} <= buttons(r.session.calls[-1]).keys()
     await r.ui.click("item:lot")
     card = r.session.calls[-1]
     assert "&lt;Item&gt;" in card.text and "Опубликован" in card.text

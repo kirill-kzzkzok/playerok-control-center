@@ -146,7 +146,7 @@ class ProductReadiness:
             if self.remember_item(item, version=read_version) is False:
                 raise self.superseded_read(ident, owner=owner)
             return {**item, "_ui_read_version": read_version}
-        if changed or not fresh(stamp, 30):
+        if item["_ui_stale"]:
             prior = self.store.setting("readiness:" + ident, {})
             self.store.set_setting(
                 "readiness:" + ident,
@@ -605,14 +605,19 @@ class ProductReadiness:
                     "Снять временную паузу",
                     "gft:settings",
                 )
-            if self.store.rows(
-                "SELECT 1 FROM gift_jobs WHERE state='UNCERTAIN' OR refund_state='UNCERTAIN' LIMIT 1"
-            ):
+            uncertain_gifts = self.store.rows(
+                f"SELECT COUNT(*) AS total, COUNT(CASE WHEN item_id IN ({marks}) THEN 1 END) AS matches, "
+                f"MIN(CASE WHEN item_id IN ({marks}) THEN order_id END) AS order_id "
+                "FROM gift_jobs WHERE state='UNCERTAIN' OR refund_state='UNCERTAIN'",
+                ids + ids,
+            )[0]
+            if uncertain_gifts["total"]:
+                order_id = uncertain_gifts["order_id"] if uncertain_gifts["matches"] == 1 else None
                 add(
                     "GIFT_UNCERTAIN",
                     "Есть неизвестный результат платежа. Новые покупки заблокированы до сверки.",
-                    "Проверить подарочные операции",
-                    "gft:list:all:0",
+                    "Открыть операцию" if order_id else "Проверить подарочные операции",
+                    "gft:details:" + order_id if order_id else "gft:list:all:0",
                     terminal=True,
                 )
             elif self.store.rows("SELECT 1 FROM gift_jobs WHERE state='SPENDING' LIMIT 1"):
@@ -869,6 +874,8 @@ class ProductReadiness:
                         and code
                         in TEMPORARY_READ_FAILURES
                         | {
+                            "RATE_LIMITED",
+                            "HTTP_429",
                             "PROXY_UNAVAILABLE",
                             "MTPROTO_TIMEOUT",
                             "PROXY_ROUTE_CHANGED",
@@ -946,13 +953,20 @@ class ProductReadiness:
             (account.id,),
         )
         candidates = list({row["item_id"]: row for row in [*candidates, *requested]}.values())
+        requested_ids = {row["item_id"] for row in requested}
         candidates.sort(
-            key=lambda row: self.store.setting("readiness:" + row["item_id"], {}).get("attempt", "")
+            key=lambda row: (
+                row["item_id"] not in requested_ids,
+                self.store.setting("readiness:" + row["item_id"], {}).get("attempt", ""),
+            )
         )
         due = [
             row
             for row in candidates
-            if not fresh(self.store.setting("readiness:" + row["item_id"], {}).get("attempt"), 120)
+            if not fresh(
+                self.store.setting("readiness:" + row["item_id"], {}).get("attempt"),
+                30 if row["item_id"] in requested_ids else 120,
+            )
         ][:4]
         slots = asyncio.Semaphore(2)
 

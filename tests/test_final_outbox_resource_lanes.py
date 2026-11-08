@@ -58,7 +58,7 @@ async def configure_other_item(r, ident, handler, *, content=None, completion=Fa
     await r.worker.once()
     await r.ui.click("lp:item:" + ident)
     await click(r, suffix=":arm")
-    await click(r, suffix=":enable:this")
+    await click(r, suffix=":enable:inherit")
 
 
 async def test_unknown_stars_after_restart_does_not_stop_new_stock_or_text_sales(shop):

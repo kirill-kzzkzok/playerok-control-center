@@ -16,6 +16,7 @@ from app.services.premium_review import blocking_expenses, debit_reviewed_elsewh
 from app.services.products import ValidationError, priority_price_basis
 from app.services.promotion_settings import PromotionSettings
 from app.services.promotions import dry_run
+from app.services.statistics import parsed_time
 
 KINDS = {"premium_publish", "premium_bump"}
 
@@ -505,7 +506,41 @@ class PaidPromotions:
                     raise APIError("PREMIUM_NEW_RECEIPT_NOT_VISIBLE", uncertain=True)
                 if discovery and not anchored:
                     raise Conflict("Нет сохранённой серверной связи квитанции с этим товаром")
-                if not discovery and observed == candidate and item.get("status") != "SOLD":
+                same_receipt = observed == candidate
+                active_item_receipt = same_receipt and item.get("status") != "SOLD"
+                fields = {
+                    "value": "amount",
+                    "direction": "direction",
+                    "operation": "operation",
+                    "status": "status",
+                    "provider_id": "provider",
+                }
+                incomplete = any(payment.get(field) is None for field in fields)
+                if same_receipt and payment.get("created_at") is not None:
+                    paid_at = parsed_time(payment["created_at"])
+                    started = parsed_time(intent.get("started_at"))
+                    # Playerok serializes time to milliseconds.
+                    checks["item_receipt_time"] = bool(
+                        paid_at
+                        and started
+                        and paid_at >= started.replace(microsecond=started.microsecond // 1000 * 1000)
+                    )
+                    if not checks["item_receipt_time"]:
+                        raise APIError("PREMIUM_RECEIPT_TIME_MISMATCH", uncertain=True)
+                if (
+                    active_item_receipt
+                    and incomplete
+                    and (
+                        item.get("priority") != "PREMIUM"
+                        or item.get("status") not in {"APPROVED", "PENDING_APPROVAL", "PENDING_MODERATION"}
+                        or any(
+                            payment.get(field) is not None and not checks[key]
+                            for field, key in fields.items()
+                        )
+                    )
+                ):
+                    raise APIError("PREMIUM_PAYMENT_NOT_CONFIRMED", uncertain=True)
+                if not discovery and active_item_receipt and not incomplete:
                     result = self.receipt({**value, "operation_id": action["id"]}, item, candidate)
                 else:
                     # A different later item receipt never replaces a valid
@@ -515,7 +550,7 @@ class PaidPromotions:
                         action, value, item, candidate, max_age=30 if discovery else 600
                     )
                     stage = "RECEIPT_VALIDATION"
-                    if discovery and observed == candidate and item.get("status") != "SOLD":
+                    if discovery and active_item_receipt and not incomplete:
                         self.receipt({**value, "operation_id": action["id"]}, item, candidate)
                     checks.update(result.get("receipt_checks", {}))
                     checks["item_anchor"] = bool(anchored or not discovery)

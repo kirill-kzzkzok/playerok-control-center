@@ -292,13 +292,9 @@ class Notifications:
                     or not review
                     and (
                         stage not in STAGES
-                        or rows[0]["status"] != ("PAID" if event["kind"] == "order_delivered" else stage)
+                        or stage != "PAID"
+                        and rows[0]["status"] != ("PAID" if event["kind"] == "order_delivered" else stage)
                     )
-                ):
-                    self.close_pending(event["key"], "SKIPPED")
-                    continue
-                if stage == "PAID" and self.store.rows(
-                    "SELECT 1 FROM inbox WHERE key=?", ("order-delivered:" + payload["id"],)
                 ):
                     self.close_pending(event["key"], "SKIPPED")
                     continue
@@ -731,11 +727,16 @@ class Notifications:
                 if not inserted:
                     continue
                 previous_card = []
-                if event["kind"] in {"order", "order_delivered"}:
+                if event["kind"] in {"order", "order_delivered"} and stage not in {
+                    "PAID",
+                    "ROLLED_BACK",
+                    "FAILED",
+                }:
                     previous_card = self.store.rows(
                         "SELECT n.telegram_message_id FROM notifications n JOIN inbox i ON i.key=n.event_key "
                         "WHERE n.owner_id=? AND n.status='SUCCEEDED' AND n.telegram_message_id IS NOT NULL "
                         "AND n.rendered_payload LIKE 'shop:%' AND i.kind IN ('order','order_delivered') AND json_extract(i.payload,'$.id')=? "
+                        "AND COALESCE(json_extract(i.payload,'$.status'),'') NOT IN ('PAID','ROLLED_BACK','FAILED') "
                         "ORDER BY i.rowid DESC LIMIT 1",
                         (user, payload["id"]),
                     )

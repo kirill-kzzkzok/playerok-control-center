@@ -125,6 +125,8 @@ class FinancePanel:
         ]
         if not payload.get("withdrawal"):
             rows.insert(0, [("💳 Выбрать способ получения денег", "providers")])
+        if not details and result.cost is None:
+            rows.insert(0, [("✏️ Указать себестоимость", "fin:cost:" + ident)])
         return text, keyboard(rows, back=("⬅️ Товар", "item:" + ident))
 
     def compact(self, owner, ident, item, payload, result, quotes):

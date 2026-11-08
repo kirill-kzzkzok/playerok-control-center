@@ -87,7 +87,6 @@ class ListingLaunch:
             new_created = source.get("managed_product_id") == product["id"] and not product["armed_at"]
             source = {
                 **source,
-                "inherit": new_created or bool(product["inherit_enabled"]),
                 "greeting": policy.greeting if platform else config.get("greeting", ""),
                 "after": config.get("after", ""),
                 "auto_complete": (policy.mark_sent if policy.account_id else new_created)
@@ -164,7 +163,6 @@ class ListingLaunch:
                     "mode": mode,
                     "manual_delivery_confirmed": False,
                     "gift_code": gift_code,
-                    "inherit": value.get("inherit", mode != "manual"),
                     "data": "" if imported else value.get("delivery_data", ""),
                     "greeting": value.get("greeting", ""),
                     "after": value.get("after", ""),
@@ -508,7 +506,6 @@ class ListingLaunch:
                     policy,
                     switch_confirmed=value.get("platform_switch_confirmed", False),
                     prepublication_cutoff=(fresh.get("enrollment_origin") or {}).get("created_at"),
-                    inherit=bool(value.get("inherit", False)),
                 )
                 delivery_revision = self.automation.get(item)[0]
             elif value["mode"] == "gifts":
@@ -613,7 +610,7 @@ class ListingLaunch:
             "product_id": product["id"],
             "revision": revision,
             "control_revision": product["control_revision"],
-            "inherit": bool(value.get("inherit", False)),
+            "inherit": True,
             "source_config": encode(config),
         }
         if handler != "manual":

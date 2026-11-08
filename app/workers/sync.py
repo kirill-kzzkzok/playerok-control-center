@@ -55,7 +55,8 @@ class Synchronizer(PageScanner):
             requests = self.store.rows(
                 "SELECT * FROM sync_requests WHERE revision>completed_revision AND not_before<=? "
                 + lane
-                + "ORDER BY updated_at,key LIMIT ?",
+                + "ORDER BY CASE WHEN julianday(updated_at)<=julianday('now','-30 seconds') THEN 0 "
+                "WHEN kind='deal' THEN 1 ELSE 2 END,updated_at,key LIMIT ?",
                 (time.time(), limit),
             )
             for request in requests:

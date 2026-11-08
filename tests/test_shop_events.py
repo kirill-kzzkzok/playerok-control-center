@@ -86,7 +86,7 @@ async def test_lost_thanks_reply_is_never_replayed(shop):
     assert not any("Неопределённый результат" in (getattr(c, "text", "") or "") for c in r.session.calls)
 
 
-async def test_order_updates_use_one_card_with_link_and_no_buttons(shop):
+async def test_purchase_is_preserved_and_later_order_updates_share_one_card(shop):
     r = await shop()
     notice = Notifications(r.store, r.bot)
     local = Orders(r.store)
@@ -106,7 +106,7 @@ async def test_order_updates_use_one_card_with_link_and_no_buttons(shop):
     updates = [
         m for m in r.session.calls if "https://playerok.com/deal/sale" in (getattr(m, "text", "") or "")
     ]
-    assert [m.__api_method__ for m in updates] == ["sendMessage", "editMessageText", "editMessageText"]
+    assert [m.__api_method__ for m in updates] == ["sendMessage", "sendMessage", "editMessageText"]
     assert all(m.reply_markup is None and order["item"]["name"] in m.text for m in updates)
     assert all(m.text.split('🔗 <a href="')[0].endswith("\n\n") for m in updates)
     assert all(not m.text.split('🔗 <a href="')[0].endswith("\n\n\n") for m in updates)
@@ -278,3 +278,20 @@ async def test_promotion_read_outage_does_not_spam_owner(shop, code):
         call for call in r.session.calls if "Проверки автопродвижения" in (getattr(call, "text", "") or "")
     ]
     assert len(notices) == int(code == "PROMOTION_CHECK_UNAVAILABLE")
+
+
+async def test_purchase_and_quick_refund_stay_separate(shop):
+    r = await shop()
+    notices = Notifications(r.store, r.bot)
+    order = r.api.order("quick-refund")
+    local = Orders(r.store)
+    local.ingest(order)
+    local.ingest({**order, "status": "ROLLED_BACK"})
+    await notices.once()
+    await notices.once()
+    from aiogram.methods import SendMessage
+
+    messages = [call.text for call in r.session.calls if isinstance(call, SendMessage)]
+    assert sum("НОВАЯ ПОКУПКА" in text for text in messages) == 1
+    assert sum("ВОЗВРАТ ПОДТВЕРЖДЁН" in text for text in messages) == 1
+    assert not any("Ожидает выдачи" in text for text in messages)

@@ -14,7 +14,6 @@ async def test_pending_permanent_code_change_is_not_called_description_confirmat
     await click(r, suffix=":commit")
     before = r.store.rows("SELECT id,status FROM outbox")
     await r.ui.click("lp:item:lot")
-    await click(r, action="lp:details:lot")
     assert "Описание:" not in r.session.last_panel.text
     assert "Изменение лота:" in r.session.last_panel.text
     assert r.store.rows("SELECT id,status FROM outbox") == before

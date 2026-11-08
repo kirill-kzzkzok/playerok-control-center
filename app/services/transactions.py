@@ -86,7 +86,7 @@ class Transactions:
         return True
 
 
-def transaction_statistics(store, days=7, at=None, *, account_id=None):
+def transaction_statistics(store, days=7, at=None, *, account_id=None, include_open_sales=False):
     if days not in {0, 1, 2, 7, 30}:
         raise ValueError("Недопустимый период")
     at = at or datetime.now(UTC)
@@ -106,6 +106,10 @@ def transaction_statistics(store, days=7, at=None, *, account_id=None):
         "debits": Decimal(0),
         "sales_credit": Decimal(0),
         "sales_count": 0,
+        "pending_sales": Decimal(0),
+        "pending_sales_count": 0,
+        "refunds": Decimal(0),
+        "refund_count": 0,
         "withdraw_debit": Decimal(0),
         "premium_debit": Decimal(0),
         "other_priority_debit": Decimal(0),
@@ -129,6 +133,22 @@ def transaction_statistics(store, days=7, at=None, *, account_id=None):
     result["has_data"] = bool(rows or result["last_sync"])
     for row in rows:
         if row["status"] != "CONFIRMED":
+            if include_open_sales and (row["operation"], row["direction"]) == ("SELL", "IN"):
+                pending = row["status"] in {"PENDING", "PROCESSING"}
+                if pending or row["status"] == "ROLLED_BACK":
+                    when = parsed_time(row["created_at"] if pending else row["completed_at"])
+                    value = amount_or_none(row["value"])
+                    if when is None:
+                        result["unknown_dates"] += 1
+                    elif start <= when <= at:
+                        count_key = "pending_sales_count" if pending else "refund_count"
+                        result[count_key] += 1
+                        if row["currency"] != "RUB":
+                            result["foreign_currency"] += 1
+                        elif value is None:
+                            result["unknown_amounts"] += 1
+                        else:
+                            result["pending_sales" if pending else "refunds"] += value
             continue
         when = parsed_time(row["completed_at"])
         if when is None:

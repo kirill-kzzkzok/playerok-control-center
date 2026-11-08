@@ -99,12 +99,19 @@ def brief(result):
         "WAITING_PUBLICATION": "⏳ Выдача настроена. Ожидает публикации.",
         "READY": "✅ Автовыдача работает",
         "OFF": "⏸ Автовыдача выключена — отправка остановлена",
-        "UNKNOWN": "🔄 Проверяем готовность",
+        "UNKNOWN": "⚠️ Готовность пока не подтверждена",
         "BLOCKED": "⚠️ Автовыдача ожидает устранения проблемы",
         "STOPPED": "⛔ Автовыдача приостановлена",
     }
-    text += "\n" + (PLATFORM_STATES if mode == "playerok" else labels)[state]
     problems = result["problems"]
+    if (
+        state == "UNKNOWN"
+        and result["enabled"]
+        and {p["code"] for p in problems if p["blocking"]} == {"ITEM_UNCHECKED"}
+    ):
+        text += "\nАвтовыдача включена" if mode != "playerok" else "\nДействия после оплаты включены"
+    else:
+        text += "\n" + (PLATFORM_STATES if mode == "playerok" else labels)[state]
     if any(p["code"] == "GIFT_IN_PROGRESS" for p in problems) and state == "UNKNOWN":
         text = "Выдача: " + MODES[mode] + "\n⏳ Отправляем подарок, следующие покупки ожидают"
     actionable = sorted(
