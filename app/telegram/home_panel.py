@@ -229,17 +229,30 @@ class HomePanel:
         else:
             text += "\n⭐ Баланс: обновляем данные"
         profit = self.store.setting(f"shop:profit:{account}:{owner}", {}) if owner else {}
-        if not fresh(profit.get("at")):
+        if not fresh(profit.get("at")) or "net" not in profit:
             text += "\n💰 Прибыль: ожидаем подтверждённые данные"
         else:
-            missing = profit["incomplete_orders"] + profit["unattributed_orders"]
-            if missing and not profit["reviewed_orders"]:
-                text += f"\n💰 Прибыль: не хватает данных по {missing} сделкам"
-            else:
-                text += "\n💰 Подтверждённая прибыль за всё время: " + escaped(profit["profit"], 30) + " ₽"
-                if missing:
-                    text += f" · ещё {missing} сделок без полного расчёта"
-            text += "\nРасчёт: " + local_time(profit["at"])
+            text += "\n\n💰 <b>Прибыль за последние 24 часа</b>"
+            for label, key in (
+                ("Зачисления за продажи", "sales_credit"),
+                ("Себестоимость", "cost"),
+                ("PREMIUM и размещение", "promotion"),
+                ("Удержания при выводе", "withdrawal"),
+                ("Прочие учтённые расходы", "other"),
+                ("Итог по известным данным", "net"),
+            ):
+                text += f"\n{label}: {escaped(profit[key], 30)} ₽"
+            if profit["missing_cost"]:
+                text += f"\nСебестоимость неизвестна для {profit['missing_cost']} зачислений."
+            if profit.get("missing_other"):
+                text += "\nПрочие расходы указаны не для всех продаж."
+            if profit["unknown_withdrawals"]:
+                text += f"\nУдержания неизвестны для {profit['unknown_withdrawals']} выводов."
+            if profit.get("incomplete_transactions"):
+                text += "\nЧасть транзакций ожидает полных данных."
+            if profit.get("uncertain_promotions"):
+                text += "\nЕсть расходы на продвижение с неподтверждённым результатом."
+            text += "\nОбновлено " + local_time(profit["at"])
         return text
 
     def home(self, owner=None):

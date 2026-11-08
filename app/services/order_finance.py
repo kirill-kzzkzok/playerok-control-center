@@ -163,13 +163,14 @@ class OrderFinance:
             errors.append("Сделка ещё не подтверждена или возвращена")
         if len(receipts) != 1:
             errors.append("Нужно одно однозначное подтверждённое SELL-зачисление с ID этого заказа")
-        if (
+        shared_receipt = bool(
             receipt
             and db.execute(
                 "SELECT 1 FROM orders WHERE id<>? AND json_extract(payload,'$.transaction.id')=? LIMIT 1",
                 (order_id, receipt["id"]),
             ).fetchone()
-        ):
+        )
+        if shared_receipt:
             errors.append("То же зачисление связано с другой сохранённой сделкой; нужна сверка")
         credit = amount_or_none(receipt["value"]) if receipt else None
         if receipt and (receipt["currency"] != "RUB" or credit is None):
@@ -232,6 +233,7 @@ class OrderFinance:
             "order_id": order_id,
             "basis": basis,
             "receipt": receipt,
+            "shared_receipt": shared_receipt,
             "credit": credit,
             "cost": cost,
             "other_expenses": other,
@@ -351,7 +353,7 @@ class OrderFinance:
             return [dict(row) | {"capacity": expense_capacity(row)} for row in rows[:8]], len(rows) > 8
 
 
-def profit_statistics(store, actor, account_id, days=7, at=None):
+def profit_statistics(store, actor, account_id, days=7, at=None, *, include_costs=False):
     if not store.rows("SELECT 1 FROM administrators WHERE user_id=?", (actor,)):
         raise Conflict("Доступ закрыт")
     if days not in {0, 1, 2, 7, 30}:
@@ -367,7 +369,12 @@ def profit_statistics(store, actor, account_id, days=7, at=None):
         "incomplete_orders": 0,
         "unattributed_orders": 0,
         "foreign_orders": 0,
+        "known_cost": Decimal(0),
+        "known_other_expenses": Decimal(0),
+        "costed_sales": 0,
+        "other_costed_sales": 0,
     }
+    counted_receipts = set()
     for order in store.rows("SELECT id FROM orders WHERE status IN ('CONFIRMED','CONFIRMED_AUTOMATICALLY')"):
         try:
             value = service.view(actor, order["id"])
@@ -381,21 +388,93 @@ def profit_statistics(store, actor, account_id, days=7, at=None):
             continue
         if not start <= when <= at:
             continue
+        if (
+            not value["shared_receipt"]
+            and value["credit"] is not None
+            and receipt["id"] not in counted_receipts
+        ):
+            counted_receipts.add(receipt["id"])
+            if value["cost"] is not None:
+                result["known_cost"] += value["cost"]
+                result["costed_sales"] += 1
+            if value["other_expenses"] is not None:
+                result["known_other_expenses"] += value["other_expenses"]
+                result["other_costed_sales"] += 1
         if value["profit"] is None:
             result["incomplete_orders"] += 1
         else:
             result["profit"] += value["profit"]
             result["reviewed_orders"] += 1
+    if not include_costs:
+        for key in ("known_cost", "known_other_expenses", "costed_sales", "other_costed_sales"):
+            result.pop(key)
     return result
 
 
 def cache_shop_profit(store, account_id):
     """Observed historical evidence only, never a spending/delivery permission."""
+    from app.services.transactions import transaction_statistics
+
+    at = datetime.now(UTC)
+    start = at - timedelta(hours=24)
+    ledger = transaction_statistics(store, days=1, at=at, account_id=account_id)
+    promotion = ledger["premium_debit"] + ledger["other_priority_debit"]
+    uncertain = store.rows(
+        "SELECT COUNT(*) AS n FROM promotion_expenses e JOIN outbox o ON o.operation_key=e.operation_key "
+        "WHERE e.status='UNCERTAIN' AND json_extract(o.payload,'$.account_id')=?",
+        (account_id,),
+    )[0]["n"]
+    seen = set()
+    for row in store.rows(
+        "SELECT e.amount,e.created_at,json_extract(o.result,'$.payment_id') AS payment_id,"
+        "json_extract(o.result,'$.paid_rub') AS paid_rub "
+        "FROM promotion_expenses e JOIN outbox o ON o.operation_key=e.operation_key "
+        "WHERE e.status='SUCCEEDED' AND o.status='SUCCEEDED' "
+        "AND o.kind IN ('premium_bump','premium_publish') AND json_extract(o.payload,'$.account_id')=? "
+        "AND NOT EXISTS (SELECT 1 FROM account_transactions t WHERE t.account_id=? "
+        "AND t.id=json_extract(o.result,'$.payment_id'))",
+        (account_id, account_id),
+    ):
+        ident, when = row["payment_id"], parsed_time(row["created_at"])
+        paid = amount_or_none(row["paid_rub"])
+        if (
+            isinstance(ident, str)
+            and ident
+            and ident not in seen
+            and when is not None
+            and start <= when <= at
+            and paid is not None
+            and paid == amount_or_none(row["amount"])
+        ):
+            promotion += paid
+            seen.add(ident)
     for owner in store.rows("SELECT user_id FROM administrators"):
-        result = profit_statistics(store, owner["user_id"], account_id, days=0)
+        costs = profit_statistics(store, owner["user_id"], account_id, days=1, at=at, include_costs=True)
+        sales = ledger["sales_credit"]
+        cost, other = costs["known_cost"], costs["known_other_expenses"]
+        withdrawal = ledger["withdraw_retained_known"]
+        result = {
+            "sales_credit": sales,
+            "cost": cost,
+            "other": other,
+            "promotion": promotion,
+            "withdrawal": withdrawal,
+            "net": sales - cost - other - promotion - withdrawal,
+        }
         store.set_setting(
             f"shop:profit:{account_id}:{owner['user_id']}",
-            {**result, "profit": str(result["profit"]), "at": now()},
+            {
+                **{key: f"{value:.2f}" for key, value in result.items()},
+                "missing_cost": max(0, ledger["sales_count"] - costs["costed_sales"]),
+                "missing_other": max(0, ledger["sales_count"] - costs["other_costed_sales"]),
+                "unknown_withdrawals": ledger["withdraw_net_unknown"],
+                "uncertain_promotions": uncertain,
+                "incomplete_transactions": sum(
+                    ledger[key]
+                    for key in ("unknown_dates", "unknown_amounts", "unknown_directions", "foreign_currency")
+                ),
+                "at": at.isoformat(),
+            },
         )
 
 

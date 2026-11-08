@@ -86,14 +86,14 @@ class Transactions:
         return True
 
 
-def transaction_statistics(store, days=7, at=None):
+def transaction_statistics(store, days=7, at=None, *, account_id=None):
     if days not in {0, 1, 2, 7, 30}:
         raise ValueError("Недопустимый период")
     at = at or datetime.now(UTC)
     if at.tzinfo is None:
         raise ValueError("Требуется часовой пояс")
     start = at - timedelta(days=days) if days else datetime.min.replace(tzinfo=UTC)
-    account = store.setting("transactions:account_id")
+    account = account_id if account_id is not None else store.setting("transactions:account_id")
     result = {
         "cached": 0,
         "confirmed": 0,
@@ -105,6 +105,7 @@ def transaction_statistics(store, days=7, at=None):
         "credits": Decimal(0),
         "debits": Decimal(0),
         "sales_credit": Decimal(0),
+        "sales_count": 0,
         "withdraw_debit": Decimal(0),
         "premium_debit": Decimal(0),
         "other_priority_debit": Decimal(0),
@@ -169,6 +170,8 @@ def transaction_statistics(store, days=7, at=None):
         }.get((operation, direction))
         if key:
             result[key] += value
+            if key == "sales_credit":
+                result["sales_count"] += 1
         else:
             result["unknown_operations"] += 1
     if coverage:
