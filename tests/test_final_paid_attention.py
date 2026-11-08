@@ -204,3 +204,23 @@ async def test_product_readiness_does_not_stop_for_refunded_legacy_completion(sh
     assert "Результат операции неизвестен" not in r.session.last_panel.text
     assert r.store.rows("SELECT status FROM outbox WHERE id=?", (op,)) == [{"status": "UNCERTAIN"}]
     assert not r.api.remote.payments
+
+
+async def test_closed_after_sale_message_does_not_reappear_as_product_stop(shop):
+    from app.services.product_readiness import ProductReadiness
+
+    r = await shop()
+    await setup_ui(r, "unique_stock")
+    order = r.api.order("old-message")
+    orders = Orders(r.store)
+    orders.ingest(order)
+    op = r.store.enqueue("old-message", "chain_message", order["id"], {"text": "fixture"})
+    claim = r.store.claim(operation_id=op)
+    r.store.mark_started(claim)
+    r.store.finish(op, claim["lease_token"], "UNCERTAIN", error="NETWORK_ERROR")
+    order["status"] = "CONFIRMED"
+    orders.ingest(order)
+    readiness = ProductReadiness(r.store, r.api).snapshot("lot", item=r.api.item)
+    assert not any(p["code"] == "UNCERTAIN" for p in readiness["problems"])
+    assert r.store.rows("SELECT status FROM outbox WHERE id=?", (op,)) == [{"status": "UNCERTAIN"}]
+    assert not r.api.messages

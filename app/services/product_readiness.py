@@ -484,10 +484,8 @@ class ProductReadiness:
                 )
             ]
         marks = ",".join("?" for _ in ids)
-        from app.services.fulfillment import ACTIVE_UNKNOWN_SQL, automatic_legacy_completion
-
         operations = self.store.rows(
-            f"SELECT q.id,q.kind,q.target,q.payload,q.status,q.error_code,EXISTS(SELECT 1 FROM gift_jobs g WHERE g.order_id=q.target) AS gift_job FROM outbox q LEFT JOIN orders o ON o.id=q.target WHERE q.kind!='premium_bump' AND (o.item_id IN ({marks}) OR q.target IN ({marks})) AND (q.status IN ('UNCERTAIN','PROCESSING','PENDING','RETRYABLE_FAILED') OR q.error_code='MANUALLY_STOPPED_UNCERTAIN') AND {ACTIVE_UNKNOWN_SQL} ORDER BY q.created_at DESC LIMIT 10",
+            f"SELECT q.id,q.kind,q.target,q.payload,q.status,q.error_code,o.id AS order_id,EXISTS(SELECT 1 FROM gift_jobs g WHERE g.order_id=q.target) AS gift_job FROM outbox q LEFT JOIN orders o ON o.id=q.target WHERE q.kind!='premium_bump' AND (o.item_id IN ({marks}) OR q.target IN ({marks})) AND (q.status IN ('UNCERTAIN','PROCESSING','PENDING','RETRYABLE_FAILED') OR q.error_code='MANUALLY_STOPPED_UNCERTAIN') AND NOT (coalesce(o.status,'') IN ('ROLLED_BACK','FAILED','CONFIRMED','CONFIRMED_AUTOMATICALLY') AND q.kind IN ('chain_message','gift_notice','fulfill')) ORDER BY q.created_at DESC LIMIT 10",
             ids + ids,
         )
         for op in operations:
@@ -506,9 +504,15 @@ class ProductReadiness:
                     )
                 continue
             uncertain = op["status"] == "UNCERTAIN" or op["error_code"] == "MANUALLY_STOPPED_UNCERTAIN"
-            completion_only = op["kind"] == "fulfill" and automatic_legacy_completion(
-                json.loads(op["payload"]), op["target"]
-            )
+            order_only = op["order_id"] is not None and op["kind"] in {
+                "delivery",
+                "delivery_text",
+                "chain_message",
+                "fulfill",
+                "gift_send",
+                "gift_notice",
+                "gift_refund",
+            }
             route = (
                 "gft:details:" + op["target"]
                 if op["kind"] in {"gift_send", "gift_refund"} and op["gift_job"]
@@ -516,19 +520,21 @@ class ProductReadiness:
             )
             add(
                 "UNCERTAIN" if uncertain else "IN_PROGRESS",
-                "Отметка выполнения одного заказа проверяется отдельно."
-                if uncertain and completion_only
+                "Результат действия по одному заказу проверяется отдельно."
+                if uncertain and order_only
                 else "Результат операции неизвестен. Повтор запрещён до сверки."
                 if uncertain
                 else "Есть незавершённая операция. Посмотрите её состояние.",
                 "Сверить без повторной отправки" if uncertain else "Посмотреть операцию",
                 route,
-                terminal=uncertain and not completion_only,
-                blocking=uncertain and not completion_only,
+                terminal=uncertain and not order_only,
+                blocking=uncertain and not order_only,
                 unknown=not uncertain,
             )
         if self.store.rows(
-            f"SELECT 1 FROM delivery_chains WHERE item_id IN ({marks}) AND status='BLOCKED' LIMIT 1", ids
+            f"SELECT 1 FROM delivery_chains c JOIN orders o ON o.id=c.order_id "
+            f"WHERE c.item_id IN ({marks}) AND c.status='BLOCKED' AND o.status IN ('PAID','SENT') LIMIT 1",
+            ids,
         ):
             add(
                 "CHAIN_BLOCKED",
