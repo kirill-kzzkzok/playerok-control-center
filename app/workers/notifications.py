@@ -633,6 +633,32 @@ class Notifications:
             for owner in owners:
                 user = owner["user_id"]
                 if (
+                    event["kind"] == "order_problem"
+                    and not payload.get("gift_operation")
+                    and self.store.rows(
+                        "SELECT 1 FROM inbox i JOIN notifications n ON n.event_key=i.key "
+                        "WHERE i.key GLOB ? AND i.kind='order_problem' AND i.rowid<? "
+                        "AND julianday(i.received_at)>=julianday(?)-1.0/1440 "
+                        "AND json_extract(i.payload,'$.order_id')=? AND n.owner_id=? "
+                        "AND n.status IN ('SUCCEEDED','UNCERTAIN') LIMIT 1",
+                        (
+                            f"order_problem:{payload['order_id']}:*",
+                            event["sequence"],
+                            event["received_at"],
+                            payload["order_id"],
+                            user,
+                        ),
+                    )
+                ):
+                    # A short false/true flip can describe the same incident.
+                    self.store.execute(
+                        "INSERT INTO notifications(event_key,owner_id,status) VALUES(?,?,'SUPPRESSED') "
+                        "ON CONFLICT(event_key,owner_id) DO UPDATE SET status='SUPPRESSED' "
+                        "WHERE notifications.status='PENDING'",
+                        (event["key"], user),
+                    )
+                    continue
+                if (
                     event["kind"] == "operation_uncertain"
                     and self.store.rows(
                         "SELECT 1 FROM outbox o JOIN operation_receipts r ON r.operation_id=o.id "

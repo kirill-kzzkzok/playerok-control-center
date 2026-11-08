@@ -267,6 +267,7 @@ async def test_problem_transition_same_status_notifies_once_and_can_reopen(setup
     assert bot.send_message.await_count == 1
     assert "ПРОБЛЕМА С ЗАКАЗОМ" in bot.send_message.call_args.args[1]
     service.orders.ingest(order)
+    store.execute("UPDATE inbox SET received_at='2000-01-01T00:00:00+00:00' WHERE kind='order_problem'")
     service.orders.ingest({**order, "has_problem": True})
     await worker.once()
     assert bot.send_message.await_count == 2
@@ -298,3 +299,22 @@ async def test_real_account_get_deal_keyword_contract_without_network_mutation()
         assert result["id"] == "deal" and result["status"] == "FAILED"
     finally:
         account.close()
+
+
+async def test_problem_alert_is_not_duplicated_when_playerok_flag_flaps(setup):
+    store, _, order, service = setup
+    service.orders.ingest(order)
+    store.set_setting("sync:health", {"status": "OK"})
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=10)))
+    await Notifications(store, bot).once()
+    service.orders.ingest({**order, "has_problem": True})
+    await Notifications(store, bot).once()
+    service.orders.ingest({**order, "has_problem": False})
+    service.orders.ingest({**order, "has_problem": True})
+    await Notifications(store, bot).once()
+    assert bot.send_message.await_count == 1
+    assert store.rows("SELECT problem FROM order_history ORDER BY rowid")[-3:] == [
+        {"problem": 1},
+        {"problem": 0},
+        {"problem": 1},
+    ]
