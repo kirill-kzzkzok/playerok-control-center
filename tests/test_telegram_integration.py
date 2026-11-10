@@ -256,16 +256,21 @@ async def test_financial_panel_through_real_dispatcher_is_read_only(tmp_path):
         assert "сохранён" in session.calls[-1].text
         await ui.click("finance:item")
         assert "На руки после вывода: 1692.00 ₽" in session.calls[-1].text
+        quotes = store.rows("SELECT count(*) AS n FROM financial_quotes")[0]["n"]
+        assert quotes >= 1
         await ui.click("fin:cost:item")
+        before_save = len(api.calls)
         await ui.message("500")
         assert store.setting("finance:7:cost:item") == "500.00"
+        assert "Себестоимость сохранена" in session.calls[-1].text
+        assert len(api.calls) == before_save
         count = len(api.calls)
         await ui.click("finance:item", owner=8)
         assert len(api.calls) == count
         assert session.calls[-1].text == "Доступ закрыт"
         assert not store.rows("SELECT * FROM outbox")
         assert not store.rows("SELECT * FROM financial_operations")
-        assert store.rows("SELECT count(*) AS n FROM financial_quotes")[0]["n"] >= 2
+        assert store.rows("SELECT count(*) AS n FROM financial_quotes")[0]["n"] == quotes
     finally:
         await bot.session.close()
         store.close()

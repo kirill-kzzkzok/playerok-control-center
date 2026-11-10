@@ -190,19 +190,29 @@ async def test_confirmed_delivery_updates_card_and_unknown_never_announces_succe
         c.text for c in r.session.calls if (getattr(c, "text", "") or "").startswith("🎁 <b>ТОВАР ВЫДАН")
     ]
     assert len(delivered) == 1
-    assert "/deal/success" in delivered[0]
+    delivered_id, unknown_id = "success", "unknown"
+    if mode == "telegram_gifts":
+        # The Outbox does not promise order among independent jobs with tied timestamps.
+        # Fault injection loses the second RPC, whichever buyer owns that payment.
+        confirmed = r.store.rows("SELECT order_id,receipt FROM gift_jobs WHERE state='SUCCEEDED'")
+        unresolved = r.store.rows("SELECT order_id FROM gift_jobs WHERE state='UNCERTAIN'")
+        assert len(confirmed) == len(unresolved) == 1
+        assert confirmed[0]["receipt"] and len(r.api.remote.payments) == 2
+        delivered_id, unknown_id = confirmed[0]["order_id"], unresolved[0]["order_id"]
+        assert delivered_id != unknown_id
+    assert "/deal/" + delivered_id in delivered[0]
     uncertain = [
         c.text
         for c in r.session.calls
         if "Неопределённый результат операции" in (getattr(c, "text", "") or "")
     ]
-    assert len(uncertain) == 1 and "/deal/unknown" in uncertain[0]
-    order = r.api.orders["success"]
+    assert len(uncertain) == 1 and "/deal/" + unknown_id in uncertain[0]
+    order = r.api.orders[delivered_id]
     order["status"] = "ROLLED_BACK"
     local.ingest(order)
     await notice.once()
     refund = [c.text for c in r.session.calls if "ВОЗВРАТ ПОДТВЕРЖДЁН" in (getattr(c, "text", "") or "")]
-    assert len(refund) == 1 and "/deal/success" in refund[0]
+    assert len(refund) == 1 and "/deal/" + delivered_id in refund[0]
     expected = (
         "Подарок был отправлен до возврата" if mode == "telegram_gifts" else "Товар был выдан до возврата"
     )
