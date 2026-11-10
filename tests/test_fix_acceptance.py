@@ -65,14 +65,14 @@ async def test_notification_backoff_isolated_from_later_action_and_not_modified_
     assert not await r.worker.once()
 
 
-async def test_obsolete_order_event_is_skipped_not_rendered_as_current_status(case):
+async def test_paid_event_is_retained_without_rendering_obsolete_waiting_status(case):
     r = case
     order = r.api.order("late")
     Orders(r.store).ingest(order)
     Orders(r.store).ingest({**order, "status": "SENT"})
     await Notifications(r.store, r.bot).once()
     assert r.store.rows("SELECT status FROM notifications WHERE event_key='order:late:PAID'") == [
-        {"status": "SKIPPED"}
+        {"status": "SUCCEEDED"}
     ]
     assert r.store.rows("SELECT status FROM notifications WHERE event_key='order:late:SENT'") == [
         {"status": "SUCCEEDED"}
@@ -82,7 +82,8 @@ async def test_obsolete_order_event_is_skipped_not_rendered_as_current_status(ca
         "SELECT telegram_message_id FROM notifications WHERE event_key='order:late:SENT'"
     )[0]
     text = r.session.messages[notification["telegram_message_id"]]["text"]
-    assert "SENT" not in text and "Продавец отметил отправку" in text
+    assert "SENT" not in text and "Playerok подтвердил выполнение заказа" in text
+    assert not any("Ожидает выдачи" in message["text"] for message in r.session.messages.values())
 
 
 @pytest.mark.parametrize("action", ["items", "commit:old-confirmation"])

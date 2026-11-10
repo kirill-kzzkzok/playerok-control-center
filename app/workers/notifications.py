@@ -292,6 +292,12 @@ class Notifications:
                     or not review
                     and (
                         stage not in STAGES
+                        or stage == "PAID"
+                        and not self.store.rows(
+                            "SELECT 1 FROM order_history WHERE order_id=? "
+                            "AND source='API_STATE' AND new_status='PAID' LIMIT 1",
+                            (payload["id"],),
+                        )
                         or stage != "PAID"
                         and rows[0]["status"] != ("PAID" if event["kind"] == "order_delivered" else stage)
                     )
