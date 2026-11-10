@@ -120,6 +120,8 @@ async def test_purchase_is_preserved_and_later_order_updates_share_one_card(shop
         ("sync", "CONNECTION_NOT_VERIFIED", "SUPPRESSED"),
         ("transactions", "UNAUTHORIZED_OR_CHALLENGE", "SUPPRESSED"),
         ("logical-products", "RATE_LIMITED", "SUPPRESSED"),
+        ("logical-products", "UNAUTHORIZED_OR_CHALLENGE", "SUPPRESSED"),
+        ("logical-products", "AUTH_REJECTED", "SUCCEEDED"),
         ("transactions", "TRANSACTION_SCHEMA_ERROR", "SUCCEEDED"),
     ],
 )

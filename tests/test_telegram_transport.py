@@ -366,3 +366,59 @@ async def test_transport_reports_only_persistent_connection_incident(caplog):
             assert len([r for r in caplog.records if r.levelno == logging.INFO]) == 1
     finally:
         await session.close()
+
+
+def test_one_telegram_outage_has_one_recovery_for_multiple_methods(caplog):
+    from app.telegram.transport import TelegramNetworkSession
+
+    session = TelegramNetworkSession()
+
+    def finish(method, success=False):
+        state, token, started = session._begin(method)
+        if not success:
+            state["error_code"] = "PROXY_UNAVAILABLE"
+        session._finish(state, token, started, "OK" if success else "TelegramRequestNotStarted")
+
+    with caplog.at_level("INFO", logger="pcc.shop"):
+        for method in ("getUpdates", "sendMessage", "editMessageText"):
+            for _ in range(3):
+                finish(method)
+        assert sum("Telegram не отвечает" in record.message for record in caplog.records) == 1
+        finish("answerCallbackQuery", True)
+        assert not any("Связь с Telegram восстановлена" in record.message for record in caplog.records)
+        for method in ("sendMessage", "getUpdates", "editMessageText"):
+            finish(method, True)
+        assert sum("Связь с Telegram восстановлена" in record.message for record in caplog.records) == 1
+        for _ in range(3):
+            finish("getUpdates")
+        finish("getUpdates", True)
+        assert sum("Связь с Telegram восстановлена" in record.message for record in caplog.records) == 2
+
+
+def test_polling_http_502_is_diagnostic_until_outage_persists(caplog, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.telegram import transport
+
+    clock = 0
+    monkeypatch.setattr(transport, "time", SimpleNamespace(monotonic=lambda: clock))
+    session = transport.TelegramNetworkSession()
+
+    def finish(http, outcome):
+        state, token, started = session._begin("getUpdates")
+        state["http"] = http
+        state["error_code"] = "UNKNOWN_TELEGRAM_ERROR"
+        session._finish(state, token, started, outcome)
+
+    with caplog.at_level("INFO", logger="pcc.shop"):
+        finish(502, "TelegramServerError")
+        clock = 20
+        finish(502, "TelegramServerError")
+        assert session.results["getUpdates"]["error_code"] == "HTTP_502"
+        assert not caplog.records
+        clock = 31
+        finish(502, "TelegramServerError")
+        finish(502, "TelegramServerError")
+        finish(200, "OK")
+    assert [record.levelname for record in caplog.records] == ["WARNING", "INFO"]
+    assert "HTTP 502" in caplog.records[0].message

@@ -284,6 +284,14 @@ class LogicalProductWorker:
                 continue
         if len(pending_orders) < 20:
             self.store.set_setting(key + ":paid_cursor", "")
+        paid_codes = set()
+        for item in snapshot:
+            if item["id"] in paid_items:
+                try:
+                    paid_codes.add(marker(item.get("name")))
+                except ValueError:
+                    continue  # The existing duplicate/invalid marker checks still decide admission.
+        products.sort(key=lambda product: product["code"] not in paid_codes)
         adopted = 0
         for product in products:
             candidates = []
@@ -341,7 +349,7 @@ class LogicalProductWorker:
                         if sold.get("id") == linked["item_id"] and sold.get("status") == "SOLD":
                             require_listing_details(sold)
                             candidates.append(sold)
-            for item in candidates:
+            for item in sorted(candidates, key=lambda item: item["id"] not in paid_items):
                 if (
                     not product["inherit_enabled"]
                     and item["id"] not in snapshot_orders

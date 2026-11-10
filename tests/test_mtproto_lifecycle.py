@@ -272,3 +272,34 @@ async def test_late_failure_of_old_read_cannot_disconnect_new_client(tmp_path, m
         old_read.cancel()
         await asyncio.gather(old_read, return_exceptions=True)
         await sender.close()
+
+
+async def test_idle_mtproto_disconnect_exception_is_observed_before_reconnect(setup):
+    sender, _, clients = setup
+    opening = asyncio.create_task(sender.connect())
+    await asyncio.sleep(0)
+    client = clients[0]
+    observed = []
+
+    class Disconnected(asyncio.Future):
+        def exception(self):
+            result = super().exception()
+            observed.append(result)
+            return result
+
+    client.disconnected = Disconnected()
+    client.handshake.set()
+    await opening
+    error = asyncio.IncompleteReadError(b"", 8)
+    try:
+        client.connected = False
+        client.disconnected.set_exception(error)
+        await asyncio.sleep(0)
+        assert observed == [error]
+        await sender.connect()
+        assert sender.client is not client and sender.me.id == 7
+        assert all(task.done() for task in client.loops)
+    finally:
+        if not observed and client.disconnected.done():
+            client.disconnected.exception()
+        await sender.close()

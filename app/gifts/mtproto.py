@@ -106,6 +106,11 @@ class PersonalGiftSender:
             if self.owns_client:
                 self.client = None
 
+    @staticmethod
+    def observe_disconnect(future):
+        if not future.cancelled() and (error := future.exception()) is not None:
+            event("CHECK", f"Личный Telegram: соединение закрыто ({type(error).__name__})", level=10)
+
     async def connect(self):
         async with self.lock:
             if self.closed:
@@ -153,6 +158,9 @@ class PersonalGiftSender:
             self.needs_disconnect = True  # Even a partial connect can own send/receive tasks.
             try:
                 await self.client.connect()
+                disconnected = getattr(self.client, "disconnected", None)
+                if disconnected is not None:
+                    disconnected.add_done_callback(self.observe_disconnect)
                 if not await self.client.is_user_authorized():
                     raise GiftFailure("SESSION_UNAUTHORIZED")
                 me = await self.client.get_me()

@@ -394,3 +394,59 @@ async def test_unlinked_paid_deal_requests_short_retry_until_flags_arrive(logica
     assert service.listing("relisted")["id"] == product["id"]
     assert not worker.paid_retry
     assert len(api.mutations) == 1  # Only the original test title binding.
+
+
+async def test_paid_relist_is_adopted_before_unrelated_candidate_hits_rate_limit(logical):
+    from datetime import datetime, timedelta
+
+    from app.playerok.adapter import APIError
+    from app.services.orders import Orders
+    from app.workers.logical_products import LogicalProductWorker
+
+    store, api, service = logical
+    original = copy.deepcopy(api.item)
+    for ident in ("background", "paid-original"):
+        api.item = {**original, "id": ident}
+        prepared = await service.prepare(7, ident, "fixed_text", {"text": "Delivery"})
+        result = service.commit(7, prepared)
+        await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
+        product = service.product(result["product_id"])
+        await service.arm(7, product["id"], product["revision"])
+        if ident == "background":
+            background = copy.deepcopy(api.item)
+
+    candidate = {**api.item, "id": "paid-new"}
+    order = {
+        "id": "fresh-sale",
+        "status": "PAID",
+        "direction": "OUT",
+        "item": candidate,
+        "user": {"id": "buyer"},
+        "chat": {"id": "chat"},
+        "created_at": (
+            datetime.fromisoformat(service.product(product["id"])["armed_at"]) + timedelta(seconds=2)
+        ).isoformat(),
+        "has_problem": False,
+        "is_automated": False,
+    }
+    Orders(store).ingest(order)
+    reads = 0
+
+    async def read(method, **kwargs):
+        nonlocal reads
+        if method == "get_my_items":
+            return {"items": [background], "page_info": {"has_next_page": False}}
+        if method == "get_deal":
+            return copy.deepcopy(order)
+        if kwargs["id"] == "background":
+            reads += 1
+            if reads > 1:
+                raise APIError("RATE_LIMITED", retry_after="30")
+            return copy.deepcopy(background)
+        return copy.deepcopy(candidate)
+
+    api.call = read
+    with pytest.raises(APIError, match="RATE_LIMITED"):
+        await LogicalProductWorker(store, api).once()
+    assert service.listing("paid-new")["id"] == product["id"]
+    assert not store.rows("SELECT 1 FROM reservations")

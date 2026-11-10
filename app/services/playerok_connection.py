@@ -196,7 +196,12 @@ class PlayerokConnection:
                 self.state.pop("temporary_failures", None)
                 self.state.pop("temporary_warned", None)
                 if connected:
-                    level = 20 if previous.get("temporary_warned") else 10
+                    recovered = previous.get("temporary_warned") or previous.get("reason") in {
+                        "UNAUTHORIZED_OR_CHALLENGE",
+                        "AUTH_REJECTED",
+                        "SESSION_EXPIRED",
+                    }
+                    level = 20 if recovered else 10
                 elif reason != previous.get("reason"):
                     level = 30
             self.store.set_setting("playerok:verification", self.state)

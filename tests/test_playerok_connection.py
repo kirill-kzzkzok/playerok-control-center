@@ -347,3 +347,18 @@ async def test_late_viewer_success_cannot_restore_revoked_identity(rig):
     assert result["reason"] == "AUTH_REJECTED"
     assert not api.account.writes_enabled and not connection.reads_allowed
     assert (await connection.check(cooldown=0))["status"] == "CONNECTED"
+
+
+async def test_challenge_recovery_is_visible_once_in_owner_console(rig, caplog):
+    import logging
+
+    store, api = rig
+    connection = PlayerokConnection(store, api)
+    with caplog.at_level(logging.INFO, logger="pcc.shop"):
+        api.error = APIError("UNAUTHORIZED_OR_CHALLENGE", diagnostics={"http_status": 403})
+        await connection.check(cooldown=0)
+        await connection.check(cooldown=0)
+        api.error = None
+        await connection.check(cooldown=0)
+        await connection.check(cooldown=0)
+    assert sum("Связь с Playerok восстановлена" in record.message for record in caplog.records) == 1

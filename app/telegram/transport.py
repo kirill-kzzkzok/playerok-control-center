@@ -39,6 +39,8 @@ class TelegramNetworkSession(AiohttpSession):
         self.results = {}
         self._reported = {}
         self._connection_failures = {}
+        self._connection_alert = False
+        self._polling_server_failed_at = None
 
     async def create_session(self):
         # AiohttpSession has no trace_configs constructor argument. Retain its
@@ -141,6 +143,10 @@ class TelegramNetworkSession(AiohttpSession):
     def _finish(self, state, token, started, outcome):
         request_evidence.reset(token)
         state.update(seconds=round(time.monotonic() - started, 3), outcome=outcome)
+        http = state["http"]
+        server_failure = outcome not in {"OK", "CANCELLED"} and type(http) is int and 500 <= http < 600
+        if server_failure:
+            state["error_code"] = f"HTTP_{http}"
         record("telegram", time.monotonic() - started)
         self.results[state["method"]] = state
         # Structured evidence remains available in results; no URL/payload or raw errors.
@@ -158,21 +164,51 @@ class TelegramNetworkSession(AiohttpSession):
             state.get("retry_after", 0),
         )
         code = state.get("error_code") or state.get("blocked") or outcome
-        # Recovery must come from the affected API method, not an unrelated ACK.
+        # A shared route gets one alert; only a previously failing method proves recovery.
         method = state["method"]
         if outcome in {"OK", "CANCELLED"} or code == "MESSAGE_NOT_MODIFIED":
             if outcome == "OK":
+                if method == "getUpdates":
+                    self._polling_server_failed_at = None
                 failures = self._connection_failures.pop(method, 0)
-                if failures >= 3:
+                if failures >= 3 and self._connection_alert:
+                    self._connection_alert = False
+                    self._connection_failures.clear()
                     event("SUCCESS", "🟢 Связь с Telegram восстановлена")
                 for key in tuple(self._reported):
                     if key[0] == method:
                         self._reported.pop(key)
             return
-        if code in {"NETWORK_ERROR", "TIMEOUT", "PROXY_UNAVAILABLE", "DNS_ERROR", "PROXY_ROUTE_CHANGED"}:
+        connection_failure = code in {
+            "NETWORK_ERROR",
+            "TIMEOUT",
+            "PROXY_UNAVAILABLE",
+            "DNS_ERROR",
+            "PROXY_ROUTE_CHANGED",
+        }
+        if method == "getUpdates" and (
+            server_failure or connection_failure and self._polling_server_failed_at is not None
+        ):
+            clock = time.monotonic()
+            if self._polling_server_failed_at is None:
+                self._polling_server_failed_at = clock
+            if clock - self._polling_server_failed_at >= 30:
+                self._connection_failures[method] = max(3, self._connection_failures.get(method, 0))
+                if not self._connection_alert:
+                    self._connection_alert = True
+                    event(
+                        "WARNING",
+                        "Telegram временно не отдаёт обновления"
+                        + (f" (HTTP {http})" if server_failure else "")
+                        + ". Бот продолжает попытки.",
+                        level=logging.WARNING,
+                    )
+            return
+        if connection_failure:
             failures = self._connection_failures.get(method, 0) + 1
             self._connection_failures[method] = failures
-            if failures == 3:
+            if failures == 3 and not self._connection_alert:
+                self._connection_alert = True
                 event(
                     "WARNING",
                     "Telegram не отвечает. Бот продолжает попытки подключения.",

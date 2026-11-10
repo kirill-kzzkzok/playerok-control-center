@@ -314,8 +314,10 @@ class Notifications:
                     None,
                 )
             elif event["kind"] == "worker_failed":
+                from app.services.playerok_connection import REASONS
                 from app.workers.supervisor import CYCLE_LABELS
 
+                description = payload["error_type"]
                 if payload.get("cycle"):
                     current = self.store.setting("runtime:cycle:" + payload["worker"], {})
                     if current.get("consecutive_failures", 0) < 3 or current.get("incident") != payload.get(
@@ -324,11 +326,20 @@ class Notifications:
                         self.close_pending(event["key"], "RESOLVED")
                         continue
                     code = current.get("error_code")
-                    if code in {"CONNECTION_NOT_VERIFIED", "RATE_LIMITED", "HTTP_429"} or (
-                        payload["worker"] == "transactions" and code == "UNAUTHORIZED_OR_CHALLENGE"
-                    ):
+                    if code in {"CONNECTION_NOT_VERIFIED", "RATE_LIMITED", "HTTP_429"}:
                         self.close_pending(event["key"], "SUPPRESSED")
                         continue
+                    if (
+                        payload["worker"] in {"transactions", "logical-products"}
+                        and code == "UNAUTHORIZED_OR_CHALLENGE"
+                    ):
+                        connection = self.store.setting("playerok:verification", {})
+                        if connection.get("status") != "DISCONNECTED":
+                            self.close_pending(event["key"], "SUPPRESSED")
+                            continue
+                        description = REASONS.get(connection.get("reason"), "Подключение Playerok отключено")
+                    elif code == "AUTH_REJECTED":
+                        description = REASONS[code]
                 text = (
                     (
                         "⚠️ <b>Фоновая обработка требует проверки</b>\n"
@@ -342,7 +353,7 @@ class Notifications:
                         80,
                     )
                     + ": "
-                    + escaped(payload["error_type"], 80)
+                    + escaped(description, 160)
                     + (
                         "\nПовторная проверка запланирована. Проверьте диагностику. "
                         if payload.get("cycle")

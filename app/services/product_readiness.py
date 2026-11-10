@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import re
 from copy import deepcopy
 from datetime import UTC, datetime
 
@@ -860,14 +861,22 @@ class ProductReadiness:
                 code = (
                     "CHECK_TIMEOUT" if isinstance(exc, TimeoutError) else getattr(exc, "code", "CHECK_FAILED")
                 )
-                safe_code = code if code in REASONS else "CHECK_FAILED"
+                safe_code = (
+                    code
+                    if isinstance(code, str) and re.fullmatch(r"[A-Z0-9_]{1,80}", code)
+                    else "CHECK_FAILED"
+                )
                 event(
                     "WARNING",
                     f"Readiness stage={stage} type={type(exc).__name__} code={safe_code}",
                     level=10
                     if (
                         isinstance(exc, APIError)
-                        and code in {"UNAUTHORIZED_OR_CHALLENGE", "CONNECTION_NOT_VERIFIED", "AUTH_REJECTED"}
+                        and (
+                            stage == "binding_scan"
+                            or code
+                            in {"UNAUTHORIZED_OR_CHALLENGE", "CONNECTION_NOT_VERIFIED", "AUTH_REJECTED"}
+                        )
                     )
                     or (
                         automatic
@@ -877,6 +886,7 @@ class ProductReadiness:
                             "RATE_LIMITED",
                             "HTTP_429",
                             "PROXY_UNAVAILABLE",
+                            "GIFT_PREFLIGHT_NETWORK",
                             "MTPROTO_TIMEOUT",
                             "PROXY_ROUTE_CHANGED",
                             "ITEM_READ_SUPERSEDED",
