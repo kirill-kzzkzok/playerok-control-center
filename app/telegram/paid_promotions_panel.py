@@ -196,7 +196,7 @@ class PaidPromotionsPanel:
                         for i, q in enumerate(choices)
                     ]
                     + [[("Условия и включение", "promotions")]],
-                    back=("К продвижению", "payp:item:" + ident),
+                    back=("⬅️ Назад", "promo:item:" + ident),
                 )
             return "⭐ <b>Продвижение товара</b>\n" + escaped(item.get("name") or "Товар", 200) + (
                 "\nPREMIUM: установлен" if priority_type == "PREMIUM" else "\nPREMIUM: не подтверждён"
@@ -214,8 +214,7 @@ class PaidPromotionsPanel:
                     for i, q in enumerate(choices)
                 ]
                 + [
-                    [("Автоподнятие", "payp:auto:" + ident)],
-                    [("Участие в автоподнятии", "promo:item:" + ident)],
+                    [("Автоподнятие", "promo:item:" + ident)],
                     [("История продвижения", "payp:history:" + ident)],
                 ],
                 back=("⬅️ К товару", "item:" + ident),

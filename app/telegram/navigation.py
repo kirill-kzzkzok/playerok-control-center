@@ -74,6 +74,7 @@ def safe_route(action):
             "gft:job:",
             "gft:list:",
             "payp:item:",
+            "promo:item:",
             "auto:item:",
             "platform:item:",
             "status:view:",
@@ -423,8 +424,8 @@ class Navigation:
                 and not has_return
                 and not action.startswith(("chat:", "chatpage:"))
             ):
-                # Dynamic parent follows the actual origin; explicit destination buttons remain explicit.
-                parent = view["history"][-1]["route"]
+                # One return path follows the actual origin, rather than offering
+                # several competing parent/home destinations on the same view.
                 markup.inline_keyboard = [
                     row
                     for row in markup.inline_keyboard
@@ -432,9 +433,10 @@ class Navigation:
                         len(row) == 1
                         and (
                             row[0].callback_data == "home"
-                            or (
-                                row[0].callback_data == parent
-                                and row[0].text.startswith(("⬅", "К ", "Назад", "Отмена"))
+                            or row[0]
+                            .text.lstrip("⬅️ ")
+                            .startswith(
+                                ("К ", "Назад", "Отмена", "Вернуться", "Основной экран", "Мой магазин")
                             )
                         )
                     )

@@ -6,7 +6,7 @@ def keyboard(rows, home=True, *, back=None):
         [InlineKeyboardButton(text=text, callback_data=callback) for text, callback in row] for row in rows
     ]
     if back:
-        buttons.append([InlineKeyboardButton(text=back[0], callback_data=back[1])])
+        buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back[1])])
     elif home:
         buttons.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="home")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)

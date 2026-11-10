@@ -221,15 +221,17 @@ class PromotionsPanel:
                 rows = [
                     [(f"{EDIT[name]}: {values[name]}", f"pp:{nonce}:edit:{name}")] for name in groups[group]
                 ]
-                rows.append([("⬅️ К параметрам", f"pp:{nonce}:group:general")])
             rows.append([("💾 Сохранить", f"pp:{nonce}:save")])
-            if not data.get("return_to"):
-                rows.append([("⬅️ Основной экран", f"pp:{nonce}:basic")])
         back = (
             ("⬅️ К черновику запуска", data["return_to"])
             if data.get("return_to")
             else ("⬅️ Мой магазин", "home")
         )
+        if data.get("advanced"):
+            back = (
+                "⬅️ Назад",
+                f"pp:{nonce}:group:general" if group != "general" else f"pp:{nonce}:basic",
+            )
         return text, keyboard(rows, back=back)
 
     def item_view(self, view):
@@ -243,6 +245,7 @@ class PromotionsPanel:
                     f"pi:{nonce}:target:" + ("exclude" if selected else "include"),
                 )
             ],
+            [("Тариф и разрешение покупок", "payp:auto:" + ident)],
             [("🗓 Условия и лимиты", "promo:settings")],
             [("Дополнительные параметры", f"pi:{nonce}:more:open")],
         ]
@@ -265,9 +268,14 @@ class PromotionsPanel:
             ]
             rows += [
                 [("Использовать общее правило магазина", f"pi:{nonce}:target:default")],
-                [("К автоподнятию товара", f"pi:{nonce}:more:close")],
             ]
-        return text, keyboard(rows, back=("К продвижению товара", "payp:item:" + ident))
+        return text, keyboard(
+            rows,
+            back=(
+                "⬅️ Назад",
+                f"pi:{nonce}:more:close" if view.get("advanced") else "payp:item:" + ident,
+            ),
+        )
 
     async def callback(self, action, owner, state):
         self.service.access.orders.owner(owner)
