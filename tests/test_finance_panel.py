@@ -110,9 +110,8 @@ async def test_forged_provider_choice_and_foreign_item_are_rejected(setup):
     with pytest.raises(ValueError):
         await panel.callback("fin:select:SBP", 7, state)
     api.item["user"]["id"] = "another seller"
-    await panel.callback("fin:cost:item", 7, state)
     with pytest.raises(ValueError):
-        await panel.message(SimpleNamespace(text="100", from_user=SimpleNamespace(id=7)), state)
+        await panel.callback("fin:cost:item", 7, state)
     assert store.setting("finance:7:cost:item") is None
 
 
@@ -212,3 +211,30 @@ async def test_premium_preview_is_one_time_quote_not_a_purchase_or_repeated_expe
     api.item["status"] = "SOLD"
     with pytest.raises(ValueError):
         await panel.callback("fin:placement:item", 7, state)
+
+
+async def test_saved_product_cost_can_be_set_during_playerok_outage(shop):
+    from app.playerok.adapter import APIError
+    from tests.test_universal_delivery_e2e import click, setup_ui
+
+    r = await shop()
+    await setup_ui(r, "unique_stock")
+    await r.ui.click("item:lot")
+    original = r.api.call
+
+    async def offline(method, **kwargs):
+        raise APIError("CONNECTION_NOT_VERIFIED")
+
+    r.api.call = offline
+    await r.ui.click("finance:lot")
+    await click(r, action="fin:cost:lot")
+    await r.ui.message("32,50")
+    assert r.store.setting("finance:7:cost:lot") == "32.50"
+    assert "Себестоимость сохранена" in r.session.last_panel.text
+    assert not r.api.messages and not r.api.remote.payments
+    r.api.call = original
+
+
+from tests.test_stage_a_controls import shop as shop_fixture
+
+shop = shop_fixture

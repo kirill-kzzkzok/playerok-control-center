@@ -4,6 +4,7 @@ from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from html import escape
 
 from app.database.store import now
+from app.playerok.adapter import APIError
 from app.services.finance import FeeRule, money, quote_fresh
 from app.services.financial_quotes import item_preferences, prepare_item_quote, save_quote
 from app.services.products import priority_price_basis
@@ -33,10 +34,16 @@ class FinancePanel:
         item = await self.api.call("get_item", id=ident)
         if (
             not getattr(self.api.account, "id", None)
+            or item.get("id") != ident
             or (item.get("user") or {}).get("id") != self.api.account.id
         ):
             raise ValueError("Владение товаром не подтверждено")
         return item
+
+    async def local_item(self, owner, ident):
+        from app.services.product_readiness import ProductReadiness
+
+        return await ProductReadiness(self.store, self.api).ui_item(owner, ident)
 
     async def item(self, owner, ident, *, details=False, refresh=False, force_read=False):
         from app.services.product_readiness import ProductReadiness
@@ -58,7 +65,8 @@ class FinancePanel:
             and (context.get("item") or {}).get("id") == ident
         ):
             observed = rows[0]["created_at"]
-            item, payload, quotes = context["item"], saved["inputs"], context["quotes"]
+            item, payload, quotes = context["item"], dict(saved["inputs"]), context["quotes"]
+            payload["cost"] = self.store.setting(f"finance:{owner}:cost:{ident}")
             allocation = payload.get("placement")
             placement = context.get("new_placement")
             result = draft_calculation(
@@ -74,9 +82,36 @@ class FinancePanel:
                 if not self.store.setting(key):
                     self.store.set_setting(key, {"due": 0, "owner": owner, "item": ident, "account": account})
         else:
-            item, payload, result, quotes, allocation, placement = await prepare_item_quote(
-                self.store, self.api, self.products, owner, ident
-            )
+            try:
+                item, payload, result, quotes, allocation, placement = await prepare_item_quote(
+                    self.store, self.api, self.products, owner, ident
+                )
+            except APIError as error:
+                from app.services.playerok_connection import TEMPORARY_READ_FAILURES
+
+                if error.code not in TEMPORARY_READ_FAILURES | {
+                    "CONNECTION_NOT_VERIFIED",
+                    "UNAUTHORIZED_OR_CHALLENGE",
+                    "HTTP_429",
+                }:
+                    raise
+                item = await self.local_item(owner, ident)
+                cost = self.store.setting(f"finance:{owner}:cost:{ident}")
+                return (
+                    "💰 <b>"
+                    + escape(item.get("name") or "Товар")
+                    + "</b>"
+                    + "\nСебестоимость: "
+                    + (escape(str(cost)) + " ₽" if cost is not None else "не задана")
+                    + "\nКомиссии и прогноз обновятся после восстановления Playerok.",
+                    keyboard(
+                        [
+                            [("✏️ Себестоимость", "fin:cost:" + ident)],
+                            [("⚙️ Параметры расчёта", "fin:options:" + ident)],
+                        ],
+                        back=("⬅️ К товару", "item:" + ident),
+                    ),
+                )
         name = ((payload.get("withdrawal") or {}).get("provider") or {}).get("name") or "не выбран"
 
         def rub(value):
@@ -254,7 +289,7 @@ class FinancePanel:
             return await self.callback("fin:options:" + ident, owner, state)
         if action.startswith("fin:options:"):
             ident = action.split(":", 2)[2]
-            await self.read_owned(ident)
+            await self.local_item(owner, ident)
             await state.update_data(finance_origin=ident)
             from app.services.logical_products import LogicalProducts
 
@@ -336,6 +371,7 @@ class FinancePanel:
             return await self.item(owner, action.split(":", 1)[1])
         if action.startswith("fin:cost:"):
             ident = action.split(":", 2)[2]
+            await self.local_item(owner, ident)
             await state.set_state("finance:cost")
             await state.set_data({"finance_item_id": ident})
             return (
@@ -443,7 +479,7 @@ class FinancePanel:
         if current == "finance:cost":
             owner, ident = message.from_user.id, data["finance_item_id"]
             # Read ownership before storing a product-specific preference.
-            await self.read_owned(ident)
+            await self.local_item(owner, ident)
             from app.services.logical_products import LogicalProducts
 
             product = LogicalProducts(self.store, self.api).listing(ident)
@@ -455,5 +491,11 @@ class FinancePanel:
                     {"account": self.api.account.id, "cost": str(amount), "declared_at": now()},
                 )
             await state.clear()
-            return await self.item(owner, ident, force_read=True)
+            return (
+                f"✅ Себестоимость сохранена: {amount} ₽ за единицу.",
+                keyboard(
+                    [[("К расчёту прибыли", "finance:" + ident)]],
+                    back=("⬅️ К товару", "item:" + ident),
+                ),
+            )
         raise ValueError("Финансовый сценарий устарел")
