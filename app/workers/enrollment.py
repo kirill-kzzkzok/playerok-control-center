@@ -163,6 +163,10 @@ class EnrollmentWorker:
             except APIError as error:
                 status, code = "PENDING", error.code
                 delay = min(900, 30 * 2 ** min(row["attempts"], 5))
+                if error.code == "DELIVERY_SNAPSHOT_NOT_YET_AVAILABLE" and row["attempts"] <= 3:
+                    # Purchase visibility often catches up within seconds. These
+                    # are read-only admissions; no delivery has been queued yet.
+                    delay = min(20, 5 * 2 ** min(row["attempts"], 2))
                 if str(error.retry_after or "").isdigit():
                     delay = max(delay, int(error.retry_after))
             except (Conflict, ValidationError):

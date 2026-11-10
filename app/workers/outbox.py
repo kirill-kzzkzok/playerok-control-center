@@ -349,7 +349,7 @@ class Executor:
 
                 current = await PlatformOrders(self.store, self.api).verify(action)
                 if current["status"] != "PAID":
-                    confirmed = await service.result(action)
+                    confirmed = await service.result(action, observed=current)
                     if confirmed:
                         return confirmed
                     raise ValidationError("Отметка не требуется; статус изменился")

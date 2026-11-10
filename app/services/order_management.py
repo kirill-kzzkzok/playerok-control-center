@@ -161,7 +161,15 @@ async def deal_details(
             snapshot.get("id") and snapshot.get("direction") and snapshot.get("status") and item.get("id")
         )
 
-    order = await api.call("get_deal", deal_id=ident)
+    missing_short = False
+    try:
+        order = await api.call("get_deal", deal_id=ident)
+    except APIError as error:
+        if error.code != "HTTP_404":
+            raise
+        # The short persisted query can lag behind purchase visibility. The
+        # existing independent full query must still prove this exact sale.
+        order, missing_short = {}, True
     short_complete = complete(order)
     if short_complete:
         sale(order, ident, api.account.id)
@@ -194,7 +202,12 @@ async def deal_details(
         or order.get("has_problem") is None
         or order.get("is_automated") is None
     ):
-        detailed = await api.call("get_delivery_deal", deal_id=ident)
+        try:
+            detailed = await api.call("get_delivery_deal", deal_id=ident)
+        except APIError as error:
+            if missing_short and error.code == "HTTP_404":
+                raise APIError("DELIVERY_SNAPSHOT_NOT_YET_AVAILABLE", retry_after=5) from None
+            raise
         if not complete(detailed):
             raise APIError("DELIVERY_SNAPSHOT_NOT_YET_AVAILABLE")
         sale(detailed, ident, api.account.id)

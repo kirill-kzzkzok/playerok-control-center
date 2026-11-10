@@ -212,7 +212,9 @@ class Fulfillment:
     async def result(self, action, *, observed=None):
         payload = json.loads(action["payload"]) if isinstance(action["payload"], str) else action["payload"]
         current = (
-            observed if observed is not None else await self.api.call("get_deal", deal_id=action["target"])
+            observed
+            if observed is not None
+            else await deal_details(self.api, action["target"], need_chat=False)
         )
         owner = ((current.get("item") or {}).get("user") or {}).get("id")
         if (
