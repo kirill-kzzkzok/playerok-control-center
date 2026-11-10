@@ -796,3 +796,27 @@ async def test_item_promotion_can_exclude_one_listing_directly(rig):
         assert not r.api.charges and not r.store.rows("SELECT 1 FROM outbox")
     finally:
         await bot.session.close()
+
+
+async def test_skipped_promotions_are_summarized_once_without_purchases(rig, caplog):
+    import logging
+    from dataclasses import asdict
+
+    from app.workers.promotions import PromotionWorker
+
+    r = rig
+    revision, policy, selection = r.settings.get()
+    r.settings.save(7, revision, {**asdict(policy), "mode": "position", "threshold": 35}, selection)
+    await r.settings.target(7, "item", "include")
+    r.api.items["item"].update(status="APPROVED", priority="PREMIUM", sequence=13)
+    worker = PromotionWorker(r.store, r.api)
+    with caplog.at_level(logging.INFO, logger="pcc.shop"):
+        await worker.once()
+        r.store.execute("UPDATE promotion_schedule SET due_at=0")
+        await worker.once()
+    summaries = [
+        record.message for record in caplog.records if record.message.startswith("🚀 Автоподнятие ·")
+    ]
+    assert len(summaries) == 1
+    assert "позиция 13" in summaries[0] and "\n" not in summaries[0]
+    assert not r.api.charges and not r.store.rows("SELECT 1 FROM outbox")

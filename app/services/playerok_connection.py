@@ -187,7 +187,7 @@ class PlayerokConnection:
             reason = self.state.get("reason")
             connected = self.state["status"] == "CONNECTED"
             level = 10
-            if reason in TEMPORARY_READ_FAILURES:
+            if reason in TEMPORARY_READ_FAILURES | {"UNAUTHORIZED_OR_CHALLENGE"}:
                 failures = min(3, previous.get("temporary_failures", 0) + 1)
                 warned = bool(previous.get("temporary_warned"))
                 level = 30 if failures == 3 and not warned else 10
@@ -197,7 +197,6 @@ class PlayerokConnection:
                 self.state.pop("temporary_warned", None)
                 if connected:
                     recovered = previous.get("temporary_warned") or previous.get("reason") in {
-                        "UNAUTHORIZED_OR_CHALLENGE",
                         "AUTH_REJECTED",
                         "SESSION_EXPIRED",
                     }

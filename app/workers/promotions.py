@@ -1,5 +1,7 @@
 import asyncio
+import json
 import math
+import re
 import time
 import uuid
 from datetime import datetime
@@ -10,6 +12,7 @@ from app.playerok.adapter import APIError, validate_page
 from app.security.logging import event
 from app.services.products import ValidationError, priority_price_basis
 from app.services.promotion_settings import PromotionSettings
+from app.services.statistics import parsed_time
 
 
 class PromotionWorker:
@@ -279,6 +282,46 @@ class PromotionWorker:
                 "🚀 Автоподнятие проверяет позиции без покупок. "
                 "Проверьте разрешение расходов для текущих настроек в разделе «Продвижение».",
             )
+        summary_at = previous_health.get("summary_at")
+        summary_time = parsed_time(summary_at)
+        if processed and (not summary_time or time.time() - summary_time.timestamp() >= 600):
+            summaries = []
+            for row in self.store.rows(
+                "SELECT s.item_id,s.error_code,e.result FROM promotion_schedule s "
+                "LEFT JOIN promotion_targets t ON t.item_id=s.item_id "
+                "LEFT JOIN promotion_evaluations e ON e.id=(SELECT MAX(id) FROM promotion_evaluations "
+                "WHERE item_id=s.item_id AND policy_revision=?) "
+                "WHERE t.disposition='include' OR (?='all' AND coalesce(t.disposition,'default')!='exclude') "
+                "ORDER BY s.item_id",
+                (revision, selection),
+            ):
+                result = json.loads(row["result"]) if row["result"] else {}
+                name = (
+                    result.get("item_name")
+                    or self.store.setting("promotions:approved:" + row["item_id"], {}).get("name")
+                    or "Товар"
+                )
+                label = re.search(r"\[[A-Za-z0-9]{3}\]$", name)
+                label = label.group() if label else " ".join(name.split())[:35]
+                reasons = result.get("reasons") or []
+                if row["error_code"]:
+                    reason = "чтение Playerok пока недоступно"
+                elif not result:
+                    reason = "ожидает проверки"
+                elif not reasons:
+                    continue  # Queuing is not a confirmed purchase; its receipt has a separate event.
+                elif "Позиция в категории:" in reasons[0]:
+                    reason = f"позиция {result.get('position')}, пропуск"
+                elif "паузы" in reasons[0]:
+                    reason = "пауза между покупками"
+                elif any("лимит" in value for value in reasons):
+                    reason = "достигнут лимит расходов"
+                else:
+                    reason = reasons[0]
+                summaries.append(label + " — " + reason)
+            if summaries:
+                event("INFO", "🚀 Автоподнятие · " + " | ".join(summaries))
+                summary_at = now()
         self.store.set_setting(
             "promotions:health",
             {
@@ -295,6 +338,7 @@ class PromotionWorker:
                 "last_success": last_success,
                 "next_retry": min(retries, default=None),
                 "incident": incident,
+                "summary_at": summary_at,
             },
         )
         if persistent and status == "DEGRADED":

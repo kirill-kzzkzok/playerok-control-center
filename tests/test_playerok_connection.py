@@ -358,7 +358,24 @@ async def test_challenge_recovery_is_visible_once_in_owner_console(rig, caplog):
         api.error = APIError("UNAUTHORIZED_OR_CHALLENGE", diagnostics={"http_status": 403})
         await connection.check(cooldown=0)
         await connection.check(cooldown=0)
+        await connection.check(cooldown=0)
         api.error = None
         await connection.check(cooldown=0)
         await connection.check(cooldown=0)
     assert sum("Связь с Playerok восстановлена" in record.message for record in caplog.records) == 1
+
+
+async def test_brief_challenge_recovery_does_not_spam_console(rig, caplog):
+    import logging
+
+    store, api = rig
+    connection = PlayerokConnection(store, api)
+    with caplog.at_level(logging.INFO, logger="pcc.shop"):
+        await connection.check(cooldown=0)
+        for _ in range(4):
+            api.error = APIError("UNAUTHORIZED_OR_CHALLENGE", diagnostics={"http_status": 403})
+            connection.invalidate("UNAUTHORIZED_OR_CHALLENGE", {"http_status": 403})
+            await connection.check(cooldown=0)
+            api.error = None
+            await connection.check(cooldown=0)
+    assert not caplog.records
