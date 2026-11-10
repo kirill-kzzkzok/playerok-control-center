@@ -46,6 +46,7 @@ class PlayerokConnection:
         self.recheck = asyncio.Event()
         self.last_recheck_request = None
         self.last_started = None
+        self.verified_this_run = False
         self.viewer = None
         self.invalidation_generation = 0
         self.viewer_task = None
@@ -112,6 +113,7 @@ class PlayerokConnection:
             return {**self.state, "busy": True}
         async with self.lock:
             previous = self.store.setting("playerok:verification", {})
+            recovering_startup = not self.verified_this_run and self.last_started is not None
             generation = self.invalidation_generation
             self.last_started = time.monotonic()
             self.disable()
@@ -169,6 +171,7 @@ class PlayerokConnection:
                 self.state.update(status="UNKNOWN", reason="CHECK_FAILED")
             else:
                 self.viewer = viewer
+                self.verified_this_run = True
                 balance = (viewer.get("profile") or {}).get("balance")
                 if isinstance(balance, dict):
                     self.store.set_setting(
@@ -196,10 +199,15 @@ class PlayerokConnection:
                 self.state.pop("temporary_failures", None)
                 self.state.pop("temporary_warned", None)
                 if connected:
-                    recovered = previous.get("temporary_warned") or previous.get("reason") in {
-                        "AUTH_REJECTED",
-                        "SESSION_EXPIRED",
-                    }
+                    recovered = (
+                        recovering_startup
+                        or previous.get("temporary_warned")
+                        or previous.get("reason")
+                        in {
+                            "AUTH_REJECTED",
+                            "SESSION_EXPIRED",
+                        }
+                    )
                     level = 20 if recovered else 10
                 elif reason != previous.get("reason"):
                     level = 30
@@ -217,7 +225,10 @@ class PlayerokConnection:
 
     async def run(self, stop):
         """Reverify identity after failure, never restore gates from cached success."""
-        delay = 30
+        # One early read after a refused startup. Sustained failures use the usual backoff.
+        delay = (
+            10 if not self.verified_this_run and self.state["reason"] == "UNAUTHORIZED_OR_CHALLENGE" else 30
+        )
         stopped = asyncio.create_task(stop.wait())
         try:
             while not stop.is_set():
@@ -234,7 +245,7 @@ class PlayerokConnection:
                 self.recheck.clear()
                 if self.state["status"] != "CONNECTED":
                     await self.check(cooldown=0 if requested in done else 5)
-                    delay = 30 if self.state["status"] == "CONNECTED" else min(delay * 2, 300)
+                    delay = 30 if self.state["status"] == "CONNECTED" else min(max(30, delay * 2), 300)
                 else:
                     if self.last_started is None or time.monotonic() - self.last_started >= 300:
                         await self.check()

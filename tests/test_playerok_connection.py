@@ -379,3 +379,37 @@ async def test_brief_challenge_recovery_does_not_spam_console(rig, caplog):
             api.error = None
             await connection.check(cooldown=0)
     assert not caplog.records
+
+
+@pytest.mark.parametrize(
+    "code,expected_delay",
+    [("UNAUTHORIZED_OR_CHALLENGE", 10), ("RATE_LIMITED", 30)],
+)
+async def test_startup_viewer_recovery_retries_and_reports_ready_once(
+    rig, monkeypatch, caplog, code, expected_delay
+):
+    store, api = rig
+    connection = PlayerokConnection(store, api)
+    api.error = APIError(code, diagnostics={"http_status": 403 if expected_delay == 10 else 429})
+    await connection.check(cooldown=0)
+    stop = asyncio.Event()
+    delays = []
+
+    async def wait(tasks, *, timeout, return_when):
+        delays.append(timeout)
+        if len(delays) == 1:
+            assert not api.account.writes_enabled and not connection.reads_allowed
+            connection.last_started -= timeout
+            api.error = None
+        else:
+            stop.set()
+        return set(), tasks
+
+    monkeypatch.setattr(asyncio, "wait", wait)
+    with caplog.at_level("INFO", logger="pcc.shop"):
+        await connection.run(stop)
+        await connection.check(cooldown=0)
+    assert delays == [expected_delay, 30]
+    assert connection.reads_allowed and api.account.writes_enabled
+    assert api.calls == ["get", "get", "get"]
+    assert sum("Связь с Playerok восстановлена" in r.message for r in caplog.records) == 1
