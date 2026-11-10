@@ -25,17 +25,12 @@ async def test_category_position_of_both_listings_drives_one_guarded_purchase_ea
     await configure(r)
     worker = PromotionWorker(r.store, r.api)
     await worker.once()
-    assert not r.api.charges and not r.store.rows("SELECT id FROM outbox")
+    assert not r.api.charges
+    assert len(r.store.rows("SELECT id FROM outbox")) == 2
     assert [
         row["position"]
         for row in r.store.rows("SELECT position FROM promotion_observations ORDER BY item_id")
     ] == [319, 320]
-    r.store.execute(
-        "UPDATE promotion_observations SET checked_at=?",
-        ((datetime.now(UTC) - timedelta(seconds=121)).isoformat(),),
-    )
-    r.store.execute("UPDATE promotion_schedule SET due_at=0")
-    await worker.once()
     for _ in range(3):
         await r.worker.once()
     assert sorted(c["item_id"] for c in r.api.charges) == ["item", "other"]
@@ -73,5 +68,5 @@ async def test_old_priority_rank_observation_cannot_authorize_new_category_purch
     )
     result = await r.settings.evaluate(7, "item", "premium")
     assert result["position"] == 319
-    assert not result["would_allow"]
+    assert result["would_allow"]  # The fresh category observation is sufficient on its own.
     assert not r.store.rows("SELECT id FROM outbox")

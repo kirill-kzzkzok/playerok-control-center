@@ -766,3 +766,33 @@ async def test_item_promotion_history_shows_confirmed_charge_without_buying_agai
         assert len(r.store.rows("SELECT id FROM outbox")) == 1
     finally:
         await bot.session.close()
+
+
+async def test_item_promotion_can_exclude_one_listing_directly(rig):
+    r = rig
+    r.api.items["item"]["status"] = "APPROVED"
+    await r.settings.target(7, "item", "include")
+    await r.settings.target(7, "other", "include")
+    session = TelegramSession()
+    bot = Bot("123:" + "x" * 35, session=session)
+    ui = Interaction(bot, dispatcher(r.store, r.api))
+    try:
+        await ui.click("payp:item:item")
+        assert any(
+            button.callback_data == "promo:item:item"
+            for row in session.calls[-1].reply_markup.inline_keyboard
+            for button in row
+        )
+        await ui.click("promo:item:item")
+        exclude = next(
+            button.callback_data
+            for row in session.calls[-1].reply_markup.inline_keyboard
+            for button in row
+            if button.text == "Не участвовать"
+        )
+        await ui.click(exclude)
+        assert not r.settings.selected("item", "selected")
+        assert r.settings.selected("other", "selected")
+        assert not r.api.charges and not r.store.rows("SELECT 1 FROM outbox")
+    finally:
+        await bot.session.close()

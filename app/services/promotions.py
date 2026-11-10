@@ -78,22 +78,21 @@ class PromotionPolicy:
             return False
         if self.mode == "time":
             return elapsed >= (self.night_interval_seconds if night else self.interval_seconds)
-        if len(positions) < 2:
+        if not positions:
             return False
-        first, second = positions[-2:]
+        latest = positions[-1]
         threshold = self.night_threshold if night else self.threshold
-        if any(
-            not isinstance(p, (list, tuple))
-            or len(p) != 2
-            or not isinstance(p[1], datetime)
-            or p[1].tzinfo is None
-            for p in (first, second)
+        if (
+            not isinstance(latest, (list, tuple))
+            or len(latest) != 2
+            or not isinstance(latest[1], datetime)
+            or latest[1].tzinfo is None
         ):
             return False
         return (
-            all(type(p[0]) is int and p[0] > threshold for p in (first, second))
-            and 0 <= (at - second[1]).total_seconds() <= self.check_seconds
-            and self.check_seconds <= (second[1] - first[1]).total_seconds() <= self.check_seconds * 2
+            type(latest[0]) is int
+            and latest[0] > threshold
+            and 0 <= (at - latest[1]).total_seconds() <= self.check_seconds
         )
 
 

@@ -128,14 +128,7 @@ class PromotionSettings:
             (ident,),
         )
         last = datetime.fromisoformat(rows[0]["created_at"]) if rows else None
-        observations = self.store.rows(
-            "SELECT position,checked_at FROM promotion_observations WHERE item_id=? AND policy_revision=? AND source=? ORDER BY id DESC LIMIT 2",
-            (ident, revision, "Playerok item.sequence (listing category position)"),
-        )
-        positions = [
-            (row["position"], datetime.fromisoformat(row["checked_at"])) for row in reversed(observations)
-        ]
-        if not policy.due(at, last, positions):
+        if not policy.due(at, last, [(position, datetime.fromisoformat(checked))]):
             local = at.astimezone(ZoneInfo("Europe/Moscow"))
             start, end = policy.night_start_hour, policy.night_end_hour
             night = policy.night_enabled and (
@@ -147,14 +140,14 @@ class PromotionSettings:
             elif policy.mode == "position" and position is None:
                 reasons.append("Позиция в категории не получена от Playerok; покупка по позиции недоступна")
             elif policy.mode == "position":
-                reasons.append("Ожидаем две свежие проверки позиции и окончание паузы между покупками")
+                reasons.append("Ожидаем окончания паузы между покупками или свежей позиции")
             else:
                 reasons.append("Ожидаем окончания интервала после предыдущей покупки")
         result.update(
             would_allow=not reasons,
             policy_revision=revision,
             quote_id=quote_id,
-            source=observations[0]["checked_at"],
+            source=checked,
             position=position,
             position_scope="sequence; позиция в категории из карточки Playerok",
             paid_execution_available=True,

@@ -89,6 +89,7 @@ class PaidPromotionsPanel:
         if intent.get("candidate_id") and intent["candidate_id"] == payload.get("before_payment_id"):
             text += "\nПосле запроса Playerok вернул ID предыдущего платежа."
         rows = [[("Открыть операцию", "ops:show:" + row["id"])]] if row["id"] else []
+        rows.append([("Участие в автоподнятии", "promo:item:" + ident)])
         rows.append([("История продвижения", "payp:history:" + ident)])
         if len(pending) > 1:
             text += f"\nТаких операций: {len(pending)}."
@@ -214,6 +215,7 @@ class PaidPromotionsPanel:
                 ]
                 + [
                     [("Автоподнятие", "payp:auto:" + ident)],
+                    [("Участие в автоподнятии", "promo:item:" + ident)],
                     [("История продвижения", "payp:history:" + ident)],
                 ],
                 back=("⬅️ К товару", "item:" + ident),

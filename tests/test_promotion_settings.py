@@ -85,10 +85,11 @@ def test_configurable_night_hours_and_two_fresh_position_checks():
     assert not policy.due(at, at - timedelta(hours=2))
     assert policy.due(at, at - timedelta(hours=4))
     policy = active(mode="position")
-    assert policy.due(at, None, [(20, at - timedelta(seconds=120)), (19, at)])
-    assert not policy.due(at, None, [(20, at), (19, at)])
-    assert not policy.due(at, None, [(True, at - timedelta(seconds=120)), (19, at)])
-    assert not policy.due(at, None, [(20, at.replace(tzinfo=None)), (19, at)])
+    assert policy.due(at, None, [(19, at)])
+    assert not policy.due(at, None, [(19, at - timedelta(seconds=121))])
+    assert not policy.due(at, None, [(19, at + timedelta(seconds=1))])
+    assert not policy.due(at, None, [(True, at)])
+    assert not policy.due(at, None, [(19, at.replace(tzinfo=None))])
 
 
 async def test_real_quote_dry_run_never_charges_and_journals_separate_evaluation(setup):
@@ -101,17 +102,12 @@ async def test_real_quote_dry_run_never_charges_and_journals_separate_evaluation
     assert not store.rows("SELECT * FROM outbox")
 
 
-async def test_position_mode_requires_two_spaced_real_reads(setup):
-    store, _, _, service = setup
+async def test_position_mode_uses_latest_live_category_read(setup):
+    _, _, item, service = setup
     service.save(1, 0, asdict(active(mode="position")), "all")
-    assert not (await service.evaluate(1, "item", "premium"))["would_allow"]
-    assert not (await service.evaluate(1, "item", "premium"))["would_allow"]
-    # Previous stored read occurred 121 seconds ago; current read comes from mock API.
-    store.execute(
-        "UPDATE promotion_observations SET checked_at=?",
-        ((datetime.now(UTC) - timedelta(seconds=121)).isoformat(),),
-    )
     assert (await service.evaluate(1, "item", "premium"))["would_allow"]
+    item["sequence"] = 1
+    assert not (await service.evaluate(1, "item", "premium"))["would_allow"]
 
 
 async def test_limits_include_unknown_and_reserved_charges_with_moscow_day_boundary(setup):
@@ -151,6 +147,7 @@ async def test_telegram_settings_restart_and_readonly_evaluation(setup):
         await panel.callback(f"pp:{nonce}:save", 1, state)
     await panel.callback("promo:item:item", 1, state)
     nonce = (await state.get_data())["promotion_item"]["nonce"]
+    await panel.callback(f"pi:{nonce}:more:open", 1, state)
     text, _ = await panel.callback(f"pi:{nonce}:quote:0", 1, state)
     assert "Списано: 0" in text
     assert not store.rows("SELECT * FROM outbox")

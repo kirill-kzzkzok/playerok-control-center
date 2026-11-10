@@ -37,7 +37,7 @@ def buying_conditions(policy):
         text = f"Поднимает товар через {interval(max(policy.interval_seconds, policy.cooldown_seconds))} после предыдущей покупки."
     else:
         text = (
-            f"Поднимает, если позиция в категории ниже {policy.threshold}-й дважды подряд."
+            f"Поднимает, если позиция в категории ниже {policy.threshold}-й."
             f" Проверка каждые {interval(policy.check_seconds)}, покупка не чаще раза в {interval(policy.cooldown_seconds)}."
         )
     if policy.night_enabled:
@@ -322,21 +322,14 @@ class PromotionsPanel:
             return await self.settings(state, advanced=action == "promo:settings")
         if len(parts) == 3 and parts[:2] == ["promo", "item"]:
             item = await self.service.access.item(owner, parts[2])
-            quotes = await self.api.call(
-                "get_item_priority_statuses", item_id=parts[2], item_price=priority_price_basis(item)
-            )
             nonce = secrets.token_hex(6)
             data = {
                 "id": parts[2],
                 "nonce": nonce,
-                "quotes": [quote["id"] for quote in quotes],
-                "quote_previews": [
-                    {key: quote.get(key) for key in ("type", "price", "period")} for quote in quotes
-                ],
+                "quotes": [],
+                "name": item.get("name") or "Товар",
             }
             await state.set_state(None)
-            await state.set_data({"promotion_item": data})
-            data["name"] = item.get("name") or "Товар"
             await state.set_data({"promotion_item": data})
             return self.item_view(data)
         data = await state.get_data()
@@ -346,11 +339,24 @@ class PromotionsPanel:
                 raise Conflict("Проверка товара устарела")
             if parts[2] == "more":
                 view["advanced"] = parts[3] == "open"
+                if view["advanced"]:
+                    item = await self.service.access.item(owner, view["id"])
+                    quotes = await self.api.call(
+                        "get_item_priority_statuses",
+                        item_id=view["id"],
+                        item_price=priority_price_basis(item),
+                    )
+                    view["quotes"] = [quote["id"] for quote in quotes]
+                    view["quote_previews"] = [
+                        {key: quote.get(key) for key in ("type", "price", "period")} for quote in quotes
+                    ]
                 await state.update_data(promotion_item=view)
                 return self.item_view(view)
             if parts[2] == "target":
                 await self.service.target(owner, view["id"], parts[3])
-                return await self.callback("promo:item:" + view["id"], owner, state)
+                view.update(nonce=secrets.token_hex(6), advanced=False, quotes=[], quote_previews=[])
+                await state.update_data(promotion_item=view)
+                return self.item_view(view)
             if parts[2] != "quote" or not 0 <= int(parts[3]) < len(view["quotes"]):
                 raise ValidationError("Стоимость недоступна")
             result = await self.service.evaluate(owner, view["id"], view["quotes"][int(parts[3])])

@@ -29,7 +29,11 @@ async def test_inactive_schedule_cannot_consume_selected_slots_or_buy(rig, exclu
     assert not r.store.rows(
         "SELECT item_id FROM promotion_schedule WHERE item_id LIKE 'excluded-%' AND checked_at IS NOT NULL"
     )
-    assert not r.store.rows("SELECT * FROM outbox")  # Only first sequence observation.
+    assert {row["target"] for row in r.store.rows("SELECT * FROM outbox")} == {"item", "other"}
+    assert not r.api.charges
+    for _ in range(3):
+        await r.worker.once()
+    assert sorted(charge["item_id"] for charge in r.api.charges) == ["item", "other"]
     # Switching modes neither drops excluded rows nor invalidates exact approvals.
     revision, policy, _ = r.settings.get()
     approval = deepcopy(r.store.setting("promotions:approved:item"))

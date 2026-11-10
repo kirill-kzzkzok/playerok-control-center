@@ -101,7 +101,7 @@ def test_statistics_excludes_refunds_from_revenue_and_future(store):
 def test_promotion_defaults_and_two_position_checks(store):
     at = datetime.now(UTC)
     policy = PromotionPolicy(enabled=True, mode="position")
-    assert not policy.due(at, None, [(11, at)])
+    assert policy.due(at, None, [(11, at)])
     assert policy.due(at, None, [(11, at - timedelta(seconds=120)), (12, at)])
     assert not policy.due(at, at - timedelta(seconds=20), [(11, at - timedelta(seconds=120)), (12, at)])
     assert not PromotionPolicy().due(at, None)
