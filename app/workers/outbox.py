@@ -820,7 +820,7 @@ class Executor:
                 return {**self.item_result(observed), "code_migration": receipt}
             if payload.get("logical_binding"):
                 try:
-                    observed = await self.owned_item(target)
+                    observed = observed or await confirmation.readback(action, proof)
                     receipt = LogicalProducts(self.store, self.api).confirm_binding(action, observed)
                 except (APIError, ValueError, TypeError):
                     raise APIError("LOGICAL_BINDING_READBACK_UNKNOWN", uncertain=True) from None

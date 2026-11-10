@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 import uuid
 from datetime import UTC, datetime
 
@@ -59,7 +60,30 @@ class LogicalProductWorker:
         self.paid_retry = False
 
     async def once(self):
-        return await self.scan()
+        adopted = await self.scan()
+        rows = self.store.rows(
+            "SELECT p.id,p.owner_id,o.id AS operation_id FROM logical_products p "
+            "JOIN logical_listings l ON l.product_id=p.id AND l.config_revision=p.revision "
+            "JOIN outbox o ON o.id=l.operation_id "
+            "WHERE p.state='PENDING' AND p.account_id=? AND o.kind='edit' "
+            "AND o.status='UNCERTAIN' AND o.started_at IS NOT NULL AND o.retry_at<=? "
+            "AND json_extract(o.payload,'$.logical_binding.product_id')=p.id "
+            "AND NOT EXISTS(SELECT 1 FROM outbox_late_results r WHERE r.operation_id=o.id) "
+            "ORDER BY o.retry_at,o.created_at LIMIT 1",
+            (self.api.account.id, time.time()),
+        )
+        if rows:
+            row = rows[0]
+            changed = self.store.execute(
+                "UPDATE outbox SET retry_at=? WHERE id=? AND status='UNCERTAIN' AND retry_at<=?",
+                (time.time() + 60, row["operation_id"], time.time()),
+            ).rowcount
+            if changed:
+                try:
+                    await self.service.reconcile_binding(row["owner_id"], row["id"])
+                except (APIError, ValueError):
+                    pass  # A read can resolve evidence, never authorize a repeat updateItem.
+        return adopted
 
     async def scan(self, *, product_id=None):
         async with self.store.logical_scan_lock:

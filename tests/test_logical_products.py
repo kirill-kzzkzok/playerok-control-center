@@ -450,3 +450,69 @@ async def test_paid_relist_is_adopted_before_unrelated_candidate_hits_rate_limit
         await LogicalProductWorker(store, api).once()
     assert service.listing("paid-new")["id"] == product["id"]
     assert not store.rows("SELECT 1 FROM reservations")
+
+
+async def test_binding_readback_retries_temporary_read_after_ack(logical):
+    from app.playerok.adapter import APIError
+
+    store, api, service = logical
+    prepared = service.commit(7, await service.prepare(7, "lot", "fixed_text", {"text": "Delivery"}))
+    original = api.call
+    failed = False
+
+    async def delayed(method, **kwargs):
+        nonlocal failed
+        if api.mutations and not failed:
+            failed = True
+            raise APIError("HTTP_503")
+        return await original(method, **kwargs)
+
+    api.call = delayed
+    await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
+    assert store.rows("SELECT status FROM outbox WHERE id=?", (prepared["operation_id"],)) == [
+        {"status": "SUCCEEDED"}
+    ]
+    assert len(api.mutations) == 1
+
+
+async def test_unknown_binding_is_confirmed_readonly_after_restart(logical):
+    from app.workers.logical_products import LogicalProductWorker
+
+    store, api, service = logical
+    result = service.commit(7, await service.prepare(7, "lot", "fixed_text", {"text": "Delivery"}))
+    api.lost_ack = True
+    await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
+    assert store.rows("SELECT status FROM outbox")[0]["status"] == "UNCERTAIN"
+    restored = Store(store.path)
+    try:
+        await LogicalProductWorker(restored, api).once()
+        assert restored.rows("SELECT status FROM outbox")[0]["status"] == "SUCCEEDED"
+        product = LogicalProducts(restored, api).product(result["product_id"])
+        assert product["state"] == "VERIFIED" and not product["enabled"]
+        assert len(api.mutations) == 1
+    finally:
+        restored.close()
+
+
+@pytest.mark.parametrize("risk", ["late", "changed", "owner", "closed"])
+async def test_background_binding_never_confirms_conflicting_or_closed_unknown(logical, risk):
+    from app.workers.logical_products import LogicalProductWorker
+
+    store, api, service = logical
+    result = service.commit(7, await service.prepare(7, "lot", "fixed_text", {"text": "Delivery"}))
+    api.lost_ack = True
+    await OutboxWorker(store, Executor(store, api, Products(store, api))).once()
+    if risk == "late":
+        store.record_late_result(result["operation_id"], "old", "SUCCEEDED", {"remote_id": "lot"})
+    elif risk == "changed":
+        api.item["description"] = "Changed externally"
+    elif risk == "owner":
+        api.item["user"]["id"] = "another"
+    else:
+        store.execute("UPDATE outbox SET status='PERMANENT_FAILED',error_code='MANUALLY_STOPPED_UNCERTAIN'")
+    await LogicalProductWorker(store, api).once()
+    assert store.rows("SELECT status FROM outbox")[0]["status"] == (
+        "PERMANENT_FAILED" if risk == "closed" else "UNCERTAIN"
+    )
+    assert len(api.mutations) == 1
+    assert not service.product(result["product_id"])["enabled"]

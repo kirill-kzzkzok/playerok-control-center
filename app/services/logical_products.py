@@ -868,7 +868,8 @@ class LogicalProducts:
         self.authority(owner, product["account_id"])
         rows = self.store.rows(
             "SELECT o.* FROM outbox o JOIN logical_listings l ON l.operation_id=o.id "
-            "WHERE l.product_id=? AND l.config_revision=? AND o.status='UNCERTAIN'",
+            "WHERE l.product_id=? AND l.config_revision=? AND o.status='UNCERTAIN' "
+            "AND NOT EXISTS(SELECT 1 FROM outbox_late_results r WHERE r.operation_id=o.id)",
             (product_id, product["revision"]),
         )
         if len(rows) != 1:
@@ -880,7 +881,8 @@ class LogicalProducts:
         with self.store.transaction() as db:
             self.binding_guard(action, writes=False)
             changed = db.execute(
-                "UPDATE outbox SET status='SUCCEEDED',result=?,error_code=NULL WHERE id=? AND status='UNCERTAIN' AND payload=?",
+                "UPDATE outbox SET status='SUCCEEDED',result=?,error_code=NULL WHERE id=? AND status='UNCERTAIN' AND payload=? "
+                "AND NOT EXISTS(SELECT 1 FROM outbox_late_results r WHERE r.operation_id=outbox.id)",
                 (encode(result), action["id"], rows[0]["payload"]),
             ).rowcount
             if changed != 1:
