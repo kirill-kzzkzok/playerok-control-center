@@ -1,7 +1,7 @@
 # Финальная адресная стабилизация: проверяемая приёмка
 
 Дата: 03.11.2026. База: ed1cb60cdcbb662751a394c900a3370c7368b9f4.
-ТЗ: [FINAL_OPERATION_READINESS_SPEC.md](FINAL_OPERATION_READINESS_SPEC.md).
+ТЗ: [FINAL_OPERATION_READINESS_SPEC.md](https://github.com/kirill-kzzkzok/playerok-control-center/blob/e2a8410db958867d09412422f35a0a683a1dda7e/docs/FINAL_OPERATION_READINESS_SPEC.md).
 
 ## Исправления
 
