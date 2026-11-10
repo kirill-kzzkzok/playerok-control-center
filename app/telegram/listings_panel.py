@@ -1,6 +1,7 @@
 import asyncio
 import json
 import secrets
+import time
 
 from app.database.store import now
 from app.playerok.adapter import APIError, validate_page
@@ -317,12 +318,36 @@ class ListingsPanel:
             if not self.store or not account or self.store.setting("playerok:account_id") != account:
                 raise ValidationError("Подтвердите аккаунт Playerok перед обновлением")
             key = "ui:catalog:" + account
+            cache = {}
             try:
-                async with asyncio.timeout(6):
-                    cache = await catalog_page(self.api, account, {})
-            except TimeoutError:
-                self.request_catalog(account)
-                raise APIError("NETWORK_ERROR") from None
+                async with asyncio.timeout(8):
+                    for _ in range(100):
+                        cache = await catalog_page(self.api, account, cache)
+                        if cache["complete"]:
+                            break
+                    else:
+                        raise APIError("CATALOG_SCAN_LIMIT")
+            except (APIError, TimeoutError) as error:
+                # Never replace the displayed full snapshot with the first page.
+                # Resume only the pages already validated in this fresh traversal.
+                with self.store.transaction():
+                    if (
+                        self.store.setting("playerok:account_id") == account
+                        and self.api.account.id == account
+                    ):
+                        retry_after = getattr(error, "retry_after", None)
+                        self.store.set_setting(
+                            key + ":pending",
+                            {
+                                "scan": cache,
+                                "due": time.time()
+                                + max(30, int(retry_after) if str(retry_after).isdigit() else 0),
+                            },
+                        )
+                if isinstance(error, TimeoutError):
+                    error = APIError("NETWORK_ERROR")
+                error.read_only = True
+                raise error from None
             with self.store.transaction():
                 if self.store.setting("playerok:account_id") != account or self.api.account.id != account:
                     raise ValidationError("Аккаунт Playerok изменился")

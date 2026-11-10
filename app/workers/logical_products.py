@@ -60,7 +60,6 @@ class LogicalProductWorker:
         self.paid_retry = False
 
     async def once(self):
-        adopted = await self.scan()
         rows = self.store.rows(
             "SELECT p.id,p.owner_id,o.id AS operation_id FROM logical_products p "
             "JOIN logical_listings l ON l.product_id=p.id AND l.config_revision=p.revision "
@@ -83,7 +82,9 @@ class LogicalProductWorker:
                     await self.service.reconcile_binding(row["owner_id"], row["id"])
                 except (APIError, ValueError):
                     pass  # A read can resolve evidence, never authorize a repeat updateItem.
-        return adopted
+        # An unrelated catalog timeout must not starve exact readback of a
+        # previously dispatched binding. This path never repeats updateItem.
+        return await self.scan()
 
     async def scan(self, *, product_id=None):
         async with self.store.logical_scan_lock:
