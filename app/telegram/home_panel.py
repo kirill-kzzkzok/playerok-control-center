@@ -262,12 +262,12 @@ class HomePanel:
         note = ""
         if status == "DISCONNECTED":
             note = "\nПроверьте подключение в профиле."
-        worker_problem = next(
-            (row[0][0] for row in self.problems(include_paid=False) if row[0][1] == "diagnostics:workers"),
-            None,
-        )
+        problems = self.problems(include_paid=False)
+        worker_problem = next((row[0][0] for row in problems if row[0][1] == "diagnostics:workers"), None)
         if worker_problem:
             note += "\n\n" + escaped(worker_problem)
+        if any(row[0][1] == "ops:list:UNCERTAIN:0" for row in problems):
+            note += "\n\n⚠️ Есть действия с неизвестным результатом, требующие сверки. Подробности — в проблемах заказов."
         return (
             "🏠 <b>Мой магазин</b>\n\n"
             + connection

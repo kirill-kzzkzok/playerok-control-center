@@ -112,13 +112,15 @@ def test_transport_groups_failures_and_reports_recovery_without_raw_content(capl
             state, token, started = session._begin("getUpdates")
             state["error_code"] = "NETWORK_ERROR"
             session._finish(state, token, started, "TelegramNetworkError")
+        assert session._connection_failures["getUpdates"] == 4
         state, token, started = session._begin("getUpdates")
         session._finish(state, token, started, "OK")
         for _ in range(2):
             state, token, started = session._begin("sendMessage")
             session._finish(state, token, started, "OK")
     assert len(caplog.records) == 2
-    assert "4 неудачных" in caplog.text
+    assert "Связь с Telegram восстановлена" in caplog.text
+    assert not session._connection_failures and not session._connection_alert
     assert "http=" not in caplog.text
 
 
@@ -188,9 +190,11 @@ def test_warning_window_groups_network_causes_and_keeps_total_count(caplog, monk
         emit("TIMEOUT")
         clock[0] = 31
         emit("NETWORK_ERROR")
+        assert session._connection_failures["getUpdates"] == 4
         emit(None)
     assert sum(r.levelno == logging.WARNING for r in caplog.records) == 1
-    assert "4 неудачных" in caplog.text
+    assert "Связь с Telegram восстановлена" in caplog.text
+    assert not session._connection_failures and not session._connection_alert
     assert len(caplog.records) == 2
 
 
