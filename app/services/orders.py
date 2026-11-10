@@ -447,6 +447,7 @@ class Orders:
                 and when
                 and (datetime.now(UTC) - timedelta(minutes=2)).isoformat() <= when <= now()
             ):
+                buyer_name = author.get("username")
                 deal_id = (message.get("deal") or {}).get("id")
                 orders = db.execute(
                     "SELECT id,status,json_extract(payload,'$.user.username') AS buyer FROM orders "

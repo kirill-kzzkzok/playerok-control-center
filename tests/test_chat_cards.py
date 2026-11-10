@@ -80,11 +80,12 @@ def test_buyer_console_logs_playerok_nick_once_without_message_text(cards, caplo
         "id": "buyer-message",
         "text": "private customer content",
         "user": {"id": "buyer", "username": "Buyer_42"},
+        "created_at": datetime.now(UTC).isoformat(),
     }
     orders = Orders(cards.store)
     assert orders.ingest_message("chat", message)
     assert not orders.ingest_message("chat", message)
-    assert caplog.messages.count("📩 Новое сообщение от покупателя Buyer_42") == 1
+    assert caplog.messages.count("📩 Новое сообщение от покупателя · Buyer_42") == 1
     assert "private customer content" not in caplog.text
 
 
