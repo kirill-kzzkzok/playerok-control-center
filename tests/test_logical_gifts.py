@@ -161,6 +161,6 @@ async def test_logical_refund_requires_order_snapshot_permission_even_if_old_pan
     assert r.service.discover() == 1
     r.store.set_setting("gifts:listing_options:item", {"refund": True})
     await r.worker.once()
-    assert r.service.job("order")["state"] == "INVALID_RECIPIENT"
+    assert r.service.job("order")["state"] == "PENDING"
     assert not r.store.rows("SELECT 1 FROM outbox WHERE kind='gift_refund'")
     assert not r.api.refunds and not r.remote.payments

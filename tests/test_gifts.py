@@ -326,15 +326,15 @@ async def test_preflight_failures_never_spend_or_refund(rig, fault, expected):
 
 @pytest.mark.parametrize("error", [errors.UsernameInvalidError(None), errors.UsernameNotOccupiedError(None)])
 @pytest.mark.parametrize("supported", [False, True])
-async def test_definitive_username_failure_refund_or_honest_manual_fallback(rig, error, supported):
+async def test_definitive_username_failure_refund_or_request_correction(rig, error, supported):
     r = rig
     await enroll(r)
     r.api.support_refund = supported
     r.remote.resolve_error = error
     await r.worker.once()
     j = r.service.job("order")
-    assert j["state"] == "INVALID_RECIPIENT" and not r.remote.payments
-    assert j["refund_state"] == ("QUEUED" if supported else "MANUAL")
+    assert j["state"] == ("INVALID_RECIPIENT" if supported else "PENDING") and not r.remote.payments
+    assert j["refund_state"] == ("QUEUED" if supported else "NONE")
     if supported:
         await r.worker.once()
         assert r.service.job("order")["refund_state"] == "CONFIRMED"
@@ -343,7 +343,11 @@ async def test_definitive_username_failure_refund_or_honest_manual_fallback(rig,
     await r.worker.once()
     from app.gifts.execution import MESSAGES
 
-    assert r.api.sent[0][1] == MESSAGES["REFUNDED" if supported else "INVALID"]
+    if supported:
+        assert r.api.sent[0][1] == MESSAGES["REFUNDED"]
+    else:
+        assert r.store.rows("SELECT 1 FROM outbox WHERE kind='reply'")
+        assert not r.api.sent  # This fixture has no confirmed PM participants.
     assert len(r.api.refunds) == int(supported)
     from app.workers.notifications import Notifications
 
@@ -354,9 +358,7 @@ async def test_definitive_username_failure_refund_or_honest_manual_fallback(rig,
         problems = [
             call.text for call in session.calls if "ПРОБЛЕМА С ЗАКАЗОМ" in (getattr(call, "text", "") or "")
         ]
-        assert len(problems) == int(not supported)
-        if problems:
-            assert "username" in problems[0] and "/deal/order" in problems[0]
+        assert not problems
     finally:
         await bot.session.close()
 
@@ -937,7 +939,7 @@ async def test_refunds_need_separate_permission(rig):
     r.api.support_refund = True
     r.remote.resolve_error = errors.UsernameNotOccupiedError(None)
     await r.worker.once()
-    assert r.service.job("order")["refund_state"] == "MANUAL"
+    assert r.service.job("order")["refund_state"] == "NONE"
     assert not r.api.refunds
 
 
@@ -1324,11 +1326,14 @@ async def test_recipient_request_restart_uses_dispatch_evidence(rig, proof):
     assert not r.remote.payments
 
 
-async def test_malformed_checkout_username_requests_chat_correction(rig):
+@pytest.mark.parametrize("not_found", [False, True])
+async def test_bad_checkout_username_requests_chat_correction(rig, not_found):
     r = rig
     r.store.set_setting("playerok:account_id", r.api.account.id)
     await enroll(r)
-    r.api.orders["order"]["obtaining_fields"][0]["value"] = "not a username!"
+    r.api.orders["order"]["obtaining_fields"][0]["value"] = "@Ghostbuyer" if not_found else "not a username!"
+    if not_found:
+        r.remote.resolve_error = errors.UsernameNotOccupiedError(None)
     original = r.api.call
     answers = []
 
@@ -1349,6 +1354,13 @@ async def test_malformed_checkout_username_requests_chat_correction(rig):
     await r.worker.once()
     assert len(r.api.sent) == 1 and "обязательно с @" in r.api.sent[0][1]
     assert not r.remote.payments and not r.api.refunds
+    if not_found:
+        assert "не нашли Telegram-аккаунт" in r.api.sent[0][1]
+        r.store.execute("UPDATE outbox SET retry_at=0 WHERE kind='gift_send'")
+        await r.worker.once()
+        assert not await r.worker.once()
+        assert len(r.api.sent) == 1 and not r.remote.payments
+        r.remote.resolve_error = None
     await asyncio.sleep(1.1)  # The fixture timestamps its sale one second ahead.
     answers.append(
         {

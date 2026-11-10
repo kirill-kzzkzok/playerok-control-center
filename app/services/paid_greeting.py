@@ -214,14 +214,15 @@ async def prepare(store, api, action):
         missing = not any(f.get("id") == field_id and f.get("value") for f in fields if isinstance(f, dict))
         action["recipient_requested"] = missing
         if proof.get("recipient_request"):
-            if not missing:
-                return None
             from app.gifts.mtproto import GiftFailure
             from app.gifts.service import GiftService
 
+            service = GiftService(store, api, api.gift_settings, api.gift_sender)
+            if proof.get("rejected_field") and not service.recipient_chat_matches(order, chat):
+                raise Conflict("Чат для исправления Telegram @username не подтверждён")
             try:
-                await GiftService(store, api, api.gift_settings, api.gift_sender).recipient_username(
-                    order, {"username_field_id": field_id}, request=False
+                await service.recipient_username(
+                    order, {"username_field_id": field_id}, request=False, chat=chat
                 )
             except GiftFailure as error:
                 if error.code != "RECIPIENT_DATA_PENDING":
@@ -230,7 +231,13 @@ async def prepare(store, api, action):
                 return None
             return (
                 f"{FRAME}\n\n"
-                + ("💌 не получилось распознать username из заказа.\n" if invalid else "")
+                + (
+                    "💌 не нашли Telegram-аккаунт по указанному @username.\n"
+                    if proof.get("rejected_field") or proof.get("rejected_message")
+                    else "💌 не получилось распознать username из заказа.\n"
+                    if invalid
+                    else ""
+                )
                 + "чтобы отправить подарок,\nпришли свой Telegram @username одним сообщением, обязательно с @ ♡\n\n"
                 f"например: @username\n\n{FRAME}"
             )

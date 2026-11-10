@@ -160,7 +160,7 @@ async def test_gift_outbox_and_refund_respect_only_specific_permissions(gift_rig
         job = r.service.job("order")
         if invalid_recipient:
             assert not r.remote.payments
-            assert job["refund_state"] == ("QUEUED" if refund else "MANUAL")
+            assert job["refund_state"] == ("QUEUED" if refund else "NONE")
             if refund:
                 await r.worker.once(operation_id=job["refund_operation_id"])
                 assert r.service.job("order")["refund_state"] == "CONFIRMED"
@@ -172,7 +172,10 @@ async def test_gift_outbox_and_refund_respect_only_specific_permissions(gift_rig
             assert job["state"] == "SUCCEEDED"
             assert job["refund_state"] == "NONE"
         assert not r.store.rows(
-            "SELECT * FROM outbox WHERE kind IN ('create','edit','delete','publish','delivery','fulfill','reply')"
+            "SELECT * FROM outbox WHERE kind IN ('create','edit','delete','publish','delivery','fulfill')"
+        )
+        assert len(r.store.rows("SELECT 1 FROM outbox WHERE kind='reply'")) == int(
+            invalid_recipient and not refund
         )
     assert not r.api.sent
     if not (allowed and invalid_recipient and refund):

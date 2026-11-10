@@ -628,36 +628,57 @@ class GiftService:
             raise GiftFailure("LISTING_CHANGED") from None
         return order
 
-    async def recipient_username(self, order, listing, *, request=True):
+    def recipient_chat_matches(self, order, chat):
+        chat_id = order["chat"]["id"]
+        buyer = (order.get("user") or {}).get("id")
+        return bool(
+            buyer
+            and buyer != self.api.account.id
+            and chat.get("id") == chat_id
+            and chat.get("type") == "PM"
+            and chat.get("is_texting_allowed") is True
+            and {user.get("id") for user in chat.get("users") or []} == {buyer, self.api.account.id}
+            and not self.store.rows(
+                "SELECT 1 FROM orders WHERE chat_id=? AND id<>? AND status IN ('PAID','SENT') LIMIT 1",
+                (chat_id, order["id"]),
+            )
+        )
+
+    def recipient_request_key(self, order, source=None):
+        return "gift-recipient-request:" + order["id"] + (":" + source if source else "")
+
+    async def recipient_username(self, order, listing, *, request=True, chat=None):
         """Read explicit buyer data only; chat fallback is scoped to one paid sale."""
         field_id = listing["username_field_id"]
         fields = order.get("obtaining_fields")
         matches = [f for f in fields or [] if isinstance(f, dict) and f.get("id") == field_id]
+        rejected_checkout = False
         if len(matches) > 1:
             return buyer_recipient(order, field_id=field_id)
         if matches and matches[0].get("value"):
             try:
-                return buyer_recipient(order, field_id=field_id)
+                username = buyer_recipient(order, field_id=field_id)
             except GiftValidationError:
                 pass  # One malformed field can be corrected in the verified buyer chat.
+            else:
+                fingerprint = hashlib.sha256(username.casefold().encode()).hexdigest()
+                rejected_checkout = bool(
+                    self.store.rows(
+                        "SELECT 1 FROM outbox WHERE operation_key=?",
+                        (self.recipient_request_key(order, "field:" + fingerprint),),
+                    )
+                )
+                if not rejected_checkout:
+                    return username
         deliverable(order, order["id"], self.api.account.id, wait_for_details=True)
         chat_id = order["chat"]["id"]
         buyer = (order.get("user") or {}).get("id")
         created = server_time(order.get("created_at"))
         if not buyer or buyer == self.api.account.id or not created:
             raise GiftFailure("RECIPIENT_DATA_PENDING")
-        chat = await self.api.call("get_chat", chat_id=chat_id)
-        participants = {user.get("id") for user in chat.get("users") or []}
-        if (
-            chat.get("id") != chat_id
-            or chat.get("type") != "PM"
-            or chat.get("is_texting_allowed") is not True
-            or participants != {buyer, self.api.account.id}
-            or self.store.rows(
-                "SELECT 1 FROM orders WHERE chat_id=? AND id<>? AND status IN ('PAID','SENT') LIMIT 1",
-                (chat_id, order["id"]),
-            )
-        ):
+        if chat is None:
+            chat = await self.api.call("get_chat", chat_id=chat_id)
+        if not self.recipient_chat_matches(order, chat):
             raise GiftFailure("RECIPIENT_DATA_PENDING")
         page = await self.api.call("get_chat_messages", chat_id=chat_id, count=24, after_cursor=None)
         try:
@@ -703,14 +724,14 @@ class GiftService:
         if len(names) > 1:
             raise GiftFailure("RECIPIENT_CHANGED")
         if not names:
-            if request:
+            if request and (latest_input or not rejected_checkout):
                 self.request_recipient(order, latest_input[1] if latest_input else None)
             raise GiftFailure("RECIPIENT_DATA_PENDING")
         username, message_id, fingerprint = next(iter(names.values()))
         order["_gift_recipient_message"] = {"id": message_id, "fingerprint": fingerprint}
         return username
 
-    def request_recipient(self, order, message_id=None, *, rejected_message=None):
+    def request_recipient(self, order, message_id=None, *, rejected_message=None, rejected_field=None):
         from app.services.paid_greeting import greeting_key
 
         greeting = self.store.rows(
@@ -718,7 +739,7 @@ class GiftService:
             (greeting_key(self.api.account.id, order["id"]),),
         )
         if (
-            not message_id
+            not (message_id or rejected_field)
             and greeting
             and (
                 greeting[0]["status"] in {"PENDING", "PROCESSING", "RETRYABLE_FAILED", "UNCERTAIN"}
@@ -728,7 +749,7 @@ class GiftService:
             return
         job = self.job(order["id"])
         self.store.enqueue(
-            "gift-recipient-request:" + order["id"] + (":" + message_id if message_id else ""),
+            self.recipient_request_key(order, "field:" + rejected_field if rejected_field else message_id),
             "reply",
             order["chat"]["id"],
             {
@@ -740,6 +761,7 @@ class GiftService:
                     "recipient_request": True,
                     "gift_operation": job["operation_id"],
                     "rejected_message": rejected_message,
+                    "rejected_field": rejected_field,
                 }
             },
         )
@@ -783,16 +805,21 @@ class GiftService:
         try:
             recipient = await self.sender.resolve(username)
         except InvalidRecipient as exc:
-            if not j["spent_at"] and order.get("_gift_recipient_message"):
-                proof = order["_gift_recipient_message"]
-                self.request_recipient(order, proof["id"], rejected_message=proof)
+            if not (j["spent_at"] or j["recipient_id"]):
+                proof = order.get("_gift_recipient_message")
+                if proof:
+                    self.request_recipient(order, proof["id"], rejected_message=proof)
+                elif await self.queue_invalid_recipient_refund(j, exc.code):
+                    raise
+                else:
+                    self.request_recipient(
+                        order, rejected_field=hashlib.sha256(username.casefold().encode()).hexdigest()
+                    )
                 self.store.execute(
                     "UPDATE gift_jobs SET recipient_username=NULL WHERE order_id=? AND state='CHECKING'",
                     (j["order_id"],),
                 )
                 raise GiftFailure("RECIPIENT_DATA_PENDING") from None
-            if not j["spent_at"]:
-                await self.invalid_recipient(j, exc.code)
             raise
         if self.store.setting("gifts:personal_account_id") != self.sender.me.id or (
             j["recipient_id"] and j["recipient_id"] != recipient.user_id
@@ -988,12 +1015,8 @@ class GiftService:
             (op, now(), order_id),
         )
 
-    async def invalid_recipient(self, job, code):
+    async def queue_invalid_recipient_refund(self, job, code):
         # Only two definitive resolveUsername RPC errors reach here, never timeout/FloodWait.
-        self.store.execute(
-            "UPDATE gift_jobs SET state='INVALID_RECIPIENT',error_code=?,refund_state='MANUAL',updated_at=? WHERE order_id=? AND state='CHECKING'",
-            (code, now(), job["order_id"]),
-        )
         order = await deal_details(self.api, job["order_id"])
         deliverable(order, job["order_id"], self.api.account.id)
         listing = self.listing(job["item_id"])
@@ -1029,9 +1052,12 @@ class GiftService:
                     actor=self.listing(job["item_id"])["owner_id"],
                 )
                 db.execute(
-                    "UPDATE gift_jobs SET refund_state='QUEUED',refund_operation_id=? WHERE order_id=? AND state='INVALID_RECIPIENT' AND spent_at IS NULL",
-                    (op, job["order_id"]),
+                    "UPDATE gift_jobs SET state='INVALID_RECIPIENT',error_code=?,refund_state='QUEUED',"
+                    "refund_operation_id=?,updated_at=? WHERE order_id=? AND state='CHECKING' AND spent_at IS NULL",
+                    (code, op, now(), job["order_id"]),
                 )
+            return True
+        return False
 
     def queue_notice(self, db, job, outcome):
         if (
