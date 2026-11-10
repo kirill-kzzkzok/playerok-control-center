@@ -262,6 +262,12 @@ class HomePanel:
         note = ""
         if status == "DISCONNECTED":
             note = "\nПроверьте подключение в профиле."
+        worker_problem = next(
+            (row[0][0] for row in self.problems(include_paid=False) if row[0][1] == "diagnostics:workers"),
+            None,
+        )
+        if worker_problem:
+            note += "\n\n" + escaped(worker_problem)
         return (
             "🏠 <b>Мой магазин</b>\n\n"
             + connection
