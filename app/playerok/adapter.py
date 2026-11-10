@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import random
 import re
 import threading
 import time
@@ -172,7 +173,7 @@ class SafeAccount(Account):
         with self._request_lock:
             if not read and (self._permitted != operation or self._permit_thread != threading.get_ident()):
                 raise APIError("WRITE_NOT_AUTHORIZED")
-            time.sleep(max(0, 0.3 - (time.monotonic() - self._last_request)))
+            time.sleep(max(0, random.uniform(0.3, 0.5) - (time.monotonic() - self._last_request)))
             self._last_request = time.monotonic()
             if not read and self._dispatch_guard:
                 self._dispatch_guard()
