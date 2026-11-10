@@ -148,6 +148,8 @@ def error_text(error):
         }
         return escaped(reasons.get(error.code, gift_reason(error.code)), 800)
     if isinstance(error, APIError):
+        if error.code == "PREMIUM_RECONCILIATION_PENDING":
+            return "Бот сверяет предыдущую покупку продвижения. Новый платёж пока не отправлен; безопасные проверки продолжатся автоматически."
         if error.code == "CONNECTION_NOT_VERIFIED":
             return "Бот перепроверяет подключение Playerok. Действие пока недоступно."
         if error.code == "UNAUTHORIZED_OR_CHALLENGE" and getattr(error, "read_only", False):

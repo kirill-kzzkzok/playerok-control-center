@@ -191,6 +191,7 @@ class PromotionWorker:
                         "HTTP_504",
                         "RATE_LIMITED",
                         "CONNECTION_NOT_VERIFIED",
+                        "PREMIUM_RECONCILIATION_PENDING",
                     }
                 ):
                     self.store.execute(

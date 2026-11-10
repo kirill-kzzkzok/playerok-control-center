@@ -397,6 +397,7 @@ class Notifications:
                     "HTTP_502",
                     "HTTP_503",
                     "HTTP_504",
+                    "PREMIUM_RECONCILIATION_PENDING",
                 }:
                     self.close_pending(event["key"], "SUPPRESSED")
                     continue

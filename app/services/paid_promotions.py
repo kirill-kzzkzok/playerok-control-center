@@ -260,6 +260,8 @@ class PaidPromotions:
                 if checked["reasons"]:
                     raise ValidationError("Расход не разрешён: " + "; ".join(checked["reasons"]))
             if blocking_expenses(self.store):
+                if automatic:
+                    raise APIError("PREMIUM_RECONCILIATION_PENDING")
                 raise Conflict("Предыдущий расход Playerok неизвестен. Сначала выполните сверку")
             if manual:
                 self.check_reviewed_manual_budget(fresh, policy)
@@ -351,13 +353,13 @@ class PaidPromotions:
         ):
             raise ValidationError("Резерв платного размещения не соответствует операции")
         if blocking_expenses(self.store):
-            raise ValidationError("Есть расход с неизвестным результатом")
+            raise APIError("PREMIUM_RECONCILIATION_PENDING")
         released = {intent_key(ident) for ident in release_ids(self.store)}
         for row in self.store.rows("SELECT key,value FROM settings WHERE key LIKE 'promotions:intent:%'"):
             if row["key"] not in released | {intent_key(action["id"])} and json.loads(row["value"]).get(
                 "pending"
             ):
-                raise ValidationError("Другой платёж Playerok выполняется или требует проверки")
+                raise APIError("PREMIUM_RECONCILIATION_PENDING")
         intent = self.store.setting(intent_key(action["id"]), {})
         if intent.get("checked_at") and not quote_fresh(intent["checked_at"], max_age=30):
             raise ValidationError("Тариф устарел до отправки. Нужно новое превью")

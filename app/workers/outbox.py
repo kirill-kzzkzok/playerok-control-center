@@ -1074,6 +1074,9 @@ class OutboxWorker:
             with self.store.transaction() as db:
                 delivery_retry = unstarted_delivery(db, action)
                 listing_retry = unstarted_listing(db, action)
+            if error.code == "PREMIUM_RECONCILIATION_PENDING" and not listing_retry:
+                # Waiting is retryable only with independent no-dispatch proof.
+                error = APIError(error.code, uncertain=True)
             if (
                 error.code == "WRITES_DISABLED"
                 and (delivery_retry or listing_retry)
@@ -1131,6 +1134,7 @@ class OutboxWorker:
                         "UNAUTHORIZED_OR_CHALLENGE",
                         "GIFT_PREFLIGHT_NETWORK",
                         "MARKETING_EDIT_READBACK_PENDING",
+                        "PREMIUM_RECONCILIATION_PENDING",
                     }
                     or delivery_retry
                     and error.code
@@ -1218,6 +1222,10 @@ class OutboxWorker:
             repeated_wait = outcome["status"] == "RETRYABLE_FAILED" and outcome["error_code"] == action.get(
                 "error_code"
             )
+            waiting_payment = (
+                outcome["status"] == "RETRYABLE_FAILED"
+                and outcome["error_code"] == "PREMIUM_RECONCILIATION_PENDING"
+            )
             intent = self.store.setting("promotions:intent:" + action["id"], {})
             checking_receipt = (
                 action["kind"] == "premium_bump"
@@ -1226,7 +1234,9 @@ class OutboxWorker:
                 and intent.get("automatic_receipt_check")
                 and (intent.get("mutation_returned") or "candidate_id" in intent)
             )
-            if checking_completion:
+            if waiting_payment:
+                message = "Автоподнятие ожидает сверки предыдущего расхода; запрос не отправлялся"
+            elif checking_completion:
                 message = "Проверяем отметку «Выполнено» на Playerok"
             elif outcome["status"] == "UNCERTAIN":
                 message = (
@@ -1267,7 +1277,7 @@ class OutboxWorker:
                 order=order_target,
                 operation=action["id"],
                 level=10
-                if repeated_wait or checking_receipt
+                if repeated_wait or checking_receipt or waiting_payment
                 else 20
                 if checking_completion or waiting_recipient
                 else 30,
