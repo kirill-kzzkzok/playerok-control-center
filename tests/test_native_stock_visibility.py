@@ -96,7 +96,7 @@ async def test_denied_native_pause_warns_once_and_never_reserves_extra_stock(sho
             [
                 call
                 for call in r.session.calls
-                if "Playerok не разрешил снять" in (getattr(call, "text", "") or "")
+                if "НЕ УДАЛОСЬ СНЯТЬ ТОВАР С ПРОДАЖИ" in (getattr(call, "text", "") or "")
                 and call.__api_method__ == "sendMessage"
             ]
         )

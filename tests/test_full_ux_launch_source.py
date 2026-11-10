@@ -30,7 +30,8 @@ async def test_launch_uses_current_saved_delivery_settings_without_reset(shop, h
     assert value["after"] == "Saved thanks"
     assert value["greeting"] == ("Saved greeting" if handler == "fixed_text" else "")
     assert value["auto_complete"] is False
-    assert value["inherit"] is bool(product["inherit_enabled"])
+    assert product["inherit_enabled"] == 1
+    assert not any(key.endswith(":inherit") for key in buttons(r.session.last_panel))
     assert not r.api.remote.payments
 
 

@@ -149,6 +149,15 @@ async def test_incomplete_paid_deal_never_uses_an_unconfirmed_full_response(case
         await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
     assert not r.store.rows("SELECT * FROM gift_jobs")
     assert not r.api.remote.payments
+    if fault == "missing-chat":
+        assert LogicalProducts(r.store, r.api).listing(r.full["item"]["id"]) is None
+        assert (
+            r.store.rows(
+                "SELECT outcome FROM audit_log WHERE action='DEAL_ITEM_READ' AND target='snapshot-paid'"
+            )
+            == [{"outcome": "DELIVERY_CHAT_NOT_YET_AVAILABLE"}] * 2
+        )
+        return
     assert (
         len(
             r.store.rows(

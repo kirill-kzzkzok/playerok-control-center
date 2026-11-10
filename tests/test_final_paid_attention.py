@@ -14,7 +14,7 @@ from tests.test_ux_redesign import buttons
 shop = shop_fixture
 
 
-async def test_missing_gift_recipient_is_visible_to_owner_without_a_stars_payment(shop):
+async def test_missing_gift_recipient_is_requested_automatically_without_owner_intervention(shop):
     from app.gifts.worker import GiftWorker
 
     r = await shop(gift=True)
@@ -22,13 +22,30 @@ async def test_missing_gift_recipient_is_visible_to_owner_without_a_stars_paymen
     r.store.set_setting("notifications:initialized", True)
     order = r.api.order("missing-recipient")
     order["obtaining_fields"] = []
+    original = r.api.call
+
+    async def call(method, **kwargs):
+        if method == "get_chat":
+            return {
+                "id": order["chat"]["id"],
+                "type": "PM",
+                "is_texting_allowed": True,
+                "users": [order["user"], {"id": r.api.account.id}],
+            }
+        return await original(method, **kwargs)
+
+    r.api.call = call
     Orders(r.store).ingest(order)
     await EnrollmentWorker(r.store, r.api).once()
     await GiftWorker(r.store, r.api, r.api.gift_settings, r.api.gift_sender).once()
     await r.worker.once()
     await Notifications(r.store, r.bot).once()
     await r.ui.click("attention")
-    assert "order:missing-recipient" in buttons(r.session.last_panel)
+    assert "order:missing-recipient" not in buttons(r.session.last_panel)
+    await r.worker.once()
+    assert any("@username" in message["text"] for message in r.api.messages)
+    await r.ui.click("order:missing-recipient")
+    assert "Статус: Оплачен" in r.session.last_panel.text
     assert not r.api.remote.payments
     assert r.store.rows("SELECT 1 FROM notifications WHERE status='SUCCEEDED'")
     # Repeated observations and fresh worker instances cannot guess a recipient.

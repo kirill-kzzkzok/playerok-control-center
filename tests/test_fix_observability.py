@@ -69,8 +69,14 @@ async def test_commit_worker_updates_same_panel_and_authorized_result(case, kind
 async def test_system_event_fallback_is_human_readable_and_human_literal_is_kept(case, text):
     r = case
     ident = await notification(r, {"id": "system", "user": None, "text": text})
-    assert "{{" not in r.session.messages[ident]["text"]
-    assert "Неизвестный отправитель" not in r.session.messages[ident]["text"]
+    if text == "{{ITEM_PAID}}":
+        assert ident is None
+        assert r.store.rows("SELECT status FROM notifications WHERE event_key='message:system'") == [
+            {"status": "SUPPRESSED"}
+        ]
+    else:
+        assert "{{" not in r.session.messages[ident]["text"]
+        assert "Неизвестный отправитель" not in r.session.messages[ident]["text"]
     human = await notification(r, {"id": "human", "user": {"id": "buyer", "username": "Buyer"}, "text": text})
     assert text in r.session.messages[human]["text"]
     assert len(r.store.rows("SELECT * FROM inbox WHERE kind='message'")) == 2

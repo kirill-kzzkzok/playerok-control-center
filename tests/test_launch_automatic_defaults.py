@@ -21,7 +21,7 @@ async def test_new_launch_defaults_are_automatic_only_for_automated_modes(launch
     ident = await r.launch.open(7, "item", {"delivery": mode})
     value = r.launch.load(7, ident)["payload"]
     assert value["auto_complete"] is (mode != "manual")
-    assert value["inherit"] is (mode != "manual")
+    assert "inherit" not in value  # Relisting inherits automatically; no separate launch choice.
     value["auto_complete"] = False
     draft = r.launch.load(7, ident)
     r.store.update_draft(ident, 7, draft["revision"], value)

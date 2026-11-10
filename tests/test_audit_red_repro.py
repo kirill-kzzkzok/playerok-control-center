@@ -69,8 +69,7 @@ async def test_system_item_paid_event_is_not_a_user_message(store, admin):
         assert Orders(store).ingest_message("ch1", _system_message("m1", "{{ITEM_PAID}}"))
         await Notifications(store, bot).once()
         notices = [v["text"] for v in session.messages.values()]
-        assert len(notices) == 1
-        assert "{{" not in notices[0] and "Неизвестный отправитель" not in notices[0]
+        assert notices == []  # Payment notifications come from verified orders, not chat placeholders.
         assert (
             json.loads(store.rows("SELECT payload FROM inbox WHERE key='message:m1'")[0]["payload"])["text"]
             == "{{ITEM_PAID}}"
