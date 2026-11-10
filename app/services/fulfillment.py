@@ -20,6 +20,17 @@ ACTIVE_UNKNOWN_SQL = (
 )
 
 
+def active_unknown_filter(store):
+    from app.services.premium_review import release_ids
+
+    return (
+        "q.status='UNCERTAIN' AND "
+        + ACTIVE_UNKNOWN_SQL
+        + " AND q.id NOT IN (SELECT value FROM json_each(?))",
+        (encode(sorted(release_ids(store))),),
+    )
+
+
 SELLER_CHECK = "Я передал(а) товар покупателю и выполнил(а) заказ"
 KNOWN_ROLES = {
     "USER",

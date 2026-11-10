@@ -5,7 +5,7 @@ import time
 
 from app.database.store import Conflict
 from app.gifts.outcomes import DELAYED_PREFLIGHT_SQL
-from app.services.fulfillment import ACTIVE_UNKNOWN_SQL
+from app.services.fulfillment import ACTIVE_UNKNOWN_SQL, active_unknown_filter
 from app.services.order_management import ENROLLMENT_WAIT_SQL
 from app.telegram.formatting import escaped
 from app.telegram.keyboards import keyboard, main_menu
@@ -93,12 +93,6 @@ class HomePanel:
     def problems(self, *, include_paid=True):
         checks = [
             (
-                "Операции с неизвестным результатом",
-                "ops:list:UNCERTAIN:0",
-                "SELECT 1 FROM outbox q LEFT JOIN orders o ON o.id=q.target "
-                "WHERE q.status='UNCERTAIN' AND " + ACTIVE_UNKNOWN_SQL + " LIMIT 1",
-            ),
-            (
                 "Действия не выполнены",
                 "ops:list:ALL:0",
                 (
@@ -125,6 +119,12 @@ class HomePanel:
             ),
         ]
         rows = [[(label, path)] for label, path, sql in checks if self.store.rows(sql)]
+        where, params = active_unknown_filter(self.store)
+        if self.store.rows(
+            "SELECT 1 FROM outbox q LEFT JOIN orders o ON o.id=q.target WHERE " + where + " LIMIT 1",
+            params,
+        ):
+            rows.insert(0, [("Операции с неизвестным результатом", "ops:list:UNCERTAIN:0")])
         paid = self.paid_issues() if include_paid else []
         if paid:
             rows.insert(0, [(f"⛔ Оплаченные заказы требуют действия: {paid[0]['total']}", "attention:0")])
@@ -266,8 +266,6 @@ class HomePanel:
         worker_problem = next((row[0][0] for row in problems if row[0][1] == "diagnostics:workers"), None)
         if worker_problem:
             note += "\n\n" + escaped(worker_problem)
-        if any(row[0][1] == "ops:list:UNCERTAIN:0" for row in problems):
-            note += "\n\n⚠️ Есть действия с неизвестным результатом, требующие сверки. Подробности — в проблемах заказов."
         return (
             "🏠 <b>Мой магазин</b>\n\n"
             + connection

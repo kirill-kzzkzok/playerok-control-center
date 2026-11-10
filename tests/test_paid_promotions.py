@@ -399,6 +399,16 @@ async def test_financial_review_counts_debit_without_confirming_or_replaying_old
         await ui.click("payp:applyreview:" + view["nonce"])
         assert not blocking_expenses(r.store)
         assert Reconciliation(r.store, r.api).action(7, op) == old
+        await ui.click("attention")
+        assert "ops:list:UNCERTAIN:0" not in [
+            b.callback_data for row in session.last_panel.reply_markup.inline_keyboard for b in row
+        ]
+        await ui.click("ops:list:UNCERTAIN:0")
+        assert "Операций нет" in session.last_panel.text
+        await ui.click("ops:list:ALL:0")
+        assert "ops:show:" + op in [
+            b.callback_data for row in session.last_panel.reply_markup.inline_keyboard for b in row
+        ]
         assert r.store.rows("SELECT status,amount FROM promotion_expenses") == [
             {"status": "UNCERTAIN", "amount": "10.00"}
         ]

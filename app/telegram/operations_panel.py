@@ -3,6 +3,7 @@ import secrets
 
 from app.database.store import Conflict
 from app.services.edit_confirmation import is_ordinary_edit
+from app.services.fulfillment import active_unknown_filter
 from app.services.premium_review import PREFIX, reviewed, terminal_bump, uncertain_expenses
 from app.services.reconciliation import Reconciliation, signature
 from app.telegram.formatting import escaped
@@ -23,12 +24,12 @@ class OperationsPanel:
             status, page = parts[2], int(parts[3])
             if status not in {"ALL", "UNCERTAIN"} or not 0 <= page <= 1_000_000:
                 raise ValueError("Некорректный список операций")
-            where = "1=1" if status == "ALL" else "status='UNCERTAIN'"
+            where, params = ("1=1", ()) if status == "ALL" else active_unknown_filter(self.store)
             values = self.store.rows(
-                "SELECT id,kind,status FROM outbox WHERE "
+                "SELECT q.id,q.kind,q.status FROM outbox q LEFT JOIN orders o ON o.id=q.target WHERE "
                 + where
-                + " ORDER BY created_at DESC,id DESC LIMIT 13 OFFSET ?",
-                (page * 12,),
+                + " ORDER BY q.created_at DESC,q.id DESC LIMIT 13 OFFSET ?",
+                (*params, page * 12),
             )
             rows = [
                 [

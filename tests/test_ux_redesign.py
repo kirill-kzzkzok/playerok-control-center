@@ -167,9 +167,10 @@ async def test_home_exactly_six_no_fake_connection_and_orders_attention(ux):
     assert not r.api.calls
     r.store.enqueue("uncertain", "reply", "chat", {}, actor=7)
     r.store.execute("UPDATE outbox SET status='UNCERTAIN'")
+    await r.ui.click("orders")
     await r.ui.click("home")
     assert "orders" in buttons(r.session.calls[-1])
-    assert "требующ" in r.session.calls[-1].text
+    assert "Есть действия с неизвестным результатом" not in r.session.calls[-1].text
     await r.ui.click("attention")
     assert "ops:list:UNCERTAIN:0" in buttons(r.session.calls[-1])
     assert not r.api.calls
