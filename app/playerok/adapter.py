@@ -79,12 +79,12 @@ class SafeAccount(Account):
         # Avoid upstream singleton, temporary certificate, TLS fingerprint spoofing and retries.
         self.cookies = parse_cookies(header)
         self.base_url = "https://playerok.com"
-        self.user_agent = "PlayerokControlCenter/0.1"
         self.id = self.username = self.profile = None
         self._is_initiated = False
         self.writes_enabled = writes_enabled
         self.auto_accept_agreements = auto_accept_agreements
         self.client = client or httpx.Client(timeout=20, follow_redirects=False, verify=True, trust_env=False)
+        self.user_agent = self.client.headers["user-agent"]
         self._lock = threading.RLock()
         self._request_lock = threading.RLock()
         self._permitted = None
