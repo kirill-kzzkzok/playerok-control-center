@@ -1,15 +1,10 @@
 """Real Gift/Outbox recovery at API and proxy transport boundaries only."""
 
-from dataclasses import replace
-from types import SimpleNamespace
-
 import pytest
 
 from app.gifts.service import GiftService
-from app.localvpn import active_proxy
 from app.playerok.adapter import APIError
 from app.services.orders import Orders
-from app.services.product_readiness import ProductReadiness
 from tests.test_logical_faults import reopen
 from tests.test_stage_a_controls import shop as shop_fixture
 from tests.test_universal_delivery_e2e import setup_ui
@@ -57,39 +52,31 @@ async def test_five_proven_read_failures_recover_after_restart_without_second_op
 
 
 @pytest.mark.parametrize("stop", [False, True])
-async def test_proxy_outage_does_not_require_manual_reenable_or_override_stop(shop, stop):
+async def test_network_outage_does_not_require_manual_reenable_or_override_stop(shop, stop):
+    from app.gifts.mtproto import GiftFailure
+
     r = await prepared(shop)
-    r.api.gift_settings = replace(r.api.gift_settings, telegram_transport="localvpn")
-    r.api.gift_sender.settings = r.api.gift_settings
+    original = r.api.gift_sender.resolve
 
-    async def confirm():
-        assert proxy.ready
-        return proxy.state["generation"]
+    async def unavailable(username):
+        raise GiftFailure("PROXY_UNAVAILABLE")
 
-    proxy = SimpleNamespace(ready=False, state={"generation": 1}, confirm=confirm)
-    token = active_proxy.set(proxy)
-    try:
-        result = ProductReadiness(r.store, r.api).snapshot("lot", item=r.api.item)
-        assert not result["ready"]
-        ident = r.store.rows("SELECT operation_id FROM gift_jobs")[0]["operation_id"]
-        await r.worker.once()
-        assert r.store.rows("SELECT status FROM outbox WHERE id=?", (ident,)) == [
-            {"status": "RETRYABLE_FAILED"}
-        ]
-        assert not r.api.remote.payments
-        if stop:
-            GiftService(r.store, r.api, r.api.gift_settings, r.api.gift_sender).stop(7)
-        reopen(r)
-        proxy.ready = True
-        r.store.execute("UPDATE outbox SET retry_at=0 WHERE id=?", (ident,))
-        await r.worker.once()
-        assert len(r.api.remote.payments) == (0 if stop else 1)
-        if stop:
-            assert r.store.setting("gifts:stopped")
-        else:
-            assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "SUCCEEDED"}]
-    finally:
-        active_proxy.reset(token)
+    r.api.gift_sender.resolve = unavailable
+    ident = r.store.rows("SELECT operation_id FROM gift_jobs")[0]["operation_id"]
+    await r.worker.once()
+    assert r.store.rows("SELECT status FROM outbox WHERE id=?", (ident,)) == [{"status": "RETRYABLE_FAILED"}]
+    assert not r.api.remote.payments
+    if stop:
+        GiftService(r.store, r.api, r.api.gift_settings, r.api.gift_sender).stop(7)
+    reopen(r)
+    r.api.gift_sender.resolve = original
+    r.store.execute("UPDATE outbox SET retry_at=0 WHERE id=?", (ident,))
+    await r.worker.once()
+    assert len(r.api.remote.payments) == (0 if stop else 1)
+    if stop:
+        assert r.store.setting("gifts:stopped")
+    else:
+        assert r.store.rows("SELECT state FROM gift_jobs") == [{"state": "SUCCEEDED"}]
 
 
 @pytest.mark.parametrize("daily", [100, None])

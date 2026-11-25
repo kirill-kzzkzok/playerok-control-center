@@ -10,31 +10,24 @@ from app.playerok.thread_calls import close_calls
 
 async def diagnose(config):
     result = {"owner_allowlist_configured": bool(config.owner_ids), "writes_enabled": config.writes_enabled}
-    from contextlib import AsyncExitStack
-
     from aiogram import Bot
     from aiogram.client.telegram import TelegramAPIServer
 
-    from app.localvpn import SOCKS_URL, NetworkSettings, PlayerokProxy, open_proxy
+    from app.telegram.system_tunnel import happ_required
     from app.telegram.transport import TelegramNetworkSession
 
     mode = getattr(config, "telegram_transport", "legacy")
     worker = mode == "worker" or (mode == "legacy" and config.use_proxy)
     kwargs = {"api": TelegramAPIServer.from_base(config.telegram_proxy)} if worker else {}
-    if mode == "localvpn":
-        kwargs.update(proxy=SOCKS_URL, localvpn=True)
-    async with AsyncExitStack() as stack:
-        if mode == "localvpn":
-            await stack.enter_async_context(open_proxy(NetworkSettings.load(), PlayerokProxy))
-        session = TelegramNetworkSession(timeout=15, **kwargs)
-        bot = Bot(config.telegram_token, session=session)
-        try:
-            await bot.get_me()
-        except Exception as error:  # noqa: BLE001 -- diagnostics exports only a safe class name
-            result["telegram_error"] = type(error).__name__
-        finally:
-            await session.close()
-        result["telegram"] = session.results
+    session = TelegramNetworkSession(timeout=15, system_tunnel=happ_required(mode), **kwargs)
+    bot = Bot(config.telegram_token, session=session)
+    try:
+        await bot.get_me()
+    except Exception as error:  # noqa: BLE001 -- diagnostics exports only a safe class name
+        result["telegram_error"] = type(error).__name__
+    finally:
+        await session.close()
+    result["telegram"] = session.results
     account = SafeAccount(config.playerok_header)
     api = Playerok(account)
     try:

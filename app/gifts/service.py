@@ -17,7 +17,6 @@ from app.gifts.core import (
     gift_codes,
 )
 from app.gifts.mtproto import GiftFailure, InvalidRecipient
-from app.localvpn import active_proxy
 from app.playerok.adapter import APIError, validate_page
 from app.security.logging import event
 from app.services.order_management import deal_details, deliverable, sale
@@ -329,10 +328,6 @@ class GiftService:
             return "PAYMENT_LOCKED"
         if self.store.setting("gifts:paused", False):
             return "GIFT_TEMPORARY_PAUSE"
-        if self.settings.telegram_transport == "localvpn" and not (
-            active_proxy.get() is not None and active_proxy.get().ready
-        ):
-            return "PROXY_UNAVAILABLE"
         if not self.store.setting("orders:last_complete_sync") or orders_sync_failed(self.store):
             return "GIFT_SYNC_PENDING"
         return None

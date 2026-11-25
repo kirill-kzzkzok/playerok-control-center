@@ -8,7 +8,6 @@ from telethon.sessions import MemorySession
 
 from app.gifts.mtproto import GiftFailure, PersonalGiftSender
 from app.gifts.settings import GiftSettings
-from app.localvpn import active_proxy
 
 
 class Transport:
@@ -49,7 +48,7 @@ class Transport:
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
     settings = GiftSettings(
-        1, "fake", str(tmp_path / "fake.session"), "", "", "", False, 1, 1, telegram_transport="localvpn"
+        1, "fake", str(tmp_path / "fake.session"), "", "", "", False, 1, 1, telegram_transport="direct"
     )
     clients = []
 
@@ -62,11 +61,16 @@ def setup(tmp_path, monkeypatch):
 
     monkeypatch.setattr("app.gifts.mtproto.TelegramClient", factory)
     proxy = SimpleNamespace(ready=True, state={"generation": 1})
-    token = active_proxy.set(proxy)
-    try:
-        yield PersonalGiftSender(settings), proxy, clients
-    finally:
-        active_proxy.reset(token)
+
+    def check():
+        if not proxy.ready:
+            raise OSError("System tunnel unavailable")
+        return proxy.state["generation"]
+
+    proxy.check = check
+    monkeypatch.setattr("app.gifts.mtproto.HappRoute", lambda: proxy)
+    monkeypatch.setattr("app.gifts.mtproto.happ_required", lambda mode: mode == "direct")
+    yield PersonalGiftSender(settings), proxy, clients
 
 
 async def test_cancelled_handshake_drains_telethon_transport_tasks(setup, monkeypatch):

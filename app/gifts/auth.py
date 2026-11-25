@@ -1,11 +1,9 @@
 """One-time interactive login for the PERSONAL Telegram account (run locally)."""
 
 import asyncio
-from contextlib import AsyncExitStack
 from pathlib import Path
 
 from app.gifts.settings import GiftSettings
-from app.localvpn import NetworkSettings, PlayerokProxy, mtproto_proxy, open_proxy
 from app.security.instance import InstanceLock
 
 
@@ -19,28 +17,22 @@ async def main():
         raise SystemExit("Set TG_USER_API_ID and TG_USER_API_HASH in private .env first")
     p = Path(s.session_path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    async with AsyncExitStack() as stack:
-        if s.telegram_transport == "localvpn":
-            await stack.enter_async_context(open_proxy(NetworkSettings.load(), PlayerokProxy))
-        with InstanceLock(str(p) + ".lock"):
-            client = TelegramClient(
-                str(p),
-                s.api_id,
-                s.api_hash,
-                request_retries=0,
-                connection_retries=0,
-                auto_reconnect=False,
-                flood_sleep_threshold=0,
-                proxy=mtproto_proxy(s.telegram_transport),
-                **({"connection": HappConnectionTcpFull} if happ_required(s.telegram_transport) else {}),
-            )
-            async with client:
-                me = await client.get_me()
-                if getattr(me, "bot", False):
-                    raise SystemExit("Only personal Telegram user sessions are supported")
-                print(
-                    "Личный Telegram-аккаунт авторизован. Сессия сохранена локально; не выкладывайте её в Git."
-                )
+    with InstanceLock(str(p) + ".lock"):
+        client = TelegramClient(
+            str(p),
+            s.api_id,
+            s.api_hash,
+            request_retries=0,
+            connection_retries=0,
+            auto_reconnect=False,
+            flood_sleep_threshold=0,
+            **({"connection": HappConnectionTcpFull} if happ_required(s.telegram_transport) else {}),
+        )
+        async with client:
+            me = await client.get_me()
+            if getattr(me, "bot", False):
+                raise SystemExit("Only personal Telegram user sessions are supported")
+            print("Личный Telegram-аккаунт авторизован. Сессия сохранена локально; не выкладывайте её в Git.")
 
 
 if __name__ == "__main__":

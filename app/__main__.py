@@ -14,7 +14,6 @@ from app.config import Config, ConfigurationError
 from app.database.store import Store
 from app.gifts.settings import GiftSettings
 from app.gifts.worker import GiftWorker
-from app.localvpn import SOCKS_URL, NetworkSettings, PlayerokProxy, ProxyUnavailable, open_proxy
 from app.playerok.adapter import Playerok, SafeAccount
 from app.playerok.thread_calls import begin_close_calls, close_calls
 from app.security.access import OwnerMiddleware
@@ -78,11 +77,6 @@ async def outbox_lane(worker, stop, *, kinds=None, excluded_kinds=()):
 
 
 async def run(config, *, network_diagnostics=False, instance_lock=None):
-    if getattr(config, "telegram_transport", "legacy") == "localvpn":
-        async with open_proxy(NetworkSettings.load(), PlayerokProxy, recover_on_start=True):
-            return await run_connected(
-                config, network_diagnostics=network_diagnostics, instance_lock=instance_lock
-            )
     return await run_connected(config, network_diagnostics=network_diagnostics, instance_lock=instance_lock)
 
 
@@ -125,8 +119,6 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
     mode = getattr(config, "telegram_transport", "legacy")
     worker = mode == "worker" or (mode == "legacy" and config.use_proxy)
     session_args = {"api": TelegramAPIServer.from_base(config.telegram_proxy)} if worker else {}
-    if mode == "localvpn":
-        session_args.update(proxy=SOCKS_URL, localvpn=True)
     from app.telegram.system_tunnel import happ_required
 
     if happ_required(mode):
@@ -134,8 +126,7 @@ async def run_connected(config, *, network_diagnostics=False, instance_lock=None
     session = AiohttpSession(timeout=35, diagnostics=network_diagnostics, **session_args)
     event(
         "CHECK",
-        "Telegram Bot API: "
-        + ("SOCKS5 127.0.0.1:1080" if mode == "localvpn" else "Cloudflare Worker" if worker else "Direct"),
+        "Telegram Bot API: " + ("Cloudflare Worker" if worker else "Direct"),
     )
     event("CHECK", "getUpdates / answerCallbackQuery: NOT TESTED — ожидаются реальные запросы")
     bot = Bot(config.telegram_token, session=session, default=DefaultBotProperties(parse_mode="HTML"))
@@ -350,9 +341,6 @@ def main():
             )
     except KeyboardInterrupt:
         return 0
-    except ProxyUnavailable:
-        logger.error("Playerok Proxy не готов. Проверьте localVPN и порт1080. Прямое подключение запрещено.")
-        return 1
     except (ConfigurationError, RuntimeError) as error:
         logger.error("%s", str(error) if isinstance(error, ConfigurationError) else type(error).__name__)
         return 1

@@ -12,7 +12,6 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import BufferedInputFile
 
 from app.database.store import Conflict
-from app.localvpn import active_proxy
 from app.playerok.adapter import APIError
 from app.services.discounts import discount_plan
 from app.services.logical_products import LogicalProducts
@@ -802,12 +801,6 @@ def create_router(store, api, products, synchronizer):
                         else:
                             description = "проверки новых заказов: " + description
                     text += "\n" + label + ": " + description
-                proxy = active_proxy.get()
-                if proxy is not None:
-                    proxy_state = proxy.state
-                    text += "\nPlayerok Proxy · 127.0.0.1:1080 · " + escaped(
-                        proxy_state.get("state", "UNKNOWN"), 40
-                    )
                 workers = store.rows("SELECT value FROM settings WHERE key LIKE 'runtime:worker:%'")
                 failed = any(
                     json.loads(row["value"]).get("state") in {"ERROR", "FAILED", "BACKOFF"} for row in workers

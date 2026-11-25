@@ -53,5 +53,5 @@ def offline_only(monkeypatch):
 
     monkeypatch.setattr(socket.socket, "connect", guarded)
     monkeypatch.setattr(socket.socket, "connect_ex", guarded_ex)
-    for module in ("app.config", "app.localvpn", "app.gifts.settings"):
+    for module in ("app.config", "app.gifts.settings"):
         monkeypatch.setattr(module + ".dotenv_values", isolated_env)

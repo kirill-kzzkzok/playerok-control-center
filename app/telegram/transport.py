@@ -13,7 +13,6 @@ from aiogram.methods import GetFile
 from aiohttp import ClientConnectionError, ClientSession, TraceConfig
 from aiohttp_socks import ProxyConnectionError, ProxyError, ProxyTimeoutError
 
-from app.localvpn import ProxyUnavailable, require_proxy
 from app.security.logging import event
 from app.telegram.errors import telegram_error
 from app.telegram.system_tunnel import HappRoute
@@ -23,18 +22,13 @@ request_evidence = ContextVar("telegram_request_evidence", default=None)
 
 
 class TelegramNetworkSession(AiohttpSession):
-    def __init__(self, *, diagnostics=False, localvpn=False, system_tunnel=False, **kwargs):
+    def __init__(self, *, diagnostics=False, system_tunnel=False, **kwargs):
         super().__init__(**kwargs)
         origin = urlsplit(self.api.base)
         self.origin = (origin.scheme, origin.hostname, origin.port)
         self.route = "Direct" if origin.hostname == "api.telegram.org" else "Worker"
         self.happ_guard = HappRoute() if system_tunnel else None
         self.happ_generation = None
-        self.localvpn = localvpn
-        if localvpn:
-            if kwargs.get("proxy") != "socks5://127.0.0.1:1080" or origin.hostname != "api.telegram.org":
-                raise ValueError("Invalid localVPN route")
-            self.route = "SOCKS5 127.0.0.1:1080"
         self.diagnostics = diagnostics
         self.results = {}
         self._reported = {}
@@ -71,11 +65,6 @@ class TelegramNetworkSession(AiohttpSession):
     async def _request_start(self, session, context, params):
         if self.happ_guard:
             self.happ_guard.check()
-        if self.localvpn:
-            try:
-                require_proxy()
-            except ProxyUnavailable:
-                raise ClientConnectionError("Playerok SOCKS service is not ready") from None
         state = request_evidence.get()
         origin = (params.url.scheme, params.url.host, params.url.port)
         expected_port = self.origin[2] or (443 if self.origin[0] == "https" else 80)
@@ -265,15 +254,6 @@ class TelegramNetworkSession(AiohttpSession):
                 if self.happ_generation != generation:
                     await self.close()
                     self.happ_generation = generation
-            if self.localvpn:
-                try:
-                    require_proxy()
-                except ProxyUnavailable:
-                    from app.telegram.errors import TelegramRequestNotStarted
-
-                    raise TelegramRequestNotStarted(
-                        method=method, message="Local SOCKS admission unavailable"
-                    ) from None
             result = await super().make_request(bot, method, timeout)
             outcome = "OK"
             return result

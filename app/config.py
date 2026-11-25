@@ -9,6 +9,13 @@ class ConfigurationError(ValueError):
     pass
 
 
+def telegram_transport(values):
+    mode = (values.get("TELEGRAM_TRANSPORT") or "direct").strip().lower()
+    if mode not in {"direct", "worker", "legacy"}:
+        raise ConfigurationError("TELEGRAM_TRANSPORT: direct / worker / legacy")
+    return mode
+
+
 @dataclass(frozen=True)
 class Config:
     telegram_token: str = field(repr=False)
@@ -29,9 +36,7 @@ class Config:
         import os
 
         values = {**dotenv_values(path, interpolate=False), **os.environ}
-        from app.localvpn import NetworkSettings
-
-        network = NetworkSettings.load(path)
+        mode = telegram_transport(values)
         token = values.get("TELEGRAM_BOT_TOKEN", "") or ""
         header = values.get("PLAYEROK_HEADER_STRING", "") or ""
         if not re.fullmatch(r"\d+:[A-Za-z0-9_-]{20,}", token):
@@ -50,7 +55,7 @@ class Config:
             ) from None
         proxy = (values.get("TELEGRAM_API_PROXY_URL") or "").rstrip("/")
         use_proxy = values.get("TELEGRAM_USE_PROXY", "false").lower() == "true"
-        if (network.mode == "worker" or (network.mode == "legacy" and use_proxy)) and (
+        if (mode == "worker" or (mode == "legacy" and use_proxy)) and (
             not proxy.startswith("https://") or "@" in proxy
         ):
             raise ConfigurationError("Прокси должен использовать HTTPS без credentials в URL")
@@ -67,7 +72,7 @@ class Config:
             values.get("FIRST_START_CLAIM", "false").lower() == "true",
             values.get("PLAYEROK_REALTIME_ENABLED", "true").lower() == "true",
             values.get("PLAYEROK_AUTOMATION_ENABLED", "false").lower() == "true",
-            network.mode,
+            mode,
             values.get("PLAYEROK_AUTO_ACCEPT_AGREEMENTS", "false").lower() == "true",
         )
 

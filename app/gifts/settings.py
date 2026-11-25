@@ -25,7 +25,7 @@ class GiftSettings:
     @classmethod
     def load(cls, path: str = ".env") -> "GiftSettings":
         env = {**dotenv_values(path, interpolate=False), **os.environ}
-        from app.localvpn import NetworkSettings
+        from app.config import telegram_transport
 
         def positive(name, default):
             value = int(env.get(name) or default)
@@ -50,7 +50,7 @@ class GiftSettings:
             max_daily_stars=positive("TG_GIFT_MAX_DAILY_STARS", "300"),
             refund_enabled=str(env.get("TG_GIFT_REFUNDS_ENABLED") or "false").lower() == "true",
             max_gifts=min(20, positive("TG_GIFT_MAX_COUNT", "5")),
-            telegram_transport=NetworkSettings.load(path).mode,
+            telegram_transport=telegram_transport(env),
         )
 
     def require_configured(self):
