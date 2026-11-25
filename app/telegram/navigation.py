@@ -415,6 +415,8 @@ class Navigation:
                     and row[0].callback_data == "items"
                     or action.startswith("launch:open:")
                     and row[0].text.startswith("⬅️ К товару")
+                    or action.startswith("rd:permissions:")
+                    and row[0].callback_data == "item:" + action.split(":", 2)[2]
                 )
                 for row in markup.inline_keyboard
             )

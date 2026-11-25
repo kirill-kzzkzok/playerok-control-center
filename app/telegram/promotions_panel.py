@@ -227,7 +227,7 @@ class PromotionsPanel:
             if data.get("return_to")
             else ("⬅️ Мой магазин", "home")
         )
-        if data.get("advanced"):
+        if data.get("advanced") and not data.get("return_to"):
             back = (
                 "⬅️ Назад",
                 f"pp:{nonce}:group:general" if group != "general" else f"pp:{nonce}:basic",
